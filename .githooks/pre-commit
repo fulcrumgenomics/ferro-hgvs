@@ -1,0 +1,38 @@
+#!/bin/bash
+# Pre-commit hook that matches CI checks
+# Install with: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Format check
+echo "=> Checking formatting..."
+if ! cargo fmt --all -- --check; then
+    echo ""
+    echo "ERROR: Formatting check failed!"
+    echo "Run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
+
+# Clippy (using same features as CI)
+echo "=> Running clippy..."
+if ! cargo clippy --features dev -- -D warnings; then
+    echo ""
+    echo "ERROR: Clippy check failed!"
+    echo "Fix the warnings above before committing."
+    exit 1
+fi
+
+# Build check
+echo "=> Checking build..."
+if ! cargo build --release; then
+    echo ""
+    echo "ERROR: Build failed!"
+    exit 1
+fi
+
+# Note: Tests are skipped in pre-commit for speed; they run in CI
+
+echo ""
+echo "All pre-commit checks passed!"

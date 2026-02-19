@@ -1,0 +1,154 @@
+{
+  "parsing": [
+    {
+      "input": "NC_000001.11:g.12345A>G",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Simple genomic substitution"
+    },
+    {
+      "input": "NC_000001.11:g.12345_12350del",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Genomic deletion range"
+    },
+    {
+      "input": "NC_000001.11:g.12345delA",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Genomic deletion with base"
+    },
+    {
+      "input": "NC_000001.11:g.12345_12346insATG",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Genomic insertion"
+    },
+    {
+      "input": "NC_000001.11:g.12345dup",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Genomic duplication"
+    },
+    {
+      "input": "NC_000001.11:g.12345_12350inv",
+      "valid": true,
+      "type": "GenomeVariant",
+      "description": "Genomic inversion"
+    },
+    {
+      "input": "NM_000088.3:c.459A>G",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "Simple CDS substitution"
+    },
+    {
+      "input": "NM_000088.3:c.459del",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "CDS deletion"
+    },
+    {
+      "input": "NM_000088.3:c.459+5G>A",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "Intronic substitution (positive offset)"
+    },
+    {
+      "input": "NM_000088.3:c.459-10G>A",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "Intronic substitution (negative offset)"
+    },
+    {
+      "input": "NM_000088.3:c.-20G>A",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "5' UTR substitution"
+    },
+    {
+      "input": "NM_000088.3:c.*50G>A",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "3' UTR substitution"
+    },
+    {
+      "input": "NM_000088.3:c.459_460insATG",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "CDS insertion"
+    },
+    {
+      "input": "NM_000088.3:c.459_461delinsATG",
+      "valid": true,
+      "type": "CdsVariant",
+      "description": "CDS delins"
+    },
+    {
+      "input": "NR_000001.1:n.100A>G",
+      "valid": true,
+      "type": "TxVariant",
+      "description": "Non-coding transcript substitution"
+    },
+    {
+      "input": "NP_000079.2:p.Val600Glu",
+      "valid": true,
+      "type": "ProteinVariant",
+      "description": "Protein substitution"
+    },
+    {
+      "input": "NP_000079.2:p.Lys23del",
+      "valid": true,
+      "type": "ProteinVariant",
+      "description": "Protein deletion"
+    },
+    {
+      "input": "NP_000079.2:p.Lys23fs",
+      "valid": true,
+      "type": "ProteinVariant",
+      "description": "Protein frameshift"
+    },
+    {
+      "input": "NP_000079.2:p.Lys23fsTer45",
+      "valid": true,
+      "type": "ProteinVariant",
+      "description": "Protein frameshift with termination"
+    },
+    {
+      "input": "NC_012920.1:m.3243A>G",
+      "valid": true,
+      "type": "MtVariant",
+      "description": "Mitochondrial substitution"
+    },
+    {
+      "input": "invalid",
+      "valid": false,
+      "error": "ParseError",
+      "description": "Invalid - no accession"
+    },
+    {
+      "input": "NM_000088.3",
+      "valid": false,
+      "error": "ParseError",
+      "description": "Invalid - no variant"
+    },
+    {
+      "input": "NM_000088.3:c.",
+      "valid": false,
+      "error": "ParseError",
+      "description": "Invalid - empty position"
+    },
+    {
+      "input": "NM_000088.3:x.100A>G",
+      "valid": false,
+      "error": "ParseError",
+      "description": "Invalid - unknown coordinate type"
+    },
+    {
+      "input": "NM_000088.3:c.100X>G",
+      "valid": false,
+      "error": "ParseError",
+      "description": "Invalid - bad reference base"
+    }
+  ]
+}

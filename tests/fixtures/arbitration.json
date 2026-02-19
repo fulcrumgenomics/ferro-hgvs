@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "decisions": {
+    "NM_000255.4:c.445_446insA": {
+      "input": "NM_000255.4:c.445_446insA",
+      "ferro_output": "NM_000255.4:c.446dup",
+      "mutalyzer_output": "NM_000255.4:c.445dup",
+      "category": "ferro_correct",
+      "reason": "Insertion at c.445_446 of A should shift 3' to c.446_447 since c.446=A matches inserted base, becoming c.446dup. Mutalyzer incorrectly reports c.445dup but c.445=G which doesn't match inserted A.",
+      "spec_reference": "HGVS 3.1: 3' rule for insertions",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NR_027676.2:n.5453A>C": {
+      "input": "NR_027676.2:n.5453A>C",
+      "ferro_output": "NR_027676.2:n.5453A>C",
+      "mutalyzer_output": "NR_027676.2:c.5453A>C",
+      "category": "ferro_correct",
+      "reason": "NR_ transcripts are non-coding and must use n. coordinates, not c. coordinates. Mutalyzer incorrectly converts n. to c.",
+      "spec_reference": "HGVS: Coordinate systems for non-coding transcripts",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NR_027676.2:n.622G>A": {
+      "input": "NR_027676.2:n.622G>A",
+      "ferro_output": "NR_027676.2:n.622G>A",
+      "mutalyzer_output": "NR_027676.2:c.622G>A",
+      "category": "ferro_correct",
+      "reason": "NR_ transcripts are non-coding and must use n. coordinates. Mutalyzer bug: converts n. to c.",
+      "spec_reference": "HGVS: Coordinate systems for non-coding transcripts",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NR_027676.2:n.3993C>T": {
+      "input": "NR_027676.2:n.3993C>T",
+      "ferro_output": "NR_027676.2:n.3993C>T",
+      "mutalyzer_output": "NR_027676.2:c.3993C>T",
+      "category": "ferro_correct",
+      "reason": "NR_ transcripts are non-coding and must use n. coordinates. Mutalyzer bug: converts n. to c.",
+      "spec_reference": "HGVS: Coordinate systems for non-coding transcripts",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NR_027676.2:n.322C>A": {
+      "input": "NR_027676.2:n.322C>A",
+      "ferro_output": "NR_027676.2:n.322C>A",
+      "mutalyzer_output": "NR_027676.2:c.322C>A",
+      "category": "ferro_correct",
+      "reason": "NR_ transcripts are non-coding and must use n. coordinates. Mutalyzer bug: converts n. to c.",
+      "spec_reference": "HGVS: Coordinate systems for non-coding transcripts",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NR_027676.2:n.4999dup": {
+      "input": "NR_027676.2:n.4999dup",
+      "ferro_output": "NR_027676.2:n.4999dup",
+      "mutalyzer_output": "NR_027676.2:c.4999dup",
+      "category": "ferro_correct",
+      "reason": "NR_ transcripts are non-coding and must use n. coordinates. Mutalyzer bug: converts n. to c.",
+      "spec_reference": "HGVS: Coordinate systems for non-coding transcripts",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NM_001407634.1:c.4110_4111GT[1]": {
+      "input": "NM_001407634.1:c.4110_4111GT[1]",
+      "ferro_output": "NM_001407634.1:c.4112_4113del",
+      "mutalyzer_output": "NM_001407634.1:c.=",
+      "category": "ferro_correct",
+      "reason": "Reference has 2 copies of GT at c.4110-4113. Specifying GT[1] means deletion of one copy. Ferro correctly converts to c.4112_4113del (3' normalized). Mutalyzer incorrectly thinks reference has only 1 copy.",
+      "spec_reference": "HGVS: Repeat notation for tandem repeats",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NM_001167619.3:c.-798del": {
+      "input": "NM_001167619.3:c.-798del",
+      "ferro_output": "NM_001167619.3:c.-797del",
+      "mutalyzer_output": "NM_001167619.3:c.-798del",
+      "category": "ferro_correct",
+      "reason": "5'UTR deletion at c.-798 should shift 3' to c.-797 because both positions have G. In 5'UTR, 3' direction is toward the CDS (less negative numbers). Mutalyzer fails to apply 3' shift.",
+      "spec_reference": "HGVS 3.1: 3' rule applies in 5'UTR toward CDS",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "LRG_321t6:c.478_479dup": {
+      "input": "LRG_321t6:c.478_479dup",
+      "ferro_output": "LRG_321t6:c.478_479dup",
+      "mutalyzer_output": "LRG_321t6:c.477_479A[5]",
+      "category": "equivalent",
+      "reason": "Both representations are valid HGVS. Mutalyzer converts to repeat notation while ferro keeps as duplication. Either is acceptable.",
+      "spec_reference": "HGVS: Repeat notation is optional for duplications",
+      "timestamp": "2025-12-26T04:00:00Z"
+    },
+    "NM_001408427.1:c.761_762insGG": {
+      "input": "NM_001408427.1:c.761_762insGG",
+      "ferro_output": "NM_001408427.1:c.758_760G[5]",
+      "mutalyzer_output": "NM_001408427.1:c.761_762insGG",
+      "category": "equivalent",
+      "reason": "Both representations are valid HGVS. Ferro converts to repeat notation (G homopolymer expansion to 5 copies), mutalyzer keeps as insertion. Either is acceptable.",
+      "spec_reference": "HGVS: Repeat notation is optional",
+      "timestamp": "2025-12-26T04:00:00Z"
+    }
+  },
+  "stats": {
+    "total": 10,
+    "ferro_correct": 8,
+    "mutalyzer_correct": 0,
+    "equivalent": 2,
+    "both_incorrect": 0,
+    "unknown": 0
+  }
+}

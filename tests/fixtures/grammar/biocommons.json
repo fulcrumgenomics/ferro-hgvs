@@ -1,0 +1,297 @@
+{
+  "description": "Test cases extracted from biocommons/hgvs repository",
+  "source": "https://github.com/biocommons/hgvs",
+  "tests": [
+    {
+      "input": "AC_01234.5:c.1A>T",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:g.1A>T",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:m.1A>T",
+      "valid": true,
+      "type": "Mt",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:n.1A>T",
+      "valid": true,
+      "type": "Tx",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:p.Ala1Ser",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:p.Phe2_Ala4del",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:c.1A>T",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:g.1A>T",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:p.Ala1Ser",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons"
+    },
+    {
+      "input": "AC_01234.5:c.76A>C",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.76_77delinsT",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.76A>C(;)76_77delinsT",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:c.76_78del",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.77_79dup",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.77_79dupACG",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.76_77insT",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.76_77insTTT",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:c.=",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:c.?",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:g.1A>C",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:m.1A>C",
+      "valid": true,
+      "type": "Mt",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:n.1A>C",
+      "valid": true,
+      "type": "Tx",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:r.1a>c",
+      "valid": true,
+      "type": "Rna",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:p.A1C",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:p.Ala1Cys",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "AC_01234.5:p.=",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:p.?",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "AC_01234.5:p.(=)",
+      "valid": true,
+      "type": "Protein",
+      "source": "biocommons-gauntlet",
+      "supported": false
+    },
+    {
+      "input": "NM_000088.3:c.589G>T",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NM_000088.3:c.589-5G>T",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NM_000088.3:c.589+10del",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NM_000088.3:c.*10A>G",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NM_000088.3:c.-20G>A",
+      "valid": true,
+      "type": "Cds",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NC_000001.11:g.12345A>G",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NC_000001.11:g.12345_12350del",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "NC_000001.11:g.12345_12346insATG",
+      "valid": true,
+      "type": "Genome",
+      "source": "biocommons-gauntlet",
+      "supported": true
+    },
+    {
+      "input": "invalid",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3:",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3:c.",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": ":c.100A>G",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3:x.100A>G",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3:c.A>G",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    },
+    {
+      "input": "NM_000088.3:c.100",
+      "valid": false,
+      "type": null,
+      "source": "biocommons-gauntlet"
+    }
+  ]
+}

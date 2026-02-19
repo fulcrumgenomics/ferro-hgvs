@@ -1,0 +1,97 @@
+{
+  "description": "Test cases with expected outputs from VariantValidator",
+  "source": "https://variantvalidator.org/",
+  "note": "These are manually curated test cases based on VariantValidator documentation and common variants",
+  "test_cases": [
+    {
+      "input": "NM_000088.3:c.589G>T",
+      "type": "Cds",
+      "valid": true,
+      "description": "Simple substitution in COL1A1"
+    },
+    {
+      "input": "NC_000017.11:g.43094466G>A",
+      "type": "Genome",
+      "valid": true,
+      "description": "BRCA1 genomic variant"
+    },
+    {
+      "input": "NM_007294.4:c.5266dup",
+      "type": "Cds",
+      "valid": true,
+      "description": "BRCA1 duplication"
+    },
+    {
+      "input": "NM_000546.6:c.215C>G",
+      "type": "Cds",
+      "valid": true,
+      "description": "TP53 substitution"
+    },
+    {
+      "input": "NM_000059.4:c.68_69del",
+      "type": "Cds",
+      "valid": true,
+      "description": "BRCA2 deletion"
+    },
+    {
+      "input": "NM_004006.2:c.93+1G>T",
+      "type": "Cds",
+      "valid": true,
+      "description": "DMD intronic substitution"
+    },
+    {
+      "input": "NM_000249.4:c.942+3A>T",
+      "type": "Cds",
+      "valid": true,
+      "description": "MLH1 intronic variant"
+    },
+    {
+      "input": "NP_000079.2:p.Val600Glu",
+      "type": "Protein",
+      "valid": true,
+      "description": "BRAF V600E protein variant"
+    },
+    {
+      "input": "NC_012920.1:m.3243A>G",
+      "type": "Mt",
+      "valid": true,
+      "description": "Common MELAS mutation"
+    },
+    {
+      "input": "NC_012920.1:m.8344A>G",
+      "type": "Mt",
+      "valid": true,
+      "description": "Common MERRF mutation"
+    },
+    {
+      "input": "NM_000088.3:c.-20A>G",
+      "type": "Cds",
+      "valid": true,
+      "description": "5' UTR variant"
+    },
+    {
+      "input": "NM_000088.3:c.*50G>A",
+      "type": "Cds",
+      "valid": true,
+      "description": "3' UTR variant"
+    },
+    {
+      "input": "NM_000314.8:c.100_102delinsATG",
+      "type": "Cds",
+      "valid": true,
+      "description": "PTEN delins"
+    },
+    {
+      "input": "NM_000492.4:c.1521_1523del",
+      "type": "Cds",
+      "valid": true,
+      "description": "CFTR F508del"
+    },
+    {
+      "input": "NM_000546.6:c.743G>A",
+      "type": "Cds",
+      "valid": true,
+      "description": "TP53 R248Q"
+    }
+  ]
+}

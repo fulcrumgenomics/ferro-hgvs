@@ -1,0 +1,981 @@
+{
+  "description": "Clinical gene variants from ClinVar",
+  "source": "NCBI ClinVar E-utilities API",
+  "version": "1.0.0",
+  "generated": "2025-12-19 18:00:48 UTC",
+  "genes_queried": [
+    "BRCA1",
+    "BRCA2",
+    "TP53",
+    "EGFR",
+    "KRAS",
+    "BRAF",
+    "CFTR",
+    "HBB",
+    "F5",
+    "MLH1"
+  ],
+  "total_test_cases": 97,
+  "summary": {
+    "by_gene": {
+      "CXCR4": 2,
+      "TTN": 4,
+      "SGSH": 1,
+      "SRP72": 1,
+      "CARD14": 1,
+      "ELP1": 1,
+      "TERT": 1,
+      "ANGPTL5": 1,
+      "HSDL2": 1,
+      "AGBL5": 1,
+      "FHL2": 1,
+      "SPG11": 2,
+      "ANK2": 3,
+      "BRCA2": 5,
+      "TUBB1": 1,
+      "FLNC": 2,
+      "TCIRG1": 1,
+      "DNMT1": 1,
+      "FANCG": 1,
+      "SEMA3E": 1,
+      "CACNA1C": 1,
+      "RREB1": 1,
+      "NUMA1": 1,
+      "COL13A1": 1,
+      "SARDH": 1,
+      "HIVEP1": 1,
+      "TACSTD2": 1,
+      "DNAJC13": 1,
+      "OBSCN": 1,
+      "CTNNA1": 1,
+      "FANCI": 1,
+      "FANCA": 4,
+      "AVP": 1,
+      "NFKB1": 1,
+      "PLEC": 1,
+      "TJP2": 1,
+      "NCF4": 1,
+      "TTC37": 1,
+      "TTC14": 1,
+      "NDE1": 1,
+      "KNL1": 1,
+      "SPAG1": 1,
+      "NDUFAF2": 1,
+      "PLEKHG5": 1,
+      "TSC1": 1,
+      "VPS13A": 2,
+      "FRMD7": 1,
+      "ABCA4": 1,
+      "ANKRD1": 1,
+      "FBN1": 1,
+      "CNTNAP2": 1,
+      "SLC28A3": 1,
+      "MSH2": 1,
+      "DMD": 1,
+      "COL17A1": 1,
+      "ALX4": 1,
+      "STXBP2": 1,
+      "CTC1": 1,
+      "SLC52A3": 1,
+      "NIPA1": 1,
+      "DARS1": 1,
+      "BRCA1": 1,
+      "ATM": 2,
+      "APC": 1,
+      "PTCH1": 1,
+      "NEB": 1,
+      "PLAT": 1,
+      "PKHD1": 1,
+      "FGFR1": 1,
+      "AP5Z1": 1,
+      "PALB2": 2,
+      "MMP9": 1,
+      "RYR2": 1,
+      "CLN3": 1,
+      "KCND3": 1,
+      "WRN": 1,
+      "PTCH2": 1,
+      "TAPBP": 1,
+      "OTOG": 1
+    },
+    "by_type": {
+      "unknown": 1,
+      "coding": 96
+    }
+  },
+  "test_cases": [
+    {
+      "input": "\n          ",
+      "type": "unknown",
+      "valid": true,
+      "category": "clinical_cxcr4",
+      "gene": "CXCR4",
+      "description": "ClinVar 724626: Likely benign",
+      "clinvar_id": "724626"
+    },
+    {
+      "input": "NM_003467.3(CXCR4):c.708G>A (p.Lys236=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_cxcr4",
+      "gene": "CXCR4",
+      "description": "ClinVar 724626: Likely benign",
+      "clinvar_id": "724626"
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.30570C>A (p.Thr10190=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttn",
+      "gene": "TTN",
+      "description": "ClinVar 723027: Likely benign",
+      "clinvar_id": "723027"
+    },
+    {
+      "input": "NM_000199.5(SGSH):c.1428C>T (p.His476=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_sgsh",
+      "gene": "SGSH",
+      "description": "ClinVar 722971: Benign",
+      "clinvar_id": "722971"
+    },
+    {
+      "input": "NM_006947.4(SRP72):c.1678+9_1678+12dup",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_srp72",
+      "gene": "SRP72",
+      "description": "ClinVar 722904: Likely benign",
+      "clinvar_id": "722904"
+    },
+    {
+      "input": "NM_001366385.1(CARD14):c.27C>T (p.Ser9=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_card14",
+      "gene": "CARD14",
+      "description": "ClinVar 722898: Benign",
+      "clinvar_id": "722898"
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.49476T>C (p.Pro16492=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttn",
+      "gene": "TTN",
+      "description": "ClinVar 704298: Likely benign",
+      "clinvar_id": "704298"
+    },
+    {
+      "input": "NM_003640.5(ELP1):c.1644-13dup",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_elp1",
+      "gene": "ELP1",
+      "description": "ClinVar 697137: Likely benign",
+      "clinvar_id": "697137"
+    },
+    {
+      "input": "NM_198253.3(TERT):c.603G>A (p.Arg201=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tert",
+      "gene": "TERT",
+      "description": "ClinVar 696911: Likely benign",
+      "clinvar_id": "696911"
+    },
+    {
+      "input": "NM_178127.5(ANGPTL5):c.1097dup (p.Asn366fs)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_angptl5",
+      "gene": "ANGPTL5",
+      "description": "ClinVar 715516: Benign",
+      "clinvar_id": "715516"
+    },
+    {
+      "input": "NM_032303.5(HSDL2):c.894A>G (p.Lys298=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_hsdl2",
+      "gene": "HSDL2",
+      "description": "ClinVar 715507: Benign",
+      "clinvar_id": "715507"
+    },
+    {
+      "input": "NM_021831.6(AGBL5):c.2083G>A (p.Val695Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_agbl5",
+      "gene": "AGBL5",
+      "description": "ClinVar 715473: Benign",
+      "clinvar_id": "715473"
+    },
+    {
+      "input": "NM_201555.2(FHL2):c.507C>T (p.Ile169=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fhl2",
+      "gene": "FHL2",
+      "description": "ClinVar 700171: Likely benign",
+      "clinvar_id": "700171"
+    },
+    {
+      "input": "NM_025137.4(SPG11):c.1821A>G (p.Ser607=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_spg11",
+      "gene": "SPG11",
+      "description": "ClinVar 413997: Likely benign",
+      "clinvar_id": "413997"
+    },
+    {
+      "input": "NM_025137.4(SPG11):c.6892A>G (p.Ile2298Val)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_spg11",
+      "gene": "SPG11",
+      "description": "ClinVar 413990: Benign/Likely benign",
+      "clinvar_id": "413990"
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.8484T>C (p.Asp2828=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ank2",
+      "gene": "ANK2",
+      "description": "ClinVar 413967: Benign",
+      "clinvar_id": "413967"
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.6492T>G (p.Leu2164=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ank2",
+      "gene": "ANK2",
+      "description": "ClinVar 413961: Likely benign",
+      "clinvar_id": "413961"
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.231G>A (p.Val77=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ank2",
+      "gene": "ANK2",
+      "description": "ClinVar 413949: Likely benign",
+      "clinvar_id": "413949"
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.3570G>C (p.Arg1190=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca2",
+      "gene": "BRCA2",
+      "description": "ClinVar 491247: Likely benign",
+      "clinvar_id": "491247"
+    },
+    {
+      "input": "NM_030773.4(TUBB1):c.1045G>A (p.Val349Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tubb1",
+      "gene": "TUBB1",
+      "description": "ClinVar 724372: Benign",
+      "clinvar_id": "724372"
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.699+9G>A",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_flnc",
+      "gene": "FLNC",
+      "description": "ClinVar 723638: Benign",
+      "clinvar_id": "723638"
+    },
+    {
+      "input": "NM_006019.4(TCIRG1):c.1692C>T (p.His564=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tcirg1",
+      "gene": "TCIRG1",
+      "description": "ClinVar 716565: Likely benign",
+      "clinvar_id": "716565"
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.5922G>T (p.Leu1974=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_flnc",
+      "gene": "FLNC",
+      "description": "ClinVar 708223: Likely benign",
+      "clinvar_id": "708223"
+    },
+    {
+      "input": "NM_001130823.3(DNMT1):c.3669C>T (p.Arg1223=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_dnmt1",
+      "gene": "DNMT1",
+      "description": "ClinVar 707638: Likely benign",
+      "clinvar_id": "707638"
+    },
+    {
+      "input": "NM_004629.2(FANCG):c.1002A>G (p.Leu334=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fancg",
+      "gene": "FANCG",
+      "description": "ClinVar 703628: Likely benign",
+      "clinvar_id": "703628"
+    },
+    {
+      "input": "NM_012431.3(SEMA3E):c.1348G>A (p.Val450Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_sema3e",
+      "gene": "SEMA3E",
+      "description": "ClinVar 698832: Likely benign",
+      "clinvar_id": "698832"
+    },
+    {
+      "input": "NM_000719.7(CACNA1C):c.1895+85G>A",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_cacna1c",
+      "gene": "CACNA1C",
+      "description": "ClinVar 695282: Benign",
+      "clinvar_id": "695282"
+    },
+    {
+      "input": "NM_001003699.4(RREB1):c.3422C>G (p.Pro1141Arg)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_rreb1",
+      "gene": "RREB1",
+      "description": "ClinVar 715572: Likely benign",
+      "clinvar_id": "715572"
+    },
+    {
+      "input": "NM_006185.4(NUMA1):c.3152C>T (p.Ala1051Val)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_numa1",
+      "gene": "NUMA1",
+      "description": "ClinVar 715512: Benign",
+      "clinvar_id": "715512"
+    },
+    {
+      "input": "NM_001130103.2(COL13A1):c.543C>G (p.Gly181=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_col13a1",
+      "gene": "COL13A1",
+      "description": "ClinVar 715510: Likely benign",
+      "clinvar_id": "715510"
+    },
+    {
+      "input": "NM_001134707.2(SARDH):c.1471-8C>T",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_sardh",
+      "gene": "SARDH",
+      "description": "ClinVar 715509: Benign",
+      "clinvar_id": "715509"
+    },
+    {
+      "input": "NM_002114.4(HIVEP1):c.5586G>A (p.Lys1862=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_hivep1",
+      "gene": "HIVEP1",
+      "description": "ClinVar 715501: Benign",
+      "clinvar_id": "715501"
+    },
+    {
+      "input": "NM_002353.3(TACSTD2):c.735C>T (p.Arg245=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tacstd2",
+      "gene": "TACSTD2",
+      "description": "ClinVar 715494: Likely benign",
+      "clinvar_id": "715494"
+    },
+    {
+      "input": "NM_015268.4(DNAJC13):c.3872A>G (p.Glu1291Gly)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_dnajc13",
+      "gene": "DNAJC13",
+      "description": "ClinVar 715477: Likely benign",
+      "clinvar_id": "715477"
+    },
+    {
+      "input": "NM_001271223.2(OBSCN):c.26663G>A (p.Arg8888Gln)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_obscn",
+      "gene": "OBSCN",
+      "description": "ClinVar 715443: Benign",
+      "clinvar_id": "715443"
+    },
+    {
+      "input": "NM_001903.5(CTNNA1):c.246G>A (p.Glu82=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ctnna1",
+      "gene": "CTNNA1",
+      "description": "ClinVar 700652: Likely benign",
+      "clinvar_id": "700652"
+    },
+    {
+      "input": "NM_001113378.1(FANCI):c.3525C>A (p.Ala1175=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fanci",
+      "gene": "FANCI",
+      "description": "ClinVar 414863: Benign",
+      "clinvar_id": "414863"
+    },
+    {
+      "input": "NM_000135.4(FANCA):c.2292G>A (p.Arg764=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fanca",
+      "gene": "FANCA",
+      "description": "ClinVar 414843: Likely benign",
+      "clinvar_id": "414843"
+    },
+    {
+      "input": "NM_000135.4(FANCA):c.2172G>A (p.Thr724=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fanca",
+      "gene": "FANCA",
+      "description": "ClinVar 414838: Likely benign",
+      "clinvar_id": "414838"
+    },
+    {
+      "input": "NM_000135.4(FANCA):c.87G>A (p.Arg29=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fanca",
+      "gene": "FANCA",
+      "description": "ClinVar 414835: Likely benign",
+      "clinvar_id": "414835"
+    },
+    {
+      "input": "NM_000135.4(FANCA):c.3031C>T (p.Arg1011Cys)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fanca",
+      "gene": "FANCA",
+      "description": "ClinVar 414834: Likely benign",
+      "clinvar_id": "414834"
+    },
+    {
+      "input": "NM_000490.5(AVP):c.150C>A (p.Gly50=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_avp",
+      "gene": "AVP",
+      "description": "ClinVar 724217: Benign",
+      "clinvar_id": "724217"
+    },
+    {
+      "input": "NM_003998.4(NFKB1):c.1700C>T (p.Thr567Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_nfkb1",
+      "gene": "NFKB1",
+      "description": "ClinVar 722155: Benign",
+      "clinvar_id": "722155"
+    },
+    {
+      "input": "NM_000445.5(PLEC):c.8397C>T (p.Arg2799=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_plec",
+      "gene": "PLEC",
+      "description": "ClinVar 287710: Likely benign",
+      "clinvar_id": "287710"
+    },
+    {
+      "input": "NM_004817.4(TJP2):c.911G>A (p.Gly304Glu)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tjp2",
+      "gene": "TJP2",
+      "description": "ClinVar 287707: Conflicting classifications of pathogenicity",
+      "clinvar_id": "287707"
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.99582G>A (p.Pro33194=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttn",
+      "gene": "TTN",
+      "description": "ClinVar 287696: Conflicting classifications of pathogenicity",
+      "clinvar_id": "287696"
+    },
+    {
+      "input": "NM_000631.5(NCF4):c.254C>A (p.Thr85Asn)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ncf4",
+      "gene": "NCF4",
+      "description": "ClinVar 287656: Benign",
+      "clinvar_id": "287656"
+    },
+    {
+      "input": "NM_014639.3(TTC37):c.4507C>T (p.Arg1503Cys)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttc37",
+      "gene": "TTC37",
+      "description": "ClinVar 287653: Uncertain significance",
+      "clinvar_id": "287653"
+    },
+    {
+      "input": "NM_181426.2(CCDC39):c.2409T>C (p.Cys803=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttc14",
+      "gene": "TTC14",
+      "description": "ClinVar 525460: Benign",
+      "clinvar_id": "525460"
+    },
+    {
+      "input": "NM_017668.3(NDE1):c.-35C>T",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_nde1",
+      "gene": "NDE1",
+      "description": "ClinVar 318044: Uncertain significance",
+      "clinvar_id": "318044"
+    },
+    {
+      "input": "NM_170589.5(KNL1):c.75+6A>G",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_knl1",
+      "gene": "KNL1",
+      "description": "ClinVar 315841: Uncertain significance",
+      "clinvar_id": "315841"
+    },
+    {
+      "input": "NM_172218.2(SPAG1):c.2714C>T (p.Ser905Leu)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_spag1",
+      "gene": "SPAG1",
+      "description": "ClinVar 242015: Likely benign",
+      "clinvar_id": "242015"
+    },
+    {
+      "input": "NM_174889.5(NDUFAF2):c.300A>T (p.Ile100=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ndufaf2",
+      "gene": "NDUFAF2",
+      "description": "ClinVar 214737: Benign",
+      "clinvar_id": "214737"
+    },
+    {
+      "input": "NM_020631.5(PLEKHG5):c.518G>A (p.Arg173Gln)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_plekhg5",
+      "gene": "PLEKHG5",
+      "description": "ClinVar 198580: Uncertain significance",
+      "clinvar_id": "198580"
+    },
+    {
+      "input": "NM_000368.4(TSC1):c.379G>A (p.Val127Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tsc1",
+      "gene": "TSC1",
+      "description": "ClinVar 184670: Uncertain significance",
+      "clinvar_id": "184670"
+    },
+    {
+      "input": "NM_033305.3(VPS13A):c.1380T>C (p.Pro460=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_vps13a",
+      "gene": "VPS13A",
+      "description": "ClinVar 701113: Likely benign",
+      "clinvar_id": "701113"
+    },
+    {
+      "input": "NM_033305.3(VPS13A):c.2964+5G>A",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_vps13a",
+      "gene": "VPS13A",
+      "description": "ClinVar 700491: Likely benign",
+      "clinvar_id": "700491"
+    },
+    {
+      "input": "NM_194277.2(FRMD7):c.-14C>T",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_frmd7",
+      "gene": "FRMD7",
+      "description": "ClinVar 367913: Uncertain significance",
+      "clinvar_id": "367913"
+    },
+    {
+      "input": "NM_000350.3(ABCA4):c.6686T>C (p.Leu2229Pro)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_abca4",
+      "gene": "ABCA4",
+      "description": "ClinVar 99481: not provided",
+      "clinvar_id": "99481"
+    },
+    {
+      "input": "NM_014391.2(ANKRD1):c.346-15_346-14del",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ankrd1",
+      "gene": "ANKRD1",
+      "description": "ClinVar 201656: Benign",
+      "clinvar_id": "201656"
+    },
+    {
+      "input": "NM_000138.5(FBN1):c.4803C>T (p.Thr1601=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fbn1",
+      "gene": "FBN1",
+      "description": "ClinVar 699942: Likely benign",
+      "clinvar_id": "699942"
+    },
+    {
+      "input": "NM_014141.6(CNTNAP2):c.854G>C (p.Gly285Ala)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_cntnap2",
+      "gene": "CNTNAP2",
+      "description": "ClinVar 95578: Benign/Likely benign",
+      "clinvar_id": "95578"
+    },
+    {
+      "input": "NM_022127.3(SLC28A3):c.862-360C>T",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_slc28a3",
+      "gene": "SLC28A3",
+      "description": "ClinVar 375670: drug response",
+      "clinvar_id": "375670"
+    },
+    {
+      "input": "NM_000251.2(MSH2):c.-68-145A>T",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_msh2",
+      "gene": "MSH2",
+      "description": "ClinVar 185533: Uncertain significance",
+      "clinvar_id": "185533"
+    },
+    {
+      "input": "NM_004006.2(DMD):c.6375G>T (p.Gln2125His)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_dmd",
+      "gene": "DMD",
+      "description": "ClinVar 743967: Likely benign",
+      "clinvar_id": "743967"
+    },
+    {
+      "input": "NM_000494.4(COL17A1):c.1110C>T (p.Val370=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_col17a1",
+      "gene": "COL17A1",
+      "description": "ClinVar 721976: Likely benign",
+      "clinvar_id": "721976"
+    },
+    {
+      "input": "NM_021926.4(ALX4):c.1182G>A (p.Ala394=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_alx4",
+      "gene": "ALX4",
+      "description": "ClinVar 721962: Likely benign",
+      "clinvar_id": "721962"
+    },
+    {
+      "input": "NM_006949.4(STXBP2):c.1530C>T (p.Ala510=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_stxbp2",
+      "gene": "STXBP2",
+      "description": "ClinVar 714723: Likely benign",
+      "clinvar_id": "714723"
+    },
+    {
+      "input": "NM_025099.6(CTC1):c.1548G>A (p.Pro516=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ctc1",
+      "gene": "CTC1",
+      "description": "ClinVar 706711: Benign",
+      "clinvar_id": "706711"
+    },
+    {
+      "input": "NM_033409.4(SLC52A3):c.525C>T (p.Ser175=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_slc52a3",
+      "gene": "SLC52A3",
+      "description": "ClinVar 703037: Likely benign",
+      "clinvar_id": "703037"
+    },
+    {
+      "input": "NM_144599.5(NIPA1):c.448G>T (p.Ala150Ser)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_nipa1",
+      "gene": "NIPA1",
+      "description": "ClinVar 701192: Likely benign",
+      "clinvar_id": "701192"
+    },
+    {
+      "input": "NM_001349.4(DARS1):c.590G>A (p.Arg197His)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_dars1",
+      "gene": "DARS1",
+      "description": "ClinVar 449797: Conflicting classifications of pathogenicity",
+      "clinvar_id": "449797"
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.7007+10_7007+12del",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca2",
+      "gene": "BRCA2",
+      "description": "ClinVar 220504: Likely benign",
+      "clinvar_id": "220504"
+    },
+    {
+      "input": "NM_007294.3(BRCA1):c.81-18C>A",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca1",
+      "gene": "BRCA1",
+      "description": "ClinVar 220462: Likely benign",
+      "clinvar_id": "220462"
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.6237G>A (p.Val2079=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca2",
+      "gene": "BRCA2",
+      "description": "ClinVar 220413: Conflicting classifications of pathogenicity",
+      "clinvar_id": "220413"
+    },
+    {
+      "input": "NM_000051.3(ATM):c.7566A>G (p.Gln2522=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_atm",
+      "gene": "ATM",
+      "description": "ClinVar 220378: Uncertain significance",
+      "clinvar_id": "220378"
+    },
+    {
+      "input": "NM_000051.3(ATM):c.662+8_662+12del",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_atm",
+      "gene": "ATM",
+      "description": "ClinVar 220323: Likely benign",
+      "clinvar_id": "220323"
+    },
+    {
+      "input": "NM_000038.6(APC):c.8484C>G (p.Thr2828=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_apc",
+      "gene": "APC",
+      "description": "ClinVar 220319: Likely benign",
+      "clinvar_id": "220319"
+    },
+    {
+      "input": "NM_001083602.2(PTCH1):c.3589G>A (p.Val1197Ile)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ptch1",
+      "gene": "PTCH1",
+      "description": "ClinVar 524568: Uncertain significance",
+      "clinvar_id": "524568"
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.22128G>A (p.Ala7376=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_neb",
+      "gene": "NEB",
+      "description": "ClinVar 722040: Likely benign",
+      "clinvar_id": "722040"
+    },
+    {
+      "input": "NM_000930.5(PLAT):c.101C>A (p.Ala34Asp)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_plat",
+      "gene": "PLAT",
+      "description": "ClinVar 713754: Likely benign",
+      "clinvar_id": "713754"
+    },
+    {
+      "input": "NM_138694.4(PKHD1):c.3897A>C (p.Ala1299=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_pkhd1",
+      "gene": "PKHD1",
+      "description": "ClinVar 701442: Likely benign",
+      "clinvar_id": "701442"
+    },
+    {
+      "input": "NM_023110.2(FGFR1):c.75G>A (p.Pro25=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_fgfr1",
+      "gene": "FGFR1",
+      "description": "ClinVar 362911: Uncertain significance",
+      "clinvar_id": "362911"
+    },
+    {
+      "input": "NM_014855.3(AP5Z1):c.790+15G>A",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ap5z1",
+      "gene": "AP5Z1",
+      "description": "ClinVar 360319: Uncertain significance",
+      "clinvar_id": "360319"
+    },
+    {
+      "input": "NM_024675.3(PALB2):c.2996+9del",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_palb2",
+      "gene": "PALB2",
+      "description": "ClinVar 215934: Conflicting classifications of pathogenicity",
+      "clinvar_id": "215934"
+    },
+    {
+      "input": "NM_004994.3(MMP9):c.886G>A (p.Gly296Ser)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_mmp9",
+      "gene": "MMP9",
+      "description": "ClinVar 198179: Uncertain significance",
+      "clinvar_id": "198179"
+    },
+    {
+      "input": "NM_001035.3(RYR2):c.3924C>T (p.Ile1308=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ryr2",
+      "gene": "RYR2",
+      "description": "ClinVar 699211: Likely benign",
+      "clinvar_id": "699211"
+    },
+    {
+      "input": "NM_000086.2(CLN3):c.1191C>T (p.Ala397=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_cln3",
+      "gene": "CLN3",
+      "description": "ClinVar 415538: Likely benign",
+      "clinvar_id": "415538"
+    },
+    {
+      "input": "NM_004980.4(KCND3):c.1371G>A (p.Thr457=)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_kcnd3",
+      "gene": "KCND3",
+      "description": "ClinVar 519471: Uncertain significance",
+      "clinvar_id": "519471"
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.46565G>T (p.Gly15522Val)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ttn",
+      "gene": "TTN",
+      "description": "ClinVar 518972: Uncertain significance",
+      "clinvar_id": "518972"
+    },
+    {
+      "input": "NM_000553.4(WRN):c.229G>C (p.Asp77His)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_wrn",
+      "gene": "WRN",
+      "description": "ClinVar 284291: Uncertain significance",
+      "clinvar_id": "284291"
+    },
+    {
+      "input": "NM_003738.5(PTCH2):c.3071C>T (p.Ala1024Val)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_ptch2",
+      "gene": "PTCH2",
+      "description": "ClinVar 239559: Uncertain significance",
+      "clinvar_id": "239559"
+    },
+    {
+      "input": "NM_024675.3(PALB2):c.208T>C (p.Ser70Pro)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_palb2",
+      "gene": "PALB2",
+      "description": "ClinVar 182781: Uncertain significance",
+      "clinvar_id": "182781"
+    },
+    {
+      "input": "NM_003190.5(TAPBP):c.175G>T (p.Asp59Tyr)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_tapbp",
+      "gene": "TAPBP",
+      "description": "ClinVar 715762: Likely benign",
+      "clinvar_id": "715762"
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.9649-6del",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca2",
+      "gene": "BRCA2",
+      "description": "ClinVar 96886: Uncertain significance",
+      "clinvar_id": "96886"
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.8487+10A>G",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_brca2",
+      "gene": "BRCA2",
+      "description": "ClinVar 96869: Likely benign",
+      "clinvar_id": "96869"
+    },
+    {
+      "input": "NM_001277269.1(OTOG):c.4274G>A (p.Arg1425Gln)",
+      "type": "coding",
+      "valid": true,
+      "category": "clinical_otog",
+      "gene": "OTOG",
+      "description": "ClinVar 504783: Likely benign",
+      "clinvar_id": "504783"
+    }
+  ]
+}

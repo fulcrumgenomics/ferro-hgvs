@@ -1,0 +1,520 @@
+{
+  "description": "Test cases extracted from mutalyzer/hgvs-parser",
+  "source": "https://github.com/mutalyzer/hgvs-parser",
+  "parsing_tests": [
+    {
+      "input": "NC_000023.10:g.33038255C>A",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NG_012232.1(NM_004006.1):c.93+1G>T",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.145C>T",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NG_012232.1:g.19del",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NG_012232.1:g.19_21del",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.720_991del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.2:c.20dup",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_000023.10:g.33229407_33229410dup",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_000023.10:g.32867861_32867862insT",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.2:c.169_170insA",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_000023.10:g.32361330_32361333inv",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.2:c.5657_5660inv",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.79_80delinsTT",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.100+5G>A",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.100-10del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.-20G>A",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.*50A>G",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NP_000001.1:p.Arg100Gly",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NP_000001.1:p.Ala50del",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NP_000001.1:p.Arg100_Gly105del",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NP_000001.1:p.Ala50_Arg51insGlyPro",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_012920.1:m.3243A>G",
+      "valid": true,
+      "type": "Mt",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_012920.1:m.8344del",
+      "valid": true,
+      "type": "Mt",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "LRG_199:g.100A>G",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "LRG_199t1:c.54G>H",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_004006.1:c.[145C>T;147C>G]",
+      "valid": true,
+      "type": "Allele",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_000014.8:g.101179660TG[14]",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "LRG_199t1:c.419_420ins[T;401_419]",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF(",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:c.",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:$",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:1Ax",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:1A>x",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:1ins[]",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "REF:[]",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_000001.1",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_000001.1:",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_000001.1:c",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_000001.1:c.",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": ":c.100A>G",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NM_000001.1:x.100A>G",
+      "valid": false,
+      "type": null,
+      "supported": true,
+      "source": "mutalyzer"
+    },
+    {
+      "input": "NG_012337.1:c.274G>T",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-exercise"
+    },
+    {
+      "input": "NG_012337.1:c.274del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-exercise"
+    },
+    {
+      "input": "NM_000787.3:c.61A>G",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-exercise"
+    },
+    {
+      "input": "NM_000787.2:c.19A>G",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-exercise"
+    },
+    {
+      "input": "AB026906.1:c.274A>T",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-exercise"
+    },
+    {
+      "input": "NR_002196.1:n.100A>G",
+      "valid": true,
+      "type": "Tx",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NR_002196.1:n.100_200del",
+      "valid": true,
+      "type": "Tx",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:r.76a>g",
+      "valid": true,
+      "type": "Rna",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:r.100_102del",
+      "valid": true,
+      "type": "Rna",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.Val600Glu",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.Ter600Glu",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.Val600Ter",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.=",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.?",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.Met1?",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.100+1G>A",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.100-1G>A",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.100+1_100+5del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.-50_-40del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.*100_*200del",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "ENST00000357654.8:c.100A>G",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "ENSP00000350283.3:p.Val600Glu",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NC_000001.11:g.(100_200)_(300_400)del",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NC_000001.11:g.(?_100)_(200_?)del",
+      "valid": true,
+      "type": "Genome",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.100delinsATG",
+      "valid": true,
+      "type": "Cds",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.0",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NP_000079.2:p.0?",
+      "valid": true,
+      "type": "Protein",
+      "supported": true,
+      "source": "mutalyzer-community"
+    },
+    {
+      "input": "NM_000088.3:c.100A>G/c.200C>T",
+      "valid": true,
+      "type": "Allele",
+      "supported": true,
+      "source": "mutalyzer-community"
+    }
+  ],
+  "normalization_tests": [
+    {
+      "input": "NM_004006.1:c.10A>T",
+      "normalized": "NM_004006.1:c.10A>T",
+      "description": "Substitution should not change"
+    },
+    {
+      "input": "NG_012232.1:g.100del",
+      "normalized": "NG_012232.1:g.100del",
+      "description": "Simple deletion"
+    },
+    {
+      "input": "NM_004006.1:c.100_102del",
+      "normalized": "NM_004006.1:c.100_102del",
+      "description": "Range deletion"
+    }
+  ]
+}

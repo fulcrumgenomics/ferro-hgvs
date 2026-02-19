@@ -1,0 +1,2 @@
+tests/fixtures/bulk/*.gz filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/validation/*_exhaustive.json.gz filter=lfs diff=lfs merge=lfs -text

@@ -1,0 +1,1446 @@
+{
+  "description": "HGVS examples from official HGVS nomenclature specification",
+  "source": "https://hgvs-nomenclature.org",
+  "version": "2024.01",
+  "generated": "2025-12-19 17:49:52 UTC",
+  "total_examples": 202,
+  "summary": {
+    "by_variant_type": {
+      "substitution": 42,
+      "deletion": 44,
+      "duplication": 47,
+      "insertion": 34,
+      "inversion": 5,
+      "repeat": 27,
+      "frameshift": 1,
+      "extension": 2
+    },
+    "by_coordinate_system": {
+      "genomic": 63,
+      "coding": 79,
+      "rna": 21,
+      "protein": 39
+    },
+    "by_level": {
+      "dna": 139,
+      "rna": 24,
+      "protein": 39
+    }
+  },
+  "examples": [
+    {
+      "hgvs": "NC_000023.10:g.33038255C",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.2):c.93+1G",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.145_147delinsTGG",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.123=",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.=",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.85=//T",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.33357783G",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:c.-128354C",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000109.3:c.-401C",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10(NM_004006.1):c.-128354C",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10(NM_000109.3):c.-401C",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:c.76A/G?",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:c.76A",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1:g.12GC",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1:g.12_13delinsTG",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1:g.12G",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_007294.3:c.2077G",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_007294.3:c.[2077G",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_007294.3:c.2077delinsATA",
+      "variant_type": "substitution",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.123c",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.76a",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.76_77delinsug",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.(1388g",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.123=",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:r.-14a",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.*41u",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.[897u",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:c.897T",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:r.0",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.spl",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.?",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.85=/u",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.85=//u",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:c.3430C",
+      "variant_type": "substitution",
+      "level": "rna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Trp24CysNP_003997.1:p.Trp24TerNP_003997.1:p.W24*",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Trp24Cys",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Cys188=",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Leu2_Met124del",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.?",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Gly56Ala^Ser^Cys",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Gln2366Lys",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Trp24_Val25delinsCysArg",
+      "variant_type": "substitution",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11:g.1234delNC_000001.11:g.1234_2345del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32459297del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344591del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344591delA",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344591delG",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5697del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.32343183del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.32343183",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5690",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5690del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592delGAT",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592delTTA",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.183_186+48del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.4072-?_5154+?del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(3996_4196)_(5090_5284)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(?_-244)_(31+1_32-1)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(10086+1_10087-1)_(*2691_?)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592=/del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592=//del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1:g.123del6",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1:g.123_128del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32456507del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1522_1524delTTT?",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1521_1523del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1522_1524del",
+      "variant_type": "deletion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.123_127del",
+      "variant_type": "deletion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:r.6_8del",
+      "variant_type": "deletion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Val7del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Lys23_Val25del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Val7del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Trp4del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Pro458_Gly460del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(His321_Glu383del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Asp90_Val120del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(His321Leufs*3",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.?",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Val7=/del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val7=/del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_000483.3:p.Phe508del",
+      "variant_type": "deletion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11:g.1234dupNC_000001.11:g.1234_2345dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32459297dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.33229410dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20dupT",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20dupG",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5697dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.32343183dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5690dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20_23dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33211290_33211293dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.260_264+48dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.32844735_32844787dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.3921dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.32441180dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.1704+1dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.1813dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.4072-1234_5155-246dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.720_991dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11(NM_206933.2):c.[675-542_1211-703dup;1211-703_1211-702insGTAAA",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(?_-244)_(31+1_32-1)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(10086+1_10087-1)_(*2691_?)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(-205839_-62966)_(*21568_*61692)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(?_31120496)_(33339477_?",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.pter_qtersup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.pter_qter[2",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592=/dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.11:g.33344590_33344592=//dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32456507dup",
+      "variant_type": "duplication",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.123_345dup",
+      "variant_type": "duplication",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Val7dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Lys23_Val25dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Val7dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Trp4dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Pro458_Gly460dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(His321_Glu383dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Asp90_Val120dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.(Asn444Lysfs*15",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Val7=/dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val7=/dup",
+      "variant_type": "duplication",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11:g.1234_1235insACGT",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32867861_32867862insT",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.169_170insA",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32862923_32862924insCCT",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.849_850ins858_895",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.419_420ins[T;401_419",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.849_850ins850_900inv",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.900_901ins850_900inv",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.940_941ins[903_940inv;851_885inv",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.(222_226)insG",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000004.11:g.(3076562_3076732)insN[12",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299insN",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.761_762insN",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.761_762insNNNNN",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.1:c.761_762insN[5",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299insN[100",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299insN[(80_120",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299insN[?",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.(12345_23456)_(34567_45678",
+      "variant_type": "insertion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.3:r.123_124insauc",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:r.(222_226)insg",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:r.549_550insn",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:r.761_762insnnnnn",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.2):r.2949_2950ins[2950-30_2950-12;2950-4_2950-1",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "rna",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10(NM_004006.2):c.2950-11_2950-5del",
+      "variant_type": "insertion",
+      "level": "rna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_004371.2:p.(Pro46_Asn47insSerSerTer",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004380.2:c.138_139insTCATCATGAGCTCCC",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_060250.2:p.Gln746_Lys747ins*63",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Ser332_Ser333insXaa",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val582_Asn583insXaa[5",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val582_Asn583insXaaXaaXaaXaaXaa",
+      "variant_type": "insertion",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11:g.1234_2345inv",
+      "variant_type": "inversion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32361330_32361333inv",
+      "variant_type": "inversion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5657_5660inv",
+      "variant_type": "inversion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_004006.2:c.4145_4160inv",
+      "variant_type": "inversion",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000023.10:g.111754331_111966764inv",
+      "variant_type": "inversion",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000014.8:g.123CAG[23",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000014.8:g.123_191CAG[19]CAA[4",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000044.3:c.171_239GCA[34",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000044.3:c.(92_331)insN[33",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_024312.4:c.2692_2693dup",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_024312.4:c.2686A[10",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_024312.4:c.1741_1742insTATATATA",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_024312.4:c.1738TA[6",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000014.8:g.101179660_101179695TG[14",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_023035.2:c.6955_6993CAG[26",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000003.12:g.63912687_63912716AGC[13",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000003.12:g.(63912602_63912844)insN[9",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000333.3:c.(4_246)insN[9",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000003.12:g.(63912602_63912844)delN[15",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000333.3:c.(4_246)delN[15",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-128_-69GGC[10]GGA[1]GGC[9]GGA[1]GGC[10",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-128_-69GGC[68]GGA[1]GGC[10",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-129CGG[79",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-128_-69GGM[108",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_002024.5:c.(-144_-16)insN[(1800_2400",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_002102.4:p.(Gln18)[25",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1210-33_1210-6GT[11]T[6",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1210-12_1210-6T[7",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NC_000001.11:g.57367047_57367121ATAAA[15",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "genomic",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NM_021080.3:c.-136-75952_-136-75878ATTTT[15",
+      "variant_type": "repeat",
+      "level": "dna",
+      "coordinate_system": "coding",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_0123456.1:p.Arg97ProfsTer23NP_0123456.1:p.Arg97fs",
+      "variant_type": "frameshift",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Met1ext-5",
+      "variant_type": "extension",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    },
+    {
+      "hgvs": "NP_003997.2:p.Ter110GlnextTer17",
+      "variant_type": "extension",
+      "level": "protein",
+      "coordinate_system": "protein",
+      "source": "hgvs-nomenclature.org"
+    }
+  ]
+}

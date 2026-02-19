@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HGVS Normalizer - Powered by ferro-hgvs</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <div class="header-title">
+                <h1>ferro-hgvs</h1>
+                <p class="subtitle">Multi-Tool HGVS Variant Normalizer</p>
+            </div>
+            <div class="header-logo">
+                <a href="https://fulcrumgenomics.com" target="_blank" rel="noopener">
+                    <img src="https://fulcrumgenomics.com/wp-content/uploads/2021/09/logo.png" alt="Fulcrum Genomics">
+                </a>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Operation Tabs -->
+            <div class="operation-tabs">
+                <button class="op-tab-button active" data-op="normalize" onclick="showOperation('normalize')">Normalize</button>
+                <button class="op-tab-button" data-op="convert" onclick="showOperation('convert')">Convert</button>
+                <button class="op-tab-button" data-op="effect" onclick="showOperation('effect')">Effect</button>
+                <button class="op-tab-button" data-op="liftover" onclick="showOperation('liftover')">Liftover</button>
+                <button class="op-tab-button" data-op="vcf" onclick="showOperation('vcf')">VCF</button>
+            </div>
+
+            <!-- Normalize Operation (default) -->
+            <div class="operation-panel active" id="op-normalize">
+                <div class="card input-section">
+                    <div class="card-header">
+                        <h2>HGVS Variant Normalization</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="input-mode-tabs">
+                            <button class="tab-button active" onclick="showInputMode('single')">Single Variant</button>
+                            <button class="tab-button" onclick="showInputMode('batch')">Batch Mode</button>
+                        </div>
+
+                        <!-- Single Variant Input -->
+                        <div class="input-mode active" id="mode-single">
+                            <div class="input-group">
+                                <label for="hgvs-input">HGVS Variant:</label>
+                                <input type="text" id="hgvs-input"
+                                       placeholder="e.g., NM_000249.4:c.350C>T"
+                                       onkeypress="if(event.key === 'Enter') parseVariant()">
+                            </div>
+                            <div class="example-variants">
+                                <span>Examples:</span>
+                                <button class="example-btn" onclick="setExample('NM_000249.4:c.350C>T')">NM_000249.4:c.350C>T</button>
+                                <button class="example-btn" onclick="setExample('NM_000249.4:c.1852_1853delAA')" title="Normalizes to c.1852_1853del">NM_000249.4:c.1852_1853delAA</button>
+                                <button class="example-btn" onclick="setExample('NM_000249.4:c.117-2del')" title="Intronic variant - only ferro supports">NM_000249.4:c.117-2del (intronic)</button>
+                            </div>
+                        </div>
+
+                        <!-- Batch Input -->
+                        <div class="input-mode" id="mode-batch">
+                            <div class="input-group">
+                                <label for="batch-input">HGVS Variants (one per line):</label>
+                                <textarea id="batch-input" rows="6"
+                                          placeholder="NM_000249.4:c.350C>T&#10;NM_000249.4:c.1852_1853delAA&#10;NM_000249.4:c.117-2del"></textarea>
+                            </div>
+                            <button class="example-btn" onclick="loadBatchExample()">Load Example Batch</button>
+                        </div>
+
+                        <!-- Tool Selection -->
+                        <div class="tool-selection">
+                            <label>Tools:</label>
+                            <div id="tool-checkboxes" class="tool-checkboxes">
+                                <div class="tool-checkbox" data-tool="ferro">
+                                    <input type="checkbox" id="tool-ferro" value="ferro" checked>
+                                    <label for="tool-ferro">ferro</label>
+                                </div>
+                                <div class="tool-checkbox" data-tool="mutalyzer">
+                                    <input type="checkbox" id="tool-mutalyzer" value="mutalyzer" checked>
+                                    <label for="tool-mutalyzer">mutalyzer</label>
+                                </div>
+                                <div class="tool-checkbox" data-tool="biocommons">
+                                    <input type="checkbox" id="tool-biocommons" value="biocommons">
+                                    <label for="tool-biocommons">biocommons</label>
+                                </div>
+                                <div class="tool-checkbox" data-tool="hgvs-rs">
+                                    <input type="checkbox" id="tool-hgvs-rs" value="hgvs-rs">
+                                    <label for="tool-hgvs-rs">hgvs-rs</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Error Mode Selection -->
+                        <div class="error-mode-selector">
+                            <label>Error Mode:</label>
+                            <div class="error-mode-options">
+                                <label class="error-mode-option">
+                                    <input type="radio" name="error_mode" value="silent">
+                                    <span>Silent</span>
+                                </label>
+                                <label class="error-mode-option">
+                                    <input type="radio" name="error_mode" value="lenient" checked>
+                                    <span>Lenient</span>
+                                </label>
+                                <label class="error-mode-option">
+                                    <input type="radio" name="error_mode" value="strict">
+                                    <span>Strict</span>
+                                </label>
+                            </div>
+                            <span class="error-mode-help" title="Silent: suppress errors, Lenient: warn but continue, Strict: fail on errors">?</span>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="action-buttons">
+                            <button class="btn btn-primary" onclick="validateVariant()">Validate</button>
+                            <button class="btn btn-success" onclick="normalizeVariant()">Normalize</button>
+                            <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Convert Operation -->
+            <div class="operation-panel" id="op-convert">
+                <div class="card input-section">
+                    <div class="card-header">
+                        <h2>Coordinate Conversion</h2>
+                    </div>
+                    <div class="card-body">
+                        <p class="op-description">Convert HGVS variants between coordinate systems (c. ↔ g. ↔ p. ↔ n.)</p>
+
+                        <div class="input-group">
+                            <label for="convert-input">HGVS Variant:</label>
+                            <input type="text" id="convert-input"
+                                   placeholder="e.g., NM_000249.4:c.350C>T"
+                                   onkeypress="if(event.key === 'Enter') convertVariant()">
+                        </div>
+                        <div class="example-variants">
+                            <span>Examples:</span>
+                            <button class="example-btn" onclick="setConvertExample('NM_000249.4:c.350C>T')">NM_000249.4:c.350C>T</button>
+                            <button class="example-btn" onclick="setConvertExample('NC_000007.14:g.117559593G>A')">NC_000007.14:g.117559593G>A</button>
+                        </div>
+
+                        <div class="convert-options">
+                            <label>Target Coordinate System:</label>
+                            <div class="coord-system-options">
+                                <label class="coord-option">
+                                    <input type="radio" name="target_system" value="g" checked>
+                                    <span>g. (genomic)</span>
+                                </label>
+                                <label class="coord-option">
+                                    <input type="radio" name="target_system" value="c">
+                                    <span>c. (coding)</span>
+                                </label>
+                                <label class="coord-option">
+                                    <input type="radio" name="target_system" value="p">
+                                    <span>p. (protein)</span>
+                                </label>
+                                <label class="coord-option">
+                                    <input type="radio" name="target_system" value="n">
+                                    <span>n. (non-coding)</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="checkbox-option">
+                            <input type="checkbox" id="include-all-conversions">
+                            <label for="include-all-conversions">Include all possible conversions</label>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button class="btn btn-success" onclick="convertVariant()">Convert</button>
+                            <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Effect Operation -->
+            <div class="operation-panel" id="op-effect">
+                <div class="card input-section">
+                    <div class="card-header">
+                        <h2>Effect Prediction</h2>
+                    </div>
+                    <div class="card-body">
+                        <p class="op-description">Predict protein consequences using Sequence Ontology terms</p>
+
+                        <div class="input-group">
+                            <label for="effect-input">HGVS Variant:</label>
+                            <input type="text" id="effect-input"
+                                   placeholder="e.g., NM_000249.4:c.350C>T"
+                                   onkeypress="if(event.key === 'Enter') predictEffect()">
+                        </div>
+                        <div class="example-variants">
+                            <span>Examples:</span>
+                            <button class="example-btn" onclick="setEffectExample('NM_000249.4:c.350C>T')">NM_000249.4:c.350C>T (missense)</button>
+                            <button class="example-btn" onclick="setEffectExample('NM_000249.4:c.1852_1853del')">NM_000249.4:c.1852_1853del (frameshift)</button>
+                            <button class="example-btn" onclick="setEffectExample('NM_000249.4:c.117-2del')">NM_000249.4:c.117-2del (splice)</button>
+                        </div>
+
+                        <div class="checkbox-option">
+                            <input type="checkbox" id="include-nmd">
+                            <label for="include-nmd">Include NMD (Nonsense-Mediated Decay) prediction</label>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button class="btn btn-success" onclick="predictEffect()">Predict Effect</button>
+                            <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Liftover Operation -->
+            <div class="operation-panel" id="op-liftover">
+                <div class="card input-section">
+                    <div class="card-header">
+                        <h2>Genome Build Liftover</h2>
+                    </div>
+                    <div class="card-body">
+                        <p class="op-description">Convert genomic coordinates between GRCh37 (hg19) and GRCh38 (hg38)</p>
+
+                        <div class="input-group">
+                            <label for="liftover-input">Genomic Position:</label>
+                            <input type="text" id="liftover-input"
+                                   placeholder="e.g., chr7:117120148 or NC_000007.13:g.117120148"
+                                   onkeypress="if(event.key === 'Enter') liftoverPosition()">
+                        </div>
+                        <div class="example-variants">
+                            <span>Examples:</span>
+                            <button class="example-btn" onclick="setLiftoverExample('chr7:117120148')">chr7:117120148</button>
+                            <button class="example-btn" onclick="setLiftoverExample('NC_000007.13:g.117120148')">NC_000007.13:g.117120148</button>
+                        </div>
+
+                        <div class="liftover-options">
+                            <div class="build-select">
+                                <label>From:</label>
+                                <select id="from-build">
+                                    <option value="GRCh37">GRCh37 (hg19)</option>
+                                    <option value="GRCh38">GRCh38 (hg38)</option>
+                                </select>
+                            </div>
+                            <span class="arrow">→</span>
+                            <div class="build-select">
+                                <label>To:</label>
+                                <select id="to-build">
+                                    <option value="GRCh38">GRCh38 (hg38)</option>
+                                    <option value="GRCh37">GRCh37 (hg19)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button class="btn btn-success" onclick="liftoverPosition()">Liftover</button>
+                            <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VCF Operation -->
+            <div class="operation-panel" id="op-vcf">
+                <div class="card input-section">
+                    <div class="card-header">
+                        <h2>VCF Conversion</h2>
+                    </div>
+                    <div class="card-body">
+                        <p class="op-description">Bidirectional conversion between VCF format and HGVS notation</p>
+
+                        <div class="vcf-mode-tabs">
+                            <button class="tab-button active" onclick="showVcfMode('hgvs-to-vcf')">HGVS → VCF</button>
+                            <button class="tab-button" onclick="showVcfMode('vcf-to-hgvs')">VCF → HGVS</button>
+                        </div>
+
+                        <!-- HGVS to VCF -->
+                        <div class="vcf-mode active" id="vcf-mode-hgvs-to-vcf">
+                            <div class="input-group">
+                                <label for="hgvs-to-vcf-input">HGVS Variant:</label>
+                                <input type="text" id="hgvs-to-vcf-input"
+                                       placeholder="e.g., NC_000007.14:g.117559593G>A"
+                                       onkeypress="if(event.key === 'Enter') hgvsToVcf()">
+                            </div>
+                            <div class="example-variants">
+                                <span>Examples:</span>
+                                <button class="example-btn" onclick="setHgvsToVcfExample('NC_000007.14:g.117559593G>A')">NC_000007.14:g.117559593G>A</button>
+                                <button class="example-btn" onclick="setHgvsToVcfExample('NC_000007.14:g.117559593delG')">NC_000007.14:g.117559593delG</button>
+                            </div>
+
+                            <div class="build-select-inline">
+                                <label>Genome Build:</label>
+                                <select id="hgvs-to-vcf-build">
+                                    <option value="GRCh38">GRCh38 (hg38)</option>
+                                    <option value="GRCh37">GRCh37 (hg19)</option>
+                                </select>
+                            </div>
+
+                            <div class="action-buttons">
+                                <button class="btn btn-success" onclick="hgvsToVcf()">Convert to VCF</button>
+                                <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                            </div>
+                        </div>
+
+                        <!-- VCF to HGVS -->
+                        <div class="vcf-mode" id="vcf-mode-vcf-to-hgvs">
+                            <div class="vcf-fields">
+                                <div class="input-group vcf-field">
+                                    <label for="vcf-chrom">CHROM:</label>
+                                    <input type="text" id="vcf-chrom" placeholder="chr7">
+                                </div>
+                                <div class="input-group vcf-field">
+                                    <label for="vcf-pos">POS:</label>
+                                    <input type="text" id="vcf-pos" placeholder="117559593">
+                                </div>
+                                <div class="input-group vcf-field">
+                                    <label for="vcf-ref">REF:</label>
+                                    <input type="text" id="vcf-ref" placeholder="G">
+                                </div>
+                                <div class="input-group vcf-field">
+                                    <label for="vcf-alt">ALT:</label>
+                                    <input type="text" id="vcf-alt" placeholder="A">
+                                </div>
+                            </div>
+                            <div class="example-variants">
+                                <span>Examples:</span>
+                                <button class="example-btn" onclick="setVcfToHgvsExample('chr7', '117559593', 'G', 'A')">chr7:117559593 G>A (sub)</button>
+                                <button class="example-btn" onclick="setVcfToHgvsExample('chr7', '117559592', 'AG', 'A')">chr7:117559592 AG>A (del)</button>
+                            </div>
+
+                            <div class="build-select-inline">
+                                <label>Genome Build:</label>
+                                <select id="vcf-to-hgvs-build">
+                                    <option value="GRCh38">GRCh38 (hg38)</option>
+                                    <option value="GRCh37">GRCh37 (hg19)</option>
+                                </select>
+                            </div>
+
+                            <div class="input-group">
+                                <label for="vcf-transcript">Transcript (optional, for c. notation):</label>
+                                <input type="text" id="vcf-transcript" placeholder="e.g., NM_000249.4">
+                            </div>
+
+                            <div class="action-buttons">
+                                <button class="btn btn-success" onclick="vcfToHgvs()">Convert to HGVS</button>
+                                <button class="btn btn-secondary" onclick="clearResults()">Clear</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div class="card results-section" id="results-section" style="display: none;">
+                <div class="card-header">
+                    <h2>Results</h2>
+                    <span id="processing-time" class="processing-time"></span>
+                </div>
+                <div class="card-body">
+                    <div id="results-container"></div>
+                </div>
+            </div>
+
+            <!-- Help & Documentation (collapsible) -->
+            <div class="help-section">
+                <button class="help-toggle" aria-expanded="false">
+                    <span class="toggle-icon">&#9654;</span> Help &amp; Documentation
+                </button>
+                <div class="help-content" hidden>
+                    <div class="help-tabs">
+                        <button class="help-tab-btn active" data-tab="overview">Overview</button>
+                        <button class="help-tab-btn" data-tab="tools">Tools</button>
+                        <button class="help-tab-btn" data-tab="support">HGVS Support</button>
+                        <button class="help-tab-btn" data-tab="operations">Operations</button>
+                        <button class="help-tab-btn" data-tab="api">API</button>
+                        <button class="help-tab-btn" data-tab="errors">Error Modes</button>
+                        <button class="help-tab-btn" data-tab="examples">Examples</button>
+                    </div>
+                    <div class="help-tab-content" id="help-tab-content">
+                        <!-- Content loaded by JS -->
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer with Service Status -->
+        <footer class="footer">
+            <div class="footer-main">
+                <div class="service-status">
+                    <span class="status-indicator" id="status-indicator"></span>
+                    <span id="status-text">Checking service status...</span>
+                    <button class="refresh-status-btn" onclick="refreshHealth()" title="Refresh status">&#8635;</button>
+                </div>
+                <div class="footer-info">
+                    <span>ferro-hgvs</span>
+                    <span class="separator">|</span>
+                    <a href="https://www.fulcrumgenomics.com" target="_blank" rel="noopener">Fulcrum Genomics</a>
+                </div>
+            </div>
+            <!-- Comprehensive Health Summary -->
+            <div id="health-summary" class="health-summary"></div>
+        </footer>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

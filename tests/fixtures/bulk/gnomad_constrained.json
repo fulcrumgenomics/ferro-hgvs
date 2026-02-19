@@ -1,0 +1,6531 @@
+{
+  "description": "HGVS variants for constrained genes from gnomAD",
+  "source": "Generated from gnomAD constrained gene list with known RefSeq accessions",
+  "version": "1.0.0",
+  "generated": "2025-12-19 18:15:07 UTC",
+  "notes": "Constrained genes have high pLI/low LOEUF, indicating selection against LoF variants",
+  "total_test_cases": 720,
+  "summary": {
+    "by_coordinate_type": {
+      "coding": 576,
+      "protein": 144
+    },
+    "by_gene": {
+      "MECP2": 20,
+      "FOXP2": 20,
+      "CHD8": 20,
+      "SCN2A": 20,
+      "SHANK3": 20,
+      "SCN5A": 20,
+      "KCNQ1": 20,
+      "KCNH2": 20,
+      "MYH7": 20,
+      "MYBPC3": 20,
+      "LMNA": 20,
+      "TP53": 20,
+      "BRCA1": 20,
+      "BRCA2": 20,
+      "APC": 20,
+      "RB1": 20,
+      "NF1": 20,
+      "CFTR": 20,
+      "PAH": 20,
+      "GBA": 20
+    },
+    "by_consequence": {
+      "start_lost": 72,
+      "substitution": 180,
+      "deletion": 108,
+      "duplication": 36,
+      "insertion": 36,
+      "delins": 36,
+      "splice": 72,
+      "5utr": 36,
+      "3utr": 36,
+      "missense": 72,
+      "nonsense": 36
+    }
+  },
+  "test_cases": [
+    {
+      "input": "NM_004992.4:c.1A>G",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.2T>C",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100A>G",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.200C>T",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.300G>A",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100del",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100_102del",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100dup",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100_101insA",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.-10A>G",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4:c.*20T>C",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4(MECP2):c.100A>G",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004992.4(MECP2):c.200del",
+      "type": "coding",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004992.3:p.Met1?",
+      "type": "protein",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004992.3:p.Arg50His",
+      "type": "protein",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004992.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004992.3:p.Trp150*",
+      "type": "protein",
+      "gene": "MECP2",
+      "transcript": "NM_004992.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.1A>G",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.2T>C",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100A>G",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.200C>T",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.300G>A",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100del",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100_102del",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100dup",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100_101insA",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.-10A>G",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4:c.*20T>C",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4(FOXP2):c.100A>G",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_014491.4(FOXP2):c.200del",
+      "type": "coding",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_014491.3:p.Met1?",
+      "type": "protein",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_014491.3:p.Arg50His",
+      "type": "protein",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_014491.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_014491.3:p.Trp150*",
+      "type": "protein",
+      "gene": "FOXP2",
+      "transcript": "NM_014491.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.1A>G",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.2T>C",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100A>G",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.200C>T",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.300G>A",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100del",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100_102del",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100dup",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100_101insA",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100delinsAT",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100+1G>A",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.100-2A>G",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.-10A>G",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2:c.*20T>C",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2(CHD8):c.100A>G",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001170629.2(CHD8):c.200del",
+      "type": "coding",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001170629.2:p.Met1?",
+      "type": "protein",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001170629.2:p.Arg50His",
+      "type": "protein",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001170629.2:p.Gly100Asp",
+      "type": "protein",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001170629.2:p.Trp150*",
+      "type": "protein",
+      "gene": "CHD8",
+      "transcript": "NM_001170629.2",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.1A>G",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.2T>C",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100A>G",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.200C>T",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.300G>A",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100del",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100_102del",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100dup",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100_101insA",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100delinsAT",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100+1G>A",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.100-2A>G",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.-10A>G",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2:c.*20T>C",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2(SCN2A):c.100A>G",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2(SCN2A):c.200del",
+      "type": "coding",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001040142.2:p.Met1?",
+      "type": "protein",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001040142.2:p.Arg50His",
+      "type": "protein",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001040142.2:p.Gly100Asp",
+      "type": "protein",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001040142.2:p.Trp150*",
+      "type": "protein",
+      "gene": "SCN2A",
+      "transcript": "NM_001040142.2",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.1A>G",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.2T>C",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100A>G",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.200C>T",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.300G>A",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100del",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100_102del",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100dup",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100_101insA",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100delinsAT",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100+1G>A",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.100-2A>G",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.-10A>G",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2:c.*20T>C",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2(SHANK3):c.100A>G",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_033517.2(SHANK3):c.200del",
+      "type": "coding",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_033517.2:p.Met1?",
+      "type": "protein",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_033517.2:p.Arg50His",
+      "type": "protein",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_033517.2:p.Gly100Asp",
+      "type": "protein",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_033517.2:p.Trp150*",
+      "type": "protein",
+      "gene": "SHANK3",
+      "transcript": "NM_033517.2",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.1A>G",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.2T>C",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100A>G",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.200C>T",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.300G>A",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100del",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100_102del",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100dup",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100_101insA",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.-10A>G",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5:c.*20T>C",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5(SCN5A):c.100A>G",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5(SCN5A):c.200del",
+      "type": "coding",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000335.4:p.Met1?",
+      "type": "protein",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000335.4:p.Arg50His",
+      "type": "protein",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000335.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000335.4:p.Trp150*",
+      "type": "protein",
+      "gene": "SCN5A",
+      "transcript": "NM_000335.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.1A>G",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.2T>C",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100A>G",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.200C>T",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.300G>A",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100del",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100_102del",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100dup",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100_101insA",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.-10A>G",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3:c.*20T>C",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3(KCNQ1):c.100A>G",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000218.3(KCNQ1):c.200del",
+      "type": "coding",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000218.3:p.Met1?",
+      "type": "protein",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000218.3:p.Arg50His",
+      "type": "protein",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000218.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000218.3:p.Trp150*",
+      "type": "protein",
+      "gene": "KCNQ1",
+      "transcript": "NM_000218.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.1A>G",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.2T>C",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100A>G",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.200C>T",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.300G>A",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100del",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100_102del",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100dup",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100_101insA",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.-10A>G",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4:c.*20T>C",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4(KCNH2):c.100A>G",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4(KCNH2):c.200del",
+      "type": "coding",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000238.3:p.Met1?",
+      "type": "protein",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000238.3:p.Arg50His",
+      "type": "protein",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000238.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000238.3:p.Trp150*",
+      "type": "protein",
+      "gene": "KCNH2",
+      "transcript": "NM_000238.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.1A>G",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.2T>C",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100A>G",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.200C>T",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.300G>A",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100del",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100_102del",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100dup",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100_101insA",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.-10A>G",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4:c.*20T>C",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4(MYH7):c.100A>G",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4(MYH7):c.200del",
+      "type": "coding",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000257.3:p.Met1?",
+      "type": "protein",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000257.3:p.Arg50His",
+      "type": "protein",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000257.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000257.3:p.Trp150*",
+      "type": "protein",
+      "gene": "MYH7",
+      "transcript": "NM_000257.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.1A>G",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.2T>C",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100A>G",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.200C>T",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.300G>A",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100del",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100_102del",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100dup",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100_101insA",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.-10A>G",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3:c.*20T>C",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3(MYBPC3):c.100A>G",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000256.3(MYBPC3):c.200del",
+      "type": "coding",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000256.3:p.Met1?",
+      "type": "protein",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000256.3:p.Arg50His",
+      "type": "protein",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000256.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000256.3:p.Trp150*",
+      "type": "protein",
+      "gene": "MYBPC3",
+      "transcript": "NM_000256.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.1A>G",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.2T>C",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100A>G",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.200C>T",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.300G>A",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100del",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100_102del",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100dup",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100_101insA",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.-10A>G",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4:c.*20T>C",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4(LMNA):c.100A>G",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_170707.4(LMNA):c.200del",
+      "type": "coding",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_170707.3:p.Met1?",
+      "type": "protein",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_170707.3:p.Arg50His",
+      "type": "protein",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_170707.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_170707.3:p.Trp150*",
+      "type": "protein",
+      "gene": "LMNA",
+      "transcript": "NM_170707.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.1A>G",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.2T>C",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100A>G",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.200C>T",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.300G>A",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100del",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100_102del",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100dup",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100_101insA",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100delinsAT",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100+1G>A",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.100-2A>G",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.-10A>G",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6:c.*20T>C",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6(TP53):c.100A>G",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000546.6(TP53):c.200del",
+      "type": "coding",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000546.5:p.Met1?",
+      "type": "protein",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000546.5:p.Arg50His",
+      "type": "protein",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000546.5:p.Gly100Asp",
+      "type": "protein",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000546.5:p.Trp150*",
+      "type": "protein",
+      "gene": "TP53",
+      "transcript": "NM_000546.6",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.1A>G",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.2T>C",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100A>G",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.200C>T",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.300G>A",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100del",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100_102del",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100dup",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100_101insA",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.-10A>G",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4:c.*20T>C",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4(BRCA1):c.100A>G",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_007294.4(BRCA1):c.200del",
+      "type": "coding",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_007294.3:p.Met1?",
+      "type": "protein",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_007294.3:p.Arg50His",
+      "type": "protein",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_007294.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_007294.3:p.Trp150*",
+      "type": "protein",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.1A>G",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.2T>C",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100A>G",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.200C>T",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.300G>A",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100del",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100_102del",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100dup",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100_101insA",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.-10A>G",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4:c.*20T>C",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4(BRCA2):c.100A>G",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000059.4(BRCA2):c.200del",
+      "type": "coding",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000059.3:p.Met1?",
+      "type": "protein",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000059.3:p.Arg50His",
+      "type": "protein",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000059.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000059.3:p.Trp150*",
+      "type": "protein",
+      "gene": "BRCA2",
+      "transcript": "NM_000059.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.1A>G",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.2T>C",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100A>G",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.200C>T",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.300G>A",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100del",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100_102del",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100dup",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100_101insA",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100delinsAT",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100+1G>A",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.100-2A>G",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.-10A>G",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6:c.*20T>C",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6(APC):c.100A>G",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000038.6(APC):c.200del",
+      "type": "coding",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000038.5:p.Met1?",
+      "type": "protein",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000038.5:p.Arg50His",
+      "type": "protein",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000038.5:p.Gly100Asp",
+      "type": "protein",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000038.5:p.Trp150*",
+      "type": "protein",
+      "gene": "APC",
+      "transcript": "NM_000038.6",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.1A>G",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.2T>C",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100A>G",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.200C>T",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.300G>A",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100del",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100_102del",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100dup",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100_101insA",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.-10A>G",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3:c.*20T>C",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3(RB1):c.100A>G",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000321.3(RB1):c.200del",
+      "type": "coding",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000321.3:p.Met1?",
+      "type": "protein",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000321.3:p.Arg50His",
+      "type": "protein",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000321.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000321.3:p.Trp150*",
+      "type": "protein",
+      "gene": "RB1",
+      "transcript": "NM_000321.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.1A>G",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.2T>C",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100A>G",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.200C>T",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.300G>A",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100del",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100_102del",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100dup",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100_101insA",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.-10A>G",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3:c.*20T>C",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3(NF1):c.100A>G",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001042492.3(NF1):c.200del",
+      "type": "coding",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001042492.3:p.Met1?",
+      "type": "protein",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001042492.3:p.Arg50His",
+      "type": "protein",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001042492.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001042492.3:p.Trp150*",
+      "type": "protein",
+      "gene": "NF1",
+      "transcript": "NM_001042492.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.1A>G",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.2T>C",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100A>G",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.200C>T",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.300G>A",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100del",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100_102del",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100dup",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100_101insA",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.-10A>G",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4:c.*20T>C",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4(CFTR):c.100A>G",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000492.4(CFTR):c.200del",
+      "type": "coding",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000492.3:p.Met1?",
+      "type": "protein",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000492.3:p.Arg50His",
+      "type": "protein",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000492.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000492.3:p.Trp150*",
+      "type": "protein",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.1A>G",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.2T>C",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100A>G",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.200C>T",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.300G>A",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100del",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100_102del",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100dup",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100_101insA",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.-10A>G",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3:c.*20T>C",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3(PAH):c.100A>G",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000277.3(PAH):c.200del",
+      "type": "coding",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000277.3:p.Met1?",
+      "type": "protein",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000277.3:p.Arg50His",
+      "type": "protein",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000277.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000277.3:p.Trp150*",
+      "type": "protein",
+      "gene": "PAH",
+      "transcript": "NM_000277.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.1A>G",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.2T>C",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100A>G",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.200C>T",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.300G>A",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100del",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100_102del",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100dup",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100_101insA",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.-10A>G",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4:c.*20T>C",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4(GBA):c.100A>G",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000157.4(GBA):c.200del",
+      "type": "coding",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000157.3:p.Met1?",
+      "type": "protein",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000157.3:p.Arg50His",
+      "type": "protein",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000157.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000157.3:p.Trp150*",
+      "type": "protein",
+      "gene": "GBA",
+      "transcript": "NM_000157.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.1A>G",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.2T>C",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100A>G",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.200C>T",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.300G>A",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100del",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100_102del",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100dup",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100_101insA",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100delinsAT",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100+1G>A",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.100-2A>G",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.-10A>G",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6:c.*20T>C",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6(HEXA):c.100A>G",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000520.6(HEXA):c.200del",
+      "type": "coding",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000520.5:p.Met1?",
+      "type": "protein",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000520.5:p.Arg50His",
+      "type": "protein",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000520.5:p.Gly100Asp",
+      "type": "protein",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000520.5:p.Trp150*",
+      "type": "protein",
+      "gene": "HEXA",
+      "transcript": "NM_000520.6",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.1A>G",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.2T>C",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100A>G",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.200C>T",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.300G>A",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100del",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100_102del",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100dup",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100_101insA",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.-10A>G",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4:c.*20T>C",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4(SMN1):c.100A>G",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000344.4(SMN1):c.200del",
+      "type": "coding",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000344.3:p.Met1?",
+      "type": "protein",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000344.3:p.Arg50His",
+      "type": "protein",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000344.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000344.3:p.Trp150*",
+      "type": "protein",
+      "gene": "SMN1",
+      "transcript": "NM_000344.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.1A>G",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.2T>C",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100A>G",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.200C>T",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.300G>A",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100del",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100_102del",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100dup",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100_101insA",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.-10A>G",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5:c.*20T>C",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5(FBN1):c.100A>G",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5(FBN1):c.200del",
+      "type": "coding",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000138.4:p.Met1?",
+      "type": "protein",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000138.4:p.Arg50His",
+      "type": "protein",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000138.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000138.4:p.Trp150*",
+      "type": "protein",
+      "gene": "FBN1",
+      "transcript": "NM_000138.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.1A>G",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.2T>C",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100A>G",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.200C>T",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.300G>A",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100del",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100_102del",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100dup",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100_101insA",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.-10A>G",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4:c.*20T>C",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4(COL1A1):c.100A>G",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4(COL1A1):c.200del",
+      "type": "coding",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000088.3:p.Met1?",
+      "type": "protein",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000088.3:p.Arg50His",
+      "type": "protein",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000088.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000088.3:p.Trp150*",
+      "type": "protein",
+      "gene": "COL1A1",
+      "transcript": "NM_000088.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.1A>G",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.2T>C",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100A>G",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.200C>T",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.300G>A",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100del",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100_102del",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100dup",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100_101insA",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.-10A>G",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4:c.*20T>C",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4(COL3A1):c.100A>G",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4(COL3A1):c.200del",
+      "type": "coding",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000090.3:p.Met1?",
+      "type": "protein",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000090.3:p.Arg50His",
+      "type": "protein",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000090.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000090.3:p.Trp150*",
+      "type": "protein",
+      "gene": "COL3A1",
+      "transcript": "NM_000090.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.1A>G",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.2T>C",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100A>G",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.200C>T",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.300G>A",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100del",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100_102del",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100dup",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100_101insA",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.-10A>G",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4:c.*20T>C",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4(SOX9):c.100A>G",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000346.4(SOX9):c.200del",
+      "type": "coding",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000346.3:p.Met1?",
+      "type": "protein",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000346.3:p.Arg50His",
+      "type": "protein",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000346.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000346.3:p.Trp150*",
+      "type": "protein",
+      "gene": "SOX9",
+      "transcript": "NM_000346.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.1A>G",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.2T>C",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100A>G",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.200C>T",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.300G>A",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100del",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100_102del",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100dup",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100_101insA",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.-10A>G",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5:c.*20T>C",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5(PAX6):c.100A>G",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000280.5(PAX6):c.200del",
+      "type": "coding",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000280.4:p.Met1?",
+      "type": "protein",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000280.4:p.Arg50His",
+      "type": "protein",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000280.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000280.4:p.Trp150*",
+      "type": "protein",
+      "gene": "PAX6",
+      "transcript": "NM_000280.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.1A>G",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.2T>C",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100A>G",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.200C>T",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.300G>A",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100del",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100_102del",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100dup",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100_101insA",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100delinsAT",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100+1G>A",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.100-2A>G",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.-10A>G",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3:c.*20T>C",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3(TBX5):c.100A>G",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000192.3(TBX5):c.200del",
+      "type": "coding",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000192.3:p.Met1?",
+      "type": "protein",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000192.3:p.Arg50His",
+      "type": "protein",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000192.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000192.3:p.Trp150*",
+      "type": "protein",
+      "gene": "TBX5",
+      "transcript": "NM_000192.3",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.1A>G",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.2T>C",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100A>G",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.200C>T",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.300G>A",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100del",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100_102del",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100dup",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100_101insA",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.-10A>G",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5:c.*20T>C",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5(GATA4):c.100A>G",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002052.5(GATA4):c.200del",
+      "type": "coding",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002052.4:p.Met1?",
+      "type": "protein",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002052.4:p.Arg50His",
+      "type": "protein",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002052.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002052.4:p.Trp150*",
+      "type": "protein",
+      "gene": "GATA4",
+      "transcript": "NM_002052.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.1A>G",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.2T>C",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100A>G",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.200C>T",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.300G>A",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100del",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100_102del",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100dup",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100_101insA",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.-10A>G",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5:c.*20T>C",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5(PTPN11):c.100A>G",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002834.5(PTPN11):c.200del",
+      "type": "coding",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002834.4:p.Met1?",
+      "type": "protein",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002834.4:p.Arg50His",
+      "type": "protein",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002834.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002834.4:p.Trp150*",
+      "type": "protein",
+      "gene": "PTPN11",
+      "transcript": "NM_002834.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.1A>G",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.2T>C",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100A>G",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.200C>T",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.300G>A",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100del",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100_102del",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100dup",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100_101insA",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.-10A>G",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4:c.*20T>C",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4(RAF1):c.100A>G",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002880.4(RAF1):c.200del",
+      "type": "coding",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002880.3:p.Met1?",
+      "type": "protein",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002880.3:p.Arg50His",
+      "type": "protein",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002880.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002880.3:p.Trp150*",
+      "type": "protein",
+      "gene": "RAF1",
+      "transcript": "NM_002880.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.1A>G",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.2T>C",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100A>G",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.200C>T",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.300G>A",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100del",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100_102del",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100dup",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100_101insA",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100delinsAT",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100+1G>A",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.100-2A>G",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.-10A>G",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4:c.*20T>C",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4(HRAS):c.100A>G",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_005343.4(HRAS):c.200del",
+      "type": "coding",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_005343.3:p.Met1?",
+      "type": "protein",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_005343.3:p.Arg50His",
+      "type": "protein",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_005343.3:p.Gly100Asp",
+      "type": "protein",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_005343.3:p.Trp150*",
+      "type": "protein",
+      "gene": "HRAS",
+      "transcript": "NM_005343.4",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.1A>G",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.2T>C",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100A>G",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.200C>T",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.300G>A",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100del",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100_102del",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100dup",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100_101insA",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.-10A>G",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5:c.*20T>C",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5(KRAS):c.100A>G",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_004985.5(KRAS):c.200del",
+      "type": "coding",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004985.4:p.Met1?",
+      "type": "protein",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004985.4:p.Arg50His",
+      "type": "protein",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004985.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_004985.4:p.Trp150*",
+      "type": "protein",
+      "gene": "KRAS",
+      "transcript": "NM_004985.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.1A>G",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.2T>C",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100A>G",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.200C>T",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.300G>A",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100del",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100_102del",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100dup",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100_101insA",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.-10A>G",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5:c.*20T>C",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5(NRAS):c.100A>G",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_002524.5(NRAS):c.200del",
+      "type": "coding",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002524.4:p.Met1?",
+      "type": "protein",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002524.4:p.Arg50His",
+      "type": "protein",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002524.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_002524.4:p.Trp150*",
+      "type": "protein",
+      "gene": "NRAS",
+      "transcript": "NM_002524.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.1A>G",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.2T>C",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100A>G",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.200C>T",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.300G>A",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100del",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100_102del",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100dup",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100_101insA",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100delinsAT",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100+1G>A",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.100-2A>G",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.-10A>G",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5:c.*20T>C",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5(ACTB):c.100A>G",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_001101.5(ACTB):c.200del",
+      "type": "coding",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001101.4:p.Met1?",
+      "type": "protein",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001101.4:p.Arg50His",
+      "type": "protein",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001101.4:p.Gly100Asp",
+      "type": "protein",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_001101.4:p.Trp150*",
+      "type": "protein",
+      "gene": "ACTB",
+      "transcript": "NM_001101.5",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.1A>G",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.2T>C",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100A>G",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.200C>T",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.300G>A",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100del",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100_102del",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100dup",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "duplication",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100_101insA",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "insertion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100delinsAT",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "delins",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100+1G>A",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.100-2A>G",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "splice",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.-10A>G",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "5utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8:c.*20T>C",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "3utr",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8(PTEN):c.100A>G",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "substitution",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NM_000314.8(PTEN):c.200del",
+      "type": "coding",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "deletion",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000314.8:p.Met1?",
+      "type": "protein",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "start_lost",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000314.8:p.Arg50His",
+      "type": "protein",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000314.8:p.Gly100Asp",
+      "type": "protein",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "missense",
+      "source": "constrained_gene",
+      "valid": true
+    },
+    {
+      "input": "NP_000314.8:p.Trp150*",
+      "type": "protein",
+      "gene": "PTEN",
+      "transcript": "NM_000314.8",
+      "consequence": "nonsense",
+      "source": "constrained_gene",
+      "valid": true
+    }
+  ]
+}

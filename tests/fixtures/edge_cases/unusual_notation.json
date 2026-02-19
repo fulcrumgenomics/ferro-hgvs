@@ -1,0 +1,295 @@
+{
+  "description": "Edge case HGVS notations - unusual but valid patterns",
+  "source": "HGVS nomenclature specification and literature",
+  "version": "1.0.0",
+  "generated": "2025-12-19",
+  "categories": {
+    "legacy": "Legacy notation patterns (IVS, EX) - deprecated but commonly encountered",
+    "mosaic": "Mosaic and chimeric variant notation",
+    "alleles": "Complex allele notation including compound heterozygous",
+    "uncertain": "Variants with uncertain positions or breakpoints",
+    "repeats": "Repeated sequence notation",
+    "conversions": "Gene conversion notation",
+    "complex": "Complex multi-component variants"
+  },
+  "test_cases": [
+    {
+      "category": "legacy",
+      "input": "NM_000088.3:c.IVS3+1G>A",
+      "description": "Legacy intron-exon boundary notation (IVS = intervening sequence)",
+      "valid": true,
+      "supported": false,
+      "notes": "IVS notation is deprecated, should use c.XXX+1G>A format"
+    },
+    {
+      "category": "legacy",
+      "input": "NM_000088.3:c.IVS14-2A>C",
+      "description": "Legacy intron notation with negative offset",
+      "valid": true,
+      "supported": false,
+      "notes": "IVS notation is deprecated"
+    },
+    {
+      "category": "legacy",
+      "input": "NM_000088.3:c.EX3del",
+      "description": "Legacy exon deletion notation",
+      "valid": true,
+      "supported": false,
+      "notes": "EX notation is deprecated"
+    },
+    {
+      "category": "legacy",
+      "input": "NM_000088.3:c.EX3_EX5del",
+      "description": "Legacy multi-exon deletion notation",
+      "valid": true,
+      "supported": false,
+      "notes": "EX notation is deprecated"
+    },
+    {
+      "category": "mosaic",
+      "input": "NC_000023.11:g.33038255C>T/=",
+      "description": "Mosaic variant - mixture of mutant and wild-type",
+      "valid": true,
+      "supported": false,
+      "notes": "Slash notation for mosaicism"
+    },
+    {
+      "category": "mosaic",
+      "input": "NM_000088.3:c.274G>A/=",
+      "description": "Mosaic coding variant",
+      "valid": true,
+      "supported": false,
+      "notes": "Mosaic notation at coding level"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A];[274G>A]",
+      "description": "Homozygous variant - same change on both alleles",
+      "valid": true,
+      "supported": true,
+      "notes": "Standard homozygous notation"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A];[=]",
+      "description": "Heterozygous variant - one mutant, one wild-type allele",
+      "valid": true,
+      "supported": false,
+      "notes": "Standard heterozygous notation - requires parser update"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A];[?]",
+      "description": "Variant with unknown second allele",
+      "valid": true,
+      "supported": true,
+      "notes": "Unknown allele notation"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A;284C>T]",
+      "description": "Compound heterozygous in cis (same chromosome)",
+      "valid": true,
+      "supported": true,
+      "notes": "Cis compound notation"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A];[284C>T]",
+      "description": "Compound heterozygous in trans (different chromosomes)",
+      "valid": true,
+      "supported": true,
+      "notes": "Trans compound notation"
+    },
+    {
+      "category": "alleles",
+      "input": "NM_000088.3:c.[274G>A(;)284C>T]",
+      "description": "Compound heterozygous with unknown phase",
+      "valid": true,
+      "supported": false,
+      "notes": "Unknown phase notation"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.(100_200)del",
+      "description": "Deletion with uncertain range",
+      "valid": true,
+      "supported": true,
+      "notes": "Parentheses indicate uncertainty"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.(100_200)_(300_400)del",
+      "description": "Deletion with uncertain breakpoints on both ends",
+      "valid": true,
+      "supported": false,
+      "notes": "Both breakpoints are uncertain ranges"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.?_100del",
+      "description": "Deletion with unknown start position",
+      "valid": true,
+      "supported": true,
+      "notes": "Question mark indicates unknown position"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.100_?del",
+      "description": "Deletion with unknown end position",
+      "valid": true,
+      "supported": true,
+      "notes": "Question mark indicates unknown position"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.?_?del",
+      "description": "Deletion with both positions unknown",
+      "valid": true,
+      "supported": false,
+      "notes": "Both positions unknown"
+    },
+    {
+      "category": "repeats",
+      "input": "NC_000014.9:g.24176318CAG[36]",
+      "description": "Simple trinucleotide repeat count",
+      "valid": true,
+      "supported": true,
+      "notes": "Huntington's disease CAG repeat"
+    },
+    {
+      "category": "repeats",
+      "input": "NC_000014.9:g.24176318CAG[36_42]",
+      "description": "Repeat with range (mosaicism or uncertainty)",
+      "valid": true,
+      "supported": false,
+      "notes": "Repeat count range"
+    },
+    {
+      "category": "repeats",
+      "input": "NM_000044.6:c.171CAG[21]",
+      "description": "Coding sequence repeat",
+      "valid": true,
+      "supported": true,
+      "notes": "Repeat in coding sequence"
+    },
+    {
+      "category": "repeats",
+      "input": "NC_000004.12:g.3074877CGG[>200]",
+      "description": "Repeat with lower bound only",
+      "valid": true,
+      "supported": false,
+      "notes": "Fragile X expansion"
+    },
+    {
+      "category": "conversions",
+      "input": "NC_000022.10:g.42522500_42522550con42524500_42524550",
+      "description": "Gene conversion - sequence replaced by sequence from another location",
+      "valid": true,
+      "supported": true,
+      "notes": "Conversion notation"
+    },
+    {
+      "category": "conversions",
+      "input": "NM_000088.3:c.100_150conNM_000089.3:c.200_250",
+      "description": "Gene conversion with different reference",
+      "valid": true,
+      "supported": false,
+      "notes": "Cross-reference conversion"
+    },
+    {
+      "category": "complex",
+      "input": "NM_000088.3:c.[123A>G;456del;789dup]",
+      "description": "Multiple variants on same allele",
+      "valid": true,
+      "supported": true,
+      "notes": "Complex cis allele"
+    },
+    {
+      "category": "complex",
+      "input": "NM_000088.3:c.123_456delins789_1011",
+      "description": "Delins with range on both sides",
+      "valid": true,
+      "supported": false,
+      "notes": "Range-to-range delins - requires parser update for complex delins"
+    },
+    {
+      "category": "complex",
+      "input": "NC_000001.11:g.100_200inv",
+      "description": "Simple inversion",
+      "valid": true,
+      "supported": true,
+      "notes": "Inversion notation"
+    },
+    {
+      "category": "complex",
+      "input": "NC_000001.11:g.100_200delinsinv300_400",
+      "description": "Deletion-insertion with inverted sequence",
+      "valid": true,
+      "supported": false,
+      "notes": "Complex delins with inversion"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.(274G>A)",
+      "description": "Predicted variant (from RNA or protein evidence)",
+      "valid": true,
+      "supported": false,
+      "notes": "Parentheses for predicted/inferred - requires parser update"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.274=",
+      "description": "No change at specific position",
+      "valid": true,
+      "supported": true,
+      "notes": "Identity/no change notation"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.=",
+      "description": "No change in entire coding sequence",
+      "valid": true,
+      "supported": true,
+      "notes": "Wild-type notation"
+    },
+    {
+      "category": "complex",
+      "input": "NC_000001.11:g.100_200delins[300_400inv;AAAA]",
+      "description": "Complex insertion with multiple components",
+      "valid": true,
+      "supported": false,
+      "notes": "Multi-component insertion"
+    },
+    {
+      "category": "mosaic",
+      "input": "NC_000023.11:g.[33038255C>T]/[33038255=]",
+      "description": "Mosaic using allele notation",
+      "valid": true,
+      "supported": false,
+      "notes": "Alternative mosaic notation"
+    },
+    {
+      "category": "uncertain",
+      "input": "NM_000088.3:c.100+?del",
+      "description": "Intronic deletion with unknown exact position",
+      "valid": true,
+      "supported": false,
+      "notes": "Unknown intronic offset"
+    }
+  ],
+  "statistics": {
+    "total_cases": 33,
+    "by_category": {
+      "legacy": 4,
+      "mosaic": 3,
+      "alleles": 6,
+      "uncertain": 8,
+      "repeats": 4,
+      "conversions": 2,
+      "complex": 6
+    },
+    "supported_count": 14,
+    "unsupported_count": 19
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "normalization": [
+    {
+      "input": "NM_POLY.1:c.4del",
+      "normalized": "NM_POLY.1:c.48del",
+      "direction": "3prime",
+      "transcript": "NM_POLY.1",
+      "description": "Deletion in poly-A should shift 3'"
+    },
+    {
+      "input": "NM_000088.3:c.7del",
+      "normalized": "NM_000088.3:c.12del",
+      "direction": "3prime",
+      "transcript": "NM_000088.3",
+      "description": "Deletion in repeat region shifts 3'"
+    },
+    {
+      "input": "NC_000001.11:g.12345A>G",
+      "normalized": "NC_000001.11:g.12345A>G",
+      "direction": "3prime",
+      "transcript": null,
+      "description": "Substitutions don't shift"
+    },
+    {
+      "input": "NM_000088.3:c.459dup",
+      "normalized": "NM_000088.3:c.459dup",
+      "direction": "3prime",
+      "transcript": "NM_000088.3",
+      "description": "Duplication at unique position"
+    }
+  ],
+  "boundary_tests": [
+    {
+      "input": "NM_000088.3:c.30+5del",
+      "should_error": true,
+      "error_type": "IntronicVariant",
+      "description": "Intronic variants cannot be normalized"
+    },
+    {
+      "input": "NM_001234.1:c.-3del",
+      "normalized": "NM_001234.1:c.-3del",
+      "boundary": "5utr",
+      "description": "5' UTR variant at boundary"
+    },
+    {
+      "input": "NM_001234.1:c.*3del",
+      "normalized": "NM_001234.1:c.*3del",
+      "boundary": "3utr",
+      "description": "3' UTR variant at boundary"
+    }
+  ]
+}

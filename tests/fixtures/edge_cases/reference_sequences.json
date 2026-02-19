@@ -1,0 +1,311 @@
+{
+  "description": "Reference sequence edge cases - various accession formats and special notations",
+  "source": "HGVS nomenclature specification and databases",
+  "version": "1.0.0",
+  "generated": "2025-12-19",
+  "categories": {
+    "ensembl": "Ensembl accession formats (ENST, ENSG, ENSP)",
+    "lrg": "Locus Reference Genomic sequences",
+    "assembly": "Assembly-qualified notation (GRCh37, GRCh38)",
+    "mitochondrial": "Mitochondrial genome edge cases",
+    "nested": "Nested reference notation with gene symbols",
+    "versioned": "Version-specific accession handling",
+    "non_standard": "Non-standard but commonly encountered formats"
+  },
+  "test_cases": [
+    {
+      "category": "ensembl",
+      "input": "ENST00000357654.9:c.123A>G",
+      "description": "Ensembl transcript accession",
+      "valid": true,
+      "supported": false,
+      "notes": "Ensembl transcript format"
+    },
+    {
+      "category": "ensembl",
+      "input": "ENST00000269305:c.817C>T",
+      "description": "Ensembl transcript without version",
+      "valid": true,
+      "supported": false,
+      "notes": "Ensembl without version number"
+    },
+    {
+      "category": "ensembl",
+      "input": "ENSP00000269305.4:p.Arg175His",
+      "description": "Ensembl protein accession",
+      "valid": true,
+      "supported": false,
+      "notes": "Ensembl protein format"
+    },
+    {
+      "category": "ensembl",
+      "input": "ENSG00000141510.18:c.123A>G",
+      "description": "Ensembl gene accession (rare usage)",
+      "valid": true,
+      "supported": false,
+      "notes": "Ensembl gene - unusual but valid"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_1:g.8638G>T",
+      "description": "LRG genomic reference",
+      "valid": true,
+      "supported": true,
+      "notes": "Standard LRG genomic"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_1t1:c.8638G>T",
+      "description": "LRG transcript reference",
+      "valid": true,
+      "supported": true,
+      "notes": "LRG transcript notation"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_1p1:p.Arg175His",
+      "description": "LRG protein reference",
+      "valid": true,
+      "supported": true,
+      "notes": "LRG protein notation"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_199t1:c.2280del",
+      "description": "LRG transcript deletion",
+      "valid": true,
+      "supported": true,
+      "notes": "BRCA1 LRG example"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_292t1:c.5266dup",
+      "description": "LRG transcript duplication",
+      "valid": true,
+      "supported": true,
+      "notes": "BRCA2 LRG example"
+    },
+    {
+      "category": "assembly",
+      "input": "GRCh38:chr1:g.12345A>G",
+      "description": "Assembly with chromosome prefix",
+      "valid": true,
+      "supported": false,
+      "notes": "Non-standard assembly notation"
+    },
+    {
+      "category": "assembly",
+      "input": "NC_000001.11:g.12345A>G",
+      "description": "GRCh38 chromosome 1 accession",
+      "valid": true,
+      "supported": true,
+      "notes": "Standard RefSeq chromosome"
+    },
+    {
+      "category": "assembly",
+      "input": "NC_000001.10:g.12345A>G",
+      "description": "GRCh37 chromosome 1 accession",
+      "valid": true,
+      "supported": true,
+      "notes": "Previous assembly version"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.8993T>G",
+      "description": "Common mtDNA variant (MT-ATP6)",
+      "valid": true,
+      "supported": true,
+      "notes": "NARP/Leigh syndrome variant"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.3243A>G",
+      "description": "MELAS variant",
+      "valid": true,
+      "supported": true,
+      "notes": "Most common MELAS mutation"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.8344A>G",
+      "description": "MERRF variant",
+      "valid": true,
+      "supported": true,
+      "notes": "Common MERRF mutation"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.16569_1del",
+      "description": "Circular mtDNA wrap-around deletion",
+      "valid": true,
+      "supported": false,
+      "notes": "Crosses origin of replication"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.1_16569del",
+      "description": "Full mitochondrial deletion (theoretical)",
+      "valid": true,
+      "supported": false,
+      "notes": "Complete deletion"
+    },
+    {
+      "category": "nested",
+      "input": "NG_007400.1(NM_000088.3):c.274G>A",
+      "description": "Genomic reference with embedded transcript",
+      "valid": true,
+      "supported": true,
+      "notes": "COL1A1 nested reference"
+    },
+    {
+      "category": "nested",
+      "input": "NM_000088.3(COL1A1):c.274G>A",
+      "description": "Transcript with gene symbol annotation",
+      "valid": true,
+      "supported": true,
+      "notes": "Gene symbol in parentheses"
+    },
+    {
+      "category": "nested",
+      "input": "NC_000017.11(NM_007294.4):c.5266dup",
+      "description": "Chromosome with nested transcript",
+      "valid": true,
+      "supported": true,
+      "notes": "BRCA1 nested example"
+    },
+    {
+      "category": "nested",
+      "input": "NG_005905.2(NM_000249.4):c.1799T>A",
+      "description": "MLH1 nested reference",
+      "valid": true,
+      "supported": true,
+      "notes": "Lynch syndrome gene"
+    },
+    {
+      "category": "versioned",
+      "input": "NM_000088.3:c.274G>A",
+      "description": "Standard versioned transcript",
+      "valid": true,
+      "supported": true,
+      "notes": "Common format"
+    },
+    {
+      "category": "versioned",
+      "input": "NM_000088:c.274G>A",
+      "description": "Transcript without version (discouraged)",
+      "valid": true,
+      "supported": true,
+      "notes": "Missing version - ambiguous"
+    },
+    {
+      "category": "versioned",
+      "input": "NP_000079.2:p.Arg175His",
+      "description": "Versioned protein accession",
+      "valid": true,
+      "supported": true,
+      "notes": "Standard protein format"
+    },
+    {
+      "category": "versioned",
+      "input": "NR_046018.2:n.100A>G",
+      "description": "Non-coding RNA accession",
+      "valid": true,
+      "supported": true,
+      "notes": "lncRNA example"
+    },
+    {
+      "category": "non_standard",
+      "input": "XM_005257360.1:c.123A>G",
+      "description": "Predicted model transcript",
+      "valid": true,
+      "supported": true,
+      "notes": "XM_ prefix for predicted"
+    },
+    {
+      "category": "non_standard",
+      "input": "XP_005257417.1:p.Arg41His",
+      "description": "Predicted model protein",
+      "valid": true,
+      "supported": true,
+      "notes": "XP_ prefix for predicted"
+    },
+    {
+      "category": "non_standard",
+      "input": "NM_001354609.2:c.100G>A",
+      "description": "Long accession number",
+      "valid": true,
+      "supported": true,
+      "notes": "9-digit accession"
+    },
+    {
+      "category": "non_standard",
+      "input": "YP_003024028.1:p.Met1?",
+      "description": "Viral/bacterial protein",
+      "valid": true,
+      "supported": false,
+      "notes": "YP_ prefix"
+    },
+    {
+      "category": "non_standard",
+      "input": "AP_000000.1:p.Gly100Asp",
+      "description": "Alternative protein product",
+      "valid": true,
+      "supported": false,
+      "notes": "AP_ prefix"
+    },
+    {
+      "category": "nested",
+      "input": "NC_000023.11(NM_004006.3):c.274G>A",
+      "description": "X chromosome nested transcript",
+      "valid": true,
+      "supported": true,
+      "notes": "DMD gene region"
+    },
+    {
+      "category": "lrg",
+      "input": "LRG_1:g.1_1000del",
+      "description": "LRG large deletion",
+      "valid": true,
+      "supported": true,
+      "notes": "Range deletion on LRG"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.11778G>A",
+      "description": "LHON variant",
+      "valid": true,
+      "supported": true,
+      "notes": "Leber hereditary optic neuropathy"
+    },
+    {
+      "category": "mitochondrial",
+      "input": "NC_012920.1:m.14484T>C",
+      "description": "LHON variant 2",
+      "valid": true,
+      "supported": true,
+      "notes": "Another LHON mutation"
+    },
+    {
+      "category": "assembly",
+      "input": "NC_000006.12:g.31356875G>A",
+      "description": "HLA region variant",
+      "valid": true,
+      "supported": true,
+      "notes": "Chromosome 6 HLA"
+    }
+  ],
+  "statistics": {
+    "total_cases": 35,
+    "by_category": {
+      "ensembl": 4,
+      "lrg": 6,
+      "assembly": 3,
+      "mitochondrial": 7,
+      "nested": 5,
+      "versioned": 4,
+      "non_standard": 6
+    },
+    "supported_count": 26,
+    "unsupported_count": 9
+  }
+}

@@ -1,0 +1,76 @@
+name: Fuzz Testing
+
+on:
+  # Run on schedule (weekly)
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at midnight
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: 'Seconds to fuzz each target'
+        required: false
+        default: '300'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_parse_hgvs
+          - fuzz_structured_hgvs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            fuzz/target/
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Download corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run fuzzer
+        run: |
+          cd fuzz
+          FUZZ_SECONDS="${{ github.event.inputs.fuzz_seconds || '300' }}"
+          timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run ${{ matrix.target }} -- -max_len=1024 || true
+
+      - name: Save corpus
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Upload crash artifacts
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

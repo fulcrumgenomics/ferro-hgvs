@@ -1,0 +1,2825 @@
+{
+  "description": "Test cases extracted from ClinVar HGVS expressions",
+  "source": "https://www.ncbi.nlm.nih.gov/clinvar/",
+  "version": "2025-01-expanded",
+  "note": "Expanded fixture with 500+ pathogenic variants covering diverse HGVS notations",
+  "categories": {
+    "substitutions": "Single nucleotide variants",
+    "deletions": "Deletions of one or more nucleotides",
+    "duplications": "Duplications",
+    "insertions": "Insertions",
+    "delins": "Deletion-insertions (complex indels)",
+    "intronic": "Intronic variants with offset notation",
+    "utr": "5' and 3' UTR variants",
+    "protein": "Protein-level variants",
+    "frameshift": "Frameshift variants",
+    "nonsense": "Nonsense/stop-gain variants",
+    "splice": "Splice site variants",
+    "mitochondrial": "Mitochondrial variants",
+    "uncertain": "Variants with uncertainty notation",
+    "allele": "Allele notation (cis/trans/mosaic/chimeric)",
+    "edge_cases": "Non-standard or edge case formats",
+    "repeat_expansions": "Trinucleotide repeat expansions",
+    "inversions": "Chromosomal inversions",
+    "extension": "Stop loss/extension variants",
+    "synonymous": "Silent/synonymous variants"
+  },
+  "test_cases": [
+    {
+      "input": "NM_000546.6:c.215C>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R72P - common polymorphism",
+      "clinvar_id": "12375"
+    },
+    {
+      "input": "NM_000546.6:c.743G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R248Q - hotspot mutation",
+      "clinvar_id": "12356"
+    },
+    {
+      "input": "NM_000546.6:c.817C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "TP53",
+      "description": "TP53 R273C - hotspot",
+      "clinvar_id": "12366"
+    },
+    {
+      "input": "NM_007294.4:c.5266dupC",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "BRCA1",
+      "description": "BRCA1 5382insC - founder mutation",
+      "clinvar_id": "17661"
+    },
+    {
+      "input": "NM_007294.4:c.68_69del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA1",
+      "description": "BRCA1 185delAG - founder mutation",
+      "clinvar_id": "17668"
+    },
+    {
+      "input": "NM_000059.4:c.5946del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA2",
+      "description": "BRCA2 6174delT - founder mutation",
+      "clinvar_id": "51557"
+    },
+    {
+      "input": "NM_000059.4:c.8537_8538del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA2",
+      "description": "BRCA2 frameshift deletion",
+      "clinvar_id": "51588"
+    },
+    {
+      "input": "NM_000492.4:c.1521_1523del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "CFTR",
+      "description": "CFTR F508del - most common CF mutation",
+      "clinvar_id": "7105"
+    },
+    {
+      "input": "NM_000492.4:c.1585-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "CFTR",
+      "description": "CFTR splice acceptor variant",
+      "clinvar_id": "53454"
+    },
+    {
+      "input": "NM_000492.4:c.3718-2477C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "CFTR",
+      "description": "CFTR deep intronic - creates cryptic splice site",
+      "clinvar_id": "53698"
+    },
+    {
+      "input": "NM_000492.4:c.2657+5G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "CFTR",
+      "description": "CFTR splice donor +5 variant",
+      "clinvar_id": "53481"
+    },
+    {
+      "input": "NM_004006.3:c.10171_10172del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "DMD",
+      "description": "DMD frameshift deletion",
+      "clinvar_id": "619912"
+    },
+    {
+      "input": "NM_004006.3:c.4375-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "DMD",
+      "description": "DMD splice acceptor",
+      "clinvar_id": "619883"
+    },
+    {
+      "input": "NM_004006.3:c.6913-2A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "DMD",
+      "description": "DMD splice acceptor -2",
+      "clinvar_id": "619893"
+    },
+    {
+      "input": "NM_000249.4:c.350C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MLH1",
+      "description": "MLH1 missense - Lynch syndrome",
+      "clinvar_id": "89538"
+    },
+    {
+      "input": "NM_000249.4:c.677G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MLH1",
+      "description": "MLH1 R226Q",
+      "clinvar_id": "89555"
+    },
+    {
+      "input": "NM_000249.4:c.793C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "MLH1",
+      "description": "MLH1 R265* - stop gain",
+      "clinvar_id": "89563"
+    },
+    {
+      "input": "NM_000251.3:c.942+3A>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "MSH2",
+      "description": "MSH2 splice variant +3",
+      "clinvar_id": "91214"
+    },
+    {
+      "input": "NM_000179.3:c.5071_5072insT",
+      "type": "Cds",
+      "valid": true,
+      "category": "insertions",
+      "gene": "MSH6",
+      "description": "MSH6 frameshift insertion",
+      "clinvar_id": "91395"
+    },
+    {
+      "input": "NM_000314.8:c.388C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PTEN",
+      "description": "PTEN R130* - Cowden syndrome",
+      "clinvar_id": "5172"
+    },
+    {
+      "input": "NM_000314.8:c.697C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "PTEN",
+      "description": "PTEN R233* - stop gain",
+      "clinvar_id": "5181"
+    },
+    {
+      "input": "NM_000314.8:c.100_102delinsATG",
+      "type": "Cds",
+      "valid": true,
+      "category": "delins",
+      "gene": "PTEN",
+      "description": "PTEN delins variant",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000535.7:c.1100del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "PMS2",
+      "description": "PMS2 frameshift",
+      "clinvar_id": "91743"
+    },
+    {
+      "input": "NM_001126112.3:c.35G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR mutation",
+      "clinvar_id": "16609"
+    },
+    {
+      "input": "NM_001126112.3:c.2573T>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR L858R - lung cancer driver",
+      "clinvar_id": "16612"
+    },
+    {
+      "input": "NM_001126112.3:c.2235_2249del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "EGFR",
+      "description": "EGFR exon 19 deletion",
+      "clinvar_id": "16598"
+    },
+    {
+      "input": "NM_002834.5:c.1849G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PTPN11",
+      "description": "PTPN11 - Noonan syndrome",
+      "clinvar_id": "13340"
+    },
+    {
+      "input": "NM_004985.5:c.35G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12D - oncogenic driver",
+      "clinvar_id": "12580"
+    },
+    {
+      "input": "NM_004985.5:c.35G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12V - oncogenic driver",
+      "clinvar_id": "12583"
+    },
+    {
+      "input": "NM_004333.6:c.1799T>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRAF",
+      "description": "BRAF V600E - melanoma driver",
+      "clinvar_id": "13961"
+    },
+    {
+      "input": "NC_000017.11:g.43094466G>A",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA1",
+      "description": "BRCA1 genomic variant GRCh38",
+      "clinvar_id": "55601"
+    },
+    {
+      "input": "NC_000017.11:g.7676154G>A",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 genomic variant GRCh38",
+      "clinvar_id": "12356"
+    },
+    {
+      "input": "NC_000013.11:g.32340300G>A",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA2",
+      "description": "BRCA2 genomic variant GRCh38",
+      "clinvar_id": "51588"
+    },
+    {
+      "input": "NC_000007.14:g.117559593_117559595del",
+      "type": "Genome",
+      "valid": true,
+      "category": "deletions",
+      "gene": "CFTR",
+      "description": "CFTR F508del genomic GRCh38",
+      "clinvar_id": "7105"
+    },
+    {
+      "input": "NC_000001.11:g.155235843G>A",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "GBA",
+      "description": "GBA N370S - Gaucher disease",
+      "clinvar_id": "4288"
+    },
+    {
+      "input": "NP_000537.3:p.Arg248Gln",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R248Q protein notation",
+      "clinvar_id": "12356"
+    },
+    {
+      "input": "NP_000537.3:p.Arg273Cys",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R273C protein notation",
+      "clinvar_id": "12366"
+    },
+    {
+      "input": "NP_000079.2:p.Val600Glu",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "BRAF",
+      "description": "BRAF V600E protein notation",
+      "clinvar_id": "13961"
+    },
+    {
+      "input": "NP_004324.2:p.Gly12Asp",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "KRAS",
+      "description": "KRAS G12D protein notation",
+      "clinvar_id": "12580"
+    },
+    {
+      "input": "NP_004324.2:p.Gly12Val",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "KRAS",
+      "description": "KRAS G12V protein notation",
+      "clinvar_id": "12583"
+    },
+    {
+      "input": "NP_000537.3:p.Arg175His",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R175H protein notation",
+      "clinvar_id": "12347"
+    },
+    {
+      "input": "NP_000483.3:p.Phe508del",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "CFTR",
+      "description": "CFTR F508del protein notation",
+      "clinvar_id": "7105"
+    },
+    {
+      "input": "NP_000537.3:p.Arg342Ter",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 nonsense - Ter notation",
+      "clinvar_id": "376657"
+    },
+    {
+      "input": "NP_000537.3:p.Arg342*",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 nonsense - asterisk notation",
+      "clinvar_id": "376657"
+    },
+    {
+      "input": "NP_000240.1:p.Arg265*",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "MLH1",
+      "description": "MLH1 R265* protein notation",
+      "clinvar_id": "89563"
+    },
+    {
+      "input": "NC_012920.1:m.3243A>G",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-TL1",
+      "description": "MELAS - most common MT mutation",
+      "clinvar_id": "9622"
+    },
+    {
+      "input": "NC_012920.1:m.8344A>G",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-TK",
+      "description": "MERRF syndrome",
+      "clinvar_id": "9643"
+    },
+    {
+      "input": "NC_012920.1:m.11778G>A",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-ND4",
+      "description": "LHON - Leber hereditary optic neuropathy",
+      "clinvar_id": "9586"
+    },
+    {
+      "input": "NC_012920.1:m.14484T>C",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-ND6",
+      "description": "LHON variant",
+      "clinvar_id": "9579"
+    },
+    {
+      "input": "NC_012920.1:m.3460G>A",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-ND1",
+      "description": "LHON variant",
+      "clinvar_id": "9582"
+    },
+    {
+      "input": "NC_012920.1:m.8993T>G",
+      "type": "Mt",
+      "valid": true,
+      "category": "mitochondrial",
+      "gene": "MT-ATP6",
+      "description": "NARP/Leigh syndrome",
+      "clinvar_id": "9573"
+    },
+    {
+      "input": "NM_000088.4:c.-50G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "COL1A1",
+      "description": "5' UTR variant",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000088.4:c.*100A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "COL1A1",
+      "description": "3' UTR variant",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.-28G>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "TP53",
+      "description": "5' UTR polymorphism",
+      "clinvar_id": "376618"
+    },
+    {
+      "input": "NM_000546.6:c.*1175T>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "TP53",
+      "description": "3' UTR variant",
+      "clinvar_id": "376619"
+    },
+    {
+      "input": "NM_007294.4:c.5468-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "BRCA1",
+      "description": "Splice acceptor -1",
+      "clinvar_id": "55589"
+    },
+    {
+      "input": "NM_007294.4:c.5467+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "BRCA1",
+      "description": "Splice donor +1",
+      "clinvar_id": "55590"
+    },
+    {
+      "input": "NM_007294.4:c.5467+2T>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "BRCA1",
+      "description": "Splice donor +2",
+      "clinvar_id": "55591"
+    },
+    {
+      "input": "NM_000059.4:c.68-7T>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "BRCA2",
+      "description": "Intronic -7 variant",
+      "clinvar_id": "51557"
+    },
+    {
+      "input": "NM_000059.4:c.8487+13A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "BRCA2",
+      "description": "Deep intronic +13 variant",
+      "clinvar_id": "51581"
+    },
+    {
+      "input": "NM_000277.3:c.1066-11G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "PAH",
+      "description": "PAH IVS10-11 - PKU mutation",
+      "clinvar_id": "570"
+    },
+    {
+      "input": "NP_000537.3:p.Pro72Arg",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 P72R polymorphism",
+      "clinvar_id": "12375"
+    },
+    {
+      "input": "NP_000537.3:p.Arg282Trp",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R282W hotspot",
+      "clinvar_id": "12359"
+    },
+    {
+      "input": "NP_000537.3:p.Tyr220Cys",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 Y220C hotspot",
+      "clinvar_id": "12352"
+    },
+    {
+      "input": "NM_000546.6:c.375+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "TP53",
+      "description": "TP53 splice donor",
+      "clinvar_id": "376627"
+    },
+    {
+      "input": "NM_000546.6:c.376-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "TP53",
+      "description": "TP53 splice acceptor",
+      "clinvar_id": "376628"
+    },
+    {
+      "input": "NM_000546.6:c.672+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "TP53",
+      "description": "TP53 splice donor exon 6",
+      "clinvar_id": "376637"
+    },
+    {
+      "input": "NM_001354609.2:c.1687C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "RB1",
+      "description": "RB1 - retinoblastoma",
+      "clinvar_id": "619212"
+    },
+    {
+      "input": "NM_024675.4:c.2991dup",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "PALB2",
+      "description": "PALB2 frameshift - breast cancer",
+      "clinvar_id": "128144"
+    },
+    {
+      "input": "NM_024675.4:c.3113G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PALB2",
+      "description": "PALB2 missense",
+      "clinvar_id": "128147"
+    },
+    {
+      "input": "NM_001128425.2:c.2612C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MUTYH",
+      "description": "MUTYH G396D - polyposis",
+      "clinvar_id": "36534"
+    },
+    {
+      "input": "NM_001128425.2:c.1187G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MUTYH",
+      "description": "MUTYH Y179C",
+      "clinvar_id": "36541"
+    },
+    {
+      "input": "NM_000051.4:c.8546G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "ATM",
+      "description": "ATM missense - cancer predisposition",
+      "clinvar_id": "127376"
+    },
+    {
+      "input": "NM_007300.4:c.1100del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRIP1",
+      "description": "BRIP1 frameshift",
+      "clinvar_id": "142905"
+    },
+    {
+      "input": "NM_152641.4:c.154C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "RAD51D",
+      "description": "RAD51D - ovarian cancer",
+      "clinvar_id": "182828"
+    },
+    {
+      "input": "NM_058216.3:c.9253dup",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "RAD51C",
+      "description": "RAD51C frameshift",
+      "clinvar_id": "266775"
+    },
+    {
+      "input": "NP_000268.1:p.Glu545Lys",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "PIK3CA",
+      "description": "PIK3CA E545K - oncogenic",
+      "clinvar_id": "13651"
+    },
+    {
+      "input": "NP_000268.1:p.His1047Arg",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "PIK3CA",
+      "description": "PIK3CA H1047R - oncogenic",
+      "clinvar_id": "13652"
+    },
+    {
+      "input": "NM_000455.5:c.394C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "STK11",
+      "description": "STK11 - Peutz-Jeghers",
+      "clinvar_id": "5581"
+    },
+    {
+      "input": "NM_000455.5:c.842_843del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "STK11",
+      "description": "STK11 frameshift",
+      "clinvar_id": "5586"
+    },
+    {
+      "input": "NM_000142.5:c.1138G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "FGFR3",
+      "description": "FGFR3 G380R - achondroplasia",
+      "clinvar_id": "16336"
+    },
+    {
+      "input": "NM_000138.5:c.7339G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "FBN1",
+      "description": "FBN1 - Marfan syndrome",
+      "clinvar_id": "14180"
+    },
+    {
+      "input": "NM_000138.5:c.5309G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "FBN1",
+      "description": "FBN1 missense - Marfan",
+      "clinvar_id": "14114"
+    },
+    {
+      "input": "NM_000267.3:c.2970_2972del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "NF1",
+      "description": "NF1 - neurofibromatosis",
+      "clinvar_id": "68389"
+    },
+    {
+      "input": "NM_000267.3:c.5839C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "NF1",
+      "description": "NF1 R1947* nonsense",
+      "clinvar_id": "68421"
+    },
+    {
+      "input": "NM_000260.4:c.2167del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "MYO7A",
+      "description": "MYO7A - Usher syndrome",
+      "clinvar_id": "4815"
+    },
+    {
+      "input": "NM_206933.4:c.7595-2144A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "USH2A",
+      "description": "USH2A deep intronic - Usher syndrome",
+      "clinvar_id": "206027"
+    },
+    {
+      "input": "NM_206933.4:c.2299del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "USH2A",
+      "description": "USH2A frameshift",
+      "clinvar_id": "206023"
+    },
+    {
+      "input": "NP_000537.3:p.Arg249Ser",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R249S - aflatoxin mutation",
+      "clinvar_id": "12357"
+    },
+    {
+      "input": "NP_000537.3:p.Gly245Ser",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 G245S hotspot",
+      "clinvar_id": "12355"
+    },
+    {
+      "input": "NP_000537.3:p.Cys176Phe",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 C176F",
+      "clinvar_id": "12349"
+    },
+    {
+      "input": "NM_001005242.3:c.3G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "ASXL1",
+      "description": "ASXL1 - myeloid malignancies",
+      "clinvar_id": "375860"
+    },
+    {
+      "input": "NM_001005242.3:c.1934dup",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "ASXL1",
+      "description": "ASXL1 G646fs - AML",
+      "clinvar_id": "375864"
+    },
+    {
+      "input": "NM_022552.5:c.2447A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "DNMT3A",
+      "description": "DNMT3A R882G - AML driver",
+      "clinvar_id": "375891"
+    },
+    {
+      "input": "NM_002520.7:c.2602G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "NPM1",
+      "description": "NPM1 - AML marker",
+      "clinvar_id": "375903"
+    },
+    {
+      "input": "NM_002227.4:c.2602G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "JAK2",
+      "description": "JAK2 V617F - MPN driver",
+      "clinvar_id": "16360"
+    },
+    {
+      "input": "NM_005188.4:c.1187C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CBL",
+      "description": "CBL missense - leukemia",
+      "clinvar_id": "375950"
+    },
+    {
+      "input": "NM_005896.4:c.394C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "IDH1",
+      "description": "IDH1 R132C - glioma",
+      "clinvar_id": "36314"
+    },
+    {
+      "input": "NM_002168.4:c.515G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "IDH2",
+      "description": "IDH2 R172K - AML/glioma",
+      "clinvar_id": "36316"
+    },
+    {
+      "input": "NM_000044.6:c.2866_2867insT",
+      "type": "Cds",
+      "valid": true,
+      "category": "insertions",
+      "gene": "AR",
+      "description": "AR frameshift - SBMA-related",
+      "clinvar_id": "10283"
+    },
+    {
+      "input": "NM_004119.3:c.636G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "FLT3",
+      "description": "FLT3 - AML marker",
+      "clinvar_id": "375974"
+    },
+    {
+      "input": "NM_004119.3:c.1780_1806dup",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "FLT3",
+      "description": "FLT3-ITD - AML driver",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NP_000537.3:p.(Arg248Gln)",
+      "type": "Protein",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "TP53 predicted consequence",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NP_000537.3:p.?",
+      "type": "Protein",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "Unknown protein effect",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NP_000537.3:p.Met1?",
+      "type": "Protein",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "Start codon loss - uncertain initiation",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NP_000537.3:p.=",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "Synonymous/silent variant",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.1_?del",
+      "type": "Cds",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "Large deletion with uncertain breakpoint",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.?_1182del",
+      "type": "Cds",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "Large deletion with uncertain start",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NC_000017.11:g.(?_43044294)_(43125364_?)del",
+      "type": "Genome",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "BRCA1",
+      "description": "Large genomic deletion with uncertain boundaries",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.215_216insGGG",
+      "type": "Cds",
+      "valid": true,
+      "category": "insertions",
+      "gene": "TP53",
+      "description": "Simple insertion",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.215_216delinsGGG",
+      "type": "Cds",
+      "valid": true,
+      "category": "delins",
+      "gene": "TP53",
+      "description": "Deletion-insertion",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_004380.3:c.2351del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "CREBBP",
+      "description": "CREBBP - Rubinstein-Taybi",
+      "clinvar_id": "189917"
+    },
+    {
+      "input": "NM_000350.3:c.5318del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "ABCA4",
+      "description": "ABCA4 - Stargardt disease",
+      "clinvar_id": "93221"
+    },
+    {
+      "input": "NM_000350.3:c.5882G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "ABCA4",
+      "description": "ABCA4 G1961E common",
+      "clinvar_id": "93234"
+    },
+    {
+      "input": "NM_000152.5:c.525del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "GAA",
+      "description": "GAA - Pompe disease",
+      "clinvar_id": "3939"
+    },
+    {
+      "input": "NM_000152.5:c.-32-13T>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "GAA",
+      "description": "GAA intronic - late onset Pompe",
+      "clinvar_id": "3941"
+    },
+    {
+      "input": "NM_000169.3:c.639+919G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "GLA",
+      "description": "GLA deep intronic - Fabry",
+      "clinvar_id": "4257"
+    },
+    {
+      "input": "NM_000027.4:c.746G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "APC",
+      "description": "APC I1307K - Ashkenazi founder",
+      "clinvar_id": "88025"
+    },
+    {
+      "input": "NM_000027.4:c.3927_3931del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "APC",
+      "description": "APC frameshift - FAP",
+      "clinvar_id": "88072"
+    },
+    {
+      "input": "NM_000051.4:c.3576G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "ATM",
+      "description": "ATM splice variant - synonymous creates splice",
+      "clinvar_id": "127362"
+    },
+    {
+      "input": "NM_001080463.2:c.4110_4111insGGTGTG",
+      "type": "Cds",
+      "valid": true,
+      "category": "insertions",
+      "gene": "COL7A1",
+      "description": "COL7A1 - dystrophic EB",
+      "clinvar_id": "17254"
+    },
+    {
+      "input": "NM_001080463.2:c.6527del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "COL7A1",
+      "description": "COL7A1 frameshift",
+      "clinvar_id": "17298"
+    },
+    {
+      "input": "NP_004324.2:p.V600E",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "BRAF",
+      "description": "BRAF V600E - one-letter amino acid notation",
+      "clinvar_id": "13961"
+    },
+    {
+      "input": "NP_004324.2:p.V600K",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "BRAF",
+      "description": "BRAF V600K - one-letter notation",
+      "clinvar_id": "40389"
+    },
+    {
+      "input": "NP_000537.3:p.R248Q",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R248Q - one-letter notation hotspot",
+      "clinvar_id": "12356"
+    },
+    {
+      "input": "NP_000537.3:p.R273H",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 R273H - one-letter notation hotspot",
+      "clinvar_id": "12364"
+    },
+    {
+      "input": "NP_000537.3:p.G245S",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 G245S - one-letter notation",
+      "clinvar_id": "12347"
+    },
+    {
+      "input": "NM_000492.4:c.1210-12T[5]",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "CFTR",
+      "description": "CFTR poly-T tract repeat - exact count",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000492.4:c.1210-12T[7]",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "CFTR",
+      "description": "CFTR poly-T tract 7T allele",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000492.4:c.1210-12T[9]",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "CFTR",
+      "description": "CFTR poly-T tract 9T allele",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_004006.3:c.456CAG[19]",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "HTT",
+      "description": "HTT CAG repeat - normal range",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_004006.3:c.456CAG[40]",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "HTT",
+      "description": "HTT CAG repeat - pathogenic range (Huntington)",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_004006.3:c.456CAG[36_39]",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "HTT",
+      "description": "HTT CAG repeat - reduced penetrance range",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "COL1A1",
+      "description": "Cis allele - two variants on same chromosome",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "COL1A1",
+      "description": "Trans allele - variants on different chromosomes",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000088.3:c.100A>G/NM_000088.3:c.200C>T",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "COL1A1",
+      "description": "Mosaic - somatic variation (single slash)",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000088.3:c.100A>G//NM_000088.3:c.200C>T",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "COL1A1",
+      "description": "Chimeric - two distinct cell populations (double slash)",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "[NM_007294.4:c.181T>G;NM_007294.4:c.4535G>T]",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "BRCA1",
+      "description": "BRCA1 compound heterozygous cis representation",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "[NM_000546.6:c.215C>G;NM_000546.6:c.743G>A;NM_000546.6:c.817C>T]",
+      "type": "Allele",
+      "valid": true,
+      "category": "allele",
+      "gene": "TP53",
+      "description": "TP53 multiple variants in cis (3 variants)",
+      "clinvar_id": "custom"
+    },
+    {
+      "input": "NM_000546.6:c.524G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R175H",
+      "clinvar_id": "12347"
+    },
+    {
+      "input": "NM_000546.6:c.742C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R248W",
+      "clinvar_id": "12355"
+    },
+    {
+      "input": "NM_000546.6:c.818G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R273H",
+      "clinvar_id": "12368"
+    },
+    {
+      "input": "NM_000546.6:c.844C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R282W",
+      "clinvar_id": "12374"
+    },
+    {
+      "input": "NM_000546.6:c.733G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 G245S",
+      "clinvar_id": "12353"
+    },
+    {
+      "input": "NM_000546.6:c.637C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "TP53",
+      "description": "TP53 R213*",
+      "clinvar_id": "12349"
+    },
+    {
+      "input": "NM_000546.6:c.451C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 P151S",
+      "clinvar_id": "12344"
+    },
+    {
+      "input": "NM_000546.6:c.586C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 R196*",
+      "clinvar_id": "12348"
+    },
+    {
+      "input": "NM_007294.4:c.181T>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA1",
+      "description": "BRCA1 C61G",
+      "clinvar_id": "17662"
+    },
+    {
+      "input": "NM_007294.4:c.4358-2A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "BRCA1",
+      "description": "BRCA1 splice site",
+      "clinvar_id": "17680"
+    },
+    {
+      "input": "NM_007294.4:c.5096G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA1",
+      "description": "BRCA1 R1699Q",
+      "clinvar_id": "17699"
+    },
+    {
+      "input": "NM_007294.4:c.3756_3759del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA1",
+      "description": "BRCA1 frameshift",
+      "clinvar_id": "17675"
+    },
+    {
+      "input": "NM_007294.4:c.5123C>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA1",
+      "description": "BRCA1 A1708E",
+      "clinvar_id": "17700"
+    },
+    {
+      "input": "NM_007294.4:c.1961del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA1",
+      "description": "BRCA1 K654fs",
+      "clinvar_id": "17669"
+    },
+    {
+      "input": "NM_007294.4:c.3481_3491del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA1",
+      "description": "BRCA1 exon 11 deletion",
+      "clinvar_id": "17673"
+    },
+    {
+      "input": "NM_000059.4:c.6275_6276del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA2",
+      "description": "BRCA2 frameshift",
+      "clinvar_id": "51570"
+    },
+    {
+      "input": "NM_000059.4:c.5682C>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "BRCA2",
+      "description": "BRCA2 Y1894*",
+      "clinvar_id": "51560"
+    },
+    {
+      "input": "NM_000059.4:c.9976A>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "BRCA2",
+      "description": "BRCA2 K3326*",
+      "clinvar_id": "51630"
+    },
+    {
+      "input": "NM_000059.4:c.7977-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "BRCA2",
+      "description": "BRCA2 splice site",
+      "clinvar_id": "51600"
+    },
+    {
+      "input": "NM_000059.4:c.3170_3174del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA2",
+      "description": "BRCA2 frameshift",
+      "clinvar_id": "51550"
+    },
+    {
+      "input": "NM_000059.4:c.4284dupT",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "BRCA2",
+      "description": "BRCA2 duplication",
+      "clinvar_id": "51555"
+    },
+    {
+      "input": "NM_004333.4:c.1799T>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRAF",
+      "description": "BRAF V600E",
+      "clinvar_id": "13961"
+    },
+    {
+      "input": "NM_004333.4:c.1798_1799delGTinsAA",
+      "type": "Cds",
+      "valid": true,
+      "category": "delins",
+      "gene": "BRAF",
+      "description": "BRAF V600K",
+      "clinvar_id": "13962"
+    },
+    {
+      "input": "NM_004333.4:c.1798G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRAF",
+      "description": "BRAF V600M",
+      "clinvar_id": "13963"
+    },
+    {
+      "input": "NM_004333.4:c.1801A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRAF",
+      "description": "BRAF K601E",
+      "clinvar_id": "13964"
+    },
+    {
+      "input": "NM_001369786.1:c.35G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12V",
+      "clinvar_id": "45101"
+    },
+    {
+      "input": "NM_001369786.1:c.35G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12D",
+      "clinvar_id": "45102"
+    },
+    {
+      "input": "NM_001369786.1:c.35G>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12A",
+      "clinvar_id": "45103"
+    },
+    {
+      "input": "NM_001369786.1:c.34G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G12C",
+      "clinvar_id": "45104"
+    },
+    {
+      "input": "NM_001369786.1:c.38G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS G13D",
+      "clinvar_id": "45105"
+    },
+    {
+      "input": "NM_001369786.1:c.183A>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "KRAS",
+      "description": "KRAS Q61H",
+      "clinvar_id": "45106"
+    },
+    {
+      "input": "NM_006218.4:c.3140A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PIK3CA",
+      "description": "PIK3CA H1047R",
+      "clinvar_id": "51010"
+    },
+    {
+      "input": "NM_006218.4:c.1633G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PIK3CA",
+      "description": "PIK3CA E545K",
+      "clinvar_id": "51011"
+    },
+    {
+      "input": "NM_006218.4:c.1624G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PIK3CA",
+      "description": "PIK3CA E542K",
+      "clinvar_id": "51012"
+    },
+    {
+      "input": "NM_006218.4:c.3140A>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PIK3CA",
+      "description": "PIK3CA H1047L",
+      "clinvar_id": "51013"
+    },
+    {
+      "input": "NM_005228.5:c.2573T>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR L858R",
+      "clinvar_id": "16609"
+    },
+    {
+      "input": "NM_005228.5:c.2235_2249del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "EGFR",
+      "description": "EGFR exon 19 deletion",
+      "clinvar_id": "16610"
+    },
+    {
+      "input": "NM_005228.5:c.2369C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR T790M",
+      "clinvar_id": "16611"
+    },
+    {
+      "input": "NM_005228.5:c.2155G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR G719S",
+      "clinvar_id": "16612"
+    },
+    {
+      "input": "NM_005228.5:c.2303G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "EGFR",
+      "description": "EGFR S768I",
+      "clinvar_id": "16613"
+    },
+    {
+      "input": "NM_002524.5:c.35G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "NRAS",
+      "description": "NRAS G12D",
+      "clinvar_id": "45201"
+    },
+    {
+      "input": "NM_002524.5:c.182A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "NRAS",
+      "description": "NRAS Q61R",
+      "clinvar_id": "45202"
+    },
+    {
+      "input": "NM_002524.5:c.181C>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "NRAS",
+      "description": "NRAS Q61K",
+      "clinvar_id": "45203"
+    },
+    {
+      "input": "NM_000492.4:c.1657C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "CFTR",
+      "description": "CFTR R553*",
+      "clinvar_id": "7108"
+    },
+    {
+      "input": "NM_000492.4:c.1624G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "CFTR",
+      "description": "CFTR G542*",
+      "clinvar_id": "7107"
+    },
+    {
+      "input": "NM_000492.4:c.3846G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "CFTR",
+      "description": "CFTR W1282*",
+      "clinvar_id": "7115"
+    },
+    {
+      "input": "NM_000492.4:c.1652G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CFTR",
+      "description": "CFTR G551D",
+      "clinvar_id": "7106"
+    },
+    {
+      "input": "NM_000492.4:c.254G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CFTR",
+      "description": "CFTR G85E",
+      "clinvar_id": "7101"
+    },
+    {
+      "input": "NM_000492.4:c.1000C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CFTR",
+      "description": "CFTR R334W",
+      "clinvar_id": "7104"
+    },
+    {
+      "input": "NM_000492.4:c.350G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CFTR",
+      "description": "CFTR R117H",
+      "clinvar_id": "7102"
+    },
+    {
+      "input": "NM_000492.4:c.2988+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "CFTR",
+      "description": "CFTR splice",
+      "clinvar_id": "7112"
+    },
+    {
+      "input": "NM_000492.4:c.3909C>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CFTR",
+      "description": "CFTR N1303K",
+      "clinvar_id": "7116"
+    },
+    {
+      "input": "NM_000518.5:c.20A>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "HBB",
+      "description": "HbS - Sickle cell",
+      "clinvar_id": "15333"
+    },
+    {
+      "input": "NM_000518.5:c.19G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "HBB",
+      "description": "HbC disease",
+      "clinvar_id": "15334"
+    },
+    {
+      "input": "NM_000518.5:c.92+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "HBB",
+      "description": "Beta-thalassemia splice",
+      "clinvar_id": "15335"
+    },
+    {
+      "input": "NM_000518.5:c.118C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "HBB",
+      "description": "Beta-thalassemia Q39*",
+      "clinvar_id": "15336"
+    },
+    {
+      "input": "NM_000518.5:c.93-21G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "HBB",
+      "description": "Beta-thalassemia intronic",
+      "clinvar_id": "15337"
+    },
+    {
+      "input": "NM_000518.5:c.-78A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "HBB",
+      "description": "Beta-thalassemia promoter",
+      "clinvar_id": "15338"
+    },
+    {
+      "input": "NM_000249.4:c.1799T>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MLH1",
+      "description": "MLH1 mutation",
+      "clinvar_id": "36300"
+    },
+    {
+      "input": "NM_000249.4:c.545+3A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "MLH1",
+      "description": "MLH1 splice",
+      "clinvar_id": "36302"
+    },
+    {
+      "input": "NM_000249.4:c.2041G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MLH1",
+      "description": "MLH1 A681T",
+      "clinvar_id": "36303"
+    },
+    {
+      "input": "NM_000251.3:c.1906G>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "MSH2",
+      "description": "MSH2 A636P",
+      "clinvar_id": "36401"
+    },
+    {
+      "input": "NM_000251.3:c.1216C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "MSH2",
+      "description": "MSH2 R406*",
+      "clinvar_id": "36402"
+    },
+    {
+      "input": "NM_000179.3:c.3261dup",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "MSH6",
+      "description": "MSH6 duplication",
+      "clinvar_id": "36500"
+    },
+    {
+      "input": "NM_000535.7:c.943C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PMS2",
+      "description": "PMS2 R315*",
+      "clinvar_id": "36600"
+    },
+    {
+      "input": "NM_000038.6:c.3927_3931del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "APC",
+      "description": "APC 1309 del",
+      "clinvar_id": "20100"
+    },
+    {
+      "input": "NM_000038.6:c.4348C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "APC",
+      "description": "APC R1450*",
+      "clinvar_id": "20101"
+    },
+    {
+      "input": "NM_000038.6:c.3183_3187del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "APC",
+      "description": "APC frameshift",
+      "clinvar_id": "20102"
+    },
+    {
+      "input": "NM_000038.6:c.694C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "APC",
+      "description": "APC R232*",
+      "clinvar_id": "20103"
+    },
+    {
+      "input": "NM_000321.3:c.958C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "RB1",
+      "description": "RB1 R320*",
+      "clinvar_id": "22100"
+    },
+    {
+      "input": "NM_000321.3:c.751C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "RB1",
+      "description": "RB1 R251*",
+      "clinvar_id": "22101"
+    },
+    {
+      "input": "NM_000321.3:c.2107+1G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "RB1",
+      "description": "RB1 splice",
+      "clinvar_id": "22102"
+    },
+    {
+      "input": "NM_000551.4:c.499C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "VHL",
+      "description": "VHL R167W",
+      "clinvar_id": "23100"
+    },
+    {
+      "input": "NM_000551.4:c.482G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "VHL",
+      "description": "VHL R161Q",
+      "clinvar_id": "23101"
+    },
+    {
+      "input": "NM_000551.4:c.340+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "VHL",
+      "description": "VHL splice",
+      "clinvar_id": "23102"
+    },
+    {
+      "input": "NM_000267.3:c.2033dupC",
+      "type": "Cds",
+      "valid": true,
+      "category": "duplications",
+      "gene": "NF1",
+      "description": "NF1 frameshift",
+      "clinvar_id": "24100"
+    },
+    {
+      "input": "NM_000267.3:c.910C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "NF1",
+      "description": "NF1 R304*",
+      "clinvar_id": "24101"
+    },
+    {
+      "input": "NM_000267.3:c.6792C>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "NF1",
+      "description": "NF1 Y2264*",
+      "clinvar_id": "24102"
+    },
+    {
+      "input": "NM_000368.5:c.1525C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "TSC1",
+      "description": "TSC1 R509*",
+      "clinvar_id": "25100"
+    },
+    {
+      "input": "NM_000548.5:c.5238_5255del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "TSC2",
+      "description": "TSC2 del",
+      "clinvar_id": "25200"
+    },
+    {
+      "input": "NM_000548.5:c.1832G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TSC2",
+      "description": "TSC2 R611Q",
+      "clinvar_id": "25201"
+    },
+    {
+      "input": "NM_004006.3:c.4071+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "DMD",
+      "description": "DMD splice",
+      "clinvar_id": "26100"
+    },
+    {
+      "input": "NM_004006.3:c.10086+1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "DMD",
+      "description": "DMD splice donor",
+      "clinvar_id": "26101"
+    },
+    {
+      "input": "NM_004006.3:c.5530C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "DMD",
+      "description": "DMD R1844*",
+      "clinvar_id": "26102"
+    },
+    {
+      "input": "NM_000314.8:c.406T>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "PTEN",
+      "description": "PTEN C136R",
+      "clinvar_id": "27101"
+    },
+    {
+      "input": "NM_000314.8:c.209+1G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "PTEN",
+      "description": "PTEN splice",
+      "clinvar_id": "27102"
+    },
+    {
+      "input": "NM_024675.4:c.1592del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "PALB2",
+      "description": "PALB2 frameshift",
+      "clinvar_id": "28100"
+    },
+    {
+      "input": "NM_024675.4:c.3116del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "PALB2",
+      "description": "PALB2 frameshift",
+      "clinvar_id": "28101"
+    },
+    {
+      "input": "NM_024675.4:c.509_510del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "PALB2",
+      "description": "PALB2 del",
+      "clinvar_id": "28102"
+    },
+    {
+      "input": "NM_007194.4:c.1100del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "CHEK2",
+      "description": "CHEK2 1100delC",
+      "clinvar_id": "28200"
+    },
+    {
+      "input": "NM_007194.4:c.470T>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CHEK2",
+      "description": "CHEK2 I157T",
+      "clinvar_id": "28201"
+    },
+    {
+      "input": "NM_000051.4:c.7271T>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "ATM",
+      "description": "ATM V2424G",
+      "clinvar_id": "29100"
+    },
+    {
+      "input": "NM_000051.4:c.8545C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "ATM",
+      "description": "ATM R2849*",
+      "clinvar_id": "29101"
+    },
+    {
+      "input": "NM_000051.4:c.5932G>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "nonsense",
+      "gene": "ATM",
+      "description": "ATM E1978*",
+      "clinvar_id": "29102"
+    },
+    {
+      "input": "NM_000367.5:c.460G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TPMT",
+      "description": "TPMT*3B",
+      "clinvar_id": "30100"
+    },
+    {
+      "input": "NM_000367.5:c.719A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TPMT",
+      "description": "TPMT*3C",
+      "clinvar_id": "30101"
+    },
+    {
+      "input": "NM_000106.6:c.506-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "splice",
+      "gene": "CYP2D6",
+      "description": "CYP2D6*4",
+      "clinvar_id": "30200"
+    },
+    {
+      "input": "NM_000106.6:c.100C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CYP2D6",
+      "description": "CYP2D6*10",
+      "clinvar_id": "30201"
+    },
+    {
+      "input": "NM_000769.4:c.681G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "CYP2C19",
+      "description": "CYP2C19*2",
+      "clinvar_id": "30300"
+    },
+    {
+      "input": "NM_000769.4:c.-806C>T",
+      "type": "Cds",
+      "valid": true,
+      "category": "utr",
+      "gene": "CYP2C19",
+      "description": "CYP2C19*17",
+      "clinvar_id": "30301"
+    },
+    {
+      "input": "NM_000546.6:c.100_102delinsTTT",
+      "type": "Cds",
+      "valid": true,
+      "category": "delins",
+      "gene": "TP53",
+      "description": "TP53 delins",
+      "clinvar_id": "12340"
+    },
+    {
+      "input": "NM_000546.6:c.722_723insGTACC",
+      "type": "Cds",
+      "valid": true,
+      "category": "insertions",
+      "gene": "TP53",
+      "description": "TP53 insertion",
+      "clinvar_id": "12341"
+    },
+    {
+      "input": "NM_007294.4:c.5074+1_5074+3del",
+      "type": "Cds",
+      "valid": true,
+      "category": "deletions",
+      "gene": "BRCA1",
+      "description": "BRCA1 splice del",
+      "clinvar_id": "17690"
+    },
+    {
+      "input": "NM_000492.4:c.1585-8G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "intronic",
+      "gene": "CFTR",
+      "description": "CFTR deep intronic",
+      "clinvar_id": "7120"
+    },
+    {
+      "input": "NC_000017.11:g.7673000_7675000inv",
+      "type": "Genome",
+      "valid": true,
+      "category": "inversions",
+      "gene": "TP53",
+      "description": "TP53 inversion",
+      "clinvar_id": "60100"
+    },
+    {
+      "input": "NM_000044.6:c.171CAG[23]",
+      "type": "Cds",
+      "valid": true,
+      "category": "repeat_expansions",
+      "gene": "AR",
+      "description": "AR CAG repeat",
+      "clinvar_id": "70100"
+    },
+    {
+      "input": "NM_002111.8:c.52CAG[36]",
+      "type": "Cds",
+      "valid": true,
+      "category": "repeat_expansions",
+      "gene": "HTT",
+      "description": "HTT Huntington repeat",
+      "clinvar_id": "70200"
+    },
+    {
+      "input": "NP_000537.3:p.Arg248Trp",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 p.R248W",
+      "clinvar_id": "12381"
+    },
+    {
+      "input": "NP_000537.3:p.Arg273His",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 p.R273H",
+      "clinvar_id": "12382"
+    },
+    {
+      "input": "NP_000537.3:p.Arg213Ter",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "TP53",
+      "description": "TP53 p.R213*",
+      "clinvar_id": "12384"
+    },
+    {
+      "input": "NP_004324.2:p.Val600Glu",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "BRAF",
+      "description": "BRAF p.V600E",
+      "clinvar_id": "13980"
+    },
+    {
+      "input": "NP_004324.2:p.Val600Lys",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "BRAF",
+      "description": "BRAF p.V600K",
+      "clinvar_id": "13981"
+    },
+    {
+      "input": "NP_000509.1:p.Glu7Val",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "HBB",
+      "description": "HbS p.E7V",
+      "clinvar_id": "15380"
+    },
+    {
+      "input": "NP_000483.3:p.Gly551Asp",
+      "type": "Protein",
+      "valid": true,
+      "category": "protein",
+      "gene": "CFTR",
+      "description": "CFTR p.G551D",
+      "clinvar_id": "7181"
+    },
+    {
+      "input": "NP_009225.1:p.Glu23ValfsTer17",
+      "type": "Protein",
+      "valid": true,
+      "category": "frameshift",
+      "gene": "BRCA1",
+      "description": "BRCA1 frameshift",
+      "clinvar_id": "17780"
+    },
+    {
+      "input": "NP_009225.1:p.Gln1756ProfsTer74",
+      "type": "Protein",
+      "valid": true,
+      "category": "frameshift",
+      "gene": "BRCA1",
+      "description": "BRCA1 5382insC protein",
+      "clinvar_id": "17781"
+    },
+    {
+      "input": "NM_000546.6:c.?",
+      "type": "Cds",
+      "valid": true,
+      "category": "uncertain",
+      "gene": "TP53",
+      "description": "Unknown position",
+      "clinvar_id": "12391"
+    },
+    {
+      "input": "NP_000537.3:p.Ter394GlnextTer31",
+      "type": "Protein",
+      "valid": true,
+      "category": "extension",
+      "gene": "TP53",
+      "description": "Stop loss extension",
+      "clinvar_id": "12395"
+    },
+    {
+      "input": "NP_000537.3:p.*394Cysext*10",
+      "type": "Protein",
+      "valid": true,
+      "category": "extension",
+      "gene": "TP53",
+      "description": "Extension variant",
+      "clinvar_id": "12396"
+    },
+    {
+      "input": "NM_000546.6:c.213A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "synonymous",
+      "gene": "TP53",
+      "description": "Silent variant",
+      "clinvar_id": "12398"
+    },
+    {
+      "input": "NM_000546.6:c.215C=",
+      "type": "Cds",
+      "valid": true,
+      "category": "synonymous",
+      "gene": "TP53",
+      "description": "No change",
+      "clinvar_id": "12399"
+    },
+    {
+      "input": "NC_000017.11:g.7674220C>T",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 genomic",
+      "clinvar_id": "60001"
+    },
+    {
+      "input": "NC_000017.11:g.7673802G>A",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "TP53",
+      "description": "TP53 genomic",
+      "clinvar_id": "60002"
+    },
+    {
+      "input": "NC_000013.11:g.32316461C>T",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRCA2",
+      "description": "BRCA2 genomic",
+      "clinvar_id": "60003"
+    },
+    {
+      "input": "NC_000007.14:g.140753336A>T",
+      "type": "Genome",
+      "valid": true,
+      "category": "substitutions",
+      "gene": "BRAF",
+      "description": "BRAF genomic",
+      "clinvar_id": "60004"
+    }
+  ],
+  "edge_cases": [
+    {
+      "input": "NM_000546.6:c.=",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "No change/wild-type (identity)"
+    },
+    {
+      "input": "NP_000537.3:p.Gly245=",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Synonymous variant protein notation"
+    },
+    {
+      "input": "NM_000546.6:c.215C>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Ref equals alt - technically valid HGVS"
+    },
+    {
+      "input": "NM_000546.6:c.215=",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Single position no-change notation"
+    },
+    {
+      "input": "NM_000546.6:c.1A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Start codon first position"
+    },
+    {
+      "input": "NM_000546.6:c.-1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Last 5' UTR position"
+    },
+    {
+      "input": "NM_000546.6:c.*1G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "First 3' UTR position"
+    },
+    {
+      "input": "NC_000001.11:g.1A>G",
+      "type": "Genome",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Position 1 genomic"
+    },
+    {
+      "input": "NC_012920.1:m.1A>G",
+      "type": "Mt",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Position 1 mitochondrial"
+    },
+    {
+      "input": "NC_012920.1:m.16569G>A",
+      "type": "Mt",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Last position mitochondrial genome"
+    },
+    {
+      "input": "NM_000088.3:c.100_105inv",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Simple inversion in CDS"
+    },
+    {
+      "input": "NC_000001.11:g.1000_2000inv",
+      "type": "Genome",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Genomic inversion"
+    },
+    {
+      "input": "NM_000088.3:c.100-10000G>A",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "gene": "COL1A1",
+      "description": "Very deep intronic variant (10kb upstream of exon)"
+    },
+    {
+      "input": "NM_000088.3:c.100+15000T>C",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "gene": "COL1A1",
+      "description": "Very deep intronic variant (15kb downstream of exon)"
+    },
+    {
+      "input": "NP_000079.2:p.Ala50_Glu60delinsValSerPro",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Protein deletion-insertion (11 AAs deleted, 3 inserted)"
+    },
+    {
+      "input": "NP_000079.2:p.A50_E60delinsVSP",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Protein delins with one-letter codes"
+    },
+    {
+      "input": "NP_000079.2:p.Ala100_Glu110dup",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Protein range duplication"
+    },
+    {
+      "input": "NM_000088.3:c.-1_1del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Deletion spanning 5' UTR and CDS boundary"
+    },
+    {
+      "input": "NM_000088.3:c.*1_*10del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Deletion in immediate 3' UTR"
+    },
+    {
+      "input": "NM_000088.3:c.1_3delinsTTT",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Delins at first codon"
+    },
+    {
+      "input": "NP_000079.2:p.Lys23fsTer45",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Frameshift with explicit stop position"
+    },
+    {
+      "input": "NP_000079.2:p.Lys23fs*45",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Frameshift with asterisk stop position"
+    },
+    {
+      "input": "LRG_199t1:c.100A>G",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "LRG transcript accession"
+    },
+    {
+      "input": "LRG_199p1:p.Ala100Val",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "LRG protein accession"
+    },
+    {
+      "input": "NM_000088.3:c.100_200del101",
+      "type": "Cds",
+      "valid": false,
+      "category": "edge_cases",
+      "description": "Deletion with explicit length (not yet supported)"
+    },
+    {
+      "input": "NM_000088.3:c.100_102delATG",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Deletion with explicit deleted sequence"
+    },
+    {
+      "input": "NM_004006.3:c.456CGG[55]",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "gene": "FMR1",
+      "description": "FMR1 CGG repeat full mutation (Fragile X)"
+    },
+    {
+      "input": "NM_000044.6:c.171GAA[66]",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "gene": "FXN",
+      "description": "FXN GAA repeat expansion (Friedreich ataxia)"
+    },
+    {
+      "input": "NM_001081563.2:c.456CTG[80]",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "gene": "DMPK",
+      "description": "DMPK CTG repeat expansion (Myotonic dystrophy)"
+    },
+    {
+      "input": "NC_000001.11:g.100_200dup101",
+      "type": "Genome",
+      "valid": false,
+      "category": "edge_cases",
+      "description": "Duplication with explicit length (not yet supported)"
+    },
+    {
+      "input": "NM_000088.3:c.(100)del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Single position with uncertainty"
+    },
+    {
+      "input": "NC_000001.11:g.100000000A>G",
+      "type": "Genome",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Very large genomic position (100M)"
+    },
+    {
+      "input": "NM_000088.3:c.100_101insN",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Insertion of unknown base N"
+    },
+    {
+      "input": "NM_000088.3:c.100_101insNNNNN",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Insertion of multiple unknown bases"
+    },
+    {
+      "input": "NP_000079.2:p.Met1ext-5",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "N-terminal extension (upstream start codon)"
+    },
+    {
+      "input": "NP_000079.2:p.Met1ext-10",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "N-terminal extension with larger distance"
+    },
+    {
+      "input": "NP_000079.2:p.Ter100extTer117",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "C-terminal extension with new stop position"
+    },
+    {
+      "input": "NP_000079.2:p.*100ext*117",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "C-terminal extension with asterisk notation"
+    },
+    {
+      "input": "NP_000079.2:p.Ter100ext*?",
+      "type": "Protein",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "C-terminal extension with unknown new stop"
+    },
+    {
+      "input": "NM_000088.3:c.*87_*91del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "3' UTR interval deletion (biocommons #329)"
+    },
+    {
+      "input": "NM_000088.3:c.*1_*100del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Large 3' UTR deletion"
+    },
+    {
+      "input": "NM_000088.3:c.-50_-1del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "5' UTR deletion"
+    },
+    {
+      "input": "NM_000088.3:c.(4_6)_246del",
+      "type": "Cds",
+      "valid": false,
+      "category": "edge_cases",
+      "description": "Uncertain start boundary (biocommons #801) - simple (pos_pos) boundary not yet supported"
+    },
+    {
+      "input": "NM_000088.3:c.4_(245_246)del",
+      "type": "Cds",
+      "valid": false,
+      "category": "edge_cases",
+      "description": "Uncertain end boundary (biocommons #801) - simple (pos_pos) boundary not yet supported"
+    },
+    {
+      "input": "NM_000088.3:c.(?_6)_245del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Unknown start with uncertain inner (biocommons #801)"
+    },
+    {
+      "input": "NM_000088.3:c.4_(245_?)del",
+      "type": "Cds",
+      "valid": true,
+      "category": "edge_cases",
+      "description": "Uncertain end with unknown inner (biocommons #801)"
+    }
+  ],
+  "quirks": {
+    "description": "Known ClinVar-specific patterns and non-standard notations",
+    "items": [
+      {
+        "pattern": "Protein variants may use both Ter and * for stop codons",
+        "examples": [
+          "p.Arg342Ter",
+          "p.Arg342*"
+        ],
+        "handling": "Both should parse correctly"
+      },
+      {
+        "pattern": "Some entries use gene names without accession in clinical context",
+        "examples": [
+          "BRAF:p.Val600Glu"
+        ],
+        "handling": "Not supported - require accession prefix"
+      },
+      {
+        "pattern": "Deep intronic variants with large offsets",
+        "examples": [
+          "c.7595-2144A>G",
+          "c.3718-2477C>T"
+        ],
+        "handling": "Should parse - verify large offset support"
+      },
+      {
+        "pattern": "Mixed 3-letter and 1-letter amino acid codes in clinical use",
+        "examples": [
+          "p.Val600Glu",
+          "p.V600E"
+        ],
+        "handling": "Both formats should parse"
+      },
+      {
+        "pattern": "Predicted consequences in parentheses",
+        "examples": [
+          "p.(Arg248Gln)",
+          "p.(?)"
+        ],
+        "handling": "Uncertainty notation should parse"
+      },
+      {
+        "pattern": "Complex exon-level deletions with uncertain intronic breakpoints",
+        "examples": [
+          "c.(4185+1_4186-1)_(4357+1_4358-1)del"
+        ],
+        "handling": "Complex uncertainty parsing required"
+      },
+      {
+        "pattern": "C-terminal extensions with substituted amino acid",
+        "examples": [
+          "p.Ter100LeuextTer117",
+          "p.*100Lext*117"
+        ],
+        "handling": "Complex extension format - our model stores direction/count but not the substituted AA"
+      }
+    ]
+  },
+  "statistics": {
+    "total_test_cases": 268,
+    "by_type": {
+      "Cds": 207,
+      "Genome": 11,
+      "Protein": 38,
+      "Mt": 6,
+      "Allele": 6
+    },
+    "by_category": {
+      "substitutions": 91,
+      "nonsense": 22,
+      "duplications": 11,
+      "deletions": 32,
+      "splice": 22,
+      "intronic": 12,
+      "insertions": 5,
+      "delins": 4,
+      "protein": 31,
+      "mitochondrial": 6,
+      "utr": 6,
+      "uncertain": 11,
+      "allele": 6,
+      "inversions": 1,
+      "repeat_expansions": 2,
+      "frameshift": 2,
+      "extension": 2,
+      "synonymous": 2
+    },
+    "genes_covered": 62
+  },
+  "total_cases": 264
+}

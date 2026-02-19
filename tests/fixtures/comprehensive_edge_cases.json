@@ -1,0 +1,1081 @@
+{
+  "description": "Comprehensive edge case tests from Mutalyzer, biocommons, VariantValidator, and HGVS spec analysis",
+  "last_updated": "2025-12-18",
+  "sources": [
+    "docs/mutalyzer_issues_research.md",
+    "docs/biocommons_hgvs_issues_review.md",
+    "docs/hgvs_gap_analysis.md",
+    "docs/validation_results.md"
+  ],
+
+  "mutalyzer_edge_cases": {
+    "description": "Edge cases from Mutalyzer issues and PRs",
+    "tests": [
+      {
+        "input": "NM_003002.4:c.278dup",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "RNA duplication should remain dup not delins (mutalyzer#99)",
+        "source": "mutalyzer#99"
+      },
+      {
+        "input": "NM_000088.3:c.2450dupC",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Frameshift duplication - protein should be p.Gly817Trpfs*3 (mutalyzer2#244)",
+        "source": "mutalyzer2#244"
+      },
+      {
+        "input": "NC_012920.1:m.3243A>G",
+        "valid": true,
+        "type": "MtVariant",
+        "description": "Mitochondrial DNA variant - should produce single result (mutalyzer2#406)",
+        "source": "mutalyzer2#406"
+      },
+      {
+        "input": "NG_012337.1:g.=",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Unchanged sequence - valid HGVS notation (mutalyzer2#377)",
+        "source": "mutalyzer2#377"
+      },
+      {
+        "input": "NG_012337.1:g.?",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Unknown variant - valid HGVS notation (mutalyzer2#377)",
+        "source": "mutalyzer2#377"
+      },
+      {
+        "input": "NM_020451.2:c.1715C>A",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Selenoprotein UGA - should not flag as stop codon (mutalyzer2#296)",
+        "source": "mutalyzer2#296"
+      },
+      {
+        "input": "NC_000007.14:117530938:A:T",
+        "valid": false,
+        "description": "SPDI format - not standard HGVS (mutalyzer commits)",
+        "source": "mutalyzer-commits"
+      },
+      {
+        "input": "NM_000088.3:c.100+1G>A",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Intronic splice site variant",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:c.100-2A>G",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Intronic splice acceptor variant",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_006019.4:c.303_318dup",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Performance test - this pattern caused 504 timeout in Mutalyzer (mutalyzer#111)",
+        "source": "mutalyzer#111",
+        "performance": true
+      },
+      {
+        "input": "NM_006019.4:c.303_319dup",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Performance test - this pattern caused 504 timeout in Mutalyzer (mutalyzer#111)",
+        "source": "mutalyzer#111",
+        "performance": true
+      },
+      {
+        "input": "NM_006019.4:c.303_320dup",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Performance test - this pattern caused 504 timeout in Mutalyzer (mutalyzer#111)",
+        "source": "mutalyzer#111",
+        "performance": true
+      },
+      {
+        "input": "NM_006019.4:c.303_321dup",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Performance test - this pattern caused 504 timeout in Mutalyzer (mutalyzer#111)",
+        "source": "mutalyzer#111",
+        "performance": true
+      },
+      {
+        "input": "NM_000193.2:c.108_109delinsG",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Delins should produce frameshift, not p.(=) (mutalyzer2#298)",
+        "source": "mutalyzer2#298"
+      },
+      {
+        "input": "NM_000777.3:c.-5_-1del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Kozak sequence damage - should be p.? not p.(=) (mutalyzer2#417)",
+        "source": "mutalyzer2#417"
+      },
+      {
+        "input": "NC_000014.8:g.101179660TG[14]",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Repeat notation with explicit sequence",
+        "source": "mutalyzer-hgvs-parser"
+      },
+      {
+        "input": "NP_000001.1:p.Ala50_Arg51insGlyPro",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Protein insertion with amino acid sequence",
+        "source": "mutalyzer-hgvs-parser"
+      },
+      {
+        "input": "NG_017013.2:g.13262_13263insTAAAA",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Insertion that may be duplication - should suggest g.13258_13262dup (mutalyzer2#428)",
+        "source": "mutalyzer2#428"
+      },
+      {
+        "input": "NC_000001.11:g.1999904_1999946|gom",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Gain of methylation notation",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NC_000001.11:g.1999904_1999946|lom",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Loss of methylation notation",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NC_000001.11:g.1999904_1999946|met=",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Methylation unchanged notation",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "biocommons_edge_cases": {
+    "description": "Edge cases from biocommons/hgvs issues review",
+    "tests": [
+      {
+        "input": "NM_000088.3:c.(4_6)_246del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Uncertain c. interval start (biocommons#801)",
+        "source": "biocommons#801"
+      },
+      {
+        "input": "NM_000088.3:c.4_(245_246)del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Uncertain c. interval end (biocommons#801)",
+        "source": "biocommons#801"
+      },
+      {
+        "input": "NM_000088.3:c.(?_6)_245del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown start boundary (biocommons#801)",
+        "source": "biocommons#801"
+      },
+      {
+        "input": "NM_000088.3:c.4_(245_?)del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown end boundary (biocommons#801)",
+        "source": "biocommons#801"
+      },
+      {
+        "input": "NM_000088.3:c.(?_6)_(245_?)del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown both boundaries (biocommons#801)",
+        "source": "biocommons#801"
+      },
+      {
+        "input": "NM_000088.3:c.6317G=",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Identity with reference base (biocommons#314)",
+        "source": "biocommons#314"
+      },
+      {
+        "input": "NM_000088.3:c.*87_*91del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "3' UTR interval deletion - both positions must have * prefix (biocommons#329)",
+        "source": "biocommons#329"
+      },
+      {
+        "input": "NM_000088.3:c.*1_*100del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "3' UTR range deletion",
+        "source": "biocommons#329"
+      },
+      {
+        "input": "NM_000088.3:c.-50_-1del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "5' UTR deletion",
+        "source": "biocommons#330"
+      },
+      {
+        "input": "NC_000001.11:g.123TG[14]",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Repeat with explicit count (biocommons#113)",
+        "source": "biocommons#113"
+      },
+      {
+        "input": "NM_000088.3:c.100CAG[10_?]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Repeat with uncertain max count",
+        "source": "biocommons#113"
+      },
+      {
+        "input": "NM_000088.3:c.100CAG[?]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Repeat with unknown count",
+        "source": "biocommons#113"
+      },
+      {
+        "input": "NM_000088.3:c.100_102delATGinsATG",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Identity as delins - should normalize to c.= (biocommons#409)",
+        "source": "biocommons#409"
+      },
+      {
+        "input": "NM_000088.3:c.1957_*3del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Deletion including stop codon = frameshift (biocommons#774)",
+        "source": "biocommons#774"
+      }
+    ]
+  },
+
+  "selenoprotein_pyrrolysine_tests": {
+    "description": "Selenocysteine and Pyrrolysine amino acid tests",
+    "tests": [
+      {
+        "input": "NP_000001.1:p.Sec25Cys",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Selenocysteine to Cysteine substitution",
+        "source": "biocommons#420"
+      },
+      {
+        "input": "NP_000001.1:p.U25C",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Selenocysteine (1-letter) substitution",
+        "source": "biocommons#420"
+      },
+      {
+        "input": "NP_000001.1:p.Pyl100Lys",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Pyrrolysine to Lysine substitution",
+        "source": "mutalyzer2#296"
+      },
+      {
+        "input": "NP_000001.1:p.O100K",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Pyrrolysine (1-letter) substitution",
+        "source": "mutalyzer2#296"
+      },
+      {
+        "input": "NP_000001.1:p.Cys25Sec",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Cysteine to Selenocysteine substitution",
+        "source": "biocommons#420"
+      },
+      {
+        "input": "NP_000001.1:p.Lys100Pyl",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Lysine to Pyrrolysine substitution",
+        "source": "mutalyzer2#296"
+      }
+    ]
+  },
+
+  "invalid_patterns": {
+    "description": "Patterns that should be rejected as invalid",
+    "tests": [
+      {
+        "input": "NC_000001.11:g.0del",
+        "valid": false,
+        "description": "Position 0 is invalid - HGVS is 1-based",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000001.11:g.0_1insAAA",
+        "valid": false,
+        "description": "Position 0 in range is invalid",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000001.11:g.4_3del",
+        "valid": false,
+        "description": "Inverted range (start > end) is invalid",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000088.3:c.135_130insT",
+        "valid": false,
+        "description": "Inverted range in CDS context",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000088.3:c.200_100inv",
+        "valid": false,
+        "description": "Invalid inverted range (positive start > end)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000001.11:g.-1del",
+        "valid": false,
+        "description": "Negative genomic position is invalid",
+        "source": "mutalyzer-patterns"
+      },
+      {
+        "input": "NC_000001.11:g.7125+1G>T",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Intronic offset on genomic coordinate (lenient parsing for ClinVar compatibility)",
+        "source": "mutalyzer-patterns"
+      },
+      {
+        "input": "NP_000001.1:p.Z100A",
+        "valid": false,
+        "description": "Z is not a valid amino acid",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NP_000001.1:p.205_685del",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Numeric protein positions (non-standard but supported for ClinVar compatibility)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000088.3:c.0A>G",
+        "valid": false,
+        "description": "CDS position 0 is invalid",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "vep_specific_patterns": {
+    "description": "Patterns generated by VEP (Variant Effect Predictor)",
+    "tests": [
+      {
+        "input": "NP_000001.1:p.Val600GlufsTer?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift with unknown termination position",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.Val600Glufs*?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift with * and ? for unknown stop",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.Ter100delextTer?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Extension with unknown endpoint",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.*100delext*?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Extension with * notation",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NM_000088.3:c.100A[6][1]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Nested repeat (genotype notation)",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "P54802:p.Val100Glu",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "UniProt 6-character accession",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "A0A024R1R8:p.Val100Glu",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "UniProt 10-character accession",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NM_000088.3:c.123A>G/=",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Mosaic notation (variant/reference)",
+        "source": "validation_results.md"
+      }
+    ]
+  },
+
+  "protein_uncertain_boundaries": {
+    "description": "Protein variants with uncertain position boundaries",
+    "tests": [
+      {
+        "input": "NP_000001.1:p.(?_Met1)_Glu2del",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Unknown N-terminal boundary",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.Met1_(Glu2_?)del",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Unknown C-terminal boundary",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.Met(?_1)_Glu2(?)del",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Deeply nested uncertain positions",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.(Val600Glu)",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Predicted protein effect (parenthetical)",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Unknown protein effect",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.(?)",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Predicted unknown protein effect",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.=",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "No protein change (synonymous)",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.(=)",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Predicted no protein change",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.0",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "No protein product",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NP_000001.1:p.0?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Uncertain no protein product",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NP_000001.1:p.Met1?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Uncertain effect on start codon",
+        "source": "mutalyzer-community"
+      }
+    ]
+  },
+
+  "allele_notation": {
+    "description": "Allele and phase notation tests",
+    "tests": [
+      {
+        "input": "NM_000088.3:c.[145C>T;147C>G]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Cis allele notation (two variants on same allele)",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:c.[145C>T];[147C>G]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Trans allele notation (variants on different alleles)",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:c.[145C>T];[0]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Null allele notation (hemizygous)",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.[145C>T];[?]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown second allele",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.145C>T(;)147C>G",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown phase shorthand",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.[145C>T(;)147C>G]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Unknown phase in brackets",
+        "source": "PLAN_100_PERCENT.md"
+      }
+    ]
+  },
+
+  "complex_insertions": {
+    "description": "Complex insertion notation tests",
+    "tests": [
+      {
+        "input": "NM_000088.3:c.483ins10",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Insert 10 unknown bases",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.483_484ins(10)",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Insert 10 unknown bases (parenthetical)",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.483_484ins(10_20)",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Insert 10-20 unknown bases",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.483_484insA[10]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Insert A repeated 10 times",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.483_484insN[15]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Insert 15 unknown bases (N notation)",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NM_000088.3:c.483_484delins[A[10];T]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Complex delins with repeat",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "LRG_199t1:c.419_420ins[T;401_419]",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Complex insertion with position reference",
+        "source": "mutalyzer-hgvs-parser"
+      }
+    ]
+  },
+
+  "delins_with_explicit_deleted": {
+    "description": "Delins patterns with explicit deleted sequence",
+    "tests": [
+      {
+        "input": "NC_000008.10:g.24814007_24814008delGGinsCT",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Delins with explicit deleted sequence",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_006158.3:c.22_23delCCinsAG",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "CDS delins with explicit deleted sequence",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000010.10:g.64573251_64573252delCAinsAC",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Delins with explicit deleted sequence (3)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000399.3:c.1146_1147delTGinsGT",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Delins with explicit deleted sequence (4)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000014.8:g.23894569_23894570delCTinsTC",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Delins with explicit deleted sequence (5)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000257.2:c.2344_2345delAGinsGA",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Delins with explicit deleted sequence (6)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NC_000010.10:g.89692957_89692958delGGinsA",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Delins with explicit deleted sequence (7)",
+        "source": "hgvs_gap_analysis.md"
+      },
+      {
+        "input": "NM_000314.4:c.441_442delGGinsA",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Delins with explicit deleted sequence (8)",
+        "source": "hgvs_gap_analysis.md"
+      }
+    ]
+  },
+
+  "intronic_and_utr_ranges": {
+    "description": "Intronic and UTR range patterns",
+    "tests": [
+      {
+        "input": "NM_000088.3:c.100+1_100+5del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Intronic range deletion",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:c.100-10_100-5del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Intronic acceptor range deletion",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:c.85-47_84+48del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Cross-boundary intronic range",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NM_000088.3:c.-50_-40del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "5' UTR range deletion",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:c.*100_*200del",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "3' UTR range deletion",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:c.-10+5G>A",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "5' UTR intronic offset",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:c.*10-5G>A",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "3' UTR intronic offset",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "uncertain_dup_range": {
+    "description": "Uncertain duplication range tests",
+    "tests": [
+      {
+        "input": "NC_000001.11:g.(187314204_187315204)_(187315104_?)dup",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Uncertain dup with unknown endpoint",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NC_000001.11:g.(90136803_90144453)_(90159675_90261231)dup",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Uncertain dup range",
+        "source": "PLAN_100_PERCENT.md"
+      },
+      {
+        "input": "NC_000001.11:g.100dup?",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Uncertain duplication",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NC_000001.11:g.100_200dup(?)",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Duplication with uncertain extent",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NC_000001.11:g.722_742dup(731_741)",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Duplication with specified uncertain region",
+        "source": "mutalyzer-patterns"
+      }
+    ]
+  },
+
+  "legacy_format_tests": {
+    "description": "Legacy HGVS notation formats - require parse_with_legacy() or LegacyParser",
+    "tests": [
+      {
+        "input": "NM_000088.3:c.IVS4+1G>A",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "IVS notation (legacy intronic) - requires LegacyParser with exon data",
+        "source": "docs/plans/legacy-formats.md",
+        "requires_legacy_parser": true
+      },
+      {
+        "input": "NM_000088.3:c.IVS7-2A>G",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "IVS acceptor notation - requires LegacyParser with exon data",
+        "source": "docs/plans/legacy-formats.md",
+        "requires_legacy_parser": true
+      },
+      {
+        "input": "NP_000001.1:p.600V>E",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Number-first protein notation (legacy) - requires parse_with_legacy()",
+        "source": "docs/plans/legacy-formats.md",
+        "requires_legacy_parser": true
+      },
+      {
+        "input": "NP_000001.1:p.V600>E",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Arrow protein substitution (legacy) - requires parse_with_legacy()",
+        "source": "docs/plans/legacy-formats.md",
+        "requires_legacy_parser": true
+      }
+    ]
+  },
+
+  "extension_tests": {
+    "description": "N/C-terminal extension tests",
+    "tests": [
+      {
+        "input": "NP_000001.1:p.Met1ext-5",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "N-terminal extension",
+        "source": "biocommons#804"
+      },
+      {
+        "input": "NP_000001.1:p.Ter100Glnext*17",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "C-terminal extension",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.*100Glnext*17",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "C-terminal extension with * notation",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.Ter100extTer?",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Extension with unknown endpoint",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "frameshift_tests": {
+    "description": "Frameshift notation tests",
+    "tests": [
+      {
+        "input": "NP_000001.1:p.Gly8Trpfs*50",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift with * for stop",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.Gly8TrpfsTer50",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift with Ter for stop",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.Arg97ProfsTer23",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift from validation_results.md",
+        "source": "validation_results.md"
+      },
+      {
+        "input": "NP_000001.1:p.Val600fs",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Simple frameshift without termination",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NP_000001.1:p.Val600Glufs",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Frameshift with new amino acid",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "conversion_tests": {
+    "description": "Conversion (con) notation tests - legacy",
+    "tests": [
+      {
+        "input": "NC_000022.10:g.42522624_42522669con42536337_42536382",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Conversion notation (SVD-WG009 deprecated but supported)",
+        "source": "mutalyzer-hgvs-parser"
+      }
+    ]
+  },
+
+  "rna_variant_tests": {
+    "description": "RNA (r.) variant tests",
+    "tests": [
+      {
+        "input": "NM_000088.3:r.76a>g",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "RNA substitution (lowercase)",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:r.100_102del",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "RNA deletion",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "NM_000088.3:r.100_101insaug",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "RNA insertion (lowercase)",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:r.(100_101insaug)",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "Predicted RNA insertion",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:r.=",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "No RNA change",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:r.?",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "Unknown RNA effect",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:r.spl",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "Aberrant splicing",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NM_000088.3:r.0",
+        "valid": true,
+        "type": "RnaVariant",
+        "description": "No RNA product",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "circular_dna_tests": {
+    "description": "Circular DNA (o.) notation tests (SVD-WG006)",
+    "tests": [
+      {
+        "input": "NC_001416.1:o.100A>G",
+        "valid": true,
+        "type": "CircularVariant",
+        "description": "Circular DNA substitution",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NC_001416.1:o.100_200del",
+        "valid": true,
+        "type": "CircularVariant",
+        "description": "Circular DNA deletion",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "ensembl_accession_tests": {
+    "description": "Ensembl accession format tests",
+    "tests": [
+      {
+        "input": "ENST00000357654.8:c.100A>G",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Ensembl transcript accession",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "ENSP00000350283.3:p.Val600Glu",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "Ensembl protein accession",
+        "source": "mutalyzer-community"
+      },
+      {
+        "input": "ENSG00000141510.16:g.100A>G",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Ensembl gene accession",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "lrg_accession_tests": {
+    "description": "LRG (Locus Reference Genomic) accession tests",
+    "tests": [
+      {
+        "input": "LRG_199:g.100A>G",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "LRG genomic accession",
+        "source": "mutalyzer-hgvs-parser"
+      },
+      {
+        "input": "LRG_199t1:c.100A>G",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "LRG transcript accession",
+        "source": "mutalyzer-hgvs-parser"
+      },
+      {
+        "input": "LRG_199p1:p.Val100Glu",
+        "valid": true,
+        "type": "ProteinVariant",
+        "description": "LRG protein accession",
+        "source": "hgvs-spec"
+      }
+    ]
+  },
+
+  "gene_symbol_tests": {
+    "description": "HGVS with gene symbol in parentheses",
+    "tests": [
+      {
+        "input": "NM_004006.1(DMD):c.22+1A>T",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Gene symbol annotation",
+        "source": "hgvs-spec"
+      },
+      {
+        "input": "NG_012232.1(NM_004006.1):c.93+1G>T",
+        "valid": true,
+        "type": "CdsVariant",
+        "description": "Nested accession with transcript",
+        "source": "mutalyzer-hgvs-parser"
+      },
+      {
+        "input": "NC_000007.14(BRAF):g.140453136A>T",
+        "valid": true,
+        "type": "GenomeVariant",
+        "description": "Genomic with gene symbol",
+        "source": "hgvs-spec"
+      }
+    ]
+  }
+}

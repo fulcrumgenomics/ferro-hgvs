@@ -1,0 +1,272 @@
+name: External API Validation
+
+on:
+  schedule:
+    # Run weekly on Sunday at midnight UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      skip_api_fetch:
+        description: 'Skip API fetching (use existing fixtures)'
+        required: false
+        default: 'false'
+      limit_variants:
+        description: 'Limit variants per API (for faster testing)'
+        required: false
+        default: '0'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fetch-api-data:
+    name: Fetch External API Data
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests civicpy
+
+      - name: Fetch Mutalyzer API data
+        run: |
+          python scripts/fetch_mutalyzer_normalized.py \
+            --output tests/fixtures/normalization/mutalyzer_api.json \
+            ${LIMIT:+--limit $LIMIT}
+        env:
+          LIMIT: ${{ github.event.inputs.limit_variants }}
+        continue-on-error: true
+
+      - name: Fetch VariantValidator API data
+        run: |
+          python scripts/fetch_variantvalidator.py \
+            --output tests/fixtures/validation/variantvalidator_api.json \
+            ${LIMIT:+--limit $LIMIT}
+        env:
+          LIMIT: ${{ github.event.inputs.limit_variants }}
+        continue-on-error: true
+
+      - name: Fetch NCBI Variation Services data
+        run: |
+          python scripts/fetch_ncbi_variation.py \
+            --output tests/fixtures/validation/ncbi_variation.json \
+            ${LIMIT:+--limit $LIMIT}
+        env:
+          LIMIT: ${{ github.event.inputs.limit_variants }}
+        continue-on-error: true
+
+      - name: Extract Mutalyzer GitHub patterns
+        run: |
+          if [ -d "external-repos/mutalyzer-hgvs-parser" ]; then
+            python scripts/extract_mutalyzer_github.py \
+              --output tests/fixtures/grammar/mutalyzer_github.json
+          else
+            echo "Mutalyzer repo not cloned, skipping"
+          fi
+        continue-on-error: true
+
+      - name: Upload API fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-fixtures
+          path: |
+            tests/fixtures/normalization/mutalyzer_api.json
+            tests/fixtures/validation/variantvalidator_api.json
+            tests/fixtures/validation/ncbi_variation.json
+            tests/fixtures/grammar/mutalyzer_github.json
+          retention-days: 30
+
+  run-comparison-tests:
+    name: Run API Comparison Tests
+    runs-on: ubuntu-latest
+    needs: [fetch-api-data]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download API fixtures
+        uses: actions/download-artifact@v4
+        with:
+          name: api-fixtures
+          path: tests/fixtures/
+        continue-on-error: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run API comparison tests
+        run: |
+          cargo test --test api_comparison_tests -- --ignored --nocapture 2>&1 | tee api_comparison_results.txt
+        continue-on-error: true
+
+      - name: Run SPDI tests
+        run: |
+          cargo test --test spdi_tests -- --ignored --nocapture 2>&1 | tee spdi_results.txt
+        continue-on-error: true
+
+      - name: Run dbSNP tests
+        run: |
+          cargo test --test dbsnp_tests -- --nocapture 2>&1 | tee dbsnp_results.txt
+        continue-on-error: true
+
+      - name: Generate validation report
+        run: |
+          echo "# External Validation Report" > validation_report.md
+          echo "" >> validation_report.md
+          echo "Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> validation_report.md
+          echo "" >> validation_report.md
+
+          echo "## API Comparison Results" >> validation_report.md
+          echo '```' >> validation_report.md
+          tail -50 api_comparison_results.txt >> validation_report.md || echo "No results" >> validation_report.md
+          echo '```' >> validation_report.md
+          echo "" >> validation_report.md
+
+          echo "## SPDI Test Results" >> validation_report.md
+          echo '```' >> validation_report.md
+          tail -50 spdi_results.txt >> validation_report.md || echo "No results" >> validation_report.md
+          echo '```' >> validation_report.md
+          echo "" >> validation_report.md
+
+          echo "## dbSNP Test Results" >> validation_report.md
+          echo '```' >> validation_report.md
+          tail -50 dbsnp_results.txt >> validation_report.md || echo "No results" >> validation_report.md
+          echo '```' >> validation_report.md
+
+      - name: Upload validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: |
+            validation_report.md
+            api_comparison_results.txt
+            spdi_results.txt
+            dbsnp_results.txt
+          retention-days: 90
+
+  run-standard-tests:
+    name: Run Standard Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run standard tests
+        run: cargo test --all-features
+
+      - name: Run clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  fetch-external-databases:
+    name: Fetch External Database Data
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests
+
+      - name: Fetch LOVD data
+        run: |
+          python scripts/fetch_lovd_hgvs.py \
+            --format json \
+            --output tests/fixtures/external/lovd_variants.json \
+            --limit 100
+        continue-on-error: true
+        timeout-minutes: 30
+
+      - name: Fetch MaveDB data
+        run: |
+          python scripts/fetch_mavedb_hgvs.py \
+            --format json \
+            --output tests/fixtures/external/mavedb_variants.json \
+            --limit 20 \
+            --variants-per-set 50
+        continue-on-error: true
+        timeout-minutes: 30
+
+      # Note: CIViC requires civicpy which may need special setup
+      - name: Fetch CIViC data (optional)
+        run: |
+          pip install civicpy || true
+          python scripts/fetch_civic_hgvs.py \
+            --format json \
+            --output tests/fixtures/external/civic_variants.json || true
+        continue-on-error: true
+        timeout-minutes: 30
+
+      - name: Upload external database fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-db-fixtures
+          path: tests/fixtures/external/
+          retention-days: 30
+
+  summary:
+    name: Generate Summary
+    runs-on: ubuntu-latest
+    needs: [run-comparison-tests, run-standard-tests]
+    if: always()
+
+    steps:
+      - name: Download validation report
+        uses: actions/download-artifact@v4
+        with:
+          name: validation-report
+        continue-on-error: true
+
+      - name: Post summary
+        run: |
+          echo "## External Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f validation_report.md ]; then
+            cat validation_report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Validation report not available" >> $GITHUB_STEP_SUMMARY
+          fi

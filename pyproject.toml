@@ -1,0 +1,83 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ferro-hgvs"
+version = "0.1.0"
+description = "HGVS variant normalizer - Python bindings for the ferro bioinformatics toolkit"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+keywords = ["hgvs", "variant", "normalization", "bioinformatics", "genomics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/fulcrumgenomics/ferro-hgvs"
+Repository = "https://github.com/fulcrumgenomics/ferro-hgvs"
+Documentation = "https://github.com/fulcrumgenomics/ferro-hgvs#readme"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "mypy>=1.0",
+    "ruff>=0.4",
+]
+
+[tool.maturin]
+features = ["python"]
+python-source = "python"
+module-name = "ferro_hgvs"
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Native extension re-exports - star imports are intentional
+"python/ferro_hgvs/__init__.py" = ["F403", "F405"]
+# Type stubs use Optional/List for Python 3.8 compatibility
+"python/ferro_hgvs/__init__.pyi" = ["UP006", "UP007"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ferro_hgvs"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+strict = true
+files = ["python/ferro_hgvs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

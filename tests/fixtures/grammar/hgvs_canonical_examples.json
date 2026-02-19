@@ -1,0 +1,431 @@
+{
+  "description": "Canonical HGVS examples from the official syntax.yaml in HGVSnomenclature/hgvs-nomenclature repository",
+  "source": "https://github.com/HGVSnomenclature/hgvs-nomenclature/blob/main/docs/syntax.yaml",
+  "generated": "2025-12-29",
+  "categories": {
+    "dna": {
+      "description": "DNA variant examples (g., c., n. coordinate systems)",
+      "examples": [
+        {
+          "hgvs": "NC_000001.11:g.[123G>A;345del]",
+          "variant_type": "allele_cis",
+          "description": "Variants in cis"
+        },
+        {
+          "hgvs": "NC_000001.11:g.[123G>A];[345del]",
+          "variant_type": "allele_trans",
+          "description": "Variants in trans"
+        },
+        {
+          "hgvs": "NC_000001.11:g.123G>A(;)345del",
+          "variant_type": "allele_uncertain",
+          "description": "Variants with unknown/uncertain phase"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234del",
+          "variant_type": "deletion",
+          "description": "Single position deletion"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234_2345del",
+          "variant_type": "deletion",
+          "description": "Range deletion"
+        },
+        {
+          "hgvs": "NC_000001.11:g.123delinsAC",
+          "variant_type": "delins",
+          "description": "Single position deletion-insertion"
+        },
+        {
+          "hgvs": "NC_000001.11:g.123_129delinsAC",
+          "variant_type": "delins",
+          "description": "Range deletion-insertion"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234dup",
+          "variant_type": "duplication",
+          "description": "Single position duplication"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234_2345dup",
+          "variant_type": "duplication",
+          "description": "Range duplication"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234_1235insACGT",
+          "variant_type": "insertion",
+          "description": "Insertion between adjacent positions"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234_2345inv",
+          "variant_type": "inversion",
+          "description": "Inversion"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234=",
+          "variant_type": "no_change",
+          "description": "No change at single position"
+        },
+        {
+          "hgvs": "NC_000001.11:g.1234_2345=",
+          "variant_type": "no_change",
+          "description": "No change in range"
+        },
+        {
+          "hgvs": "NC_000014.8:g.123CAG[23]",
+          "variant_type": "repeat",
+          "description": "Unique repeat"
+        },
+        {
+          "hgvs": "NC_000014.8:g.123_191CAG[19]CAA[4]",
+          "variant_type": "repeat",
+          "description": "Mixed repeat"
+        },
+        {
+          "hgvs": "NC_000023.10:g.33038255C>A",
+          "variant_type": "substitution",
+          "description": "Simple substitution"
+        },
+        {
+          "hgvs": "NG_012232.1(NM_004006.2):c.93+1G>T",
+          "variant_type": "substitution",
+          "description": "Genome reference with transcript coordinates"
+        }
+      ]
+    },
+    "rna": {
+      "description": "RNA variant examples (r. coordinate system)",
+      "examples": [
+        {
+          "hgvs": "NM_004006.3:r.[123c>a;345del]",
+          "variant_type": "allele_cis",
+          "description": "Variants in cis"
+        },
+        {
+          "hgvs": "NM_004006.3:r.[123c>a];[345del]",
+          "variant_type": "allele_trans",
+          "description": "Variants in trans"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123c>a(;)345del",
+          "variant_type": "allele_uncertain",
+          "description": "Variants with unknown/uncertain phase"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123_127del",
+          "variant_type": "deletion",
+          "description": "Range deletion"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123_127delinsag",
+          "variant_type": "delins",
+          "description": "Deletion-insertion"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123_345dup",
+          "variant_type": "duplication",
+          "description": "Range duplication"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123_124insauc",
+          "variant_type": "insertion",
+          "description": "Insertion"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123_345inv",
+          "variant_type": "inversion",
+          "description": "Inversion"
+        },
+        {
+          "hgvs": "NM_004006.3:r.9495_9497[4]",
+          "variant_type": "repeat",
+          "description": "Repeat with positions"
+        },
+        {
+          "hgvs": "NM_004006.3:r.-110_-108[6]",
+          "variant_type": "repeat",
+          "description": "Repeat in 5' UTR"
+        },
+        {
+          "hgvs": "NM_004006.3:r.9495caa[4]",
+          "variant_type": "repeat",
+          "description": "Repeat with sequence"
+        },
+        {
+          "hgvs": "NM_004006.3:r.-110gcu[6]",
+          "variant_type": "repeat",
+          "description": "Repeat in 5' UTR with sequence"
+        },
+        {
+          "hgvs": "NM_004006.3:r.123c>g",
+          "variant_type": "substitution",
+          "description": "Substitution"
+        },
+        {
+          "hgvs": "NM_002354.2:r.-358_555::NM_000251.2:r.212_*279",
+          "variant_type": "adjoined_transcript",
+          "description": "Deletion-derived adjoined transcript"
+        },
+        {
+          "hgvs": "NM_152263.2:r.-115_775::aggcucccuugg::NM_002609.3:r.1580_*1924",
+          "variant_type": "adjoined_transcript",
+          "description": "Adjoined transcript with linker sequence"
+        },
+        {
+          "hgvs": "NM_152263.2:r.?_775::NM_002609.3:r.1580_?",
+          "variant_type": "adjoined_transcript",
+          "description": "Adjoined transcript with unknown boundaries"
+        }
+      ]
+    },
+    "protein": {
+      "description": "Protein variant examples (p. coordinate system)",
+      "examples": [
+        {
+          "hgvs": "NP_003997.1:p.[(Ser73Arg;Asn103del)]",
+          "variant_type": "allele_cis",
+          "description": "Variants in cis (predicted)"
+        },
+        {
+          "hgvs": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
+          "variant_type": "allele_trans",
+          "description": "Variants in trans (predicted)"
+        },
+        {
+          "hgvs": "NP_003997.1:p.(Ser73Arg)(;)(Asn103del)",
+          "variant_type": "allele_uncertain",
+          "description": "Variants with unknown/uncertain phase"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Val7del",
+          "variant_type": "deletion",
+          "description": "Single amino acid deletion"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Lys23_Val25del",
+          "variant_type": "deletion",
+          "description": "Range deletion"
+        },
+        {
+          "hgvs": "NP_004371.2:p.Asn47delinsSerSerTer",
+          "variant_type": "delins",
+          "description": "Deletion-insertion"
+        },
+        {
+          "hgvs": "NP_004371.2:p.(Asn47delinsSerSerTer)",
+          "variant_type": "delins",
+          "description": "Deletion-insertion (predicted)"
+        },
+        {
+          "hgvs": "NP_003070.3:p.Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu",
+          "variant_type": "delins",
+          "description": "Range deletion-insertion"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Val7dup",
+          "variant_type": "duplication",
+          "description": "Single amino acid duplication"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Lys23_Val25dup",
+          "variant_type": "duplication",
+          "description": "Range duplication"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Met1ext-5",
+          "variant_type": "extension",
+          "description": "N-terminus extension"
+        },
+        {
+          "hgvs": "NP_003997.2:p.Ter110GlnextTer17",
+          "variant_type": "extension",
+          "description": "C-terminus extension"
+        },
+        {
+          "hgvs": "NP_0123456.1:p.Arg97ProfsTer23",
+          "variant_type": "frameshift",
+          "description": "Frameshift with termination position"
+        },
+        {
+          "hgvs": "NP_0123456.1:p.Arg97fs",
+          "variant_type": "frameshift",
+          "description": "Frameshift short form"
+        },
+        {
+          "hgvs": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+          "variant_type": "insertion",
+          "description": "Insertion (predicted)"
+        },
+        {
+          "hgvs": "NP_0123456.1:p.Ala2[10]",
+          "variant_type": "repeat",
+          "description": "Single amino acid repeat"
+        },
+        {
+          "hgvs": "NP_0123456.1:p.Ala2[10];[11]",
+          "variant_type": "repeat",
+          "description": "Repeat alleles"
+        },
+        {
+          "hgvs": "NP_0123456.1:p.Arg65_Ser67[12]",
+          "variant_type": "repeat",
+          "description": "Multi-amino acid repeat"
+        },
+        {
+          "hgvs": "NP_003997.1:p.Trp24Cys",
+          "variant_type": "substitution",
+          "description": "Missense substitution"
+        },
+        {
+          "hgvs": "NP_003997.1:p.Trp24Ter",
+          "variant_type": "substitution",
+          "description": "Nonsense substitution"
+        },
+        {
+          "hgvs": "NP_003997.1:p.W24*",
+          "variant_type": "substitution",
+          "description": "Nonsense substitution (short form)"
+        },
+        {
+          "hgvs": "NP_003997.1:p.(Trp24Cys)",
+          "variant_type": "substitution",
+          "description": "Predicted substitution"
+        }
+      ]
+    },
+    "normalization_rules": {
+      "description": "Examples demonstrating HGVS normalization rules",
+      "examples": [
+        {
+          "hgvs": "NM_004006.2:c.5697del",
+          "variant_type": "deletion",
+          "description": "3' rule - deletion at 3' end of A-stretch",
+          "rule": "3_prime_rule"
+        },
+        {
+          "hgvs": "NC_000023.11:g.32343183del",
+          "variant_type": "deletion",
+          "description": "3' rule - deletion at 3' end of T-stretch (minus strand)",
+          "rule": "3_prime_rule"
+        },
+        {
+          "hgvs": "NM_004006.2:c.5697dup",
+          "variant_type": "duplication",
+          "description": "3' rule - duplication positioned at 3' end",
+          "rule": "3_prime_rule"
+        },
+        {
+          "hgvs": "NC_000023.11:g.32343183dup",
+          "variant_type": "duplication",
+          "description": "3' rule - duplication on minus strand",
+          "rule": "3_prime_rule"
+        },
+        {
+          "hgvs": "LRG_199t1:c.3921del",
+          "variant_type": "deletion",
+          "description": "Exception to 3' rule at exon boundary",
+          "rule": "exon_boundary_exception"
+        },
+        {
+          "hgvs": "LRG_199t1:c.3921dup",
+          "variant_type": "duplication",
+          "description": "Exception to 3' rule at exon boundary (dup)",
+          "rule": "exon_boundary_exception"
+        },
+        {
+          "hgvs": "NC_000023.11:g.33344591del",
+          "variant_type": "deletion",
+          "description": "Simple deletion without redundant sequence",
+          "rule": "no_redundant_sequence"
+        },
+        {
+          "hgvs": "NC_000023.11:g.33344590_33344592del",
+          "variant_type": "deletion",
+          "description": "Range deletion without redundant sequence",
+          "rule": "no_redundant_sequence"
+        },
+        {
+          "hgvs": "NM_004006.2:c.20dup",
+          "variant_type": "duplication",
+          "description": "Duplication without redundant sequence",
+          "rule": "no_redundant_sequence"
+        }
+      ]
+    },
+    "coding_dna": {
+      "description": "Coding DNA (c.) examples from recommendation pages",
+      "examples": [
+        {
+          "hgvs": "NM_004006.2:c.145_147delinsTGG",
+          "variant_type": "delins",
+          "description": "Deletion-insertion"
+        },
+        {
+          "hgvs": "NM_004006.2:c.123=",
+          "variant_type": "no_change",
+          "description": "No change notation"
+        },
+        {
+          "hgvs": "NM_004006.2:c.20dup",
+          "variant_type": "duplication",
+          "description": "Single position duplication"
+        },
+        {
+          "hgvs": "NM_004006.2:c.20_23dup",
+          "variant_type": "duplication",
+          "description": "Range duplication"
+        },
+        {
+          "hgvs": "NM_004006.2:c.5657_5660inv",
+          "variant_type": "inversion",
+          "description": "Inversion"
+        },
+        {
+          "hgvs": "NM_004006.2:c.4145_4160inv",
+          "variant_type": "inversion",
+          "description": "Larger inversion"
+        },
+        {
+          "hgvs": "NM_004006.2:c.849_850ins850_900inv",
+          "variant_type": "insertion",
+          "description": "Insertion of inverted sequence"
+        },
+        {
+          "hgvs": "NM_004006.2:c.4375C>T",
+          "variant_type": "substitution",
+          "description": "Coding substitution example"
+        }
+      ]
+    }
+  },
+  "simple_parseable": [
+    "NC_000001.11:g.1234del",
+    "NC_000001.11:g.1234_2345del",
+    "NC_000001.11:g.123delinsAC",
+    "NC_000001.11:g.123_129delinsAC",
+    "NC_000001.11:g.1234dup",
+    "NC_000001.11:g.1234_2345dup",
+    "NC_000001.11:g.1234_1235insACGT",
+    "NC_000001.11:g.1234_2345inv",
+    "NC_000001.11:g.1234=",
+    "NC_000023.10:g.33038255C>A",
+    "NM_004006.3:r.123_127del",
+    "NM_004006.3:r.123_127delinsag",
+    "NM_004006.3:r.123_345dup",
+    "NM_004006.3:r.123_124insauc",
+    "NM_004006.3:r.123_345inv",
+    "NM_004006.3:r.123c>g",
+    "NP_003997.2:p.Val7del",
+    "NP_003997.2:p.Lys23_Val25del",
+    "NP_003997.2:p.Val7dup",
+    "NP_003997.2:p.Lys23_Val25dup",
+    "NP_003997.1:p.Trp24Cys",
+    "NP_003997.1:p.Trp24Ter",
+    "NP_003997.1:p.W24*",
+    "NM_004006.2:c.145_147delinsTGG",
+    "NM_004006.2:c.20dup",
+    "NM_004006.2:c.20_23dup",
+    "NM_004006.2:c.5657_5660inv",
+    "NM_004006.2:c.4375C>T"
+  ]
+}

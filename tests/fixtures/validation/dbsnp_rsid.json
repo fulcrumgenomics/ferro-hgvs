@@ -1,0 +1,854 @@
+{
+  "source": "dbSNP/ClinVar curated rsIDs",
+  "description": "Clinically important rsIDs with their HGVS expressions for validation testing",
+  "generated": "2025-12-19",
+  "total_rsids": 100,
+  "rsids": [
+    {
+      "rsid": "rs121913529",
+      "gene": "BRAF",
+      "hgvs_c": "NM_004333.4:c.1799T>A",
+      "hgvs_p": "NP_004324.2:p.Val600Glu",
+      "clinical_significance": "Pathogenic",
+      "condition": "Melanoma, colorectal cancer",
+      "notes": "BRAF V600E - most common BRAF mutation"
+    },
+    {
+      "rsid": "rs80357906",
+      "gene": "BRCA1",
+      "hgvs_c": "NM_007294.4:c.68_69del",
+      "hgvs_p": "NP_009225.1:p.Glu23ValfsTer17",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hereditary breast and ovarian cancer",
+      "notes": "BRCA1 185delAG - Ashkenazi Jewish founder mutation"
+    },
+    {
+      "rsid": "rs113993960",
+      "gene": "CFTR",
+      "hgvs_c": "NM_000492.4:c.1521_1523del",
+      "hgvs_p": "NP_000483.3:p.Phe508del",
+      "clinical_significance": "Pathogenic",
+      "condition": "Cystic fibrosis",
+      "notes": "CFTR F508del - most common CF mutation"
+    },
+    {
+      "rsid": "rs28934578",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.524G>A",
+      "hgvs_p": "NP_000537.3:p.Arg175His",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R175H - common hotspot mutation"
+    },
+    {
+      "rsid": "rs63750447",
+      "gene": "BRCA2",
+      "hgvs_c": "NM_000059.4:c.5946del",
+      "hgvs_p": "NP_000050.3:p.Ser1982ArgfsTer22",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hereditary breast and ovarian cancer",
+      "notes": "BRCA2 6174delT - Ashkenazi Jewish founder mutation"
+    },
+    {
+      "rsid": "rs121913527",
+      "gene": "BRAF",
+      "hgvs_c": "NM_004333.4:c.1798_1799delGTinsAA",
+      "hgvs_p": "NP_004324.2:p.Val600Lys",
+      "clinical_significance": "Pathogenic",
+      "condition": "Melanoma",
+      "notes": "BRAF V600K"
+    },
+    {
+      "rsid": "rs121912651",
+      "gene": "KRAS",
+      "hgvs_c": "NM_001369786.1:c.35G>A",
+      "hgvs_p": "NP_001356715.1:p.Gly12Asp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Various cancers",
+      "notes": "KRAS G12D"
+    },
+    {
+      "rsid": "rs121913535",
+      "gene": "KRAS",
+      "hgvs_c": "NM_001369786.1:c.35G>T",
+      "hgvs_p": "NP_001356715.1:p.Gly12Val",
+      "clinical_significance": "Pathogenic",
+      "condition": "Various cancers",
+      "notes": "KRAS G12V"
+    },
+    {
+      "rsid": "rs121913237",
+      "gene": "EGFR",
+      "hgvs_c": "NM_005228.5:c.2573T>G",
+      "hgvs_p": "NP_005219.2:p.Leu858Arg",
+      "clinical_significance": "Pathogenic/Drug response",
+      "condition": "Non-small cell lung cancer",
+      "notes": "EGFR L858R - TKI sensitive"
+    },
+    {
+      "rsid": "rs121908120",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.743G>A",
+      "hgvs_p": "NP_000537.3:p.Arg248Gln",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R248Q"
+    },
+    {
+      "rsid": "rs121912666",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.818G>A",
+      "hgvs_p": "NP_000537.3:p.Arg273His",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R273H"
+    },
+    {
+      "rsid": "rs121913279",
+      "gene": "PIK3CA",
+      "hgvs_c": "NM_006218.4:c.3140A>G",
+      "hgvs_p": "NP_006209.2:p.His1047Arg",
+      "clinical_significance": "Pathogenic",
+      "condition": "Breast cancer, PIK3CA-related overgrowth",
+      "notes": "PIK3CA H1047R"
+    },
+    {
+      "rsid": "rs121913273",
+      "gene": "PIK3CA",
+      "hgvs_c": "NM_006218.4:c.1633G>A",
+      "hgvs_p": "NP_006209.2:p.Glu545Lys",
+      "clinical_significance": "Pathogenic",
+      "condition": "Breast cancer",
+      "notes": "PIK3CA E545K"
+    },
+    {
+      "rsid": "rs587776544",
+      "gene": "BRCA1",
+      "hgvs_c": "NM_007294.4:c.181T>G",
+      "hgvs_p": "NP_009225.1:p.Cys61Gly",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hereditary breast and ovarian cancer",
+      "notes": "BRCA1 C61G"
+    },
+    {
+      "rsid": "rs11571833",
+      "gene": "BRCA2",
+      "hgvs_c": "NM_000059.4:c.9976A>T",
+      "hgvs_p": "NP_000050.3:p.Lys3326Ter",
+      "clinical_significance": "Likely pathogenic",
+      "condition": "Breast cancer risk",
+      "notes": "BRCA2 K3326*"
+    },
+    {
+      "rsid": "rs1042522",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.215C>G",
+      "hgvs_p": "NP_000537.3:p.Pro72Arg",
+      "clinical_significance": "Benign",
+      "condition": "Common polymorphism",
+      "notes": "TP53 P72R - functional variant"
+    },
+    {
+      "rsid": "rs334",
+      "gene": "HBB",
+      "hgvs_c": "NM_000518.5:c.20A>T",
+      "hgvs_p": "NP_000509.1:p.Glu7Val",
+      "clinical_significance": "Pathogenic",
+      "condition": "Sickle cell disease",
+      "notes": "HbS - sickle cell mutation"
+    },
+    {
+      "rsid": "rs6025",
+      "gene": "F5",
+      "hgvs_c": "NM_000130.5:c.1601G>A",
+      "hgvs_p": "NP_000121.2:p.Arg534Gln",
+      "clinical_significance": "Risk factor",
+      "condition": "Factor V Leiden thrombophilia",
+      "notes": "Factor V Leiden"
+    },
+    {
+      "rsid": "rs1800460",
+      "gene": "TPMT",
+      "hgvs_c": "NM_000367.5:c.460G>A",
+      "hgvs_p": "NP_000358.1:p.Ala154Thr",
+      "clinical_significance": "Drug response",
+      "condition": "Thiopurine sensitivity",
+      "notes": "TPMT*3B"
+    },
+    {
+      "rsid": "rs1142345",
+      "gene": "TPMT",
+      "hgvs_c": "NM_000367.5:c.719A>G",
+      "hgvs_p": "NP_000358.1:p.Tyr240Cys",
+      "clinical_significance": "Drug response",
+      "condition": "Thiopurine sensitivity",
+      "notes": "TPMT*3C"
+    },
+    {
+      "rsid": "rs1799930",
+      "gene": "NAT2",
+      "hgvs_c": "NM_000015.3:c.590G>A",
+      "hgvs_p": "NP_000006.2:p.Arg197Gln",
+      "clinical_significance": "Drug response",
+      "condition": "Slow acetylator phenotype",
+      "notes": "NAT2 slow acetylator"
+    },
+    {
+      "rsid": "rs3892097",
+      "gene": "CYP2D6",
+      "hgvs_c": "NM_000106.6:c.506-1G>A",
+      "hgvs_p": null,
+      "clinical_significance": "Drug response",
+      "condition": "Poor metabolizer",
+      "notes": "CYP2D6*4 splice defect"
+    },
+    {
+      "rsid": "rs1065852",
+      "gene": "CYP2D6",
+      "hgvs_c": "NM_000106.6:c.100C>T",
+      "hgvs_p": "NP_000097.3:p.Pro34Ser",
+      "clinical_significance": "Drug response",
+      "condition": "Altered metabolism",
+      "notes": "CYP2D6*10"
+    },
+    {
+      "rsid": "rs4244285",
+      "gene": "CYP2C19",
+      "hgvs_c": "NM_000769.4:c.681G>A",
+      "hgvs_p": null,
+      "clinical_significance": "Drug response",
+      "condition": "Poor metabolizer - clopidogrel",
+      "notes": "CYP2C19*2"
+    },
+    {
+      "rsid": "rs12248560",
+      "gene": "CYP2C19",
+      "hgvs_c": "NM_000769.4:c.-806C>T",
+      "hgvs_p": null,
+      "clinical_significance": "Drug response",
+      "condition": "Ultra-rapid metabolizer",
+      "notes": "CYP2C19*17"
+    },
+    {
+      "rsid": "rs1801133",
+      "gene": "MTHFR",
+      "hgvs_c": "NM_005957.5:c.665C>T",
+      "hgvs_p": "NP_005948.3:p.Ala222Val",
+      "clinical_significance": "Risk factor",
+      "condition": "Hyperhomocysteinemia",
+      "notes": "MTHFR C677T"
+    },
+    {
+      "rsid": "rs1801131",
+      "gene": "MTHFR",
+      "hgvs_c": "NM_005957.5:c.1286A>C",
+      "hgvs_p": "NP_005948.3:p.Glu429Ala",
+      "clinical_significance": "Risk factor",
+      "condition": "Hyperhomocysteinemia",
+      "notes": "MTHFR A1298C"
+    },
+    {
+      "rsid": "rs80338939",
+      "gene": "BRCA1",
+      "hgvs_c": "NM_007294.4:c.5266dupC",
+      "hgvs_p": "NP_009225.1:p.Gln1756ProfsTer74",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hereditary breast and ovarian cancer",
+      "notes": "BRCA1 5382insC"
+    },
+    {
+      "rsid": "rs80357713",
+      "gene": "BRCA2",
+      "hgvs_c": "NM_000059.4:c.5682C>G",
+      "hgvs_p": "NP_000050.3:p.Tyr1894Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hereditary breast and ovarian cancer",
+      "notes": "BRCA2 Y1894*"
+    },
+    {
+      "rsid": "rs74315329",
+      "gene": "MLH1",
+      "hgvs_c": "NM_000249.4:c.1799T>A",
+      "hgvs_p": "NP_000240.1:p.Leu600His",
+      "clinical_significance": "Pathogenic",
+      "condition": "Lynch syndrome",
+      "notes": "MLH1 mutation"
+    },
+    {
+      "rsid": "rs63750217",
+      "gene": "MSH2",
+      "hgvs_c": "NM_000251.3:c.942+3A>T",
+      "hgvs_p": null,
+      "clinical_significance": "Pathogenic",
+      "condition": "Lynch syndrome",
+      "notes": "MSH2 splice site"
+    },
+    {
+      "rsid": "rs267607626",
+      "gene": "APC",
+      "hgvs_c": "NM_000038.6:c.3927_3931del",
+      "hgvs_p": "NP_000029.2:p.Glu1309AspfsTer4",
+      "clinical_significance": "Pathogenic",
+      "condition": "Familial adenomatous polyposis",
+      "notes": "APC common mutation"
+    },
+    {
+      "rsid": "rs121907948",
+      "gene": "RB1",
+      "hgvs_c": "NM_000321.3:c.958C>T",
+      "hgvs_p": "NP_000312.2:p.Arg320Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Retinoblastoma",
+      "notes": "RB1 nonsense"
+    },
+    {
+      "rsid": "rs104894226",
+      "gene": "VHL",
+      "hgvs_c": "NM_000551.4:c.499C>T",
+      "hgvs_p": "NP_000542.1:p.Arg167Trp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Von Hippel-Lindau disease",
+      "notes": "VHL R167W"
+    },
+    {
+      "rsid": "rs137852957",
+      "gene": "TSC1",
+      "hgvs_c": "NM_000368.5:c.1525C>T",
+      "hgvs_p": "NP_000359.1:p.Arg509Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Tuberous sclerosis",
+      "notes": "TSC1 nonsense"
+    },
+    {
+      "rsid": "rs137853013",
+      "gene": "TSC2",
+      "hgvs_c": "NM_000548.5:c.5238_5255del",
+      "hgvs_p": "NP_000539.2:p.His1746_Arg1751del",
+      "clinical_significance": "Pathogenic",
+      "condition": "Tuberous sclerosis",
+      "notes": "TSC2 deletion"
+    },
+    {
+      "rsid": "rs28933068",
+      "gene": "LDLR",
+      "hgvs_c": "NM_000527.5:c.681C>G",
+      "hgvs_p": "NP_000518.1:p.Asp227Glu",
+      "clinical_significance": "Pathogenic",
+      "condition": "Familial hypercholesterolemia",
+      "notes": "LDLR mutation"
+    },
+    {
+      "rsid": "rs104893765",
+      "gene": "FBN1",
+      "hgvs_c": "NM_000138.5:c.4082G>A",
+      "hgvs_p": "NP_000129.3:p.Cys1361Tyr",
+      "clinical_significance": "Pathogenic",
+      "condition": "Marfan syndrome",
+      "notes": "FBN1 cysteine substitution"
+    },
+    {
+      "rsid": "rs72545970",
+      "gene": "COL1A1",
+      "hgvs_c": "NM_000088.4:c.2299G>A",
+      "hgvs_p": "NP_000079.2:p.Gly767Ser",
+      "clinical_significance": "Pathogenic",
+      "condition": "Osteogenesis imperfecta",
+      "notes": "COL1A1 glycine substitution"
+    },
+    {
+      "rsid": "rs121908531",
+      "gene": "NF1",
+      "hgvs_c": "NM_000267.3:c.2033dupC",
+      "hgvs_p": "NP_000258.1:p.Gln679ProfsTer9",
+      "clinical_significance": "Pathogenic",
+      "condition": "Neurofibromatosis type 1",
+      "notes": "NF1 frameshift"
+    },
+    {
+      "rsid": "rs876660754",
+      "gene": "NF2",
+      "hgvs_c": "NM_000268.4:c.169C>T",
+      "hgvs_p": "NP_000259.1:p.Arg57Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Neurofibromatosis type 2",
+      "notes": "NF2 nonsense"
+    },
+    {
+      "rsid": "rs121909535",
+      "gene": "ATM",
+      "hgvs_c": "NM_000051.4:c.7271T>G",
+      "hgvs_p": "NP_000042.3:p.Val2424Gly",
+      "clinical_significance": "Pathogenic",
+      "condition": "Ataxia-telangiectasia",
+      "notes": "ATM missense"
+    },
+    {
+      "rsid": "rs587779879",
+      "gene": "PALB2",
+      "hgvs_c": "NM_024675.4:c.1592del",
+      "hgvs_p": "NP_078951.2:p.Leu531CysfsTer30",
+      "clinical_significance": "Pathogenic",
+      "condition": "Breast cancer susceptibility",
+      "notes": "PALB2 frameshift"
+    },
+    {
+      "rsid": "rs80359550",
+      "gene": "PTEN",
+      "hgvs_c": "NM_000314.8:c.388C>T",
+      "hgvs_p": "NP_000305.3:p.Arg130Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "PTEN hamartoma tumor syndrome",
+      "notes": "PTEN nonsense"
+    },
+    {
+      "rsid": "rs121913330",
+      "gene": "NRAS",
+      "hgvs_c": "NM_002524.5:c.35G>A",
+      "hgvs_p": "NP_002515.1:p.Gly12Asp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Melanoma, various cancers",
+      "notes": "NRAS G12D"
+    },
+    {
+      "rsid": "rs121913254",
+      "gene": "NRAS",
+      "hgvs_c": "NM_002524.5:c.182A>G",
+      "hgvs_p": "NP_002515.1:p.Gln61Arg",
+      "clinical_significance": "Pathogenic",
+      "condition": "Melanoma, various cancers",
+      "notes": "NRAS Q61R"
+    },
+    {
+      "rsid": "rs121913232",
+      "gene": "EGFR",
+      "hgvs_c": "NM_005228.5:c.2235_2249del",
+      "hgvs_p": "NP_005219.2:p.Glu746_Ala750del",
+      "clinical_significance": "Pathogenic/Drug response",
+      "condition": "Non-small cell lung cancer",
+      "notes": "EGFR exon 19 deletion"
+    },
+    {
+      "rsid": "rs121913465",
+      "gene": "EGFR",
+      "hgvs_c": "NM_005228.5:c.2369C>T",
+      "hgvs_p": "NP_005219.2:p.Thr790Met",
+      "clinical_significance": "Drug response",
+      "condition": "TKI resistance",
+      "notes": "EGFR T790M - resistance mutation"
+    },
+    {
+      "rsid": "rs121913459",
+      "gene": "ERBB2",
+      "hgvs_c": "NM_004448.4:c.2264T>C",
+      "hgvs_p": "NP_004439.2:p.Leu755Ser",
+      "clinical_significance": "Pathogenic",
+      "condition": "Breast cancer",
+      "notes": "HER2 mutation"
+    },
+    {
+      "rsid": "rs121913345",
+      "gene": "KIT",
+      "hgvs_c": "NM_000222.3:c.1727T>C",
+      "hgvs_p": "NP_000213.1:p.Leu576Pro",
+      "clinical_significance": "Pathogenic",
+      "condition": "GIST",
+      "notes": "KIT mutation"
+    },
+    {
+      "rsid": "rs121434568",
+      "gene": "PDGFRA",
+      "hgvs_c": "NM_006206.6:c.2525A>T",
+      "hgvs_p": "NP_006197.1:p.Asp842Val",
+      "clinical_significance": "Pathogenic",
+      "condition": "GIST",
+      "notes": "PDGFRA D842V"
+    },
+    {
+      "rsid": "rs104895097",
+      "gene": "ALK",
+      "hgvs_c": "NM_004304.5:c.3522C>A",
+      "hgvs_p": "NP_004295.2:p.Phe1174Leu",
+      "clinical_significance": "Pathogenic",
+      "condition": "Neuroblastoma",
+      "notes": "ALK F1174L"
+    },
+    {
+      "rsid": "rs121918506",
+      "gene": "RET",
+      "hgvs_c": "NM_020975.6:c.2753T>C",
+      "hgvs_p": "NP_066124.1:p.Met918Thr",
+      "clinical_significance": "Pathogenic",
+      "condition": "MEN2B",
+      "notes": "RET M918T"
+    },
+    {
+      "rsid": "rs5030868",
+      "gene": "G6PD",
+      "hgvs_c": "NM_001042351.3:c.563C>T",
+      "hgvs_p": "NP_001035810.1:p.Ser188Phe",
+      "clinical_significance": "Pathogenic",
+      "condition": "G6PD deficiency",
+      "notes": "G6PD Mediterranean"
+    },
+    {
+      "rsid": "rs5030869",
+      "gene": "G6PD",
+      "hgvs_c": "NM_001042351.3:c.376A>G",
+      "hgvs_p": "NP_001035810.1:p.Asn126Asp",
+      "clinical_significance": "Pathogenic",
+      "condition": "G6PD deficiency",
+      "notes": "G6PD A-"
+    },
+    {
+      "rsid": "rs1800562",
+      "gene": "HFE",
+      "hgvs_c": "NM_000410.4:c.845G>A",
+      "hgvs_p": "NP_000401.1:p.Cys282Tyr",
+      "clinical_significance": "Risk factor",
+      "condition": "Hereditary hemochromatosis",
+      "notes": "HFE C282Y"
+    },
+    {
+      "rsid": "rs1799945",
+      "gene": "HFE",
+      "hgvs_c": "NM_000410.4:c.187C>G",
+      "hgvs_p": "NP_000401.1:p.His63Asp",
+      "clinical_significance": "Risk factor",
+      "condition": "Hereditary hemochromatosis",
+      "notes": "HFE H63D"
+    },
+    {
+      "rsid": "rs28940313",
+      "gene": "PKD1",
+      "hgvs_c": "NM_001009944.3:c.7864C>T",
+      "hgvs_p": "NP_001009944.2:p.Gln2622Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Polycystic kidney disease",
+      "notes": "PKD1 nonsense"
+    },
+    {
+      "rsid": "rs137853253",
+      "gene": "PKD2",
+      "hgvs_c": "NM_000297.4:c.1094T>C",
+      "hgvs_p": "NP_000288.1:p.Leu365Pro",
+      "clinical_significance": "Pathogenic",
+      "condition": "Polycystic kidney disease",
+      "notes": "PKD2 missense"
+    },
+    {
+      "rsid": "rs80358580",
+      "gene": "CFTR",
+      "hgvs_c": "NM_000492.4:c.1657C>T",
+      "hgvs_p": "NP_000483.3:p.Arg553Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Cystic fibrosis",
+      "notes": "CFTR R553*"
+    },
+    {
+      "rsid": "rs75527207",
+      "gene": "CFTR",
+      "hgvs_c": "NM_000492.4:c.1624G>T",
+      "hgvs_p": "NP_000483.3:p.Gly542Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Cystic fibrosis",
+      "notes": "CFTR G542*"
+    },
+    {
+      "rsid": "rs78655421",
+      "gene": "CFTR",
+      "hgvs_c": "NM_000492.4:c.3846G>A",
+      "hgvs_p": "NP_000483.3:p.Trp1282Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Cystic fibrosis",
+      "notes": "CFTR W1282*"
+    },
+    {
+      "rsid": "rs77010898",
+      "gene": "CFTR",
+      "hgvs_c": "NM_000492.4:c.1652G>A",
+      "hgvs_p": "NP_000483.3:p.Gly551Asp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Cystic fibrosis",
+      "notes": "CFTR G551D - ivacaftor responsive"
+    },
+    {
+      "rsid": "rs397508686",
+      "gene": "DMD",
+      "hgvs_c": "NM_004006.3:c.4071+1G>A",
+      "hgvs_p": null,
+      "clinical_significance": "Pathogenic",
+      "condition": "Duchenne muscular dystrophy",
+      "notes": "DMD splice site"
+    },
+    {
+      "rsid": "rs387906314",
+      "gene": "F8",
+      "hgvs_c": "NM_000132.4:c.6046C>T",
+      "hgvs_p": "NP_000123.1:p.Arg2016Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hemophilia A",
+      "notes": "Factor VIII nonsense"
+    },
+    {
+      "rsid": "rs118203920",
+      "gene": "F9",
+      "hgvs_c": "NM_000133.4:c.277G>A",
+      "hgvs_p": "NP_000124.1:p.Ala93Thr",
+      "clinical_significance": "Pathogenic",
+      "condition": "Hemophilia B",
+      "notes": "Factor IX missense"
+    },
+    {
+      "rsid": "rs63750521",
+      "gene": "SERPINA1",
+      "hgvs_c": "NM_000295.5:c.1096G>A",
+      "hgvs_p": "NP_000286.3:p.Glu366Lys",
+      "clinical_significance": "Pathogenic",
+      "condition": "Alpha-1 antitrypsin deficiency",
+      "notes": "A1AT Z allele"
+    },
+    {
+      "rsid": "rs17580",
+      "gene": "SERPINA1",
+      "hgvs_c": "NM_000295.5:c.863A>T",
+      "hgvs_p": "NP_000286.3:p.Glu288Val",
+      "clinical_significance": "Pathogenic",
+      "condition": "Alpha-1 antitrypsin deficiency",
+      "notes": "A1AT S allele"
+    },
+    {
+      "rsid": "rs104893875",
+      "gene": "HEXA",
+      "hgvs_c": "NM_000520.6:c.1278insTATC",
+      "hgvs_p": "NP_000511.2:p.Tyr427IlefsTer5",
+      "clinical_significance": "Pathogenic",
+      "condition": "Tay-Sachs disease",
+      "notes": "HEXA 4bp insertion"
+    },
+    {
+      "rsid": "rs76763715",
+      "gene": "GBA",
+      "hgvs_c": "NM_000157.4:c.1226A>G",
+      "hgvs_p": "NP_000148.2:p.Asn409Ser",
+      "clinical_significance": "Pathogenic/Risk factor",
+      "condition": "Gaucher disease, Parkinson risk",
+      "notes": "GBA N370S (N409S new nomenclature)"
+    },
+    {
+      "rsid": "rs421016",
+      "gene": "GBA",
+      "hgvs_c": "NM_000157.4:c.1448T>C",
+      "hgvs_p": "NP_000148.2:p.Leu483Pro",
+      "clinical_significance": "Pathogenic",
+      "condition": "Gaucher disease",
+      "notes": "GBA L444P (L483P new nomenclature)"
+    },
+    {
+      "rsid": "rs28940268",
+      "gene": "MECP2",
+      "hgvs_c": "NM_004992.4:c.473C>T",
+      "hgvs_p": "NP_004983.1:p.Thr158Met",
+      "clinical_significance": "Pathogenic",
+      "condition": "Rett syndrome",
+      "notes": "MECP2 T158M"
+    },
+    {
+      "rsid": "rs28934907",
+      "gene": "MECP2",
+      "hgvs_c": "NM_004992.4:c.916C>T",
+      "hgvs_p": "NP_004983.1:p.Arg306Cys",
+      "clinical_significance": "Pathogenic",
+      "condition": "Rett syndrome",
+      "notes": "MECP2 R306C"
+    },
+    {
+      "rsid": "rs104894018",
+      "gene": "FGFR3",
+      "hgvs_c": "NM_000142.5:c.1138G>A",
+      "hgvs_p": "NP_000133.1:p.Gly380Arg",
+      "clinical_significance": "Pathogenic",
+      "condition": "Achondroplasia",
+      "notes": "FGFR3 G380R - >98% of achondroplasia"
+    },
+    {
+      "rsid": "rs28931614",
+      "gene": "FGFR3",
+      "hgvs_c": "NM_000142.5:c.1118A>G",
+      "hgvs_p": "NP_000133.1:p.Tyr373Cys",
+      "clinical_significance": "Pathogenic",
+      "condition": "Thanatophoric dysplasia",
+      "notes": "FGFR3 Y373C"
+    },
+    {
+      "rsid": "rs104895362",
+      "gene": "SDHB",
+      "hgvs_c": "NM_003000.3:c.136C>T",
+      "hgvs_p": "NP_002991.2:p.Arg46Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Paraganglioma",
+      "notes": "SDHB R46*"
+    },
+    {
+      "rsid": "rs121912617",
+      "gene": "IDH1",
+      "hgvs_c": "NM_005896.4:c.395G>A",
+      "hgvs_p": "NP_005887.2:p.Arg132His",
+      "clinical_significance": "Pathogenic",
+      "condition": "Glioma",
+      "notes": "IDH1 R132H"
+    },
+    {
+      "rsid": "rs121913500",
+      "gene": "IDH2",
+      "hgvs_c": "NM_002168.4:c.515G>A",
+      "hgvs_p": "NP_002159.2:p.Arg172Lys",
+      "clinical_significance": "Pathogenic",
+      "condition": "AML, glioma",
+      "notes": "IDH2 R172K"
+    },
+    {
+      "rsid": "rs104886003",
+      "gene": "JAK2",
+      "hgvs_c": "NM_004972.4:c.1849G>T",
+      "hgvs_p": "NP_004963.1:p.Val617Phe",
+      "clinical_significance": "Pathogenic",
+      "condition": "Myeloproliferative neoplasms",
+      "notes": "JAK2 V617F"
+    },
+    {
+      "rsid": "rs121913618",
+      "gene": "FLT3",
+      "hgvs_c": "NM_004119.3:c.2503G>T",
+      "hgvs_p": "NP_004110.2:p.Asp835Tyr",
+      "clinical_significance": "Pathogenic",
+      "condition": "AML",
+      "notes": "FLT3 D835Y"
+    },
+    {
+      "rsid": "rs116855232",
+      "gene": "APOE",
+      "hgvs_c": "NM_000041.4:c.388T>C",
+      "hgvs_p": "NP_000032.1:p.Cys130Arg",
+      "clinical_significance": "Risk factor",
+      "condition": "Alzheimer disease risk",
+      "notes": "APOE e4 allele marker"
+    },
+    {
+      "rsid": "rs429358",
+      "gene": "APOE",
+      "hgvs_c": "NM_000041.4:c.526C>T",
+      "hgvs_p": "NP_000032.1:p.Arg176Cys",
+      "clinical_significance": "Risk factor",
+      "condition": "Alzheimer disease risk",
+      "notes": "APOE e4 defining variant"
+    },
+    {
+      "rsid": "rs7412",
+      "gene": "APOE",
+      "hgvs_c": "NM_000041.4:c.526C>T",
+      "hgvs_p": "NP_000032.1:p.Arg176Cys",
+      "clinical_significance": "Protective",
+      "condition": "Alzheimer disease",
+      "notes": "APOE e2 marker"
+    },
+    {
+      "rsid": "rs72558187",
+      "gene": "MT-ND1",
+      "hgvs_c": "NC_012920.1:m.3460G>A",
+      "hgvs_p": null,
+      "clinical_significance": "Pathogenic",
+      "condition": "Leber hereditary optic neuropathy",
+      "notes": "LHON primary mutation"
+    },
+    {
+      "rsid": "rs199476128",
+      "gene": "MT-TL1",
+      "hgvs_c": "NC_012920.1:m.3243A>G",
+      "hgvs_p": null,
+      "clinical_significance": "Pathogenic",
+      "condition": "MELAS",
+      "notes": "tRNA-Leu mutation"
+    },
+    {
+      "rsid": "rs118192098",
+      "gene": "MT-TK",
+      "hgvs_c": "NC_012920.1:m.8344A>G",
+      "hgvs_p": null,
+      "clinical_significance": "Pathogenic",
+      "condition": "MERRF",
+      "notes": "tRNA-Lys mutation"
+    },
+    {
+      "rsid": "rs527236166",
+      "gene": "WT1",
+      "hgvs_c": "NM_024426.6:c.1180C>T",
+      "hgvs_p": "NP_077744.4:p.Arg394Trp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Wilms tumor, Denys-Drash",
+      "notes": "WT1 mutation"
+    },
+    {
+      "rsid": "rs17878362",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.97-29del",
+      "hgvs_p": null,
+      "clinical_significance": "Benign",
+      "condition": "PIN3 16bp duplication polymorphism region",
+      "notes": "Intronic polymorphism"
+    },
+    {
+      "rsid": "rs121909211",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.637C>T",
+      "hgvs_p": "NP_000537.3:p.Arg213Ter",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R213*"
+    },
+    {
+      "rsid": "rs28934576",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.742C>T",
+      "hgvs_p": "NP_000537.3:p.Arg248Trp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R248W"
+    },
+    {
+      "rsid": "rs11540652",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.844C>T",
+      "hgvs_p": "NP_000537.3:p.Arg282Trp",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 R282W"
+    },
+    {
+      "rsid": "rs121912656",
+      "gene": "TP53",
+      "hgvs_c": "NM_000546.6:c.733G>A",
+      "hgvs_p": "NP_000537.3:p.Gly245Ser",
+      "clinical_significance": "Pathogenic",
+      "condition": "Li-Fraumeni syndrome",
+      "notes": "TP53 G245S"
+    },
+    {
+      "rsid": "rs587781332",
+      "gene": "CHEK2",
+      "hgvs_c": "NM_007194.4:c.1100del",
+      "hgvs_p": "NP_009125.1:p.Thr367MetfsTer15",
+      "clinical_significance": "Pathogenic",
+      "condition": "Breast cancer susceptibility",
+      "notes": "CHEK2 1100delC"
+    },
+    {
+      "rsid": "rs28897756",
+      "gene": "CHEK2",
+      "hgvs_c": "NM_007194.4:c.470T>C",
+      "hgvs_p": "NP_009125.1:p.Ile157Thr",
+      "clinical_significance": "Risk factor",
+      "condition": "Breast cancer susceptibility",
+      "notes": "CHEK2 I157T"
+    }
+  ]
+}

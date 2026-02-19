@@ -1,0 +1,125 @@
+# Mutalyzer test patterns extracted from test_checker.py and test_normalizer.py
+# Reference with gene: NG_007485.1(NM_000077.4):c.X
+
+# Boundary checks
+NG_007485.1:g.0del
+NG_007485.1:g.-1del
+NG_007485.1:g.1000000del
+NG_007485.1(NM_000077.4):c.40000del
+NG_007485.1(NM_000077.4):c.-40000del
+NG_007485.1(NR_003529.3):n.40000del
+NG_007485.1(NR_003529.3):n.-40000del
+
+# Delins with reference
+NG_007485.1(NR_003529.3):n.10delinsNG_007485.1:g.0
+NG_007485.1(NR_003529.3):n.10delinsNG_007485.1:g.100000
+
+# Basic operations
+NG_012337.1(NM_003002.2):c.*2825T>T
+NG_012337.1:g.15949del
+NG_012337.1(NM_003002.2):c.-5062G>T
+NG_007485.1:g.4_3del
+NG_007485.1(NM_000077.4):c.135_130insT
+NG_012337.1(NM_012459.2):c.135_130insT
+
+# Complex insertions with references
+NG_012337.1(NM_012459.2):c.1_2ins[LRG_1:g.100000;AAA]
+
+# Inversions
+NG_012337.1(NM_012459.2):c.-11025_11020inv
+
+# Standard insertions
+NG_007485.1:g.40_42insT
+NG_007485.1(NM_000077.4):c.40_42insT
+NG_007485.1(NM_000077.4):c.150_151insT
+NG_012337.1(NM_012459.2):c.129_130insT
+NG_007485.1(NR_003529.3):n.40_42insT
+
+# Repeat notation
+NG_012337.1(NM_003002.2):c.100_102AAT[4]
+NG_012337.1(NM_003002.2):c.100_102AA[4]
+
+# Basic substitution and variants
+NG_012337.1(NM_003002.2):c.274A>T
+NG_012337.1(NM_003002.2):c.274ATT>T
+NG_012337.1(NM_003002.2):c.274del3
+NG_012337.1(NM_003002.2):c.274_279del3
+NG_012337.1(NM_003002.2):c.274inv3
+NG_012337.1(NM_003002.2):c.274_279inv3
+NG_012337.1(NM_003002.2):c.274_279invAA
+NG_012337.1(NM_003002.2):c.274invAA
+NG_012337.1:g.7125delGACinsT
+NG_012337.1:g.7125delGinsT
+
+# Allele notation
+NG_012337.1:g.[10_20del;12_13insA]
+NG_012337.1(NM_003002.2):c.[274G>T;274del]
+
+# Intronic positions
+NG_012337.1:g.7125+1G>T
+NG_012337.1:g.5+3del
+NG_012337.1:g.4_5+3del
+NG_012337.1:g.5+3_7del
+
+# Cross-reference insertions
+NG_012337.1:g.10_11insLRG_24:g.2+5
+
+# Complex repeat/dup notation
+NG_012337.1:g.274dup[1;A]
+NG_012337.1:g.20_21ins[(123);30_40]
+NG_012337.1:g.20_21ins[123;30_40]
+NG_012337.1:g.20_21ins[30_40;123]
+NG_012337.1:g.20_21ins[?]
+NG_012337.1:g.20_21ins[30_40;?]
+
+# Invalid notation (for testing)
+NG_012337.1:g.20>60
+NG_012337.1:g.20_21ins[30_?]
+NG_012337.1:g.20_21ins[?_40]
+NG_012337.1:g.20_21ins[30_40;50_?]
+NG_012337.1:g.20_21ins[30_40;?_60]
+NG_012337.1:g.20_21AA[30_40]
+NG_012337.1:g.20_21AA[?]
+
+# Uncertain dup notation
+NG_012337.1:g.722_742dup(731_741)
+NG_012337.1:g.722_742dup(731_?)
+NG_012337.1:g.722_742dup(?_731)
+NG_012337.1:g.722_742dup(?)
+NG_012337.1:g.722_742dup?
+
+# Non-coding transcript and RNA
+NM_004152.3:c.205_685del
+NM_004152.3:p.205_685del
+NM_004152.3:n.200del
+NM_004152.3:r.200del
+
+# Additional basic operations
+NG_007485.1:g.1del
+NG_007485.1(NM_000077.4):c.-24664del
+NG_007485.1(NM_000077.4):c.149_150insT
+NG_007485.1(NM_000077.4):c.151_152insT
+NG_012337.1(NM_012459.2):c.128_129insT
+NG_012337.1(NM_003002.2):c.274G>T
+NG_012337.1(NM_003002.2):c.274del1
+NG_012337.1(NM_003002.2):c.274_275del2
+NG_012337.1(NM_012459.2):c.130_131insT
+NG_012337.1(NM_003002.2):c.*2824T>T
+NG_012337.1:g.15948del
+NG_012337.1(NM_003002.2):c.-5061G>T
+NG_012337.1:g.0_1insAAA
+NG_012337.1:g.15948_15949insAAA
+NG_012337.1:g.274dup1
+NG_012337.1:g.274dupT
+NG_012337.1:g.274inv1
+NG_012337.1:g.274invT
+NG_012337.1:g.274_276inv3
+NG_012337.1:g.274_276invTAC
+
+# GRCh assembly notation
+GRCh37(chr23):g.3250del
+GRCh37(chrX):g.3250del
+GRCh37(chrY):g.3250del
+GRCh38(chr23):g.3250del
+GRCh38(chrX):g.3250del
+GRCh38(chrY):g.3250del

@@ -1,0 +1,36 @@
+[workspace]
+name = "ferro-hgvs"
+version = "0.1.0"
+description = "HGVS variant normalizer with benchmark testing dependencies"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[tasks]
+# Run ferro-benchmark compare-normalize with mutalyzer
+compare-mutalyzer = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- compare-normalize --validator mutalyzer" }
+# Run ferro-benchmark compare-normalize with biocommons
+compare-biocommons = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- compare-normalize --validator biocommons" }
+# Check if validators are available
+check-validators = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- check-biocommons && cargo run --release --features benchmark --bin ferro-benchmark -- check-mutalyzer-normalizer" }
+
+[dependencies]
+# Python runtime
+python = ">=3.10,<3.14"
+# PostgreSQL client (needed by psycopg2 for biocommons/hgvs UTA connection)
+postgresql = ">=14"
+# setuptools provides pkg_resources needed by mutalyzer-backtranslate
+setuptools = ">=65"
+rsync = ">=3.4.1,<4"
+
+[pypi-dependencies]
+# Mutalyzer - independent HGVS implementation with algebra-based normalizer
+mutalyzer = ">=3.0"
+mutalyzer-hgvs-parser = ">=0.3"
+
+# biocommons/hgvs - canonical Python HGVS implementation
+# Note: requires UTA database connection (remote by default at uta.biocommons.org)
+hgvs = ">=1.5.6, <2"
+
+# biocommons.seqrepo - local sequence repository for offline biocommons/hgvs
+# Used by setup-seqrepo command to download and manage sequence data
+biocommons-seqrepo = ">=0.6"

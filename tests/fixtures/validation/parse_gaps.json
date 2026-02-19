@@ -1,0 +1,190 @@
+{
+  "description": "Parse gap analysis - patterns that fail to parse",
+  "source": "Automated analysis of existing fixtures",
+  "version": "2.0.0",
+  "generated": "2025-12-19",
+  "summary": {
+    "total_failures": 19,
+    "by_category": {
+      "trailing_annotation": 17,
+      "complex_insertion": 2
+    }
+  },
+  "categories": {
+    "trailing_annotation": "Trailing protein annotation like (p.Xxx=) - Phase 2 target",
+    "complex_insertion": "Complex insertion with embedded HGVS references"
+  },
+  "test_cases": [
+    {
+      "input": "NM_003467.3(CXCR4):c.708G>A (p.Lys236=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 724626: Synonymous variant with trailing protein annotation",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.30570C>A (p.Thr10190=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 723027: TTN synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_000199.5(SGSH):c.1428C>T (p.His476=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 722971: SGSH synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001366385.1(CARD14):c.27C>T (p.Ser9=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 722898: CARD14 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.49476T>C (p.Pro16492=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 704298: TTN synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_198253.3(TERT):c.603G>A (p.Arg201=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 696911: TERT synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_178127.5(ANGPTL5):c.1097dup (p.Asn366fs)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 715516: Frameshift with trailing annotation",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_032303.5(HSDL2):c.894A>G (p.Lys298=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 715507: HSDL2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_021831.6(AGBL5):c.2083G>A (p.Val695Ile)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 715473: Missense with trailing annotation",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_201555.2(FHL2):c.507C>T (p.Ile169=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 700171: FHL2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_025137.4(SPG11):c.1821A>G (p.Ser607=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 413997: SPG11 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_025137.4(SPG11):c.6892A>G (p.Ile2298Val)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 413990: SPG11 missense variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.8484T>C (p.Asp2828=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 413967: ANK2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.6492T>G (p.Leu2164=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 413961: ANK2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_001148.6(ANK2):c.231G>A (p.Val77=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 413949: ANK2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_000059.3(BRCA2):c.3570G>C (p.Arg1190=)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 491247: BRCA2 synonymous variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NM_030773.4(TUBB1):c.1045G>A (p.Val349Ile)",
+      "category": "trailing_annotation",
+      "source": "clinical_genes",
+      "description": "ClinVar 724372: TUBB1 missense variant",
+      "valid": true,
+      "supported": false,
+      "phase": 2
+    },
+    {
+      "input": "NG_012337.1(NM_012459.2):c.1_2ins[LRG_1:g.100000;AAA]",
+      "category": "complex_insertion",
+      "source": "mutalyzer",
+      "description": "Complex insertion with embedded HGVS reference in brackets",
+      "valid": true,
+      "supported": false,
+      "phase": 0
+    },
+    {
+      "input": "NG_012337.1:g.10_11insLRG_24:g.2+5",
+      "category": "complex_insertion",
+      "source": "mutalyzer",
+      "description": "Cross-reference insertion from another sequence",
+      "valid": true,
+      "supported": false,
+      "phase": 0
+    }
+  ]
+}

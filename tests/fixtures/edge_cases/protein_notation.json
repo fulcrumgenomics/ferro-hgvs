@@ -1,0 +1,430 @@
+{
+  "description": "Comprehensive protein variant notation test cases",
+  "source": "HGVS nomenclature specification",
+  "version": "1.0.0",
+  "generated": "2025-12-19",
+  "categories": {
+    "substitution": "Simple amino acid substitutions",
+    "frameshift": "Frameshift variant notations",
+    "extension": "Extension variants (N-terminal and C-terminal)",
+    "initiation": "Initiation codon variants",
+    "termination": "Termination/stop codon variants",
+    "silent": "Silent/synonymous variants",
+    "uncertain": "Uncertain or unknown protein effects",
+    "deletion": "Protein deletions",
+    "insertion": "Protein insertions",
+    "duplication": "Protein duplications",
+    "delins": "Deletion-insertions at protein level",
+    "one_letter": "One-letter amino acid code variants"
+  },
+  "test_cases": [
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Arg175His",
+      "description": "Standard missense substitution",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.(Arg175His)",
+      "description": "Predicted missense substitution",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Trp24Ter",
+      "description": "Nonsense mutation (Ter = termination)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Trp24*",
+      "description": "Nonsense mutation (asterisk notation)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.Arg97ProfsTer23",
+      "description": "Frameshift with termination at position 23",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.Arg97Profs*23",
+      "description": "Frameshift with asterisk termination notation",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.Arg97fs",
+      "description": "Frameshift short form (no termination specified)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.(Arg97fs)",
+      "description": "Predicted frameshift",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.Arg97GlufsTer5",
+      "description": "Frameshift with specific new amino acid",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "extension",
+      "input": "NP_000079.2:p.Ter110Glnext*17",
+      "description": "C-terminal extension past original stop (asterisk notation)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "extension",
+      "input": "NP_000079.2:p.Ter110GlnextTer17",
+      "description": "C-terminal extension with Ter notation",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "extension",
+      "input": "NP_000079.2:p.*110Glnext*17",
+      "description": "C-terminal extension using asterisk for both stops",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "extension",
+      "input": "NP_000079.2:p.Ter110ext*?",
+      "description": "Extension with unknown new termination position",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "initiation",
+      "input": "NP_000079.2:p.Met1?",
+      "description": "Unknown effect on initiation codon",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "initiation",
+      "input": "NP_000079.2:p.Met1ext-5",
+      "description": "N-terminal extension (5 amino acids upstream)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "initiation",
+      "input": "NP_000079.2:p.Met1Valext-12",
+      "description": "New start codon creating N-terminal extension",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "initiation",
+      "input": "NP_000079.2:p.Met1_Lys2insGluGlu",
+      "description": "Insertion at start affecting initiation",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "initiation",
+      "input": "NP_000079.2:p.Met1Val",
+      "description": "Start codon loss (Met to Val)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "termination",
+      "input": "NP_000079.2:p.Ter400Leu",
+      "description": "Stop-loss mutation",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "termination",
+      "input": "NP_000079.2:p.*400Leuext*20",
+      "description": "Stop-loss with extension notation",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "termination",
+      "input": "NP_000079.2:p.Gln350Ter",
+      "description": "Nonsense mutation creating premature stop",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "termination",
+      "input": "NP_000079.2:p.Gln350*",
+      "description": "Nonsense mutation with asterisk",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "silent",
+      "input": "NP_000079.2:p.Leu54=",
+      "description": "Synonymous/silent variant",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "silent",
+      "input": "NP_000079.2:p.(Leu54=)",
+      "description": "Predicted synonymous variant",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "silent",
+      "input": "NP_000079.2:p.=",
+      "description": "No protein change (wild-type)",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "silent",
+      "input": "NP_000079.2:p.(=)",
+      "description": "Predicted no protein change",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "uncertain",
+      "input": "NP_000079.2:p.?",
+      "description": "Unknown protein effect",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "uncertain",
+      "input": "NP_000079.2:p.(?)",
+      "description": "Predicted unknown effect",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "uncertain",
+      "input": "NP_000079.2:p.Arg97=/?",
+      "description": "Mosaic uncertain effect",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "deletion",
+      "input": "NP_000079.2:p.Ala3del",
+      "description": "Single amino acid deletion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "deletion",
+      "input": "NP_000079.2:p.Ala3_Ser5del",
+      "description": "Range deletion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "deletion",
+      "input": "NP_000079.2:p.(Ala3_Ser5del)",
+      "description": "Predicted range deletion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "insertion",
+      "input": "NP_000079.2:p.His4_Gln5insAla",
+      "description": "Single amino acid insertion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "insertion",
+      "input": "NP_000079.2:p.His4_Gln5insAlaProSer",
+      "description": "Multiple amino acid insertion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "insertion",
+      "input": "NP_000079.2:p.Lys2_Gly3insGlnSerLys",
+      "description": "Insertion between positions",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "duplication",
+      "input": "NP_000079.2:p.Ala3dup",
+      "description": "Single amino acid duplication",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "duplication",
+      "input": "NP_000079.2:p.Ala3_Ser5dup",
+      "description": "Range duplication",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "delins",
+      "input": "NP_000079.2:p.Cys28delinsTrpVal",
+      "description": "Single position deletion-insertion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "delins",
+      "input": "NP_000079.2:p.Cys28_Lys29delinsTrp",
+      "description": "Range deletion-insertion",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.R175H",
+      "description": "Substitution with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.W24*",
+      "description": "Nonsense with one-letter code",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.*24W",
+      "description": "Stop-loss with one-letter code",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.R97fs",
+      "description": "Frameshift with one-letter code",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.L54=",
+      "description": "Silent variant with one-letter code",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.A3del",
+      "description": "Deletion with one-letter code",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.A3_S5del",
+      "description": "Range deletion with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.H4_Q5insA",
+      "description": "Insertion with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "one_letter",
+      "input": "NP_000079.2:p.C28delinsWV",
+      "description": "Delins with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "frameshift",
+      "input": "NP_000079.2:p.R97Pfs*23",
+      "description": "Frameshift with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "extension",
+      "input": "NP_000079.2:p.*110Qext*17",
+      "description": "Extension with one-letter codes",
+      "valid": true,
+      "supported": true
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Xaa100Tyr",
+      "description": "Unknown amino acid to known (Xaa = any)",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.X100Y",
+      "description": "Unknown amino acid (one-letter X)",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "uncertain",
+      "input": "NP_000079.2:p.(Gly56Ala^Ser67Arg)",
+      "description": "Uncertain between two variants",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Sec25Cys",
+      "description": "Selenocysteine variant",
+      "valid": true,
+      "supported": false
+    },
+    {
+      "category": "substitution",
+      "input": "NP_000079.2:p.Pyl25Lys",
+      "description": "Pyrrolysine variant",
+      "valid": true,
+      "supported": false
+    }
+  ],
+  "amino_acid_codes": {
+    "three_letter": ["Ala", "Arg", "Asn", "Asp", "Cys", "Gln", "Glu", "Gly", "His", "Ile", "Leu", "Lys", "Met", "Phe", "Pro", "Ser", "Thr", "Trp", "Tyr", "Val", "Ter", "Sec", "Pyl", "Xaa"],
+    "one_letter": ["A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V", "*", "U", "O", "X"]
+  },
+  "statistics": {
+    "total_cases": 55,
+    "by_category": {
+      "substitution": 8,
+      "frameshift": 6,
+      "extension": 5,
+      "initiation": 5,
+      "termination": 4,
+      "silent": 4,
+      "uncertain": 4,
+      "deletion": 3,
+      "insertion": 3,
+      "duplication": 2,
+      "delins": 2,
+      "one_letter": 11
+    },
+    "supported_count": 48,
+    "unsupported_count": 7
+  }
+}

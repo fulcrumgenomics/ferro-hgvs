@@ -1,0 +1,26 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 5%
+        informational: true
+    patch:
+      default:
+        target: 70%
+        threshold: 10%
+        informational: true
+
+  # Don't require coverage on these paths
+  ignore:
+    - "src/bin/*"
+    - "benches/*"
+    - "tests/*"
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false

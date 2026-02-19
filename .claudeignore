@@ -1,0 +1,26 @@
+# Build artifacts (never need to scan)
+target/
+
+# Mutalyzer cache (562k+ files causes freeze)
+mutalyzer_cache_new/
+mutalyzer_cache/
+
+# Coverage and profiling
+coverage/
+tarpaulin-report.json
+dhat-heap.json
+*.profraw
+*.profdata
+
+# Fuzz artifacts
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/target/
+
+# Large binary/reference files (can still read specific files when asked)
+reference_data/*.fa
+reference_data/*.fa.gz
+reference_data/*.fasta
+reference_data/*.fasta.gz
+*.bgz
+*.tbi

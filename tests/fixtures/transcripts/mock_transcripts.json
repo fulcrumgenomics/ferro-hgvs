@@ -1,0 +1,63 @@
+[
+  {
+    "id": "NM_000088.3",
+    "gene_symbol": "COL1A1",
+    "strand": "+",
+    "sequence": "ATGCCCCCCATGCCCCCCAAAGGGTTTTTTAAAGGGTTTTTTCCCAAAGGGTTTTTTAAAGGGTTTTTTCCCCCCAAAGGGTTTTTT",
+    "cds_start": 1,
+    "cds_end": 87,
+    "exons": [
+      { "number": 1, "start": 1, "end": 30 },
+      { "number": 2, "start": 31, "end": 60 },
+      { "number": 3, "start": 61, "end": 87 }
+    ]
+  },
+  {
+    "id": "NM_001234.1",
+    "gene_symbol": "TEST",
+    "strand": "+",
+    "sequence": "AAAAATGCCCAAAGGGTTTTTTGGGCCCAAATTTGGGCCCAAATTTTAGAAAA",
+    "cds_start": 5,
+    "cds_end": 48,
+    "exons": [
+      { "number": 1, "start": 1, "end": 18 },
+      { "number": 2, "start": 19, "end": 36 },
+      { "number": 3, "start": 37, "end": 53 }
+    ]
+  },
+  {
+    "id": "NM_BRCA1.1",
+    "gene_symbol": "BRCA1",
+    "strand": "-",
+    "sequence": "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC",
+    "cds_start": 1,
+    "cds_end": 78,
+    "exons": [
+      { "number": 1, "start": 1, "end": 26 },
+      { "number": 2, "start": 27, "end": 52 },
+      { "number": 3, "start": 53, "end": 78 }
+    ]
+  },
+  {
+    "id": "NR_000001.1",
+    "gene_symbol": "NCRNA1",
+    "strand": "+",
+    "sequence": "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC",
+    "cds_start": null,
+    "cds_end": null,
+    "exons": [
+      { "number": 1, "start": 1, "end": 52 }
+    ]
+  },
+  {
+    "id": "NM_POLY.1",
+    "gene_symbol": "POLYRUN",
+    "strand": "+",
+    "sequence": "ATGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATGA",
+    "cds_start": 1,
+    "cds_end": 51,
+    "exons": [
+      { "number": 1, "start": 1, "end": 51 }
+    ]
+  }
+]

@@ -1,0 +1,3335 @@
+{
+  "description": "Bulk ClinVar HGVS variants for comprehensive testing",
+  "source": "NCBI ClinVar E-utilities API",
+  "version": "1.0.0",
+  "generated": "2025-12-19 18:15:06 UTC",
+  "total_test_cases": 330,
+  "summary": {
+    "by_coordinate_type": {
+      "coding": 329,
+      "genomic": 1
+    },
+    "by_query_source": {
+      "substitution": 37,
+      "deletion": 27,
+      "duplication": 42,
+      "insertion": 48,
+      "indel": 31,
+      "likely_pathogenic": 7,
+      "uncertain": 25,
+      "benign": 5,
+      "nonsense": 31,
+      "hereditary_cancer": 28,
+      "cardiac": 37,
+      "neurological": 12
+    },
+    "by_clinical_significance": {
+      "likely benign": 269,
+      "benign": 58,
+      "conflicting classifications of pathogenicity": 2,
+      "uncertain significance": 1
+    }
+  },
+  "test_cases": [
+    {
+      "input": "NM_000130.5(F5):c.3288A>G (p.Ser1096=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "F5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746949",
+      "valid": true
+    },
+    {
+      "input": "NM_006231.4(POLE):c.2346C>A (p.Ala782=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "POLE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746904",
+      "valid": true
+    },
+    {
+      "input": "NM_006254.4(PRKCD):c.792C>T (p.Cys264=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "PRKCD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746753",
+      "valid": true
+    },
+    {
+      "input": "NM_004321.7(KIF1A):c.1167C>T (p.Gly389=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "KIF1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746695",
+      "valid": true
+    },
+    {
+      "input": "NM_003265.3(TLR3):c.1295A>G (p.His432Arg)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "TLR3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746638",
+      "valid": true
+    },
+    {
+      "input": "NM_006258.4(PRKG1):c.1719C>T (p.Phe573=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "PRKG1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746611",
+      "valid": true
+    },
+    {
+      "input": "NM_000117.3(EMD):c.330T>A (p.Ser110=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "EMD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746526",
+      "valid": true
+    },
+    {
+      "input": "NM_138387.3(G6PC3):c.699G>A (p.Lys233=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "G6PC3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "745904",
+      "valid": true
+    },
+    {
+      "input": "NM_001250.6(CD40):c.57T>C (p.His19=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CD40",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745831",
+      "valid": true
+    },
+    {
+      "input": "NM_001035.3(RYR2):c.8838C>T (p.Gly2946=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "RYR2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745384",
+      "valid": true
+    },
+    {
+      "input": "NM_006493.4(CLN5):c.435A>G (p.Thr145=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CLN5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745192",
+      "valid": true
+    },
+    {
+      "input": "NM_001065.4(TNFRSF1A):c.672T>C (p.Leu224=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "TNFRSF1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744904",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.62355C>T (p.Asp20785=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744806",
+      "valid": true
+    },
+    {
+      "input": "NM_000211.5(ITGB2):c.1968C>A (p.Pro656=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "ITGB2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744751",
+      "valid": true
+    },
+    {
+      "input": "NM_000465.4(BARD1):c.2157A>G (p.Thr719=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "BARD1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744654",
+      "valid": true
+    },
+    {
+      "input": "NM_000264.5(PTCH1):c.357G>C (p.Ala119=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "PTCH1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744158",
+      "valid": true
+    },
+    {
+      "input": "NM_003640.5(ELP1):c.3222+8C>T",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "ELP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "744039",
+      "valid": true
+    },
+    {
+      "input": "NM_198576.4(AGRN):c.2254+8G>A",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "AGRN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743995",
+      "valid": true
+    },
+    {
+      "input": "NM_000246.3(CIITA):c.1803G>C (p.Arg601=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CIITA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743974",
+      "valid": true
+    },
+    {
+      "input": "NM_000257.4(MYH7):c.5070C>T (p.Ala1690=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "MYH7",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743955",
+      "valid": true
+    },
+    {
+      "input": "NM_000530.8(MPZ):c.201C>T (p.Arg67=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "MPZ",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743953",
+      "valid": true
+    },
+    {
+      "input": "NM_000267.3(NF1):c.3315-5C>T",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "NF1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743890",
+      "valid": true
+    },
+    {
+      "input": "NM_000267.3(NF1):c.6579+7A>G",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "NF1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743774",
+      "valid": true
+    },
+    {
+      "input": "NM_000426.3(LAMA2):c.6618C>T (p.Phe2206=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "LAMA2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743729",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.65586G>A (p.Arg21862=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743728",
+      "valid": true
+    },
+    {
+      "input": "NM_000383.4(AIRE):c.1398C>T (p.Pro466=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "AIRE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743717",
+      "valid": true
+    },
+    {
+      "input": "NM_052813.5(CARD9):c.925C>T (p.Arg309Cys)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CARD9",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "743712",
+      "valid": true
+    },
+    {
+      "input": "NM_152296.5(ATP1A3):c.672C>T (p.Asp224=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "ATP1A3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743706",
+      "valid": true
+    },
+    {
+      "input": "NM_000548.5(TSC2):c.849-10A>T",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "TSC2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743696",
+      "valid": true
+    },
+    {
+      "input": "NM_000238.4(KCNH2):c.473-4G>A",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "KCNH2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743676",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.9465C>G (p.Pro3155=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743675",
+      "valid": true
+    },
+    {
+      "input": "NM_020070.4(IGLL1):c.492G>A (p.Thr164=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "IGLL1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743661",
+      "valid": true
+    },
+    {
+      "input": "NM_002163.4(IRF8):c.825G>A (p.Glu275=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "IRF8",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743656",
+      "valid": true
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.5212C>T (p.Leu1738=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "FLNC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743634",
+      "valid": true
+    },
+    {
+      "input": "NM_001113378.2(FANCI):c.819A>T (p.Leu273=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "FANCI",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743613",
+      "valid": true
+    },
+    {
+      "input": "NM_004364.4(CEBPA):c.756G>C (p.Ala252=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CEBPA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743609",
+      "valid": true
+    },
+    {
+      "input": "NM_138638.5(CFL2):c.495A>G (p.Pro165=)",
+      "type": "coding",
+      "query_source": "substitution",
+      "gene": "CFL2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743607",
+      "valid": true
+    },
+    {
+      "input": "NM_020458.4(TTC7A):c.1164C>T (p.Ile388=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "TTC7A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746745",
+      "valid": true
+    },
+    {
+      "input": "NM_002851.3(PTPRZ1):c.4899C>T (p.Ser1633=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "PTPRZ1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746607",
+      "valid": true
+    },
+    {
+      "input": "NM_015125.4(CIC):c.3084A>G (p.Thr1028=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "CIC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746579",
+      "valid": true
+    },
+    {
+      "input": "NM_000232.5(SGCB):c.519G>A (p.Pro173=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "SGCB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746533",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.795C>T (p.Ala265=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745525",
+      "valid": true
+    },
+    {
+      "input": "NM_000117.3(EMD):c.714C>T (p.Val238=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "EMD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745521",
+      "valid": true
+    },
+    {
+      "input": "NM_001258392.3(CLPB):c.1620C>T (p.Pro540=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "CLPB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745484",
+      "valid": true
+    },
+    {
+      "input": "NM_020975.6(RET):c.843C>G (p.Ala281=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "RET",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745405",
+      "valid": true
+    },
+    {
+      "input": "NM_000733.4(CD3E):c.103+10T>C",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "CD3E",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "744708",
+      "valid": true
+    },
+    {
+      "input": "NM_001006658.3(CR2):c.1086A>T (p.Val362=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "CR2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744424",
+      "valid": true
+    },
+    {
+      "input": "NM_002529.3(NTRK1):c.360-9C>T",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "NTRK1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "744217",
+      "valid": true
+    },
+    {
+      "input": "NM_000093.5(COL5A1):c.4069-6C>T",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "COL5A1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "744216",
+      "valid": true
+    },
+    {
+      "input": "NM_000548.5(TSC2):c.3231C>T (p.Thr1077=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "TSC2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744171",
+      "valid": true
+    },
+    {
+      "input": "NM_001127500.3(MET):c.2415A>G (p.Thr805=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "MET",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "744070",
+      "valid": true
+    },
+    {
+      "input": "NM_000246.3(CIITA):c.772+5G>T",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "CIITA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743989",
+      "valid": true
+    },
+    {
+      "input": "NM_015474.4(SAMHD1):c.490C>A (p.Arg164=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "SAMHD1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743983",
+      "valid": true
+    },
+    {
+      "input": "NM_004006.2(DMD):c.6375G>T (p.Gln2125His)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "DMD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "743967",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.85449C>T (p.Ile28483=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743850",
+      "valid": true
+    },
+    {
+      "input": "NM_177438.2(DICER1):c.3606A>G (p.Leu1202=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "DICER1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743823",
+      "valid": true
+    },
+    {
+      "input": "NM_020964.3(EPG5):c.7155C>T (p.Ser2385=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "EPG5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743719",
+      "valid": true
+    },
+    {
+      "input": "NM_004304.5(ALK):c.1866C>T (p.Ile622=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "ALK",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743351",
+      "valid": true
+    },
+    {
+      "input": "NM_006397.3(RNASEH2A):c.199+9G>C",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "RNASEH2A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "743039",
+      "valid": true
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.6801C>T (p.Val2267=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "FLNC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742627",
+      "valid": true
+    },
+    {
+      "input": "NM_003764.4(STX11):c.193C>T (p.Leu65=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "STX11",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742306",
+      "valid": true
+    },
+    {
+      "input": "NM_000540.3(RYR1):c.4533G>A (p.Thr1511=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "RYR1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "741935",
+      "valid": true
+    },
+    {
+      "input": "NM_003126.4(SPTA1):c.5457A>G (p.Leu1819=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "SPTA1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "741540",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.10800G>A (p.Leu3600=)",
+      "type": "coding",
+      "query_source": "deletion",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "741435",
+      "valid": true
+    },
+    {
+      "input": "NM_198282.4(STING1):c.380C>T (p.Ser127Leu)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "STING1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746622",
+      "valid": true
+    },
+    {
+      "input": "NM_000551.4(VHL):c.252G>C (p.Val84=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "VHL",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746562",
+      "valid": true
+    },
+    {
+      "input": "NM_002661.5(PLCG2):c.2991C>T (p.Tyr997=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "PLCG2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745333",
+      "valid": true
+    },
+    {
+      "input": "NM_004360.5(CDH1):c.1779C>T (p.Pro593=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "CDH1",
+      "clinical_significance": "Conflicting classifications of pathogenicity",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745156",
+      "valid": true
+    },
+    {
+      "input": "NM_001364905.1(LRBA):c.2275A>C (p.Met759Leu)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "LRBA",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "743723",
+      "valid": true
+    },
+    {
+      "input": "NM_001321120.2(TBX4):c.780C>T (p.Ala260=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "TBX4",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743657",
+      "valid": true
+    },
+    {
+      "input": "NM_001364905.1(LRBA):c.4956G>A (p.Pro1652=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "LRBA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742090",
+      "valid": true
+    },
+    {
+      "input": "NM_014625.4(NPHS2):c.372C>T (p.Cys124=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "NPHS2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "741670",
+      "valid": true
+    },
+    {
+      "input": "NM_000092.5(COL4A4):c.4525C>T (p.Leu1509=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "COL4A4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "740618",
+      "valid": true
+    },
+    {
+      "input": "NM_001197104.2(KMT2A):c.3974G>A (p.Ser1325Asn)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "KMT2A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "738824",
+      "valid": true
+    },
+    {
+      "input": "NM_000760.4(CSF3R):c.1263G>A (p.Pro421=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "CSF3R",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "736598",
+      "valid": true
+    },
+    {
+      "input": "NM_001083899.2(GP6):c.1459C>T (p.Pro487Ser)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "GP6",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "736596",
+      "valid": true
+    },
+    {
+      "input": "NM_014339.7(IL17RA):c.2076C>T (p.Val692=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "IL17RA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735646",
+      "valid": true
+    },
+    {
+      "input": "NM_004628.5(XPC):c.2418C>T (p.Pro806=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "XPC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735340",
+      "valid": true
+    },
+    {
+      "input": "NM_198576.4(AGRN):c.5838C>T (p.Pro1946=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "AGRN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735310",
+      "valid": true
+    },
+    {
+      "input": "NM_000023.4(SGCA):c.90A>G (p.Pro30=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "SGCA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "734472",
+      "valid": true
+    },
+    {
+      "input": "NM_003332.4(TYROBP):c.46C>T (p.Leu16=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "TYROBP",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "732760",
+      "valid": true
+    },
+    {
+      "input": "NM_015243.2(VPS13B):c.2433A>T (p.Ile811=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "VPS13B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724870",
+      "valid": true
+    },
+    {
+      "input": "NM_003467.3(CXCR4):c.708G>A (p.Lys236=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "CXCR4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724626",
+      "valid": true
+    },
+    {
+      "input": "NM_018965.4(TREM2):c.396C>G (p.Pro132=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "TREM2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724458",
+      "valid": true
+    },
+    {
+      "input": "NM_000380.4(XPA):c.213A>G (p.Thr71=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "XPA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724230",
+      "valid": true
+    },
+    {
+      "input": "NM_000433.4(NCF2):c.51G>A (p.Ala17=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "NCF2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724169",
+      "valid": true
+    },
+    {
+      "input": "NM_001083116.3(PRF1):c.1140G>A (p.Pro380=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "PRF1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "723839",
+      "valid": true
+    },
+    {
+      "input": "NM_000416.3(IFNGR1):c.40G>A (p.Val14Met)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "IFNGR1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "723758",
+      "valid": true
+    },
+    {
+      "input": "NM_020964.3(EPG5):c.1609G>A (p.Glu537Lys)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "EPG5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "723660",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.7374C>T (p.Ser2458=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "723381",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.30570C>A (p.Thr10190=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "723027",
+      "valid": true
+    },
+    {
+      "input": "NM_000199.5(SGSH):c.1428C>T (p.His476=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "SGSH",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "722971",
+      "valid": true
+    },
+    {
+      "input": "NM_002163.4(IRF8):c.537G>A (p.Ala179=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "IRF8",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "722802",
+      "valid": true
+    },
+    {
+      "input": "NM_000330.4(RS1):c.88G>A (p.Glu30Lys)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "RS1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "722780",
+      "valid": true
+    },
+    {
+      "input": "NM_000407.5(GP1BB):c.544G>T (p.Ala182Ser)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "GP1BB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "721649",
+      "valid": true
+    },
+    {
+      "input": "NC_000010.11:g.27040170T>G",
+      "type": "genomic",
+      "query_source": "duplication",
+      "gene": "ANKRD26",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "",
+      "clinvar_id": "717238",
+      "valid": true
+    },
+    {
+      "input": "NM_002473.6(MYH9):c.2085C>T (p.Asn695=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "MYH9",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "717124",
+      "valid": true
+    },
+    {
+      "input": "NM_006949.4(STXBP2):c.822G>A (p.Ala274=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "STXBP2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "716692",
+      "valid": true
+    },
+    {
+      "input": "NM_001197104.2(KMT2A):c.7299A>G (p.Lys2433=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "KMT2A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "716588",
+      "valid": true
+    },
+    {
+      "input": "NM_001875.5(CPS1):c.1714G>A (p.Asp572Asn)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "CPS1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715412",
+      "valid": true
+    },
+    {
+      "input": "NM_001322934.2(NFKB2):c.2676C>T (p.His892=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "NFKB2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715396",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.11311+9A>G",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "715362",
+      "valid": true
+    },
+    {
+      "input": "NM_004655.4(AXIN2):c.774G>A (p.Thr258=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "AXIN2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715293",
+      "valid": true
+    },
+    {
+      "input": "NM_177550.5(SLC13A5):c.1230C>T (p.Ile410=)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "SLC13A5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715280",
+      "valid": true
+    },
+    {
+      "input": "NM_001142864.4(PIEZO1):c.3928G>A (p.Val1310Ile)",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "PIEZO1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "714852",
+      "valid": true
+    },
+    {
+      "input": "NM_006096.4(NDRG1):c.856-9C>T",
+      "type": "coding",
+      "query_source": "duplication",
+      "gene": "NDRG1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "714466",
+      "valid": true
+    },
+    {
+      "input": "NM_000490.5(AVP):c.150C>A (p.Gly50=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "AVP",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724217",
+      "valid": true
+    },
+    {
+      "input": "NM_000551.4(VHL):c.340+10C>A",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "VHL",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "723884",
+      "valid": true
+    },
+    {
+      "input": "NM_000449.3(RFX5):c.477T>C (p.Tyr159=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RFX5",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "723738",
+      "valid": true
+    },
+    {
+      "input": "NM_001365088.1(SLC12A6):c.1017T>C (p.Tyr339=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "SLC12A6",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "721719",
+      "valid": true
+    },
+    {
+      "input": "NM_000170.3(GLDC):c.2307C>T (p.Pro769=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "GLDC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "719922",
+      "valid": true
+    },
+    {
+      "input": "NM_006019.4(TCIRG1):c.1692C>T (p.His564=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "TCIRG1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "716565",
+      "valid": true
+    },
+    {
+      "input": "NM_000383.4(AIRE):c.372G>A (p.Pro124=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "AIRE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715284",
+      "valid": true
+    },
+    {
+      "input": "NM_000268.4(NF2):c.939C>T (p.Ala313=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "NF2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "714194",
+      "valid": true
+    },
+    {
+      "input": "NM_000400.4(ERCC2):c.1632C>T (p.Tyr544=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "ERCC2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "712863",
+      "valid": true
+    },
+    {
+      "input": "NM_000107.3(DDB2):c.644T>C (p.Met215Thr)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "DDB2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "712077",
+      "valid": true
+    },
+    {
+      "input": "NM_000930.5(PLAT):c.1629G>A (p.Pro543=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "PLAT",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "712061",
+      "valid": true
+    },
+    {
+      "input": "NM_015378.4(VPS13D):c.11370+4A>T",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "VPS13D",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "711686",
+      "valid": true
+    },
+    {
+      "input": "NM_000179.3(MSH6):c.1383T>C (p.Phe461=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "MSH6",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "710808",
+      "valid": true
+    },
+    {
+      "input": "NM_002163.4(IRF8):c.1065G>A (p.Pro355=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "IRF8",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "710806",
+      "valid": true
+    },
+    {
+      "input": "NM_021946.4(BCORL1):c.3158A>G (p.Lys1053Arg)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "BCORL1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "708706",
+      "valid": true
+    },
+    {
+      "input": "NM_002299.4(LCT):c.301A>G (p.Ser101Gly)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "LCT",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "708530",
+      "valid": true
+    },
+    {
+      "input": "NM_152383.4(DIS3L2):c.933C>T (p.Asp311=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "DIS3L2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "708503",
+      "valid": true
+    },
+    {
+      "input": "NM_004369.4(COL6A3):c.913G>A (p.Val305Ile)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "COL6A3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "707797",
+      "valid": true
+    },
+    {
+      "input": "NM_000426.3(LAMA2):c.4803G>A (p.Pro1601=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "LAMA2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "707766",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.13251A>C (p.Val4417=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "707605",
+      "valid": true
+    },
+    {
+      "input": "NM_000051.3(ATM):c.7968T>C (p.Leu2656=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "ATM",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706938",
+      "valid": true
+    },
+    {
+      "input": "NM_020975.6(RET):c.231C>T (p.Arg77=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RET",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706783",
+      "valid": true
+    },
+    {
+      "input": "NM_024570.4(RNASEH2B):c.203A>G (p.Glu68Gly)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RNASEH2B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "706377",
+      "valid": true
+    },
+    {
+      "input": "NM_004082.4(DCTN1):c.3212-10G>A",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "DCTN1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "705947",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.18694-12dup",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "704338",
+      "valid": true
+    },
+    {
+      "input": "NM_000335.5(SCN5A):c.5847C>T (p.Tyr1949=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "SCN5A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "704320",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.13327C>T (p.Leu4443=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703962",
+      "valid": true
+    },
+    {
+      "input": "NM_000454.5(SOD1):c.195T>C (p.Phe65=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "SOD1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703873",
+      "valid": true
+    },
+    {
+      "input": "NM_000264.5(PTCH1):c.3379C>T (p.Leu1127=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "PTCH1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703716",
+      "valid": true
+    },
+    {
+      "input": "NM_001035.3(RYR2):c.3243C>T (p.Thr1081=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RYR2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703408",
+      "valid": true
+    },
+    {
+      "input": "NM_015627.3(LDLRAP1):c.780G>A (p.Ser260=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "LDLRAP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "701037",
+      "valid": true
+    },
+    {
+      "input": "NM_177438.2(DICER1):c.4206+8_4206+9insTTTT",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "DICER1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "701032",
+      "valid": true
+    },
+    {
+      "input": "NM_172201.1(KCNE2):c.348G>A (p.Ala116=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "KCNE2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "700968",
+      "valid": true
+    },
+    {
+      "input": "NM_012431.3(SEMA3E):c.1435C>T (p.Leu479=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "SEMA3E",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "700561",
+      "valid": true
+    },
+    {
+      "input": "NM_145046.5(CALR3):c.780G>A (p.Pro260=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "CALR3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699281",
+      "valid": true
+    },
+    {
+      "input": "NM_006218.4(PIK3CA):c.1809C>T (p.Asp603=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "PIK3CA",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699107",
+      "valid": true
+    },
+    {
+      "input": "NM_015627.3(LDLRAP1):c.748-4C>A",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "LDLRAP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "698758",
+      "valid": true
+    },
+    {
+      "input": "NM_181882.3(PRX):c.1491C>G (p.Pro497=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "PRX",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "3 prime UTR variant",
+      "clinvar_id": "697308",
+      "valid": true
+    },
+    {
+      "input": "NM_005373.3(MPL):c.963G>T (p.Arg321=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "MPL",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696853",
+      "valid": true
+    },
+    {
+      "input": "NM_000093.5(COL5A1):c.57G>A (p.Leu19=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "COL5A1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696848",
+      "valid": true
+    },
+    {
+      "input": "NM_000540.3(RYR1):c.5487C>T (p.Pro1829=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RYR1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696732",
+      "valid": true
+    },
+    {
+      "input": "NM_001005340.2(GPNMB):c.53C>T (p.Pro18Leu)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "GPNMB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715719",
+      "valid": true
+    },
+    {
+      "input": "NM_207437.3(DNAH10):c.3556G>A (p.Glu1186Lys)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "DNAH10",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715658",
+      "valid": true
+    },
+    {
+      "input": "NM_019023.4(PRMT7):c.1945G>A (p.Val649Ile)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "PRMT7",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715535",
+      "valid": true
+    },
+    {
+      "input": "NM_024312.5(GNPTAB):c.3268C>T (p.Leu1090=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "GNPTAB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715282",
+      "valid": true
+    },
+    {
+      "input": "NM_005876.5(SPEG):c.8508G>A (p.Lys2836=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "SPEG",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715221",
+      "valid": true
+    },
+    {
+      "input": "NM_004260.4(RECQL4):c.714G>A (p.Glu238=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "RECQL4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715133",
+      "valid": true
+    },
+    {
+      "input": "NM_021942.6(TRAPPC11):c.1305T>A (p.Leu435=)",
+      "type": "coding",
+      "query_source": "insertion",
+      "gene": "TRAPPC11",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715108",
+      "valid": true
+    },
+    {
+      "input": "NM_001142864.4(PIEZO1):c.7353C>T (p.Ile2451=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "PIEZO1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "739465",
+      "valid": true
+    },
+    {
+      "input": "NM_001625.4(AK2):c.25G>A (p.Glu9Lys)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "AK2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "5 prime UTR variant",
+      "clinvar_id": "737934",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.20346T>C (p.Tyr6782=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "737909",
+      "valid": true
+    },
+    {
+      "input": "NM_003839.4(TNFRSF11A):c.525T>C (p.Cys175=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "TNFRSF11A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724616",
+      "valid": true
+    },
+    {
+      "input": "NM_003998.4(NFKB1):c.1700C>T (p.Thr567Ile)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "NFKB1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "722155",
+      "valid": true
+    },
+    {
+      "input": "NM_021926.4(ALX4):c.1182G>A (p.Ala394=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "ALX4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "721962",
+      "valid": true
+    },
+    {
+      "input": "NM_003200.5(TCF3):c.1731A>G (p.Gln577=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "TCF3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "719994",
+      "valid": true
+    },
+    {
+      "input": "NM_000259.3(MYO5A):c.5520C>G (p.Thr1840=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "MYO5A",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "717952",
+      "valid": true
+    },
+    {
+      "input": "NM_014339.7(IL17RA):c.327C>T (p.Leu109=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "IL17RA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "714604",
+      "valid": true
+    },
+    {
+      "input": "NM_018344.6(SLC29A3):c.301-6T>C",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "SLC29A3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "713949",
+      "valid": true
+    },
+    {
+      "input": "NM_003839.4(TNFRSF11A):c.1279G>A (p.Asp427Asn)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "TNFRSF11A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "713429",
+      "valid": true
+    },
+    {
+      "input": "NM_017890.4(VPS13B):c.11133C>T (p.Ser3711=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "VPS13B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "710565",
+      "valid": true
+    },
+    {
+      "input": "NM_004656.4(BAP1):c.141C>T (p.Ile47=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "BAP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "707787",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.25473G>A (p.Thr8491=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706828",
+      "valid": true
+    },
+    {
+      "input": "NM_001130823.3(DNMT1):c.3960C>T (p.Tyr1320=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "DNMT1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706182",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.60C>T (p.Tyr20=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "704541",
+      "valid": true
+    },
+    {
+      "input": "NM_000719.7(CACNA1C):c.2103+8C>T",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "CACNA1C",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "700476",
+      "valid": true
+    },
+    {
+      "input": "NM_001035.3(RYR2):c.4707A>G (p.Gly1569=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "RYR2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699651",
+      "valid": true
+    },
+    {
+      "input": "NM_000090.4(COL3A1):c.1816-4T>C",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "COL3A1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "699016",
+      "valid": true
+    },
+    {
+      "input": "NM_000426.3(LAMA2):c.1506C>T (p.Ser502=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "LAMA2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "698119",
+      "valid": true
+    },
+    {
+      "input": "NM_004456.5(EZH2):c.1905T>C (p.Asp635=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "EZH2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697798",
+      "valid": true
+    },
+    {
+      "input": "NM_000088.4(COL1A1):c.2166C>T (p.Gly722=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "COL1A1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697683",
+      "valid": true
+    },
+    {
+      "input": "NM_023110.3(FGFR1):c.2361G>A (p.Thr787=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "FGFR1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697534",
+      "valid": true
+    },
+    {
+      "input": "NM_152296.5(ATP1A3):c.1080G>A (p.Thr360=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "ATP1A3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697133",
+      "valid": true
+    },
+    {
+      "input": "NM_003640.5(ELP1):c.3360T>C (p.Tyr1120=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "ELP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697066",
+      "valid": true
+    },
+    {
+      "input": "NM_005957.5(MTHFR):c.1555C>T (p.Arg519Cys)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "MTHFR",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "697065",
+      "valid": true
+    },
+    {
+      "input": "NM_002114.4(HIVEP1):c.5586G>A (p.Lys1862=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "HIVEP1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715501",
+      "valid": true
+    },
+    {
+      "input": "NM_001271223.2(OBSCN):c.21214C>G (p.Arg7072Gly)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "OBSCN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715471",
+      "valid": true
+    },
+    {
+      "input": "NM_030957.4(ADAMTS10):c.2016C>T (p.Cys672=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "ADAMTS10",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715179",
+      "valid": true
+    },
+    {
+      "input": "NM_016532.4(INPP5K):c.51C>T (p.His17=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "INPP5K",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "5 prime UTR variant",
+      "clinvar_id": "714853",
+      "valid": true
+    },
+    {
+      "input": "NM_001067.4(TOP2A):c.729A>G (p.Ala243=)",
+      "type": "coding",
+      "query_source": "indel",
+      "gene": "TOP2A",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "714733",
+      "valid": true
+    },
+    {
+      "input": "NM_198576.4(AGRN):c.3060C>G (p.Pro1020=)",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "AGRN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742382",
+      "valid": true
+    },
+    {
+      "input": "NM_001127221.1(CACNA1A):c.687C>T (p.Ile229=)",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "CACNA1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742373",
+      "valid": true
+    },
+    {
+      "input": "NM_000170.3(GLDC):c.1262-4G>A",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "GLDC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "742349",
+      "valid": true
+    },
+    {
+      "input": "NM_001875.5(CPS1):c.2392-9G>A",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "CPS1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "742171",
+      "valid": true
+    },
+    {
+      "input": "NM_001039933.3(CD79B):c.434-4G>A",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "CD79B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "742165",
+      "valid": true
+    },
+    {
+      "input": "NM_005060.4(RORC):c.1067-4C>A",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "RORC",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "741955",
+      "valid": true
+    },
+    {
+      "input": "NM_000274.4(OAT):c.521-6T>G",
+      "type": "coding",
+      "query_source": "likely_pathogenic",
+      "gene": "OAT",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "741125",
+      "valid": true
+    },
+    {
+      "input": "NM_004006.2(DMD):c.4014G>A (p.Glu1338=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "DMD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746915",
+      "valid": true
+    },
+    {
+      "input": "NM_000540.3(RYR1):c.7098C>A (p.Pro2366=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "RYR1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746892",
+      "valid": true
+    },
+    {
+      "input": "NM_001033855.3(DCLRE1C):c.330C>T (p.Leu110=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "DCLRE1C",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "746860",
+      "valid": true
+    },
+    {
+      "input": "NM_032790.3(ORAI1):c.124G>A (p.Ala42Thr)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "ORAI1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746754",
+      "valid": true
+    },
+    {
+      "input": "NM_000074.3(CD40LG):c.32G>A (p.Arg11Gln)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "CD40LG",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746752",
+      "valid": true
+    },
+    {
+      "input": "NM_000130.5(F5):c.5001G>A (p.Pro1667=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "F5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746736",
+      "valid": true
+    },
+    {
+      "input": "NM_181882.3(PRX):c.3531A>G (p.Ala1177=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "PRX",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "3 prime UTR variant",
+      "clinvar_id": "746686",
+      "valid": true
+    },
+    {
+      "input": "NM_003664.5(AP3B1):c.2172G>A (p.Gln724=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "AP3B1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746641",
+      "valid": true
+    },
+    {
+      "input": "NM_015247.2(CYLD):c.1071C>T (p.Thr357=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "CYLD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746617",
+      "valid": true
+    },
+    {
+      "input": "NM_001556.3(IKBKB):c.2263G>T (p.Ala755Ser)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "IKBKB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746609",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.9768C>T (p.Tyr3256=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746593",
+      "valid": true
+    },
+    {
+      "input": "NM_000490.5(AVP):c.245C>T (p.Pro82Leu)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "AVP",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746584",
+      "valid": true
+    },
+    {
+      "input": "NM_004415.4(DSP):c.726+7G>C",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "DSP",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "746519",
+      "valid": true
+    },
+    {
+      "input": "NM_000368.5(TSC1):c.3135T>C (p.Leu1045=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "TSC1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746491",
+      "valid": true
+    },
+    {
+      "input": "NM_000092.5(COL4A4):c.929G>A (p.Arg310Gln)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "COL4A4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746479",
+      "valid": true
+    },
+    {
+      "input": "NM_000097.7(CPOX):c.716G>A (p.Cys239Tyr)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "CPOX",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "746450",
+      "valid": true
+    },
+    {
+      "input": "NM_000490.5(AVP):c.363C>T (p.His121=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "AVP",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746393",
+      "valid": true
+    },
+    {
+      "input": "NM_030984.5(TBXAS1):c.1254C>T (p.Cys418=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "TBXAS1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746349",
+      "valid": true
+    },
+    {
+      "input": "NM_000190.4(HMBS):c.534C>T (p.Asp178=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "HMBS",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746326",
+      "valid": true
+    },
+    {
+      "input": "NM_000043.6(FAS):c.948G>A (p.Lys316=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "FAS",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746285",
+      "valid": true
+    },
+    {
+      "input": "NM_000548.5(TSC2):c.4560G>T (p.Leu1520=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "TSC2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746261",
+      "valid": true
+    },
+    {
+      "input": "NM_032043.3(BRIP1):c.2576-4T>C",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "BRIP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "746260",
+      "valid": true
+    },
+    {
+      "input": "NM_002878.3(RAD51D):c.330T>C (p.Gly110=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "RAD51D",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746245",
+      "valid": true
+    },
+    {
+      "input": "NM_004364.4(CEBPA):c.939G>A (p.Lys313=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "CEBPA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746241",
+      "valid": true
+    },
+    {
+      "input": "NM_006206.6(PDGFRA):c.576C>T (p.Thr192=)",
+      "type": "coding",
+      "query_source": "uncertain",
+      "gene": "PDGFRA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746196",
+      "valid": true
+    },
+    {
+      "input": "NM_006231.4(POLE):c.4666C>A (p.Arg1556=)",
+      "type": "coding",
+      "query_source": "benign",
+      "gene": "POLE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746176",
+      "valid": true
+    },
+    {
+      "input": "NM_203447.3(DOCK8):c.1779T>C (p.Asp593=)",
+      "type": "coding",
+      "query_source": "benign",
+      "gene": "DOCK8",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746168",
+      "valid": true
+    },
+    {
+      "input": "NM_153460.4(IL17RC):c.846C>T (p.Ser282=)",
+      "type": "coding",
+      "query_source": "benign",
+      "gene": "IL17RC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "746160",
+      "valid": true
+    },
+    {
+      "input": "NM_001145536.2(C17orf107):c.*1419C>T",
+      "type": "coding",
+      "query_source": "benign",
+      "gene": "CHRNE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "3 prime UTR variant",
+      "clinvar_id": "746130",
+      "valid": true
+    },
+    {
+      "input": "NM_000109.4(DMD):c.1969-5CA[4]",
+      "type": "coding",
+      "query_source": "benign",
+      "gene": "DMD",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "splice acceptor variant",
+      "clinvar_id": "746126",
+      "valid": true
+    },
+    {
+      "input": "NM_002529.3(NTRK1):c.1650C>G (p.Ser550=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "NTRK1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745255",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.82857C>T (p.Thr27619=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743741",
+      "valid": true
+    },
+    {
+      "input": "NM_000246.3(CIITA):c.141C>G (p.Leu47=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "CIITA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743724",
+      "valid": true
+    },
+    {
+      "input": "NM_001848.3(COL6A1):c.1977C>T (p.Tyr659=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "COL6A1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "743066",
+      "valid": true
+    },
+    {
+      "input": "NM_000091.5(COL4A3):c.1863A>G (p.Gln621=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "COL4A3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "742400",
+      "valid": true
+    },
+    {
+      "input": "NM_014208.3(DSPP):c.144A>G (p.Leu48=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "DSPP",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "741906",
+      "valid": true
+    },
+    {
+      "input": "NM_018400.3(SCN3B):c.445+8T>C",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "SCN3B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "741757",
+      "valid": true
+    },
+    {
+      "input": "NM_006231.4(POLE):c.720+9G>A",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "POLE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "741710",
+      "valid": true
+    },
+    {
+      "input": "NM_177438.2(DICER1):c.2490G>A (p.Glu830=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "DICER1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "739997",
+      "valid": true
+    },
+    {
+      "input": "NM_020529.3(NFKBIA):c.140A>G (p.Lys47Arg)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "NFKBIA",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "739286",
+      "valid": true
+    },
+    {
+      "input": "NM_000548.5(TSC2):c.4224C>T (p.Gly1408=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TSC2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "738624",
+      "valid": true
+    },
+    {
+      "input": "NM_000179.3(MSH6):c.900G>A (p.Arg300=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "MSH6",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "737905",
+      "valid": true
+    },
+    {
+      "input": "NM_000330.4(RS1):c.548C>T (p.Thr183Ile)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "RS1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "736967",
+      "valid": true
+    },
+    {
+      "input": "NM_006019.4(TCIRG1):c.1305+7G>C",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TCIRG1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "736786",
+      "valid": true
+    },
+    {
+      "input": "NM_194456.1(KRIT1):c.1914A>G (p.Ala638=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "KRIT1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735765",
+      "valid": true
+    },
+    {
+      "input": "NM_000259.3(MYO5A):c.1200C>T (p.Arg400=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "MYO5A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735737",
+      "valid": true
+    },
+    {
+      "input": "NM_133459.4(CCBE1):c.843A>T (p.Pro281=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "CCBE1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735571",
+      "valid": true
+    },
+    {
+      "input": "NM_004655.4(AXIN2):c.456C>T (p.Ala152=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "AXIN2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "734883",
+      "valid": true
+    },
+    {
+      "input": "NM_002661.5(PLCG2):c.1092C>T (p.Pro364=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "PLCG2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "734066",
+      "valid": true
+    },
+    {
+      "input": "NM_000211.5(ITGB2):c.714C>T (p.Asp238=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "ITGB2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "733072",
+      "valid": true
+    },
+    {
+      "input": "NM_004304.5(ALK):c.361C>A (p.Arg121=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "ALK",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "730558",
+      "valid": true
+    },
+    {
+      "input": "NM_145725.3(TRAF3):c.1092G>A (p.Leu364=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TRAF3",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "728424",
+      "valid": true
+    },
+    {
+      "input": "NM_015125.4(CIC):c.2781C>T (p.Ala927=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "CIC",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "727696",
+      "valid": true
+    },
+    {
+      "input": "NM_015243.2(VPS13B):c.510C>T (p.Ser170=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "VPS13B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724979",
+      "valid": true
+    },
+    {
+      "input": "NM_152468.5(TMC8):c.917_918delinsTT (p.Asn306Ile)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TMC8",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "724852",
+      "valid": true
+    },
+    {
+      "input": "NM_004304.5(ALK):c.588G>C (p.Ser196=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "ALK",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724813",
+      "valid": true
+    },
+    {
+      "input": "NM_004972.4(JAK2):c.731A>G (p.Lys244Arg)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "JAK2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "724741",
+      "valid": true
+    },
+    {
+      "input": "NM_003331.5(TYK2):c.3123C>T (p.Asp1041=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "TYK2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724651",
+      "valid": true
+    },
+    {
+      "input": "NM_000138.5(FBN1):c.6110A>G (p.Lys2037Arg)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "FBN1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "724608",
+      "valid": true
+    },
+    {
+      "input": "NM_004329.3(BMPR1A):c.1543T>C (p.Leu515=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "BMPR1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724589",
+      "valid": true
+    },
+    {
+      "input": "NM_012448.4(STAT5B):c.1971C>T (p.Ala657=)",
+      "type": "coding",
+      "query_source": "nonsense",
+      "gene": "STAT5B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "724405",
+      "valid": true
+    },
+    {
+      "input": "NM_000527.5(LDLR):c.1863A>T (p.Thr621=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "LDLR",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745313",
+      "valid": true
+    },
+    {
+      "input": "NM_001145536.2(C17orf107):c.*1494G>A",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "CHRNE",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "735312",
+      "valid": true
+    },
+    {
+      "input": "NM_030773.4(TUBB1):c.1045G>A (p.Val349Ile)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "TUBB1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "724372",
+      "valid": true
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.699+9G>A",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "FLNC",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "723638",
+      "valid": true
+    },
+    {
+      "input": "NM_001366385.1(CARD14):c.2139C>T (p.Cys713=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "SGSH",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "722970",
+      "valid": true
+    },
+    {
+      "input": "NM_000092.5(COL4A4):c.1665G>A (p.Ala555=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "COL4A4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "722931",
+      "valid": true
+    },
+    {
+      "input": "NM_006947.4(SRP72):c.1678+9_1678+12dup",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "SRP72",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "722904",
+      "valid": true
+    },
+    {
+      "input": "NM_001366385.1(CARD14):c.27C>T (p.Ser9=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "CARD14",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "722898",
+      "valid": true
+    },
+    {
+      "input": "NM_001734.5(C1S):c.1066+10T>C",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "C1S",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "722140",
+      "valid": true
+    },
+    {
+      "input": "NM_001077269.1(WIPF1):c.212G>A (p.Gly71Asp)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "WIPF1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "721527",
+      "valid": true
+    },
+    {
+      "input": "NM_000086.2(CLN3):c.693C>T (p.Leu231=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "CLN3",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "721317",
+      "valid": true
+    },
+    {
+      "input": "NM_003190.5(TAPBP):c.175G>T (p.Asp59Tyr)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "TAPBP",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "715762",
+      "valid": true
+    },
+    {
+      "input": "NM_001458.4(FLNC):c.5922G>T (p.Leu1974=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "FLNC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "708223",
+      "valid": true
+    },
+    {
+      "input": "NM_001130823.3(DNMT1):c.3669C>T (p.Arg1223=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "DNMT1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "707638",
+      "valid": true
+    },
+    {
+      "input": "NM_015046.7(SETX):c.6276T>C (p.Asp2092=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "SETX",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706296",
+      "valid": true
+    },
+    {
+      "input": "NM_001130823.3(DNMT1):c.1647C>T (p.Thr549=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "DNMT1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "705119",
+      "valid": true
+    },
+    {
+      "input": "NM_030962.3(SBF2):c.5493T>C (p.Asp1831=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "SBF2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "705112",
+      "valid": true
+    },
+    {
+      "input": "NM_020975.6(RET):c.3123G>A (p.Val1041=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "RET",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "705106",
+      "valid": true
+    },
+    {
+      "input": "NM_000252.3(MTM1):c.1793A>G (p.His598Arg)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "MTM1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "705101",
+      "valid": true
+    },
+    {
+      "input": "NM_004738.5(VAPB):c.528G>A (p.Leu176=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "VAPB",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "705096",
+      "valid": true
+    },
+    {
+      "input": "NM_024685.4(BBS10):c.1975A>T (p.Ile659Leu)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "BBS10",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "704965",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.49476T>C (p.Pro16492=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "704298",
+      "valid": true
+    },
+    {
+      "input": "NM_004629.2(FANCG):c.1002A>G (p.Leu334=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "FANCG",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703628",
+      "valid": true
+    },
+    {
+      "input": "NM_024529.5(CDC73):c.822A>G (p.Ala274=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "CDC73",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703410",
+      "valid": true
+    },
+    {
+      "input": "NM_004360.5(CDH1):c.1797T>C (p.Thr599=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "CDH1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699641",
+      "valid": true
+    },
+    {
+      "input": "NM_012431.3(SEMA3E):c.1348G>A (p.Val450Ile)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "SEMA3E",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "698832",
+      "valid": true
+    },
+    {
+      "input": "NM_003640.5(ELP1):c.1644-13dup",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "ELP1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "697137",
+      "valid": true
+    },
+    {
+      "input": "NM_198253.3(TERT):c.603G>A (p.Arg201=)",
+      "type": "coding",
+      "query_source": "hereditary_cancer",
+      "gene": "TERT",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696911",
+      "valid": true
+    },
+    {
+      "input": "NM_000268.4(NF2):c.492C>T (p.Ala164=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "NF2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "739244",
+      "valid": true
+    },
+    {
+      "input": "NM_000081.4(LYST):c.2363+7A>T",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "LYST",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "738462",
+      "valid": true
+    },
+    {
+      "input": "NM_004321.7(KIF1A):c.1503G>A (p.Pro501=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "KIF1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "733791",
+      "valid": true
+    },
+    {
+      "input": "NM_006892.4(DNMT3B):c.408C>T (p.Ser136=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "DNMT3B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "732894",
+      "valid": true
+    },
+    {
+      "input": "NM_005027.4(PIK3R2):c.816-8C>T",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "PIK3R2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "732893",
+      "valid": true
+    },
+    {
+      "input": "NM_014619.5(GRIK4):c.15G>T (p.Ser5=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "GRIK4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "732535",
+      "valid": true
+    },
+    {
+      "input": "NM_001366385.1(CARD14):c.2807+10C>T",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SGSH",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "732436",
+      "valid": true
+    },
+    {
+      "input": "NM_005666.4(CFHR2):c.334_337del (p.Ile112fs)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "CFHR2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "frameshift variant",
+      "clinvar_id": "732212",
+      "valid": true
+    },
+    {
+      "input": "NM_000174.4(GP9):c.445T>C (p.Leu149=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "GP9",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "721252",
+      "valid": true
+    },
+    {
+      "input": "NM_001142864.4(PIEZO1):c.1647G>A (p.Thr549=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "PIEZO1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "719933",
+      "valid": true
+    },
+    {
+      "input": "NM_003327.4(TNFRSF4):c.75C>T (p.Thr25=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "TNFRSF4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "718794",
+      "valid": true
+    },
+    {
+      "input": "NM_020458.4(TTC7A):c.2017+8C>T",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "TTC7A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "718394",
+      "valid": true
+    },
+    {
+      "input": "NM_032130.3(FAM186B):c.2210C>T (p.Thr737Met)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "FAM186B",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "713126",
+      "valid": true
+    },
+    {
+      "input": "NM_138477.4(CDAN1):c.2263-5G>A",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "CDAN1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "709476",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.13428T>C (p.Asp4476=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "707416",
+      "valid": true
+    },
+    {
+      "input": "NM_004304.5(ALK):c.1803C>T (p.Leu601=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "ALK",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "706226",
+      "valid": true
+    },
+    {
+      "input": "NM_000891.3(KCNJ2):c.207C>G (p.Leu69=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "KCNJ2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "704379",
+      "valid": true
+    },
+    {
+      "input": "NM_017890.4(VPS13B):c.8523T>C (p.Ile2841=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "VPS13B",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "703757",
+      "valid": true
+    },
+    {
+      "input": "NM_025099.6(CTC1):c.1946-6C>T",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "CTC1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "700777",
+      "valid": true
+    },
+    {
+      "input": "NM_017841.4(SDHAF2):c.387A>G (p.Pro129=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SDHAF2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "700766",
+      "valid": true
+    },
+    {
+      "input": "NM_006920.6(SCN1A):c.3969+8A>G",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SCN1A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "700317",
+      "valid": true
+    },
+    {
+      "input": "NM_032444.4(SLX4):c.4830C>T (p.Ser1610=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SLX4",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699428",
+      "valid": true
+    },
+    {
+      "input": "NM_020937.4(FANCM):c.1200A>G (p.Lys400=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "FANCM",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699358",
+      "valid": true
+    },
+    {
+      "input": "NM_003000.3(SDHB):c.738C>T (p.Ile246=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SDHB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699234",
+      "valid": true
+    },
+    {
+      "input": "NM_002049.4(GATA1):c.798G>A (p.Thr266=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "GATA1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699197",
+      "valid": true
+    },
+    {
+      "input": "NM_033084.6(FANCD2):c.1698C>T (p.Thr566=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "FANCD2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "699115",
+      "valid": true
+    },
+    {
+      "input": "NM_000719.7(CACNA1C):c.798C>T (p.Val266=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "CACNA1C",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "698729",
+      "valid": true
+    },
+    {
+      "input": "NM_004958.4(MTOR):c.5133C>T (p.Ile1711=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "MTOR",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "698720",
+      "valid": true
+    },
+    {
+      "input": "NM_000540.3(RYR1):c.7362C>T (p.Arg2454=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "RYR1",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "698212",
+      "valid": true
+    },
+    {
+      "input": "NM_001267550.2(TTN):c.13281C>T (p.Val4427=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "TTN",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "697912",
+      "valid": true
+    },
+    {
+      "input": "NM_002838.5(PTPRC):c.879G>A (p.Lys293=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "PTPRC",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "794657",
+      "valid": true
+    },
+    {
+      "input": "NM_001323289.2(CDKL5):c.2217A>G (p.Leu739=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "CDKL5",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "794336",
+      "valid": true
+    },
+    {
+      "input": "NM_001040142.2(SCN2A):c.2920-7G>A",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "SCN2A",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "794328",
+      "valid": true
+    },
+    {
+      "input": "NM_001673.5(ASNS):c.1101A>G (p.Ser367=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "ASNS",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "794259",
+      "valid": true
+    },
+    {
+      "input": "NM_002474.3(MYH11):c.1719T>C (p.Thr573=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "MYH11",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "794227",
+      "valid": true
+    },
+    {
+      "input": "NM_001142800.2(EYS):c.5376A>G (p.Ala1792=)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "EYS",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "794203",
+      "valid": true
+    },
+    {
+      "input": "NM_181471.3(RFC2):c.619G>A (p.Glu207Lys)",
+      "type": "coding",
+      "query_source": "cardiac",
+      "gene": "RFC2",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "794141",
+      "valid": true
+    },
+    {
+      "input": "NM_001271208.2(NEB):c.21630C>T (p.Ile7210=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "NEB",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "745280",
+      "valid": true
+    },
+    {
+      "input": "NM_001322934.2(NFKB2):c.579C>T (p.Arg193=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "NFKB2",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "738712",
+      "valid": true
+    },
+    {
+      "input": "NM_001007553.3(CSDE1):c.1965A>G (p.Gln655=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "CSDE1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "715551",
+      "valid": true
+    },
+    {
+      "input": "NM_001142864.4(PIEZO1):c.997C>T (p.Arg333Cys)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "PIEZO1",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "708553",
+      "valid": true
+    },
+    {
+      "input": "NM_004364.4(CEBPA):c.468G>A (p.Arg156=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "CEBPA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "698261",
+      "valid": true
+    },
+    {
+      "input": "NM_000135.4(FANCA):c.303A>G (p.Gln101=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "FANCA",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696372",
+      "valid": true
+    },
+    {
+      "input": "NM_004629.2(FANCG):c.1521G>A (p.Ala507=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "FANCG",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696188",
+      "valid": true
+    },
+    {
+      "input": "NM_198253.3(TERT):c.2688C>T (p.Cys896=)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "TERT",
+      "clinical_significance": "Likely benign",
+      "molecular_consequence": "synonymous variant",
+      "clinvar_id": "696098",
+      "valid": true
+    },
+    {
+      "input": "NM_000719.7(CACNA1C):c.2853+440G>A",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "CACNA1C",
+      "clinical_significance": "Benign",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "695431",
+      "valid": true
+    },
+    {
+      "input": "NM_014053.4(FLVCR1):c.1092+5G>A",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "FLVCR1",
+      "clinical_significance": "Conflicting classifications of pathogenicity",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "374768",
+      "valid": true
+    },
+    {
+      "input": "NM_000271.5(NPC1):c.57+4A>G",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "NPC1",
+      "clinical_significance": "Uncertain significance",
+      "molecular_consequence": "intron variant",
+      "clinvar_id": "374748",
+      "valid": true
+    },
+    {
+      "input": "NM_018993.3(RIN2):c.1642G>A (p.Val548Met)",
+      "type": "coding",
+      "query_source": "neurological",
+      "gene": "RIN2",
+      "clinical_significance": "Benign/Likely benign",
+      "molecular_consequence": "missense variant",
+      "clinvar_id": "374444",
+      "valid": true
+    }
+  ]
+}

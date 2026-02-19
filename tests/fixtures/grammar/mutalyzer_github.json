@@ -1,0 +1,3281 @@
+{
+  "source": "mutalyzer-hgvs-parser GitHub repository",
+  "repository": "https://github.com/mutalyzer/mutalyzer-hgvs-parser",
+  "generated": "2025-12-19 17:36:12 UTC",
+  "total_patterns": 332,
+  "summary": {
+    "by_coordinate_system": {
+      "coding": 122,
+      "genomic": 55,
+      "mitochondrial": 1,
+      "null": 79,
+      "protein": 75
+    },
+    "by_variant_type": {
+      "deletion": 59,
+      "substitution": 25,
+      "delins": 37,
+      "insertion": 55,
+      "no_change": 7,
+      "duplication": 21,
+      "repeat": 23,
+      "inversion": 9,
+      "conversion": 11,
+      "null": 46,
+      "uncertain": 14,
+      "allele": 9,
+      "extension": 8,
+      "frameshift": 8
+    },
+    "by_reference_type": {
+      "chromosome": 42,
+      "transcript": 60,
+      "non_coding_rna": 1,
+      "null": 31,
+      "lrg": 42,
+      "genomic": 20,
+      "test_placeholder": 108,
+      "protein": 28
+    }
+  },
+  "patterns": [
+    {
+      "hgvs": "NC_000001.10:c.58del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NR_026752.1:c.1621del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "non_coding_rna",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "AB026906.1:c.40del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "LRG_9:c.159del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "LRG_199:c.159del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "UD_136095285869:g.100del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NG_012337.1(SDHD_v001):c.274G>T",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NG_012337.1(SDHD_i001):c.274G>T",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NG_012337.1(NM_003002.2):c.274G>T",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NC_000017.10(KRTAP2-4_v001):c.100del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "UD_136095285869(MIR1302-2_v001):c.3813del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NC_000001.10(NM_002074.3):c.58del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NC_012920.1(MT-ND1):m.3460del",
+      "coordinate_system": "mitochondrial",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "LRG_9t1:c.159del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "LRG_9p1:c.159del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[12del;10_11insA]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16insA",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16insATC",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[A]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins28_39",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39;A]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39;A;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins28_39inv",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39inv]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39inv;A]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39inv;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.15_16ins[28_39inv;A;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delinsA",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delinsATC",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[A]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins28_39",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39;A]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39;A;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins28_39inv",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39inv]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39inv;A]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39inv;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.12_17delins[28_39inv;A;ATC]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[(12del)]",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[(12del)?]",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[(12del);(12del)]",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[(12del;12del)]",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NM_002001.2:c.[((12del)?;12del)?]",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_hgvs_parser.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.33038255C>A",
+      "coordinate_system": "genomic",
+      "variant_type": "substitution",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.1):c.93+1G>T",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.79_80delinsTT",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[79G>T;80C>T]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.1:c.[145C>T;147C>G]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.54G>H",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.1:c.123=",
+      "coordinate_system": "coding",
+      "variant_type": "no_change",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_21del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.1):c.183_186+48del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.3921del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.1704+1del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.1813del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.1):c.4072-1234_5155-246del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.1):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.720_991del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.1):c.(?_-245)_(31+1_32-1)del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.33229407_33229410dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.20_23dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.260_264+48dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32862852_32862904dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.3921dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.1704+1dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.1813dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.4072-1234_5155-246dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.720_991dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+      "coordinate_system": "genomic",
+      "variant_type": "repeat",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.(?_-127)_(31+1_32-1)dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32867861_32867862insT",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.169_170insA",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32862923_32862924insCCT",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.240_241insAGG",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32867907_32867908insL37425.1:23_361",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.419_420ins[T;401_419]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.849_850ins850_900inv",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.900_901ins850_900inv",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.(222_226)insG",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000004.11:g.(3076562_3076732)ins(12)",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299insN",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.761_762insN",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.761_762insNNNNN",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.1:c.761_762ins(5)",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299ins(100)",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299ins(80_120)",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32717298_32717299ins(?)",
+      "coordinate_system": "genomic",
+      "variant_type": "insertion",
+      "reference_type": "chromosome",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.32361330_32361333inv",
+      "coordinate_system": "genomic",
+      "variant_type": "inversion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.5657_5660inv",
+      "coordinate_system": "coding",
+      "variant_type": "inversion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.4145_4160inv",
+      "coordinate_system": "coding",
+      "variant_type": "inversion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000012.11:g.6128892_6128954conNC_000022.10:17179029_17179091",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_000797.3:c.812_829con908_925",
+      "coordinate_system": "coding",
+      "variant_type": "conversion",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[2376G>C;3103del]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000023.10:g.[30683643A>G;33038273T>G]",
+      "coordinate_system": "genomic",
+      "variant_type": "substitution",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000014.8:g.101179660TG[14]",
+      "coordinate_system": "genomic",
+      "variant_type": "repeat",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_023035.2(CACNA1A):c.6955CAG[26]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_023035.2(CACNA1A):c.6955_6993dup",
+      "coordinate_system": "coding",
+      "variant_type": "duplication",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_763t1:c.54GCA[23]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_763t1:54_149GCA[23]ACA[1]GCC[2]ACC[1]GCC[10]",
+      "coordinate_system": null,
+      "variant_type": "repeat",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-129CGG[79]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_002024.5:c.-128GGM[108]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_002024.5:c.(-231_-20)ins(1800_2400)",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_000492.3:c.1210-33_1210-6GT[11]T[6]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+      "coordinate_system": "genomic",
+      "variant_type": "repeat",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000001.10:g.57832719ATAAA[15]",
+      "coordinate_system": "genomic",
+      "variant_type": "repeat",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_021080.3:c.-136-75952ATTTT[15]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19=",
+      "coordinate_system": "genomic",
+      "variant_type": "no_change",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_29=",
+      "coordinate_system": "genomic",
+      "variant_type": "no_change",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[4]",
+      "coordinate_system": null,
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1del[AAA;A[3]inv]insGGG[4]inv",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:10>[REF:g.(4_6)]",
+      "coordinate_system": "genomic",
+      "variant_type": "substitution",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:c.4conREF:g.[3;4;5;6;(5_5)_?con[3456_09209]]",
+      "coordinate_system": "coding",
+      "variant_type": "conversion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF(A(B(C))):3",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R:4",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):4",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:4",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:?",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF(R1_1):4",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_1:4",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:4_10",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:4_10",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(4_10)",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(4_10)_(20_30)",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(?_10)_(20_30)",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(?_?)_(20_30)",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(?+10_?)_(20_30)",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:(?_?)_(?_?)",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:c.100_200",
+      "coordinate_system": "coding",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:c.(?_?)_(?_?)",
+      "coordinate_system": "coding",
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:c.[(?_?)_(?_?)]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_2:c.[(?_?)_(?_?);100_200]",
+      "coordinate_system": "coding",
+      "variant_type": "allele",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1con50",
+      "coordinate_system": null,
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conAAA",
+      "coordinate_system": null,
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40",
+      "coordinate_system": null,
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40inv",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40inv[50]",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40[50]inv",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40inv[50_60]",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R(R):1conr3:40[50_60]inv",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R1(R2):1conR2(R3):g.10con100",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R1(R2):g.100conR3:100con50",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R1(R2):g.100conR3(R4):100con50",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R1(R2):g.100conR3(R4):c.100con50",
+      "coordinate_system": "genomic",
+      "variant_type": "conversion",
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": " NC_000023.10 : g . 33038255 C > A ",
+      "coordinate_system": null,
+      "variant_type": "substitution",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199 t1 :c.( 4071+1_4072 -1)_ ( 5154 +1_5155-1)[ 3]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pterdel",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.qterdel",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pter_qterdel",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pter_100del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.100_qterdel",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pter_8247756delinspter_qter",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.1_qterdelins[NC_000011.10:g.pter_qter]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pter_qterdelins[NC_000011.10:g.pter_qter]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.pterdelins[NC_000011.10:g.pter_qter]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000002.12:g.qterdelins[NC_000011.10:g.pter_qter]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:c.",
+      "coordinate_system": "coding",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:$",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(1",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(1_",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(-",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(-1",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(-1-",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(-1-?_?",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:(1_1)_",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:*?+?_(",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:*?+?_(+1+_",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:*?+?_(*1+?_1_)",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1Ax",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A>",
+      "coordinate_system": null,
+      "variant_type": "substitution",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A>x",
+      "coordinate_system": null,
+      "variant_type": "substitution",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A>Ax",
+      "coordinate_system": null,
+      "variant_type": "substitution",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A[",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A[?",
+      "coordinate_system": null,
+      "variant_type": "uncertain",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A[1",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1)",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1_",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1_)",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1_A)",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1A(1_1",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1delAx",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1del(5",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1del1A",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1delAins",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1del1ins",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins()",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins(1",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins[]",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins[A",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins[(1_1)inv",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins[(1_1)inv[]",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1ins[(1_1)inv()",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:1x",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[]",
+      "coordinate_system": null,
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[1del",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[1del;]",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:[=;=]",
+      "coordinate_system": null,
+      "variant_type": "allele",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.85=/T>C",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.1:c.85=//T>C",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "transcript",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_21=/del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_21=//del",
+      "coordinate_system": "genomic",
+      "variant_type": "deletion",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_21=/dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NG_012232.1:g.19_21=//dup",
+      "coordinate_system": "genomic",
+      "variant_type": "duplication",
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[2376G>C];[3103del]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[2376G>C];[2376=]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[2376G>C];[?]",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.2376G>C(;)3103del",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "transcript",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "LRG_199t1:c.[296T>G];[476T>C](;)1083G>C(;)1406del",
+      "coordinate_system": "coding",
+      "variant_type": "substitution",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000014.8:g.101179660TG[14];[18]",
+      "coordinate_system": "genomic",
+      "variant_type": "allele",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "NC_000014.8:g.100d>",
+      "coordinate_system": "genomic",
+      "variant_type": "substitution",
+      "reference_type": "chromosome",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF:g.1de",
+      "coordinate_system": "genomic",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "REF_1:g.pter_100delins[REF_2:g.]",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_syntax.py"
+    },
+    {
+      "hgvs": "R1:1delinsR2:2del",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:1del[R2:2del]",
+      "coordinate_system": null,
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:[1del;10_11insR2:2del]",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:c.10-5_10-2delR2:10del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:c.10-5_10-2dupR2:10del",
+      "coordinate_system": "coding",
+      "variant_type": "deletion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:c.10-5_10-2delinsTCTR2.2:c.10insT",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "REF_1:10del REF_2:20insA REF_3:30insT",
+      "coordinate_system": null,
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "R1:c.10-5_10-2delins[R2:10;R1:10_20del]",
+      "coordinate_system": "coding",
+      "variant_type": "delins",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "NG_000001.1(NM_000002.3):c.100",
+      "coordinate_system": "coding",
+      "variant_type": null,
+      "reference_type": "genomic",
+      "is_predicted": false,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "NG_000001.1(NM_000002.3):c.(?_-20)_(30+1_30-1)",
+      "coordinate_system": "coding",
+      "variant_type": "uncertain",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "NG_000001.1(NM_000002.3):c.(170_?)_420+60[19]",
+      "coordinate_system": "coding",
+      "variant_type": "repeat",
+      "reference_type": "genomic",
+      "is_predicted": true,
+      "source_file": "test_convert.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Trp24Cys)",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Cys188=",
+      "coordinate_system": "protein",
+      "variant_type": "no_change",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Leu2_Met124del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Met1_Leu2insArgSerThrVal",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Met1ext-5",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.?",
+      "coordinate_system": "protein",
+      "variant_type": "uncertain",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Lys23_Val25del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.Val7=/del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_060250.2:p.Gln746_Lys747ins*63",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Ser332_Ser333ins(1))",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Ser332_Ser333insX)",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val582_Asn583ins(5))",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Val582_Asn583insXXXXX)",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_000213.1:p.(Val559_Glu561del)",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+      "coordinate_system": "protein",
+      "variant_type": "delins",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Ser68Arg;Asn594del]",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Ser68Arg];[Ser68Arg]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Ser68Arg];[Asn594del]",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "protein",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Ser68Arg];[Ser68=]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Lys31Asn: {},Val25_Lys31del]",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Arg49=/Ser]",
+      "coordinate_system": "protein",
+      "variant_type": "repeat",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "NP_003997.1:p.[Arg49=//Ser]",
+      "coordinate_system": "protein",
+      "variant_type": "repeat",
+      "reference_type": "protein",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.Trp24Cys",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.0",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.Met1?",
+      "coordinate_system": "protein",
+      "variant_type": "uncertain",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.Trp24=/Cys",
+      "coordinate_system": "protein",
+      "variant_type": "no_change",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.Val7del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.(Val7del)",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_199p1:p.Trp4del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_232p1:p.(Pro458_Gly460del)",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "LRG_232p1:p.Gly2_Met46del",
+      "coordinate_system": "protein",
+      "variant_type": "deletion",
+      "reference_type": "lrg",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Trp26Ter",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Trp26*",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ala3dup",
+      "coordinate_system": "protein",
+      "variant_type": "duplication",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Ala3dup)",
+      "coordinate_system": "protein",
+      "variant_type": "duplication",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ala3_Ser5dup",
+      "coordinate_system": "protein",
+      "variant_type": "duplication",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ser6dup",
+      "coordinate_system": "protein",
+      "variant_type": "duplication",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.His4_Gln5insAla",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Lys2_Gly3insGlnSerLys",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Met3_His4insGlyTer)",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Arg78_Gly79ins23",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Cys28delinsTrpVal",
+      "coordinate_system": "protein",
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Cys28_Lys29delinsTrp",
+      "coordinate_system": "protein",
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Pro578_Lys579delinsLeuTer)",
+      "coordinate_system": "protein",
+      "variant_type": "delins",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.[Ser44Arg;Trp46Arg]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ala2[10]",
+      "coordinate_system": "protein",
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ala2[10];[11]",
+      "coordinate_system": "protein",
+      "variant_type": "allele",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Gln18[23]",
+      "coordinate_system": "protein",
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Gln18)[(70_80)]",
+      "coordinate_system": "protein",
+      "variant_type": "repeat",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Arg97ProfsTer23",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Arg97fs",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Tyr4*)",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Glu5ValfsTer5",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Glu5fs",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ile327Argfs*?",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ile327fs",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Gln151Thrfs*9",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.His150Hisfs*10",
+      "coordinate_system": "protein",
+      "variant_type": "frameshift",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Met1ext-5",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Met1_Leu2insArgSerThrVal",
+      "coordinate_system": "protein",
+      "variant_type": "insertion",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ter110GlnextTer17",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.*110Glnext*17",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(Ter315TyrextAsnLysGlyThrTer)",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.*315TyrextAsnLysGlyThr*",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.Ter327Argext*?",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.*327Argext*?",
+      "coordinate_system": "protein",
+      "variant_type": "extension",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.(=)",
+      "coordinate_system": "protein",
+      "variant_type": "no_change",
+      "reference_type": "test_placeholder",
+      "is_predicted": true,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.=",
+      "coordinate_system": "protein",
+      "variant_type": "no_change",
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "PREF:p.24Cys",
+      "coordinate_system": "protein",
+      "variant_type": null,
+      "reference_type": "test_placeholder",
+      "is_predicted": false,
+      "source_file": "test_protein.py"
+    },
+    {
+      "hgvs": "R1(R2(R3)):g.(10_15)",
+      "coordinate_system": "genomic",
+      "variant_type": null,
+      "reference_type": null,
+      "is_predicted": true,
+      "source_file": "test_ambig.py"
+    },
+    {
+      "hgvs": "10_11insNM_000001.1:c.100_200",
+      "coordinate_system": "coding",
+      "variant_type": "insertion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_ambig.py"
+    },
+    {
+      "hgvs": "10_11delinsR2:g.10_15",
+      "coordinate_system": "genomic",
+      "variant_type": "delins",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_ambig.py"
+    },
+    {
+      "hgvs": "R1:10_11insA",
+      "coordinate_system": null,
+      "variant_type": "insertion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_ambig.py"
+    },
+    {
+      "hgvs": "R1:10",
+      "coordinate_system": null,
+      "variant_type": null,
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_ambig.py"
+    },
+    {
+      "hgvs": "R1:-10-20inv",
+      "coordinate_system": null,
+      "variant_type": "inversion",
+      "reference_type": null,
+      "is_predicted": false,
+      "source_file": "test_ambig.py"
+    }
+  ],
+  "by_file": {
+    "test_hgvs_parser.py": [
+      "NC_000001.10:c.58del",
+      "NM_002001.2:c.12del",
+      "NR_026752.1:c.1621del",
+      "AB026906.1:c.40del",
+      "LRG_9:c.159del",
+      "LRG_199:c.159del",
+      "UD_136095285869:g.100del",
+      "NG_012337.1(SDHD_v001):c.274G>T",
+      "NG_012337.1(SDHD_i001):c.274G>T",
+      "NG_012337.1(NM_003002.2):c.274G>T",
+      "NC_000017.10(KRTAP2-4_v001):c.100del",
+      "UD_136095285869(MIR1302-2_v001):c.3813del",
+      "NC_000001.10(NM_002074.3):c.58del",
+      "NC_012920.1(MT-ND1):m.3460del",
+      "LRG_9t1:c.159del",
+      "LRG_9p1:c.159del",
+      "NM_002001.2:c.[12del;10_11insA]",
+      "NM_002001.2:c.15_16insA",
+      "NM_002001.2:c.15_16insATC",
+      "NM_002001.2:c.15_16ins[A]",
+      "NM_002001.2:c.15_16ins[ATC]",
+      "NM_002001.2:c.15_16ins28_39",
+      "NM_002001.2:c.15_16ins[28_39]",
+      "NM_002001.2:c.15_16ins[28_39;A]",
+      "NM_002001.2:c.15_16ins[28_39;ATC]",
+      "NM_002001.2:c.15_16ins[28_39;A;ATC]",
+      "NM_002001.2:c.15_16ins28_39inv",
+      "NM_002001.2:c.15_16ins[28_39inv]",
+      "NM_002001.2:c.15_16ins[28_39inv;A]",
+      "NM_002001.2:c.15_16ins[28_39inv;ATC]",
+      "NM_002001.2:c.15_16ins[28_39inv;A;ATC]",
+      "NM_002001.2:c.12_17delinsA",
+      "NM_002001.2:c.12_17delinsATC",
+      "NM_002001.2:c.12_17delins[A]",
+      "NM_002001.2:c.12_17delins[ATC]",
+      "NM_002001.2:c.12_17delins28_39",
+      "NM_002001.2:c.12_17delins[28_39]",
+      "NM_002001.2:c.12_17delins[28_39;A]",
+      "NM_002001.2:c.12_17delins[28_39;ATC]",
+      "NM_002001.2:c.12_17delins[28_39;A;ATC]",
+      "NM_002001.2:c.12_17delins28_39inv",
+      "NM_002001.2:c.12_17delins[28_39inv]",
+      "NM_002001.2:c.12_17delins[28_39inv;A]",
+      "NM_002001.2:c.12_17delins[28_39inv;ATC]",
+      "NM_002001.2:c.12_17delins[28_39inv;A;ATC]",
+      "NC_000001.10:c.58del",
+      "NM_002001.2:c.12del",
+      "NR_026752.1:c.1621del",
+      "NG_012337.1(SDHD_v001):c.274G>T",
+      "NG_012337.1(SDHD_i001):c.274G>T",
+      "NG_012337.1(NM_003002.2):c.274G>T",
+      "NC_000017.10(KRTAP2-4_v001):c.100del",
+      "NC_000001.10(NM_002074.3):c.58del",
+      "NC_012920.1(MT-ND1):m.3460del",
+      "NM_002001.2:c.[12del;10_11insA]",
+      "NM_002001.2:c.[(12del)]",
+      "NM_002001.2:c.[(12del)?]",
+      "NM_002001.2:c.[(12del);(12del)]",
+      "NM_002001.2:c.[(12del;12del)]",
+      "NM_002001.2:c.[((12del)?;12del)?]",
+      "NM_002001.2:c.15_16insA",
+      "NM_002001.2:c.15_16insATC",
+      "NM_002001.2:c.15_16ins[A]",
+      "NM_002001.2:c.15_16ins[ATC]",
+      "NM_002001.2:c.15_16ins28_39",
+      "NM_002001.2:c.15_16ins[28_39]",
+      "NM_002001.2:c.15_16ins[28_39;A]",
+      "NM_002001.2:c.15_16ins[28_39;ATC]",
+      "NM_002001.2:c.15_16ins[28_39;A;ATC]",
+      "NM_002001.2:c.15_16ins28_39inv",
+      "NM_002001.2:c.15_16ins[28_39inv]",
+      "NM_002001.2:c.15_16ins[28_39inv;A]",
+      "NM_002001.2:c.15_16ins[28_39inv;ATC]",
+      "NM_002001.2:c.15_16ins[28_39inv;A;ATC]",
+      "NM_002001.2:c.12_17delinsA",
+      "NM_002001.2:c.12_17delinsATC",
+      "NM_002001.2:c.12_17delins[A]",
+      "NM_002001.2:c.12_17delins[ATC]",
+      "NM_002001.2:c.12_17delins28_39",
+      "NM_002001.2:c.12_17delins[28_39]",
+      "NM_002001.2:c.12_17delins[28_39;A]",
+      "NM_002001.2:c.12_17delins[28_39;ATC]",
+      "NM_002001.2:c.12_17delins[28_39;A;ATC]",
+      "NM_002001.2:c.12_17delins28_39inv",
+      "NM_002001.2:c.12_17delins[28_39inv]",
+      "NM_002001.2:c.12_17delins[28_39inv;A]",
+      "NM_002001.2:c.12_17delins[28_39inv;ATC]",
+      "NM_002001.2:c.12_17delins[28_39inv;A;ATC]",
+      "LRG_9t1:c.159del",
+      "LRG_9p1:c.159del",
+      "NC_012920.1(MT-ND1):m.3460del"
+    ],
+    "test_syntax.py": [
+      "NC_000023.10:g.33038255C>A",
+      "NG_012232.1(NM_004006.1):c.93+1G>T",
+      "LRG_199t1:c.79_80delinsTT",
+      "LRG_199t1:c.[79G>T;80C>T]",
+      "NM_004006.1:c.[145C>T;147C>G]",
+      "LRG_199t1:c.54G>H",
+      "NM_004006.1:c.123=",
+      "NG_012232.1:g.19del",
+      "NG_012232.1:g.19_21del",
+      "NG_012232.1(NM_004006.1):c.183_186+48del",
+      "LRG_199t1:c.3921del",
+      "LRG_199t1:c.1704+1del",
+      "LRG_199t1:c.1813del",
+      "NG_012232.1(NM_004006.1):c.4072-1234_5155-246del",
+      "NG_012232.1(NM_004006.1):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+      "LRG_199t1:c.720_991del",
+      "NG_012232.1(NM_004006.1):c.(?_-245)_(31+1_32-1)del",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+      "NM_004006.2:c.20dup",
+      "NC_000023.10:g.33229407_33229410dup",
+      "NM_004006.2:c.20_23dup",
+      "NC_000023.10:g.33229407_33229410dup",
+      "LRG_199t1:c.260_264+48dup",
+      "NC_000023.10:g.32862852_32862904dup",
+      "LRG_199t1:c.3921dup",
+      "LRG_199t1:c.1704+1dup",
+      "LRG_199t1:c.1813dup",
+      "LRG_199t1:c.4072-1234_5155-246dup",
+      "LRG_199t1:c.720_991dup",
+      "NG_012232.1(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+      "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+      "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "LRG_199t1:c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "LRG_199t1:c.(?_-127)_(31+1_32-1)dup",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+      "NC_000023.10:g.32867861_32867862insT",
+      "NM_004006.2:c.169_170insA",
+      "NC_000023.10:g.32862923_32862924insCCT",
+      "LRG_199t1:c.240_241insAGG",
+      "NC_000023.10:g.32867907_32867908insL37425.1:23_361",
+      "NM_004006.2:c.419_420ins[T;401_419]",
+      "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+      "NM_004006.2:c.849_850ins850_900inv",
+      "NM_004006.2:c.900_901ins850_900inv",
+      "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "NM_004006.2:c.(222_226)insG",
+      "NC_000004.11:g.(3076562_3076732)ins(12)",
+      "NC_000023.10:g.32717298_32717299insN",
+      "NM_004006.2:c.761_762insN",
+      "NM_004006.2:c.761_762insNNNNN",
+      "NM_004006.1:c.761_762ins(5)",
+      "NC_000023.10:g.32717298_32717299ins(100)",
+      "NC_000023.10:g.32717298_32717299ins(80_120)",
+      "NC_000023.10:g.32717298_32717299ins(?)",
+      "NC_000023.10:g.32361330_32361333inv",
+      "NM_004006.2:c.5657_5660inv",
+      "NM_004006.2:c.4145_4160inv",
+      "NM_004006.2:c.849_850ins850_900inv",
+      "NM_004006.2:c.900_901ins850_900inv",
+      "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "NC_000012.11:g.6128892_6128954conNC_000022.10:17179029_17179091",
+      "NM_000797.3:c.812_829con908_925",
+      "LRG_199t1:c.[2376G>C;3103del]",
+      "NC_000023.10:g.[30683643A>G;33038273T>G]",
+      "NC_000014.8:g.101179660TG[14]",
+      "NM_023035.2(CACNA1A):c.6955CAG[26]",
+      "NM_023035.2(CACNA1A):c.6955_6993dup",
+      "LRG_763t1:c.54GCA[23]",
+      "LRG_763t1:54_149GCA[23]ACA[1]GCC[2]ACC[1]GCC[10]",
+      "NM_002024.5:c.-129CGG[79]",
+      "NM_002024.5:c.-128GGM[108]",
+      "NM_002024.5:c.(-231_-20)ins(1800_2400)",
+      "NM_000492.3:c.1210-33_1210-6GT[11]T[6]",
+      "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+      "NC_000001.10:g.57832719ATAAA[15]",
+      "NM_021080.3:c.-136-75952ATTTT[15]",
+      "NG_012232.1:g.19=",
+      "NG_012232.1:g.19_29=",
+      "REF:[4]",
+      "REF:1del[AAA;A[3]inv]insGGG[4]inv",
+      "REF:10>[REF:g.(4_6)]",
+      "REF:c.4conREF:g.[3;4;5;6;(5_5)_?con[3456_09209]]",
+      "REF(A(B(C))):3",
+      "R:4",
+      "R(R):4",
+      "REF:4",
+      "REF:?",
+      "REF(R1_1):4",
+      "REF_1:4",
+      "REF:4_10",
+      "REF_2:4_10",
+      "REF_2:(4_10)",
+      "REF_2:(4_10)_(20_30)",
+      "REF_2:(?_10)_(20_30)",
+      "REF_2:(?_?)_(20_30)",
+      "REF_2:(?+10_?)_(20_30)",
+      "REF_2:(?_?)_(?_?)",
+      "REF_2:c.100_200",
+      "REF_2:c.(?_?)_(?_?)",
+      "REF_2:c.[(?_?)_(?_?)]",
+      "REF_2:c.[(?_?)_(?_?);100_200]",
+      "R(R):1con50",
+      "R(R):1conAAA",
+      "R(R):1conr3:40",
+      "R(R):1conr3:40inv",
+      "R(R):1conr3:40inv[50]",
+      "R(R):1conr3:40[50]inv",
+      "R(R):1conr3:40inv[50_60]",
+      "R(R):1conr3:40[50_60]inv",
+      "R1(R2):1conR2(R3):g.10con100",
+      "R1(R2):g.100conR3:100con50",
+      "R1(R2):g.100conR3(R4):100con50",
+      "R1(R2):g.100conR3(R4):c.100con50",
+      " NC_000023.10 : g . 33038255 C > A ",
+      "LRG_199 t1 :c.( 4071+1_4072 -1)_ ( 5154 +1_5155-1)[ 3]",
+      "NC_000002.12:g.pterdel",
+      "NC_000002.12:g.qterdel",
+      "NC_000002.12:g.pter_qterdel",
+      "NC_000002.12:g.pter_100del",
+      "NC_000002.12:g.100_qterdel",
+      "NC_000002.12:g.pter_8247756delinspter_qter",
+      "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "NC_000002.12:g.1_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pter_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]",
+      "REF:c.",
+      "REF:",
+      "REF:$",
+      "REF:(",
+      "REF:(1",
+      "REF:(1_",
+      "REF:(-",
+      "REF:(-1",
+      "REF:(-1-",
+      "REF:(-1-?_?",
+      "REF:(1_1)_",
+      "REF:*?+?_(",
+      "REF:*?+?_(+1+_",
+      "REF:*?+?_(*1+?_1_)",
+      "REF:1Ax",
+      "REF:1A>",
+      "REF:1A>x",
+      "REF:1A>Ax",
+      "REF:1A[",
+      "REF:1A[?",
+      "REF:1A[1",
+      "REF:1A(",
+      "REF:1A(1",
+      "REF:1A(1)",
+      "REF:1A(1_",
+      "REF:1A(1_)",
+      "REF:1A(1_A)",
+      "REF:1A(1_1",
+      "REF:1delAx",
+      "REF:1del(5",
+      "REF:1del1A",
+      "REF:1delAins",
+      "REF:1del1ins",
+      "REF:1ins()",
+      "REF:1ins(1",
+      "REF:1ins[]",
+      "REF:1ins[A",
+      "REF:1ins[(1_1)inv",
+      "REF:1ins[(1_1)inv[]",
+      "REF:1ins[(1_1)inv()",
+      "REF:1x",
+      "REF:[",
+      "REF:[]",
+      "REF:[1del",
+      "REF:[1del;]",
+      "REF:[=;=]",
+      "LRG_199t1:c.85=/T>C",
+      "NM_004006.1:c.85=//T>C",
+      "NG_012232.1:g.19_21=/del",
+      "NG_012232.1:g.19_21=//del",
+      "NG_012232.1:g.19_21=/dup",
+      "NG_012232.1:g.19_21=//dup",
+      "LRG_199t1:c.[2376G>C];[3103del]",
+      "LRG_199t1:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "LRG_199t1:c.[2376G>C];[2376=]",
+      "LRG_199t1:c.[2376G>C];[?]",
+      "LRG_199t1:c.2376G>C(;)3103del",
+      "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
+      "LRG_199t1:c.[296T>G];[476T>C](;)1083G>C(;)1406del",
+      "NC_000014.8:g.101179660TG[14];[18]",
+      "NC_000014.8:g.100d>",
+      "NC_000023.10:g.33038255C>A",
+      "NG_012232.1(NM_004006.1):c.93+1G>T",
+      "NM_004006.1:c.[145C>T;147C>G]",
+      "NM_004006.1:c.123=",
+      "NM_004006.1:c.85=//T>C",
+      "NG_012232.1:g.19del",
+      "NG_012232.1:g.19_21del",
+      "NG_012232.1(NM_004006.1):c.183_186+48del",
+      "NG_012232.1(NM_004006.1):c.4072-1234_5155-246del",
+      "NG_012232.1(NM_004006.1):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+      "NG_012232.1(NM_004006.1):c.(?_-245)_(31+1_32-1)del",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+      "NG_012232.1:g.19_21=/del",
+      "NG_012232.1:g.19_21=//del",
+      "NM_004006.2:c.20dup",
+      "NC_000023.10:g.33229407_33229410dup",
+      "NM_004006.2:c.20_23dup",
+      "NC_000023.10:g.33229407_33229410dup",
+      "NC_000023.10:g.32862852_32862904dup",
+      "NG_012232.1(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+      "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+      "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+      "NG_012232.1:g.19_21=/dup",
+      "NG_012232.1:g.19_21=//dup",
+      "NC_000023.10:g.32867861_32867862insT",
+      "NM_004006.2:c.169_170insA",
+      "NC_000023.10:g.32862923_32862924insCCT",
+      "NC_000023.10:g.32867907_32867908insL37425.1:23_361",
+      "NM_004006.2:c.419_420ins[T;401_419]",
+      "NM_004006.2:c.849_850ins850_900inv",
+      "NM_004006.2:c.900_901ins850_900inv",
+      "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "NM_004006.2:c.(222_226)insG",
+      "NC_000004.11:g.(3076562_3076732)ins(12)",
+      "NC_000023.10:g.32717298_32717299insN",
+      "NM_004006.2:c.761_762insN",
+      "NM_004006.2:c.761_762insNNNNN",
+      "NM_004006.1:c.761_762ins(5)",
+      "NC_000023.10:g.32717298_32717299ins(100)",
+      "NC_000023.10:g.32717298_32717299ins(80_120)",
+      "NC_000023.10:g.32717298_32717299ins(?)",
+      "NC_000023.10:g.32361330_32361333inv",
+      "NM_004006.2:c.5657_5660inv",
+      "NM_004006.2:c.4145_4160inv",
+      "NM_004006.2:c.849_850ins850_900inv",
+      "NM_004006.2:c.900_901ins850_900inv",
+      "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "NC_000012.11:g.6128892_6128954conNC_000022.10:17179029_17179091",
+      "NM_000797.3:c.812_829con908_925",
+      "NC_000023.10:g.[30683643A>G;33038273T>G]",
+      "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
+      "NC_000014.8:g.101179660TG[14]",
+      "NC_000014.8:g.101179660TG[14];[18]",
+      "NM_023035.2(CACNA1A):c.6955CAG[26]",
+      "NM_023035.2(CACNA1A):c.6955_6993dup",
+      "NM_002024.5:c.-129CGG[79]",
+      "NM_002024.5:c.-128GGM[108]",
+      "NM_002024.5:c.(-231_-20)ins(1800_2400)",
+      "NM_000492.3:c.1210-33_1210-6GT[11]T[6]",
+      "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+      "NC_000001.10:g.57832719ATAAA[15]",
+      "NM_021080.3:c.-136-75952ATTTT[15]",
+      "NG_012232.1:g.19=",
+      "NG_012232.1:g.19_29=",
+      "NC_000002.12:g.pterdel",
+      "NC_000002.12:g.qterdel",
+      "NC_000002.12:g.pter_qterdel",
+      "NC_000002.12:g.pter_100del",
+      "NC_000002.12:g.100_qterdel",
+      "NC_000002.12:g.pter_8247756delinspter_qter",
+      "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "NC_000002.12:g.1_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pter_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]",
+      "NM_004006.1:c.85=//T>C",
+      "NG_012232.1:g.19_21=/del",
+      "NG_012232.1:g.19_21=//del",
+      "NG_012232.1:g.19_21=/dup",
+      "NG_012232.1:g.19_21=//dup",
+      "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
+      "NC_000014.8:g.101179660TG[14];[18]",
+      "NC_000014.8:g.100d>",
+      "LRG_199t1:c.79_80delinsTT",
+      "LRG_199t1:c.[79G>T;80C>T]",
+      "LRG_199t1:c.54G>H",
+      "LRG_199t1:c.85=/T>C",
+      "LRG_199t1:c.3921del",
+      "LRG_199t1:c.1704+1del",
+      "LRG_199t1:c.1813del",
+      "LRG_199t1:c.720_991del",
+      "LRG_199t1:c.260_264+48dup",
+      "LRG_199t1:c.3921dup",
+      "LRG_199t1:c.1704+1dup",
+      "LRG_199t1:c.1813dup",
+      "LRG_199t1:c.4072-1234_5155-246dup",
+      "LRG_199t1:c.720_991dup",
+      "LRG_199t1:c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+      "LRG_199t1:c.(?_-127)_(31+1_32-1)dup",
+      "LRG_199t1:c.240_241insAGG",
+      "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+      "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "LRG_199t1:c.[2376G>C;3103del]",
+      "LRG_199t1:c.[2376G>C];[3103del]",
+      "LRG_199t1:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "LRG_199t1:c.[2376G>C];[2376=]",
+      "LRG_199t1:c.[2376G>C];[?]",
+      "LRG_199t1:c.2376G>C(;)3103del",
+      "LRG_199t1:c.[296T>G];[476T>C](;)1083G>C(;)1406del",
+      "LRG_763t1:c.54GCA[23]",
+      "LRG_199t1:c.85=/T>C",
+      "LRG_199t1:c.[2376G>C];[3103del]",
+      "LRG_199t1:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "LRG_199t1:c.[2376G>C];[2376=]",
+      "LRG_199t1:c.[2376G>C];[?]",
+      "LRG_199t1:c.2376G>C(;)3103del",
+      "LRG_199t1:c.[296T>G];[476T>C](;)1083G>C(;)1406del",
+      "NC_000023.10:g.33038255C>A",
+      "NG_012232.1:g.19del",
+      "NG_012232.1:g.19_21del",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+      "NG_012232.1:g.19_21=/del",
+      "NG_012232.1:g.19_21=//del",
+      "NC_000023.10:g.33229407_33229410dup",
+      "NC_000023.10:g.33229407_33229410dup",
+      "NC_000023.10:g.32862852_32862904dup",
+      "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+      "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+      "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+      "NG_012232.1:g.19_21=/dup",
+      "NG_012232.1:g.19_21=//dup",
+      "NC_000023.10:g.32867861_32867862insT",
+      "NC_000023.10:g.32862923_32862924insCCT",
+      "NC_000023.10:g.32867907_32867908insL37425.1:23_361",
+      "NC_000004.11:g.(3076562_3076732)ins(12)",
+      "NC_000023.10:g.32717298_32717299insN",
+      "NC_000023.10:g.32717298_32717299ins(100)",
+      "NC_000023.10:g.32717298_32717299ins(80_120)",
+      "NC_000023.10:g.32717298_32717299ins(?)",
+      "NC_000023.10:g.32361330_32361333inv",
+      "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "NC_000012.11:g.6128892_6128954conNC_000022.10:17179029_17179091",
+      "NC_000023.10:g.[30683643A>G;33038273T>G]",
+      "NC_000014.8:g.101179660TG[14]",
+      "NC_000014.8:g.101179660TG[14];[18]",
+      "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+      "NC_000001.10:g.57832719ATAAA[15]",
+      "NG_012232.1:g.19=",
+      "NG_012232.1:g.19_29=",
+      "NC_000002.12:g.pterdel",
+      "NC_000002.12:g.qterdel",
+      "NC_000002.12:g.pter_qterdel",
+      "NC_000002.12:g.pter_100del",
+      "NC_000002.12:g.100_qterdel",
+      "NC_000002.12:g.pter_8247756delinspter_qter",
+      "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "NC_000002.12:g.1_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pter_qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.pterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000002.12:g.qterdelins[NC_000011.10:g.pter_qter]",
+      "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]",
+      "NG_012232.1:g.19_21=/del",
+      "NG_012232.1:g.19_21=//del",
+      "NG_012232.1:g.19_21=/dup",
+      "NG_012232.1:g.19_21=//dup",
+      "NC_000014.8:g.101179660TG[14];[18]",
+      "NC_000014.8:g.100d>",
+      "REF:c.4conREF:g.[3;4;5;6;(5_5)_?con[3456_09209]]",
+      "REF_2:c.100_200",
+      "REF_2:c.(?_?)_(?_?)",
+      "REF_2:c.[(?_?)_(?_?)]",
+      "REF_2:c.[(?_?)_(?_?);100_200]",
+      "REF:g.1de",
+      "REF:g.1de",
+      "REF_1:g.pter_100delins[REF_2:g.]",
+      "REF_1:g.pter_100delins[REF_2:g.]"
+    ],
+    "test_convert.py": [
+      "R1:1delinsR2:2del",
+      "R1:1del[R2:2del]",
+      "R1:[1del;10_11insR2:2del]",
+      "R1:c.10-5_10-2delR2:10del",
+      "R1:c.10-5_10-2dupR2:10del",
+      "R1:c.10-5_10-2delinsTCTR2.2:c.10insT",
+      "REF_1:10del REF_2:20insA REF_3:30insT",
+      "R1:c.10-5_10-2delins[R2:10;R1:10_20del]",
+      "NG_000001.1(NM_000002.3):c.100",
+      "NG_000001.1(NM_000002.3):c.(?_-20)_(30+1_30-1)",
+      "NG_000001.1(NM_000002.3):c.(170_?)_420+60[19]",
+      "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]",
+      "NC_000016.9:g.pter_2140661delins[NC_000001.10:g.188411550_pterinv]"
+    ],
+    "test_protein.py": [
+      "NP_003997.1:p.(Trp24Cys)",
+      "NP_003997.1:p.Cys188=",
+      "NP_003997.1:p.Leu2_Met124del",
+      "NP_003997.1:p.Met1_Leu2insArgSerThrVal",
+      "NP_003997.1:p.Met1ext-5",
+      "NP_003997.1:p.?",
+      "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+      "NP_003997.1:p.Lys23_Val25del",
+      "NP_003997.1:p.Val7=/del",
+      "NP_060250.2:p.Gln746_Lys747ins*63",
+      "NP_003997.1:p.(Ser332_Ser333ins(1))",
+      "NP_003997.1:p.(Ser332_Ser333insX)",
+      "NP_003997.1:p.(Val582_Asn583ins(5))",
+      "NP_003997.1:p.(Val582_Asn583insXXXXX)",
+      "NP_000213.1:p.(Val559_Glu561del)",
+      "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+      "NP_003997.1:p.[Ser68Arg;Asn594del]",
+      "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
+      "NP_003997.1:p.[Ser68Arg];[Ser68Arg]",
+      "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+      "NP_003997.1:p.[Ser68Arg];[Asn594del]",
+      "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+      "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "NP_003997.1:p.[Ser68Arg];[Ser68=]",
+      "NP_003997.1:p.[Lys31Asn: {},Val25_Lys31del]",
+      "NP_003997.1:p.[Arg49=/Ser]",
+      "NP_003997.1:p.[Arg49=//Ser]",
+      "LRG_199p1:p.Trp24Cys",
+      "LRG_199p1:p.0",
+      "LRG_199p1:p.Met1?",
+      "LRG_199p1:p.Trp24=/Cys",
+      "LRG_199p1:p.Val7del",
+      "LRG_199p1:p.(Val7del)",
+      "LRG_199p1:p.Trp4del",
+      "LRG_232p1:p.(Pro458_Gly460del)",
+      "LRG_232p1:p.Gly2_Met46del",
+      "PREF:p.Trp26Ter",
+      "PREF:p.Trp26*",
+      "PREF:p.Ala3dup",
+      "PREF:p.(Ala3dup)",
+      "PREF:p.Ala3_Ser5dup",
+      "PREF:p.Ser6dup",
+      "PREF:p.His4_Gln5insAla",
+      "PREF:p.Lys2_Gly3insGlnSerLys",
+      "PREF:p.(Met3_His4insGlyTer)",
+      "PREF:p.Arg78_Gly79ins23",
+      "PREF:p.Cys28delinsTrpVal",
+      "PREF:p.Cys28_Lys29delinsTrp",
+      "PREF:p.(Pro578_Lys579delinsLeuTer)",
+      "PREF:p.[Ser44Arg;Trp46Arg]",
+      "PREF:p.Ala2[10]",
+      "PREF:p.Ala2[10];[11]",
+      "PREF:p.Gln18[23]",
+      "PREF:p.(Gln18)[(70_80)]",
+      "PREF:p.Arg97ProfsTer23",
+      "PREF:p.Arg97fs",
+      "PREF:p.(Tyr4*)",
+      "PREF:p.Glu5ValfsTer5",
+      "PREF:p.Glu5fs",
+      "PREF:p.Ile327Argfs*?",
+      "PREF:p.Ile327fs",
+      "PREF:p.Gln151Thrfs*9",
+      "PREF:p.His150Hisfs*10",
+      "PREF:p.Met1ext-5",
+      "PREF:p.Met1_Leu2insArgSerThrVal",
+      "PREF:p.Ter110GlnextTer17",
+      "PREF:p.*110Glnext*17",
+      "PREF:p.(Ter315TyrextAsnLysGlyThrTer)",
+      "PREF:p.*315TyrextAsnLysGlyThr*",
+      "PREF:p.Ter327Argext*?",
+      "PREF:p.*327Argext*?",
+      "PREF:p.(=)",
+      "PREF:p.=",
+      "PREF:p.24Cys"
+    ],
+    "test_ambig.py": [
+      "LRG_199p1:p.Trp24Cys",
+      "PREF:p.Ala2[10]",
+      "NP_003997.1:p.(Trp24Cys)",
+      "R1(R2(R3)):g.(10_15)",
+      "10_11insNM_000001.1:c.100_200",
+      "10_11delinsR2:g.10_15",
+      "R1:10_11insA",
+      "R1:10",
+      "R1:-10-20inv",
+      "NP_003997.1:p.(Trp24Cys)",
+      "NP_003997.1:p.(Trp24Cys)",
+      "LRG_199p1:p.Trp24Cys",
+      "LRG_199p1:p.Trp24Cys",
+      "PREF:p.Ala2[10]",
+      "PREF:p.Ala2[10]"
+    ]
+  }
+}
