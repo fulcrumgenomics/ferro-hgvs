@@ -2895,6 +2895,22 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_inverted_range_insertion_no_panic() {
+        // Regression: ClinVar pattern NC_000011.10:g.5238138_5153222insTATTT
+        // has start > end (inverted range).  Previously caused a panic in
+        // insertion_is_duplication due to slice index out of bounds.
+        // The normalizer should return an error, not panic.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NC_000011.10:g.5238138_5153222insTATTT").unwrap();
+        let result = normalizer.normalize(&variant);
+        // It's fine if this returns Ok (unchanged) or Err (validation failure),
+        // but it must NOT panic.
+        let _ = result;
+    }
+
+    #[test]
     fn test_delins_should_not_shift() {
         // HGVS spec: delins should NOT be 3' shifted like del/dup/ins
         // This test ensures we don't incorrectly shift delins positions

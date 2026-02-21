@@ -187,20 +187,30 @@ pub fn normalize_batch<P: AsRef<Path>>(
             }
 
             match parse_hgvs(variant) {
-                Ok(parsed) => match normalizer.normalize(&parsed) {
-                    Ok(normalized) => VariantResult {
-                        input: variant.clone(),
-                        success: true,
-                        output: Some(normalized.to_string()),
-                        error: None,
-                    },
-                    Err(e) => VariantResult {
-                        input: variant.clone(),
-                        success: false,
-                        output: None,
-                        error: Some(format!("{}", e)),
-                    },
-                },
+                Ok(parsed) => {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        normalizer.normalize(&parsed)
+                    })) {
+                        Ok(Ok(normalized)) => VariantResult {
+                            input: variant.clone(),
+                            success: true,
+                            output: Some(normalized.to_string()),
+                            error: None,
+                        },
+                        Ok(Err(e)) => VariantResult {
+                            input: variant.clone(),
+                            success: false,
+                            output: None,
+                            error: Some(format!("{}", e)),
+                        },
+                        Err(_) => VariantResult {
+                            input: variant.clone(),
+                            success: false,
+                            output: None,
+                            error: Some("internal error: panic during normalization".to_string()),
+                        },
+                    }
+                }
                 Err(e) => VariantResult {
                     input: variant.clone(),
                     success: false,
