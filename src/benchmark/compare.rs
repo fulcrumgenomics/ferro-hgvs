@@ -1630,6 +1630,7 @@ pub fn run_mutalyzer_normalize_parallel(
             manifest.num_shards,
             allow_network,
             temp_dir.path(),
+            settings_file,
         );
     }
 
@@ -1699,25 +1700,43 @@ pub fn run_mutalyzer_normalize_parallel(
         // Pass network flag as 5th argument
         cmd.arg(if allow_network { "true" } else { "false" });
 
-        let child = cmd.spawn().map_err(|e| FerroError::Io {
-            msg: format!("Failed to spawn Python: {}", e),
-        })?;
-        children.push((i, child));
+        match cmd.spawn() {
+            Ok(child) => children.push((i, child)),
+            Err(e) => {
+                cleanup_children(&mut children);
+                return Err(FerroError::Io {
+                    msg: format!("Failed to spawn Python: {}", e),
+                });
+            }
+        }
     }
 
-    // Wait for all processes to complete
-    for (_i, mut child) in children {
-        let status = child.wait().map_err(|e| FerroError::Io {
-            msg: format!("Failed to wait for Python: {}", e),
-        })?;
-        if !status.success() {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "Mutalyzer normalizer failed with exit code: {:?}",
-                    status.code()
-                ),
-            });
+    // Wait for all processes to complete, killing remaining on first error
+    let mut wait_error = None;
+    for (shard_id, child) in children.iter_mut() {
+        if wait_error.is_some() {
+            kill_and_wait(child, *shard_id);
+            continue;
         }
+        match child.wait() {
+            Ok(status) if !status.success() => {
+                wait_error = Some(FerroError::Io {
+                    msg: format!(
+                        "Mutalyzer normalizer failed with exit code: {:?}",
+                        status.code()
+                    ),
+                });
+            }
+            Err(e) => {
+                wait_error = Some(FerroError::Io {
+                    msg: format!("Failed to wait for Python: {}", e),
+                });
+            }
+            _ => {}
+        }
+    }
+    if let Some(err) = wait_error {
+        return Err(err);
     }
 
     let elapsed = start.elapsed();
@@ -1745,11 +1764,12 @@ pub fn run_mutalyzer_normalize_parallel(
     Ok((all_results, elapsed, aggregated_error_counts))
 }
 
-/// Run mutalyzer normalization using pre-sharded cache.
+/// Run mutalyzer normalization using pre-sharded cache with work-stealing.
 ///
-/// Patterns are grouped by their accession's shard, then workers process
-/// their assigned shards sequentially. This ensures each worker only loads
-/// the reference data for its shards (~18GB/N instead of 18GB).
+/// Each non-empty shard becomes an independent task. A pool of N workers
+/// processes tasks from a shared queue — when a worker finishes a shard,
+/// it immediately picks up the next available one. This avoids the straggler
+/// problem where one worker gets stuck with disproportionately slow shards.
 #[allow(clippy::type_complexity)]
 fn run_mutalyzer_normalize_presharded(
     patterns: &[String],
@@ -1758,6 +1778,7 @@ fn run_mutalyzer_normalize_presharded(
     num_shards: usize,
     allow_network: bool,
     temp_dir: &Path,
+    settings_file: Option<&str>,
 ) -> Result<
     (
         Vec<ParseResult>,
@@ -1767,119 +1788,148 @@ fn run_mutalyzer_normalize_presharded(
     FerroError,
 > {
     eprintln!(
-        "[normalize] Using pre-sharded cache ({} shards, {} workers)",
+        "[normalize] Using pre-sharded cache ({} shards, {} workers, work-stealing)",
         num_shards, workers
     );
 
     // Group patterns by their accession's shard
     let shard_groups = group_patterns_by_shard(patterns, num_shards);
 
-    // Log shard distribution
-    let non_empty_shards: Vec<_> = shard_groups
-        .iter()
+    // Collect non-empty shards as individual tasks
+    let shard_tasks: Vec<(usize, Vec<String>)> = shard_groups
+        .into_iter()
         .enumerate()
         .filter(|(_, g)| !g.is_empty())
         .collect();
+
+    let effective_workers = workers.min(shard_tasks.len());
+
     eprintln!(
-        "[normalize] Patterns distributed across {} shards (of {} total)",
-        non_empty_shards.len(),
-        num_shards
+        "[normalize] {} non-empty shards queued for {} workers",
+        shard_tasks.len(),
+        effective_workers
     );
 
-    // Assign shards to workers
-    // If workers >= num_shards: each worker gets at most 1 shard
-    // If workers < num_shards: workers get multiple shards (round-robin)
-    let effective_workers = workers.min(non_empty_shards.len());
-    let mut worker_shards: Vec<Vec<usize>> = (0..effective_workers).map(|_| Vec::new()).collect();
+    let settings_path = settings_file
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cache_dir.join("mutalyzer_settings.conf"));
 
-    for (i, (shard_id, _)) in non_empty_shards.iter().enumerate() {
-        worker_shards[i % effective_workers].push(*shard_id);
-    }
-
-    // Process each worker's shards
-    let start = Instant::now();
-    let mut all_results = Vec::new();
-    let mut aggregated_error_counts: HashMap<String, usize> = HashMap::new();
-    let mut output_paths: Vec<PathBuf> = Vec::new();
-
-    // Create input files and spawn workers
-    let mut children: Vec<std::process::Child> = Vec::new();
-
-    for (worker_id, shard_ids) in worker_shards.iter().enumerate() {
-        if shard_ids.is_empty() {
-            continue;
-        }
-
-        // Collect all patterns for this worker's shards
-        let mut worker_patterns: Vec<String> = Vec::new();
-        for &shard_id in shard_ids {
-            worker_patterns.extend(shard_groups[shard_id].clone());
-        }
-
-        if worker_patterns.is_empty() {
-            continue;
-        }
-
-        // Write input file
-        let input_path = temp_dir.join(format!("worker_{}_input.txt", worker_id));
-        let output_path = temp_dir.join(format!("worker_{}_output.json", worker_id));
+    // Write input files for all shard tasks upfront
+    let mut task_io: Vec<(usize, PathBuf, PathBuf, usize)> = Vec::new(); // (shard_id, input, output, pattern_count)
+    for (shard_id, shard_patterns) in &shard_tasks {
+        let input_path = temp_dir.join(format!("shard_{}_input.txt", shard_id));
+        let output_path = temp_dir.join(format!("shard_{}_output.json", shard_id));
 
         let mut file = File::create(&input_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to create input file: {}", e),
         })?;
-        for pattern in &worker_patterns {
+        for pattern in shard_patterns {
             writeln!(file, "{}", pattern).map_err(|e| FerroError::Io {
                 msg: format!("Failed to write pattern: {}", e),
             })?;
         }
 
-        // All workers use the same settings file pointing to the full cache.
-        // Memory savings come from pattern routing - each worker only processes
-        // patterns for certain accessions, so only loads those into memory.
-        let settings_path = cache_dir.join("mutalyzer_settings.conf");
-        let effective_settings = settings_path.to_string_lossy().to_string();
-
-        eprintln!(
-            "[normalize] Worker {} processing {} patterns from shard(s) {:?}",
-            worker_id,
-            worker_patterns.len(),
-            shard_ids
-        );
-
-        // Spawn worker process
-        let mut cmd = std::process::Command::new("python3");
-        cmd.args(["-c", MUTALYZER_NORMALIZE_SCRIPT]);
-        cmd.arg(input_path.display().to_string());
-        cmd.arg(output_path.display().to_string());
-        cmd.arg(&effective_settings);
-        cmd.arg(if allow_network { "true" } else { "false" });
-
-        let child = cmd.spawn().map_err(|e| FerroError::Io {
-            msg: format!("Failed to spawn Python: {}", e),
-        })?;
-        children.push(child);
-        output_paths.push(output_path);
+        task_io.push((*shard_id, input_path, output_path, shard_patterns.len()));
     }
 
-    // Wait for all workers
-    for mut child in children {
-        let status = child.wait().map_err(|e| FerroError::Io {
-            msg: format!("Failed to wait for Python: {}", e),
-        })?;
-        if !status.success() {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "Mutalyzer normalizer failed with exit code: {:?}",
-                    status.code()
-                ),
-            });
+    // Work-stealing: maintain up to N concurrent subprocesses.
+    // As each finishes, spawn the next queued shard.
+    let start = Instant::now();
+    let mut task_queue = std::collections::VecDeque::from(task_io);
+    // Each active slot: (child, shard_id, output_path, pattern_count)
+    let mut active: Vec<(std::process::Child, usize, PathBuf, usize)> = Vec::new();
+    let mut completed_outputs: Vec<PathBuf> = Vec::new();
+    let mut shards_done = 0;
+    let total_shards = shard_tasks.len();
+
+    // Fill initial worker slots
+    while active.len() < effective_workers {
+        if let Some((shard_id, input_path, output_path, count)) = task_queue.pop_front() {
+            match spawn_mutalyzer_worker(&input_path, &output_path, &settings_path, allow_network) {
+                Ok(child) => active.push((child, shard_id, output_path, count)),
+                Err(e) => {
+                    cleanup_active_workers(&mut active);
+                    return Err(e);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Poll active workers, replacing finished ones with queued tasks
+    while !active.is_empty() {
+        let mut progress_made = false;
+        let mut i = 0;
+        while i < active.len() {
+            match active[i].0.try_wait() {
+                Ok(Some(status)) => {
+                    let (_, shard_id, output_path, count) = active.remove(i);
+                    shards_done += 1;
+                    progress_made = true;
+                    if !status.success() {
+                        cleanup_active_workers(&mut active);
+                        return Err(FerroError::Io {
+                            msg: format!(
+                                "Mutalyzer normalizer failed on shard {} with exit code: {:?}",
+                                shard_id,
+                                status.code()
+                            ),
+                        });
+                    }
+                    eprintln!(
+                        "[normalize] Shard {} done ({} patterns) [{}/{}]",
+                        shard_id, count, shards_done, total_shards
+                    );
+                    completed_outputs.push(output_path);
+
+                    // Backfill from queue
+                    if let Some((next_shard, input_path, output_path, next_count)) =
+                        task_queue.pop_front()
+                    {
+                        match spawn_mutalyzer_worker(
+                            &input_path,
+                            &output_path,
+                            &settings_path,
+                            allow_network,
+                        ) {
+                            Ok(child) => {
+                                active.push((child, next_shard, output_path, next_count));
+                            }
+                            Err(e) => {
+                                cleanup_active_workers(&mut active);
+                                return Err(e);
+                            }
+                        }
+                    }
+                    // Don't increment i — we removed an element
+                }
+                Ok(None) => {
+                    // Still running
+                    i += 1;
+                }
+                Err(e) => {
+                    cleanup_active_workers(&mut active);
+                    return Err(FerroError::Io {
+                        msg: format!("Failed to poll worker: {}", e),
+                    });
+                }
+            }
+        }
+        // Brief sleep to avoid busy-spinning, but skip if a worker just
+        // completed so we immediately poll for more completions / backfills.
+        if !active.is_empty() && !progress_made {
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
     }
 
     let elapsed = start.elapsed();
 
-    // Collect results
-    for output_path in &output_paths {
+    // Collect results from all completed shards
+    let mut all_results = Vec::new();
+    let mut aggregated_error_counts: HashMap<String, usize> = HashMap::new();
+
+    for output_path in &completed_outputs {
         let file = File::open(output_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to open output: {}", e),
         })?;
@@ -1896,6 +1946,69 @@ fn run_mutalyzer_normalize_presharded(
     }
 
     Ok((all_results, elapsed, aggregated_error_counts))
+}
+
+/// Kill and wait on a single child process, logging any errors.
+///
+/// Suppresses "no such process" (ESRCH) errors from `kill()` on Unix, since
+/// the child may have already exited between polling and cleanup.
+fn kill_and_wait(child: &mut std::process::Child, shard_id: usize) {
+    if let Err(e) = child.kill() {
+        // ESRCH (3) is POSIX-defined across all Unix-like systems.
+        let is_already_exited = cfg!(unix) && e.raw_os_error() == Some(3);
+        if !is_already_exited {
+            eprintln!(
+                "[normalize] Warning: failed to kill worker for shard {}: {}",
+                shard_id, e
+            );
+        }
+    }
+    if let Err(e) = child.wait() {
+        eprintln!(
+            "[normalize] Warning: failed to wait on worker for shard {}: {}",
+            shard_id, e
+        );
+    }
+}
+
+/// Kill and wait on all active child processes (work-stealing pool variant).
+///
+/// Called on error paths to prevent orphaned subprocesses. Errors during
+/// cleanup are logged but not propagated — the caller already has an error.
+fn cleanup_active_workers(active: &mut Vec<(std::process::Child, usize, PathBuf, usize)>) {
+    for (child, shard_id, _, _) in active.iter_mut() {
+        kill_and_wait(child, *shard_id);
+    }
+    active.clear();
+}
+
+/// Kill and wait on all spawned child processes (simple parallel variant).
+///
+/// Called on error paths to prevent orphaned subprocesses.
+fn cleanup_children(children: &mut Vec<(usize, std::process::Child)>) {
+    for (shard_id, child) in children.iter_mut() {
+        kill_and_wait(child, *shard_id);
+    }
+    children.clear();
+}
+
+/// Spawn a single mutalyzer normalize subprocess for a shard.
+fn spawn_mutalyzer_worker(
+    input_path: &Path,
+    output_path: &Path,
+    settings_path: &Path,
+    allow_network: bool,
+) -> Result<std::process::Child, FerroError> {
+    let mut cmd = std::process::Command::new("python3");
+    cmd.args(["-c", MUTALYZER_NORMALIZE_SCRIPT]);
+    cmd.arg(input_path.display().to_string());
+    cmd.arg(output_path.display().to_string());
+    cmd.arg(settings_path.display().to_string());
+    cmd.arg(if allow_network { "true" } else { "false" });
+
+    cmd.spawn().map_err(|e| FerroError::Io {
+        msg: format!("Failed to spawn Python: {}", e),
+    })
 }
 
 /// Run biocommons/hgvs normalization in parallel using sharded subprocesses.
@@ -1950,25 +2063,43 @@ fn run_biocommons_normalize_parallel(
         // Pass UTA database URL as 3rd argument (empty string if not provided)
         cmd.arg(uta_db_url.unwrap_or(""));
 
-        let child = cmd.spawn().map_err(|e| FerroError::Io {
-            msg: format!("Failed to spawn Python: {}", e),
-        })?;
-        children.push((i, child));
+        match cmd.spawn() {
+            Ok(child) => children.push((i, child)),
+            Err(e) => {
+                cleanup_children(&mut children);
+                return Err(FerroError::Io {
+                    msg: format!("Failed to spawn Python: {}", e),
+                });
+            }
+        }
     }
 
     // Wait for all processes to complete
-    for (_i, mut child) in children {
-        let status = child.wait().map_err(|e| FerroError::Io {
-            msg: format!("Failed to wait for Python: {}", e),
-        })?;
-        if !status.success() {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "biocommons/hgvs normalizer failed with exit code: {:?}",
-                    status.code()
-                ),
-            });
+    let mut wait_error = None;
+    for (shard_id, child) in children.iter_mut() {
+        if wait_error.is_some() {
+            kill_and_wait(child, *shard_id);
+            continue;
         }
+        match child.wait() {
+            Ok(status) if !status.success() => {
+                wait_error = Some(FerroError::Io {
+                    msg: format!(
+                        "biocommons/hgvs normalizer failed with exit code: {:?}",
+                        status.code()
+                    ),
+                });
+            }
+            Err(e) => {
+                wait_error = Some(FerroError::Io {
+                    msg: format!("Failed to wait for Python: {}", e),
+                });
+            }
+            _ => {}
+        }
+    }
+    if let Some(err) = wait_error {
+        return Err(err);
     }
 
     let elapsed = start.elapsed();
