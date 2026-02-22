@@ -211,7 +211,7 @@ def extract_key_info(validation: dict[str, Any]) -> dict[str, Any]:
         return info
 
     # Look for the primary result
-    for key, value in validation.items():
+    for _key, value in validation.items():
         if isinstance(value, dict):
             if "validation_warnings" in value:
                 info["warnings"].extend(value.get("validation_warnings", []))
@@ -255,7 +255,10 @@ def generate_fixture(results: list[dict[str, Any]], output_path: Path) -> None:
         if r["validation"] and "error" not in r["validation"]:
             entry["summary"] = extract_key_info(r["validation"])
         else:
-            entry["summary"] = {"valid": False, "errors": [r["validation"].get("error", "Unknown error")]}
+            entry["summary"] = {
+                "valid": False,
+                "errors": [r["validation"].get("error", "Unknown error")],
+            }
 
         processed.append(entry)
 

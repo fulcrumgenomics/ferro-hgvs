@@ -268,7 +268,7 @@ def print_overhead_analysis(ferro_py: list[BenchmarkResult]) -> None:
     min_time_ns = min(r.time_ns for r in ferro_py)
     max_time_ns = max(r.time_ns for r in ferro_py)
 
-    print(f"\nParsing statistics (ferro-hgvs Python API):")
+    print("\nParsing statistics (ferro-hgvs Python API):")
     print(f"  Average: {avg_time_ns / 1000:.2f} us ({avg_time_ns:.0f} ns)")
     print(f"  Min:     {min_time_ns / 1000:.2f} us ({min_time_ns:.0f} ns)")
     print(f"  Max:     {max_time_ns / 1000:.2f} us ({max_time_ns:.0f} ns)")

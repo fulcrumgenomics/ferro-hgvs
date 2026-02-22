@@ -59,7 +59,7 @@ Results in this guide were generated with:
 | **Smoke** | 100 | All 4 | ~10 sec |
 | **Small** | 1,000 | All 4 | ~1-2 min |
 | **Medium** | 10,000 | All 4 | ~10-20 min |
-| **Full ClinVar** | ~48M | ferro + mutalyzer + hgvs-rs | ~2-4 hours |
+| **Full ClinVar** | ~57.5M | ferro + mutalyzer + hgvs-rs | ~2-4 hours |
 
 > **Note**: biocommons/hgvs doesn't scale to full ClinVar due to database query overhead (~27 days estimated).
 
@@ -246,7 +246,7 @@ curl -o data/clinvar/hgvs4variation.txt.gz \
 # Check size (~500MB compressed)
 ls -lh data/clinvar/hgvs4variation.txt.gz
 
-# Extract all patterns (~48M)
+# Extract all patterns (~57.5M)
 ferro-benchmark extract clinvar \
   -i data/clinvar/hgvs4variation.txt.gz \
   -o data/clinvar/clinvar_patterns.txt
@@ -1041,7 +1041,7 @@ ferro-benchmark compare results normalize \
 
 ## Parse Comparison: Full ClinVar
 
-> **Important**: biocommons is excluded from full ClinVar comparisons due to speed limitations (~27 days estimated for 48M patterns).
+> **Important**: biocommons is excluded from full ClinVar comparisons due to speed limitations (~27 days estimated for 57.5M patterns).
 
 ```bash
 INPUT=data/clinvar/clinvar_patterns.txt
@@ -1068,12 +1068,16 @@ ferro-benchmark compare results parse \
 
 ### Expected Full ClinVar Parse Metrics
 
-| Tool | ~48M patterns | Patterns/sec |
-|------|---------------|--------------|
+| Tool | ~57.5M patterns | Patterns/sec |
+|------|-----------------|--------------|
 | ferro | ~12 sec | ~4,000,000 |
 | mutalyzer | ~40 min | ~20,000 |
 | hgvs-rs | ~4 min | ~200,000 |
 | biocommons | ~27 days | ~20 (excluded) |
+
+ferro parses 57,523,009 of 57,524,053 patterns successfully (99.998%).
+The 1,044 parse failures are malformed syntax not conforming to any HGVS grammar
+(e.g., multi-range uncertain positions, multi-repeat notation, non-standard suffixes).
 
 ---
 
@@ -1109,12 +1113,34 @@ ferro-benchmark compare results normalize \
 
 ### Expected Full ClinVar Normalize Metrics
 
-| Tool | ~48M patterns | Time | Patterns/sec |
-|------|---------------|------|--------------|
+| Tool | ~57.5M patterns | Time | Patterns/sec |
+|------|-----------------|------|--------------|
 | ferro | ~12 sec | ~4,000,000 |
 | mutalyzer | ~40 min | ~20,000 |
 | hgvs-rs | ~4 hours | ~200 |
 | biocommons | ~27 days | ~20 (excluded) |
+
+### ferro Full ClinVar Normalize Pass Rate
+
+On 57,524,053 ClinVar patterns with a fully prepared ferro reference:
+
+| Metric | Count | Rate |
+|--------|-------|------|
+| **Total patterns** | 57,524,053 | — |
+| **Parse failures** | 1,044 | 0.002% |
+| **Normalize success** | 57,522,070 | **99.997%** |
+| **Normalize failures** | 1,983 | 0.003% |
+
+The 1,983 normalize failures break down as:
+
+| Category | Count | Description |
+|----------|-------|-------------|
+| Parse errors | 1,044 | Malformed HGVS syntax (inherently unparseable) |
+| Intronic conversion | 909 | CDS-to-tx position doesn't match intron boundary (cdot coordinate discrepancy) |
+| Boundary-spanning n. | 30 | n. variant spans exon-intron boundary (not yet supported) |
+
+> **Note**: Excluding the 1,044 patterns that cannot be parsed by any tool,
+> ferro normalizes 99.998% of all parseable patterns (57,522,070 / 57,523,009).
 
 ---
 
