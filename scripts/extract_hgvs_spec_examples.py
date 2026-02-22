@@ -81,14 +81,13 @@ def extract_hgvs_from_text(text: str) -> list[str]:
     # Match common HGVS patterns
     # NC/NG/NM/NR/NP accessions with variants
     accession_pattern = re.compile(
-        r'((?:NC|NG|NM|NR|NP|LRG)_[\d\.]+(?:\([^)]+\))?:[cgmnpr]\.[^\s<>"\']+)',
-        re.IGNORECASE
+        r'((?:NC|NG|NM|NR|NP|LRG)_[\d\.]+(?:\([^)]+\))?:[cgmnpr]\.[^\s<>"\']+)', re.IGNORECASE
     )
 
     for match in accession_pattern.finditer(text):
         hgvs = match.group(1)
         # Clean up trailing punctuation
-        hgvs = re.sub(r'[,;.)\]]+$', '', hgvs)
+        hgvs = re.sub(r"[,;.)\]]+$", "", hgvs)
         if len(hgvs) > 10:  # Skip very short matches
             patterns.append(hgvs)
 
@@ -128,7 +127,7 @@ def extract_examples_from_page(html: str, variant_type: str, level: str) -> list
         List of example dictionaries
     """
     examples = []
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(html, "html.parser")
 
     # Extract text content
     text = soup.get_text()
@@ -138,25 +137,27 @@ def extract_examples_from_page(html: str, variant_type: str, level: str) -> list
 
     for hgvs in hgvs_patterns:
         # Determine coordinate system
-        coord_match = re.search(r':([cgmnpr])\.', hgvs)
+        coord_match = re.search(r":([cgmnpr])\.", hgvs)
         coord_system = coord_match.group(1) if coord_match else None
 
         coord_name = {
-            'c': 'coding',
-            'g': 'genomic',
-            'm': 'mitochondrial',
-            'n': 'non_coding',
-            'p': 'protein',
-            'r': 'rna',
-        }.get(coord_system, 'unknown')
+            "c": "coding",
+            "g": "genomic",
+            "m": "mitochondrial",
+            "n": "non_coding",
+            "p": "protein",
+            "r": "rna",
+        }.get(coord_system, "unknown")
 
-        examples.append({
-            "hgvs": hgvs,
-            "variant_type": variant_type,
-            "level": level,
-            "coordinate_system": coord_name,
-            "source": "hgvs-nomenclature.org",
-        })
+        examples.append(
+            {
+                "hgvs": hgvs,
+                "variant_type": variant_type,
+                "level": level,
+                "coordinate_system": coord_name,
+                "source": "hgvs-nomenclature.org",
+            }
+        )
 
     return examples
 
@@ -230,9 +231,7 @@ def generate_fixture(examples: list[dict[str, Any]], output_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Extract HGVS examples from hgvs-nomenclature.org"
-    )
+    parser = argparse.ArgumentParser(description="Extract HGVS examples from hgvs-nomenclature.org")
     parser.add_argument(
         "--output",
         type=Path,

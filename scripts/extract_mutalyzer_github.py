@@ -40,29 +40,26 @@ def extract_parametrize_values(source: str, decorator_name: str = "parametrize")
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef):
             for decorator in node.decorator_list:
-                if isinstance(decorator, ast.Call):
-                    func = decorator.func
-                    if isinstance(func, ast.Attribute):
-                        if (
-                            hasattr(func, "attr")
-                            and func.attr == decorator_name
-                            and hasattr(func, "value")
-                            and isinstance(func.value, ast.Attribute)
-                            and hasattr(func.value, "attr")
-                            and func.value.attr == "mark"
-                        ):
-                            # Found @pytest.mark.parametrize
-                            if len(decorator.args) >= 2:
-                                second_arg = decorator.args[1]
-                                if isinstance(second_arg, ast.List):
-                                    for elt in second_arg.elts:
-                                        if isinstance(elt, ast.Constant):
-                                            values.append(elt.value)
-                                        elif isinstance(elt, ast.Tuple):
-                                            # For tuples like ("GRCh38", "NM_...")
-                                            for sub in elt.elts:
-                                                if isinstance(sub, ast.Constant):
-                                                    values.append(sub.value)
+                if not isinstance(decorator, ast.Call):
+                    continue
+                func = decorator.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == decorator_name
+                    and isinstance(func.value, ast.Attribute)
+                    and func.value.attr == "mark"
+                    and len(decorator.args) >= 2
+                    and isinstance(decorator.args[1], ast.List)
+                ):
+                    # Found @pytest.mark.parametrize
+                    for elt in decorator.args[1].elts:
+                        if isinstance(elt, ast.Constant):
+                            values.append(elt.value)
+                        elif isinstance(elt, ast.Tuple):
+                            # For tuples like ("GRCh38", "NM_...")
+                            for sub in elt.elts:
+                                if isinstance(sub, ast.Constant):
+                                    values.append(sub.value)
 
     return values
 
@@ -80,9 +77,7 @@ def extract_dict_keys(source: str) -> list[str]:
 
     # Find dictionary assignments with HGVS-like keys
     # Look for patterns like "NM_...:c...." or "NP_...:p...."
-    hgvs_pattern = re.compile(
-        r'"([A-Z]{2}_\d+\.\d+(?:\([^)]+\))?:[cgnpmr]\.[^"]+)"', re.MULTILINE
-    )
+    hgvs_pattern = re.compile(r'"([A-Z]{2}_\d+\.\d+(?:\([^)]+\))?:[cgnpmr]\.[^"]+)"', re.MULTILINE)
     for match in hgvs_pattern.finditer(source):
         keys.append(match.group(1))
 
@@ -251,9 +246,7 @@ def extract_from_repository(repo_path: Path) -> dict[str, list[dict[str, Any]]]:
     return results
 
 
-def generate_fixture(
-    results: dict[str, list[dict[str, Any]]], output_path: Path
-) -> None:
+def generate_fixture(results: dict[str, list[dict[str, Any]]], output_path: Path) -> None:
     """Generate test fixture JSON file.
 
     Args:
@@ -298,8 +291,7 @@ def generate_fixture(
         },
         "patterns": all_patterns,
         "by_file": {
-            file_name: [p["hgvs"] for p in patterns]
-            for file_name, patterns in results.items()
+            file_name: [p["hgvs"] for p in patterns] for file_name, patterns in results.items()
         },
     }
 
@@ -339,7 +331,9 @@ def main() -> None:
     if not args.repo_path.exists():
         print(f"Repository not found: {args.repo_path}")
         print("Please clone the repository first:")
-        print("  git clone https://github.com/mutalyzer/mutalyzer-hgvs-parser external-repos/mutalyzer-hgvs-parser")
+        print(
+            "  git clone https://github.com/mutalyzer/mutalyzer-hgvs-parser external-repos/mutalyzer-hgvs-parser"
+        )
         return
 
     print(f"Extracting patterns from: {args.repo_path}")

@@ -301,18 +301,14 @@ def generate_fixture(
         "hgvs_conversions": {
             "total": len(hgvs_results),
             "successful": sum(
-                1
-                for r in hgvs_results
-                if r.get("spdi_result") and "error" not in r["spdi_result"]
+                1 for r in hgvs_results if r.get("spdi_result") and "error" not in r["spdi_result"]
             ),
             "variants": hgvs_results,
         },
         "rsid_lookups": {
             "total": len(rsid_results),
             "successful": sum(
-                1
-                for r in rsid_results
-                if r.get("info") and "error" not in r["info"]
+                1 for r in rsid_results if r.get("info") and "error" not in r["info"]
             ),
             "variants": rsid_results,
         },
@@ -323,8 +319,12 @@ def generate_fixture(
         json.dump(fixture, f, indent=2)
 
     print(f"\nGenerated fixture: {output_path}")
-    print(f"HGVS conversions: {fixture['hgvs_conversions']['successful']}/{fixture['hgvs_conversions']['total']}")
-    print(f"rsID lookups: {fixture['rsid_lookups']['successful']}/{fixture['rsid_lookups']['total']}")
+    print(
+        f"HGVS conversions: {fixture['hgvs_conversions']['successful']}/{fixture['hgvs_conversions']['total']}"
+    )
+    print(
+        f"rsID lookups: {fixture['rsid_lookups']['successful']}/{fixture['rsid_lookups']['total']}"
+    )
 
 
 def main() -> None:
@@ -358,7 +358,7 @@ def main() -> None:
         hgvs_variants = hgvs_variants[: args.limit]
         rsids = rsids[: args.limit]
 
-    print(f"NCBI Variation Services API")
+    print("NCBI Variation Services API")
     print(f"Rate limit: {RATE_LIMIT_DELAY}s between requests\n")
 
     print(f"=== HGVS to SPDI Conversions ({len(hgvs_variants)} variants) ===")
