@@ -1113,8 +1113,8 @@ ferro-benchmark compare results normalize \
 
 ### Expected Full ClinVar Normalize Metrics
 
-| Tool | ~57.5M patterns | Time | Patterns/sec |
-|------|-----------------|------|--------------|
+| Tool | Time | Patterns/sec |
+|------|------|--------------|
 | ferro | ~12 sec | ~4,000,000 |
 | mutalyzer | ~40 min | ~20,000 |
 | hgvs-rs | ~4 hours | ~200 |

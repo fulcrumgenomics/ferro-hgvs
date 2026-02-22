@@ -45,11 +45,8 @@ def extract_parametrize_values(source: str, decorator_name: str = "parametrize")
                 func = decorator.func
                 if (
                     isinstance(func, ast.Attribute)
-                    and hasattr(func, "attr")
                     and func.attr == decorator_name
-                    and hasattr(func, "value")
                     and isinstance(func.value, ast.Attribute)
-                    and hasattr(func.value, "attr")
                     and func.value.attr == "mark"
                     and len(decorator.args) >= 2
                     and isinstance(decorator.args[1], ast.List)
