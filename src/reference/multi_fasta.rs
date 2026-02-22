@@ -582,20 +582,7 @@ impl MultiFastaProvider {
     /// Get CDS info from supplemental metadata for old/superseded transcripts.
     /// Creates a synthetic single exon spanning the entire transcript since
     /// mRNA transcripts are already spliced.
-    #[allow(clippy::type_complexity)]
-    fn get_supplemental_cds_info(
-        &self,
-        accession: &str,
-    ) -> (
-        Option<String>,
-        crate::reference::transcript::Strand,
-        Option<u64>,
-        Option<u64>,
-        Option<String>,
-        Vec<crate::reference::transcript::Exon>,
-        Option<u64>,
-        Option<u64>,
-    ) {
+    fn get_supplemental_cds_info(&self, accession: &str) -> TranscriptMetadata {
         use crate::reference::transcript::{Exon, Strand};
 
         if let Some(info) = self.supplemental_cds.transcripts.get(accession) {
@@ -613,20 +600,38 @@ impl MultiFastaProvider {
                 Vec::new()
             };
 
-            (
-                info.gene_symbol.clone(),
-                Strand::Plus,   // Assume plus strand for supplemental transcripts
-                info.cds_start, // CDS coordinates are already 1-based from GenBank
-                info.cds_end,
-                None,  // No chromosome info
-                exons, // Synthetic single exon
-                None,
-                None,
-            )
+            TranscriptMetadata {
+                gene_symbol: info.gene_symbol.clone(),
+                strand: Strand::Plus, // Assume plus strand for supplemental transcripts
+                cds_start: info.cds_start, // CDS coordinates are already 1-based from GenBank
+                cds_end: info.cds_end,
+                chromosome: None,
+                exons,
+                genomic_start: None,
+                genomic_end: None,
+                exon_cigars: Vec::new(),
+            }
         } else {
-            (None, Strand::Plus, None, None, None, Vec::new(), None, None)
+            TranscriptMetadata::default()
         }
     }
+}
+
+/// Metadata about a transcript gathered from cdot and/or supplemental sources.
+///
+/// Groups the fields needed to construct a [`Transcript`] from the reference provider,
+/// replacing what was previously a 9-element tuple.
+#[derive(Default)]
+struct TranscriptMetadata {
+    gene_symbol: Option<String>,
+    strand: crate::reference::transcript::Strand,
+    cds_start: Option<u64>,
+    cds_end: Option<u64>,
+    chromosome: Option<String>,
+    exons: Vec<crate::reference::transcript::Exon>,
+    genomic_start: Option<u64>,
+    genomic_end: Option<u64>,
+    exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
 }
 
 impl ReferenceProvider for MultiFastaProvider {
@@ -640,16 +645,7 @@ impl ReferenceProvider for MultiFastaProvider {
                 let sequence = self.get_sequence_from_index(entry, 0, entry.length)?;
 
                 // Try to get metadata from cdot
-                let (
-                    gene_symbol,
-                    strand,
-                    cds_start,
-                    cds_end,
-                    chromosome,
-                    exons,
-                    genomic_start,
-                    genomic_end,
-                ) = if let Some(ref cdot) = self.cdot_mapper {
+                let meta = if let Some(ref cdot) = self.cdot_mapper {
                     if let Some(tx) = cdot.get_transcript(&resolved) {
                         // Convert cdot exons to transcript exons
                         // cdot internal format: [genome_start, genome_end, tx_start, tx_end]
@@ -693,17 +689,18 @@ impl ReferenceProvider for MultiFastaProvider {
                                 (None, None)
                             };
 
-                            (
-                                tx.gene_name.clone(),
-                                tx.strand,
+                            TranscriptMetadata {
+                                gene_symbol: tx.gene_name.clone(),
+                                strand: tx.strand,
                                 // CDS coordinates: cdot 0-based → transcript 1-based
-                                tx.cds_start.map(|s| s + 1), // 0-based → 1-based
-                                tx.cds_end, // 0-based exclusive = 1-based inclusive (no conversion)
-                                Some(tx.contig.clone()),
+                                cds_start: tx.cds_start.map(|s| s + 1), // 0-based → 1-based
+                                cds_end: tx.cds_end, // 0-based exclusive = 1-based inclusive
+                                chromosome: Some(tx.contig.clone()),
                                 exons,
                                 genomic_start,
                                 genomic_end,
-                            )
+                                exon_cigars: tx.exon_cigars.clone(),
+                            }
                         }
                     } else {
                         // Check supplemental CDS for old/superseded transcripts
@@ -728,19 +725,20 @@ impl ReferenceProvider for MultiFastaProvider {
 
                 return Ok(Transcript {
                     id: resolved,
-                    gene_symbol,
-                    strand,
+                    gene_symbol: meta.gene_symbol,
+                    strand: meta.strand,
                     sequence,
-                    cds_start,
-                    cds_end,
-                    exons,
-                    chromosome,
-                    genomic_start,
-                    genomic_end,
+                    cds_start: meta.cds_start,
+                    cds_end: meta.cds_end,
+                    exons: meta.exons,
+                    chromosome: meta.chromosome,
+                    genomic_start: meta.genomic_start,
+                    genomic_end: meta.genomic_end,
                     genome_build: GenomeBuild::GRCh38,
                     mane_status: ManeStatus::default(),
                     refseq_match: None,
                     ensembl_match: None,
+                    exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });
             }

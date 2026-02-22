@@ -2732,6 +2732,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
 
@@ -2952,6 +2953,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
 
@@ -3055,6 +3057,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
 
@@ -3119,6 +3122,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
 
@@ -3261,6 +3265,7 @@ mod tests {
             mane_status: Default::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: std::sync::OnceLock::new(),
         });
         let normalizer = Normalizer::new(provider);
@@ -3308,6 +3313,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: std::sync::OnceLock::new(),
         });
 

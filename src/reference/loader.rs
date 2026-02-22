@@ -707,6 +707,7 @@ impl TranscriptBuilder {
             mane_status: self.mane_status,
             refseq_match: self.refseq_match,
             ensembl_match: self.ensembl_match,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         })
     }
@@ -767,6 +768,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -795,6 +797,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -813,6 +816,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -842,6 +846,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -879,6 +884,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -897,6 +903,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -934,6 +941,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -952,6 +960,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1047,6 +1056,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1088,6 +1098,7 @@ mod tests {
             mane_status: ManeStatus::PlusClinical,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1106,6 +1117,7 @@ mod tests {
             mane_status: ManeStatus::PlusClinical,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1143,6 +1155,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1162,6 +1175,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1193,6 +1207,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1211,6 +1226,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1423,6 +1439,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1759,6 +1776,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1777,6 +1795,7 @@ mod tests {
             mane_status: ManeStatus::PlusClinical,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1807,6 +1826,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
 
@@ -1832,6 +1852,7 @@ mod tests {
             mane_status: ManeStatus::PlusClinical,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
         db.add(tx_plus);
@@ -1856,6 +1877,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
         db.add(tx_select);

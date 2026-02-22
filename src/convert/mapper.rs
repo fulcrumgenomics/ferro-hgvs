@@ -104,8 +104,24 @@ impl<'a> CoordinateMapper<'a> {
         // Most real transcripts from cdot are contiguous
         let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
         if !has_gaps {
-            // No gaps - use simple calculation
-            return Ok(start_tx + offset);
+            // No gaps - use simple calculation, adjusted for CIGAR insertions.
+            // CDS numbering follows the genome alignment (skips CIGAR insertion bases),
+            // so we need to add the net CIGAR insertion offset between start and target.
+            let raw_tx = start_tx + offset;
+            if !self.transcript.exon_cigars.is_empty() && offset >= 0 {
+                // Only apply CIGAR adjustment when offset is non-negative (within
+                // or after CDS). Negative offsets point into the 5' UTR before the
+                // CDS start, where CIGAR insertions within exons don't apply.
+                if let (Ok(start_u64), Ok(raw_u64)) =
+                    (u64::try_from(start_tx), u64::try_from(raw_tx))
+                {
+                    let adj_start = self.transcript.cigar_insertion_adjustment(start_u64);
+                    let adj_target = self.transcript.cigar_insertion_adjustment(raw_u64);
+                    let net_adj = adj_target as i64 - adj_start as i64;
+                    return Ok(raw_tx + net_adj);
+                }
+            }
+            return Ok(raw_tx);
         }
 
         // Exons have gaps - use exon-aware mapping
@@ -243,13 +259,31 @@ impl<'a> CoordinateMapper<'a> {
         // Most real transcripts from cdot are contiguous
         let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
         if !has_gaps {
-            // No gaps - use simple calculation
-            // For 5' UTR (target < start), formula is target - start
-            // For CDS (target >= start), formula is target - start + 1
-            if target_tx >= start_tx {
-                return Ok(target_tx - start_tx + 1);
+            // No gaps - use simple calculation, adjusted for CIGAR insertions.
+            // This is the inverse of cds_to_tx_exon_aware: subtract the net
+            // CIGAR insertion offset to convert transcript positions back to
+            // CDS positions (which follow genome alignment).
+            let (adj_target, adj_start) = if !self.transcript.exon_cigars.is_empty() {
+                if let (Ok(target_u64), Ok(start_u64)) =
+                    (u64::try_from(target_tx), u64::try_from(start_tx))
+                {
+                    (
+                        self.transcript.cigar_insertion_adjustment(target_u64),
+                        self.transcript.cigar_insertion_adjustment(start_u64),
+                    )
+                } else {
+                    (0, 0)
+                }
             } else {
-                return Ok(target_tx - start_tx);
+                (0, 0)
+            };
+            let net_adj = adj_target as i64 - adj_start as i64;
+            // For CDS (target >= start), formula is target - start + 1 - net_adj
+            // For 5' UTR (target < start), formula is target - start - net_adj
+            if target_tx >= start_tx {
+                return Ok(target_tx - start_tx + 1 - net_adj);
+            } else {
+                return Ok(target_tx - start_tx - net_adj);
             }
         }
 
@@ -688,6 +722,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -810,6 +845,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -838,6 +874,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -958,6 +995,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -1198,6 +1236,7 @@ mod intronic_debug_tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
