@@ -3,6 +3,8 @@
 [![Crates.io](https://img.shields.io/crates/v/ferro-hgvs.svg)](https://crates.io/crates/ferro-hgvs)
 [![Documentation](https://docs.rs/ferro-hgvs/badge.svg)](https://docs.rs/ferro-hgvs)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/ferro-hgvs/README.html)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18703104.svg)](https://doi.org/10.5281/zenodo.18703104)
 
 # ferro-hgvs
 
