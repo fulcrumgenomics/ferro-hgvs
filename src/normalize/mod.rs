@@ -34,6 +34,7 @@ use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::Interval;
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
+use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, LocEdit, TxVariant};
 use crate::hgvs::HgvsVariant as HV;
 use crate::reference::ReferenceProvider;
@@ -41,6 +42,22 @@ use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
 use rules::{canonicalize_edit, needs_normalization, should_canonicalize};
 use shuffle::shuffle;
+
+/// Check if a CDS position has an unknown (?) offset sentinel value
+fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
+    matches!(
+        pos.offset,
+        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
+    )
+}
+
+/// Check if a TxPos has an unknown (?) offset sentinel value
+fn has_unknown_offset_tx(pos: &TxPos) -> bool {
+    matches!(
+        pos.offset,
+        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
+    )
+}
 
 /// Warning generated during normalization
 #[derive(Debug, Clone)]
@@ -279,8 +296,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::Cds(v) => {
                 let start_pos = v.loc_edit.location.start.inner()?;
                 let end_pos = v.loc_edit.location.end.inner()?;
-                // Only return positions for exonic variants
-                if start_pos.is_intronic() || end_pos.is_intronic() {
+                // Only return positions for exonic, non-UTR variants
+                if start_pos.is_intronic()
+                    || end_pos.is_intronic()
+                    || start_pos.base < 1
+                    || end_pos.base < 1
+                {
                     None
                 } else {
                     Some((start_pos.base as u64, end_pos.base as u64))
@@ -412,6 +433,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
 
+        // Can't normalize variants with unknown (?) offsets - return unchanged
+        if has_unknown_offset_cds(start_pos) || has_unknown_offset_cds(end_pos) {
+            return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![]));
+        }
+
         // Try to get transcript first - we need it for intronic normalization too
         let accession = variant.accession.full();
         let transcript = match self.provider.get_transcript(&accession) {
@@ -437,21 +463,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Convert CDS to transcript coordinates for normalization
-        let cds_start = transcript
-            .cds_start
-            .ok_or_else(|| FerroError::ConversionError {
-                msg: "Transcript has no CDS".to_string(),
-            })?;
+        let cds_start = match transcript.cds_start {
+            Some(s) => s,
+            None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+        };
 
-        // Calculate transcript positions
-        let tx_start = self.cds_to_tx_pos(start_pos, cds_start, transcript.cds_end)?;
-        let tx_end = self.cds_to_tx_pos(end_pos, cds_start, transcript.cds_end)?;
+        // Calculate transcript positions - return unchanged if position is out of range
+        let tx_start = match self.cds_to_tx_pos(start_pos, cds_start, transcript.cds_end) {
+            Ok(v) => v,
+            Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+        };
+        let tx_end = match self.cds_to_tx_pos(end_pos, cds_start, transcript.cds_end) {
+            Ok(v) => v,
+            Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+        };
 
         // Get boundaries (stay within exon unless configured otherwise)
         let boundaries = if self.config.cross_boundaries {
             Boundaries::new(1, transcript.sequence.len() as u64)
         } else {
-            boundary::get_cds_boundaries(&transcript, tx_start, &self.config)?
+            match boundary::get_cds_boundaries(&transcript, tx_start, &self.config) {
+                Ok(b) => b,
+                Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+            }
         };
 
         // Perform normalization on transcript sequence
@@ -498,19 +532,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
 
-        if start_pos.is_intronic() || end_pos.is_intronic() {
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-            });
+        // Can't normalize variants with unknown (?) offsets - return unchanged
+        if has_unknown_offset_tx(start_pos) || has_unknown_offset_tx(end_pos) {
+            return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![]));
         }
 
-        // Try to get transcript
+        // Try to get transcript first - we need it for intronic normalization too
         let accession = variant.accession.full();
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
             Err(_) => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
+
+        if start_pos.is_intronic() || end_pos.is_intronic() {
+            // Route intronic tx variants to the intronic normalization path
+            if start_pos.is_intronic() && end_pos.is_intronic() {
+                return self.normalize_intronic_tx(variant, &transcript, start_pos, end_pos, edit);
+            }
+            // Variant spans exon-intron boundary - not yet supported for n. coords
+            return Err(FerroError::IntronicVariant {
+                variant: format!("{}", variant),
+            });
+        }
 
         // Only normalize positive positions (within transcript)
         // Negative positions are outside the transcript sequence
@@ -926,7 +970,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Find the intron boundaries
         // Use exon-aware CDS-to-tx mapping to account for cdot's gap positions
         let tx_pos = mapper.cds_to_tx(start_pos)?;
-        let tx_start = tx_pos.base as u64;
+        let tx_start = u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
+            msg: format!(
+                "Negative transcript position {} during intronic normalization",
+                tx_pos.base
+            ),
+        })?;
 
         let intron = transcript
             .find_intron_at_tx_boundary(tx_start, start_pos.offset.unwrap_or(0))
@@ -969,6 +1018,116 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         Ok((HV::Cds(new_variant), warnings))
+    }
+
+    /// Normalize an intronic transcript (n.) variant
+    ///
+    /// This mirrors `normalize_intronic_cds()` but works with TxPos instead of CdsPos.
+    /// Converts to genomic coordinates, normalizes in genomic space, and converts back.
+    fn normalize_intronic_tx(
+        &self,
+        variant: &TxVariant,
+        transcript: &crate::reference::transcript::Transcript,
+        start_pos: &TxPos,
+        end_pos: &TxPos,
+        edit: &NaEdit,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        use crate::convert::CoordinateMapper;
+
+        // Check if we have genomic data available
+        if !self.provider.has_genomic_data() {
+            return Err(FerroError::IntronicVariant {
+                variant: format!("{}", variant),
+            });
+        }
+
+        // Get the chromosome for this transcript
+        let chromosome =
+            transcript
+                .chromosome
+                .as_ref()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Transcript has no chromosome mapping for intronic normalization"
+                        .to_string(),
+                })?;
+
+        // Create coordinate mapper
+        let mapper = CoordinateMapper::new(transcript);
+
+        // Convert tx intronic positions to genomic
+        let g_start = mapper.tx_to_genomic_with_intron(start_pos)?;
+        let g_end = mapper.tx_to_genomic_with_intron(end_pos)?;
+
+        // Ensure start <= end (may be reversed on minus strand)
+        let (g_start, g_end) = if g_start <= g_end {
+            (g_start, g_end)
+        } else {
+            (g_end, g_start)
+        };
+
+        // Get a window of genomic sequence around the variant
+        let window = self.config.window_size;
+        let seq_start = g_start.saturating_sub(window);
+        let seq_end = g_end.saturating_add(window);
+
+        // Fetch genomic sequence
+        let genomic_seq = self
+            .provider
+            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+
+        // Calculate the variant position relative to the fetched sequence
+        let rel_start = (g_start - seq_start) + 1; // 1-based
+        let rel_end = (g_end - seq_start) + 1;
+
+        // Find the intron boundaries for normalization limits
+        let tx_start = u64::try_from(start_pos.base).map_err(|_| FerroError::ConversionError {
+            msg: format!(
+                "Negative transcript position {} during intronic normalization",
+                start_pos.base
+            ),
+        })?;
+
+        let intron = transcript
+            .find_intron_at_tx_boundary(tx_start, start_pos.offset.unwrap_or(0))
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: "Could not find intron for normalization".to_string(),
+            })?;
+
+        // Get intron boundaries in genomic coordinates
+        let (intron_g_start, intron_g_end) = match (intron.genomic_start, intron.genomic_end) {
+            (Some(s), Some(e)) => (s, e),
+            _ => {
+                return Err(FerroError::ConversionError {
+                    msg: "Intron has no genomic coordinates".to_string(),
+                })
+            }
+        };
+
+        // Calculate relative intron boundaries
+        let intron_rel_start = intron_g_start.saturating_sub(seq_start) + 1;
+        let intron_rel_end = intron_g_end.saturating_sub(seq_start) + 1;
+        let boundaries = Boundaries::new(intron_rel_start, intron_rel_end);
+
+        // Perform normalization in genomic space
+        let seq_bytes = genomic_seq.as_bytes();
+        let (new_rel_start, new_rel_end, new_edit, warnings) =
+            self.normalize_na_edit(seq_bytes, edit, rel_start, rel_end, &boundaries)?;
+
+        // Convert the normalized genomic position back to absolute genomic
+        let new_g_start = seq_start + new_rel_start - 1;
+        let new_g_end = seq_start + new_rel_end - 1;
+
+        // Convert back to transcript intronic notation
+        let new_start = mapper.genomic_to_tx_with_intron(new_g_start)?;
+        let new_end = mapper.genomic_to_tx_with_intron(new_g_end)?;
+
+        let new_variant = TxVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+        };
+
+        Ok((HV::Tx(new_variant), warnings))
     }
 
     /// Normalize a CDS variant that spans an exon-intron boundary
@@ -1105,18 +1264,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Get exon boundaries in genomic coords
         let tx_pos = mapper.cds_to_tx(exonic_pos)?;
-        let exon =
-            transcript
-                .exon_at(tx_pos.base as u64)
-                .ok_or_else(|| FerroError::ConversionError {
-                    msg: "Could not find exon for boundary normalization".to_string(),
-                })?;
+        let tx_pos_base = u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
+            msg: format!(
+                "Negative transcript position {} during boundary normalization",
+                tx_pos.base
+            ),
+        })?;
+        let exon = transcript
+            .exon_at(tx_pos_base)
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: "Could not find exon for boundary normalization".to_string(),
+            })?;
 
         // Get intron boundaries in genomic coords
         let tx_boundary = mapper.cds_to_tx(intronic_pos)?;
+        let tx_boundary_base =
+            u64::try_from(tx_boundary.base).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "Negative transcript position {} during boundary normalization",
+                    tx_boundary.base
+                ),
+            })?;
         let offset = intronic_pos.offset.unwrap_or(0);
         let intron = transcript
-            .find_intron_at_tx_boundary(tx_boundary.base as u64, offset)
+            .find_intron_at_tx_boundary(tx_boundary_base, offset)
             .ok_or_else(|| FerroError::ConversionError {
                 msg: "Could not find intron for boundary normalization".to_string(),
             })?;
@@ -1608,9 +1779,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let end = cds_end.ok_or_else(|| FerroError::ConversionError {
                 msg: "No CDS end".to_string(),
             })?;
-            Ok(end + pos.base as u64)
+            let base = u64::try_from(pos.base).map_err(|_| FerroError::ConversionError {
+                msg: format!("Negative base {} in 3' UTR position", pos.base),
+            })?;
+            Ok(end + base)
         } else if pos.base < 1 {
-            Ok((cds_start as i64 + pos.base - 1) as u64)
+            let tx_pos = cds_start as i64 + pos.base - 1;
+            u64::try_from(tx_pos).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "CDS position c.{} maps before transcript start (cds_start={})",
+                    pos.base, cds_start
+                ),
+            })
         } else {
             Ok(cds_start + pos.base as u64 - 1)
         }
@@ -2952,6 +3132,207 @@ mod tests {
         assert!(
             output.contains("c.10_11delins"),
             "Delins should NOT be shifted (HGVS spec), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_cds_to_tx_pos_utr5_underflow() {
+        // cds_start=5, base=-6 → 5 + (-6) - 1 = -2, should return Err not wrap to u64::MAX
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let pos = CdsPos {
+            base: -6,
+            offset: None,
+            utr3: false,
+        };
+        let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
+        assert!(
+            result.is_err(),
+            "cds_to_tx_pos should return Err for positions before transcript start, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_cds_to_tx_pos_utr5_valid() {
+        // cds_start=5, base=-3 → 5 + (-3) - 1 = 1, valid position
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let pos = CdsPos {
+            base: -3,
+            offset: None,
+            utr3: false,
+        };
+        let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    fn test_variant_positions_negative_cds_base() {
+        // CDS variant with negative base should return None from variant_positions
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_001234.1:c.-3A>G").unwrap();
+        let positions = normalizer.extract_position_range(&variant);
+        assert_eq!(
+            positions, None,
+            "variant_positions should return None for 5' UTR CDS positions"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cds_utr5_deep_negative() {
+        // A deeply negative 5' UTR position that would overflow should return an error, not panic
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        // c.-88 with cds_start=5 → 5 + (-88) - 1 = -84, which would wrap to huge u64
+        let variant = parse_hgvs("NM_001234.1:c.-88A>G").unwrap();
+        let result = normalizer.normalize(&variant);
+        // The primary check is that this doesn't panic.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_normalize_unknown_offset_returns_unchanged() {
+        // Variants with ? offsets (sentinel values i64::MAX/MIN) should return unchanged
+        // because we can't normalize with indeterminate boundaries
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        // c.-85-?_834+?del has unknown offsets on both positions
+        let variant = parse_hgvs("NM_000088.3:c.-85-?_834+?del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "Unknown offset should not error, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_normalize_unknown_offset_single_position() {
+        // Even a single unknown offset should cause early return
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10-?del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "Single unknown offset should not error, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_normalize_utr_before_tx_start_returns_unchanged() {
+        // c.-215 with a small UTR should not error - return unchanged
+        // NM_001234.1 has cds_start=5, so c.-215 maps to 5 + (-215) - 1 = -211
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_001234.1:c.-215_-214del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "UTR before transcript start should not error, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_normalize_no_cds_returns_unchanged() {
+        // An NR_ transcript with c. coordinates should not error
+        let mut provider = MockProvider::new();
+        use crate::reference::transcript::{Exon, Transcript};
+        provider.add_transcript(Transcript {
+            id: "NR_001566.1".to_string(),
+            gene_symbol: Some("NCRNA".to_string()),
+            strand: crate::reference::transcript::Strand::Plus,
+            sequence: "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC".to_string(),
+            cds_start: None,
+            cds_end: None,
+            exons: vec![Exon::new(1, 1, 51)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: Default::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            cached_introns: std::sync::OnceLock::new(),
+        });
+        let normalizer = Normalizer::new(provider);
+
+        // c. variant on a non-coding transcript (no CDS)
+        let variant = parse_hgvs("NR_001566.1:c.10del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "No CDS should not error, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_normalize_tx_intronic() {
+        // n. intronic variants should normalize via genomic space
+        // Build a non-coding transcript with genomic coords and intronic positions
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+
+        let mut provider = MockProvider::new();
+
+        // Create transcript: 2 exons with an intron in between
+        // Exon 1: tx 1-100, genomic 1000-1099
+        // Intron: genomic 1100-1199
+        // Exon 2: tx 101-200, genomic 1200-1299
+        // Sequence in the intron around position 1100+: AAAA... (for shifting test)
+        let tx_sequence = "A".repeat(200);
+
+        provider.add_transcript(Transcript {
+            id: "NR_038982.1".to_string(),
+            gene_symbol: Some("NCRNA_TEST".to_string()),
+            strand: Strand::Plus,
+            sequence: tx_sequence,
+            cds_start: None,
+            cds_end: None,
+            exons: vec![
+                Exon::with_genomic(1, 1, 100, 1000, 1099),
+                Exon::with_genomic(2, 101, 200, 1200, 1299),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1299),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            cached_introns: std::sync::OnceLock::new(),
+        });
+
+        // Add genomic sequence for chr1 around positions 1000-1299
+        // Make the intron region (1100-1199) be "AGCT" repeated to test shifting
+        let mut genomic = String::new();
+        for _ in 0..325 {
+            genomic.push_str("AGCT");
+        }
+        provider.add_genomic_sequence("chr1", genomic);
+
+        let normalizer = Normalizer::new(provider);
+
+        // n.100+4del - intronic deletion in a non-coding transcript
+        let variant = parse_hgvs("NR_038982.1:n.100+4del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "n. intronic normalization should succeed, got: {:?}",
+            result.err()
+        );
+        let output = format!("{}", result.unwrap());
+        assert!(
+            output.contains('+') || output.contains('-'),
+            "Normalized intronic n. variant should retain intronic notation, got: {}",
             output
         );
     }

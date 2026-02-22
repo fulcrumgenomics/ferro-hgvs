@@ -643,12 +643,25 @@ impl Transcript {
     /// The intron if found, along with whether this is a 5' or 3' boundary reference
     pub fn find_intron_at_tx_boundary(&self, tx_boundary: u64, offset: i64) -> Option<&Intron> {
         for intron in self.introns() {
-            if offset > 0 && intron.tx_5prime_boundary == tx_boundary {
+            if offset > 0 {
                 // Positive offset: c.N+offset means we're after the 5' boundary (end of upstream exon)
-                return Some(intron);
-            } else if offset < 0 && intron.tx_3prime_boundary == tx_boundary {
+                if intron.tx_5prime_boundary == tx_boundary {
+                    return Some(intron);
+                }
+                // Fallback: CDS-to-tx mapped to the first base of the downstream exon
+                // (e.g., c.729 maps to tx 1054 which is 3' boundary of this intron)
+                if intron.tx_3prime_boundary == tx_boundary {
+                    return Some(intron);
+                }
+            } else if offset < 0 {
                 // Negative offset: c.N-offset means we're before the 3' boundary (start of downstream exon)
-                return Some(intron);
+                if intron.tx_3prime_boundary == tx_boundary {
+                    return Some(intron);
+                }
+                // Fallback: CDS-to-tx mapped to the last base of the upstream exon
+                if intron.tx_5prime_boundary == tx_boundary {
+                    return Some(intron);
+                }
             }
         }
         None
@@ -1209,5 +1222,37 @@ mod tests {
             cached_introns: std::sync::OnceLock::new(),
         };
         assert_eq!(single_exon.intron_count(), 0);
+    }
+
+    #[test]
+    fn test_find_intron_boundary_at_exon_start() {
+        // When CDS-to-tx maps a position to the first base of the downstream exon,
+        // a positive offset should still find the intron just before that exon.
+        let tx = make_test_transcript_with_genomic();
+        let introns = tx.introns();
+
+        // Intron 1: tx_5prime_boundary=7, tx_3prime_boundary=8
+        // If we query with tx_boundary=8 (start of exon 2) and offset=+4,
+        // we should still find intron 1 via the fallback
+        let result = tx.find_intron_at_tx_boundary(8, 4);
+        assert!(
+            result.is_some(),
+            "Should find intron when position is at downstream exon start with positive offset"
+        );
+        assert_eq!(result.unwrap().number, introns[0].number);
+
+        // Standard case: tx_boundary=7 (end of exon 1) with offset=+4
+        let result = tx.find_intron_at_tx_boundary(7, 4);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().number, introns[0].number);
+
+        // Negative offset fallback: tx_boundary=7 (end of exon 1) with offset=-4
+        // should find intron 1 via the fallback
+        let result = tx.find_intron_at_tx_boundary(7, -4);
+        assert!(
+            result.is_some(),
+            "Should find intron when position is at upstream exon end with negative offset"
+        );
+        assert_eq!(result.unwrap().number, introns[0].number);
     }
 }
