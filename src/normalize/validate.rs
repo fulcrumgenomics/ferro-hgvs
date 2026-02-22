@@ -133,9 +133,16 @@ fn validate_sequence(stated: &[Base], ref_seq: &[u8], start: u64, end: u64) -> V
     let start_idx = hgvs_pos_to_index(start);
     let end_idx = end as usize; // 1-based inclusive end = 0-based exclusive end
 
-    if end_idx > ref_seq.len() || start_idx > end_idx {
+    if end_idx > ref_seq.len() {
         let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
         return ValidationResult::mismatch(stated_str, format!("(position {} out of range)", end));
+    }
+    if start_idx > end_idx {
+        let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
+        return ValidationResult::mismatch(
+            stated_str,
+            format!("(inverted range: start {} > end {})", start, end),
+        );
     }
 
     let actual_bytes = &ref_seq[start_idx..end_idx];

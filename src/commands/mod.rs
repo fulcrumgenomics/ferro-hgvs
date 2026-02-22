@@ -203,12 +203,22 @@ pub fn normalize_batch<P: AsRef<Path>>(
                             output: None,
                             error: Some(format!("{}", e)),
                         },
-                        Err(_) => VariantResult {
-                            input: variant.clone(),
-                            success: false,
-                            output: None,
-                            error: Some("internal error: panic during normalization".to_string()),
-                        },
+                        Err(payload) => {
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .map(|s| s.as_str())
+                                .or_else(|| payload.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            VariantResult {
+                                input: variant.clone(),
+                                success: false,
+                                output: None,
+                                error: Some(format!(
+                                    "internal error: panic during normalization: {}",
+                                    msg
+                                )),
+                            }
+                        }
                     }
                 }
                 Err(e) => VariantResult {
