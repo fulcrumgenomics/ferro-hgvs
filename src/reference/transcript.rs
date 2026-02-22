@@ -13,6 +13,7 @@
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
+use crate::data::{cumulative_insertion_offset, CigarOp};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::sync::OnceLock;
@@ -307,6 +308,11 @@ pub struct Transcript {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ensembl_match: Option<String>,
 
+    /// Per-exon CIGAR alignment data (from cdot gap info).
+    /// Indexed in the same order as `exons`. Used for CIGAR-aware CDS→tx mapping.
+    #[serde(skip)]
+    pub(crate) exon_cigars: Vec<Option<Vec<CigarOp>>>,
+
     /// Cached introns (computed lazily from exons)
     /// This field is for internal use and will be initialized automatically.
     #[serde(skip)]
@@ -330,6 +336,7 @@ impl Clone for Transcript {
             mane_status: self.mane_status,
             refseq_match: self.refseq_match.clone(),
             ensembl_match: self.ensembl_match.clone(),
+            exon_cigars: self.exon_cigars.clone(),
             // Cache is reset on clone - will be lazily re-initialized
             cached_introns: OnceLock::new(),
         }
@@ -353,13 +360,18 @@ impl PartialEq for Transcript {
             && self.mane_status == other.mane_status
             && self.refseq_match == other.refseq_match
             && self.ensembl_match == other.ensembl_match
+            && self.exon_cigars == other.exon_cigars
     }
 }
 
 impl Eq for Transcript {}
 
 impl Transcript {
-    /// Create a new Transcript with the given fields
+    /// Create a new Transcript with the given fields.
+    ///
+    /// Note: `exon_cigars` is intentionally omitted from this constructor and
+    /// initialized to empty. It is populated internally by reference providers
+    /// (e.g., `MultiFastaProvider`) when loading cdot alignment data.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
@@ -392,6 +404,7 @@ impl Transcript {
             mane_status,
             refseq_match,
             ensembl_match,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -490,6 +503,56 @@ impl Transcript {
     /// Check if this is any type of MANE transcript
     pub fn is_mane(&self) -> bool {
         self.mane_status.is_mane()
+    }
+
+    /// Compute the cumulative CIGAR insertion offset at a raw transcript position.
+    ///
+    /// When CDS positions are mapped to transcript positions using simple arithmetic
+    /// (`cds_start + offset`), the result doesn't account for CIGAR insertion bases.
+    /// This method computes the number of insertion bases across all exons up to the
+    /// given raw position, which should be added to get the correct transcript position.
+    ///
+    /// The `raw_tx_pos` is in "mixed" coordinates: the CDS start (in tx coords) plus
+    /// a genome-aligned offset. Insertions before this position need to be counted.
+    pub fn cigar_insertion_adjustment(&self, raw_tx_pos: u64) -> u64 {
+        if self.exon_cigars.is_empty() {
+            return 0;
+        }
+
+        let mut adjustment: u64 = 0;
+        let mut sorted_indices: Vec<usize> = (0..self.exons.len()).collect();
+        sorted_indices.sort_by_key(|&i| self.exons[i].start);
+
+        for &idx in &sorted_indices {
+            let exon = &self.exons[idx];
+            let cigar = match self.exon_cigars.get(idx) {
+                Some(Some(ops)) if !ops.is_empty() => ops,
+                _ => continue,
+            };
+
+            // If the exon starts past our adjusted target, stop
+            if exon.start > raw_tx_pos + adjustment {
+                break;
+            }
+
+            // Compute position within this exon for the cumulative_insertion_offset function
+            let exon_tx_len = exon.end - exon.start + 1;
+            let adjusted_target = raw_tx_pos + adjustment;
+
+            let pos_in_exon = if adjusted_target >= exon.end {
+                // Past this exon — count all insertions
+                exon_tx_len
+            } else if adjusted_target >= exon.start {
+                // Within this exon
+                adjusted_target - exon.start + 1
+            } else {
+                continue;
+            };
+
+            adjustment += cumulative_insertion_offset(cigar, pos_in_exon);
+        }
+
+        adjustment
     }
 
     /// Get cached introns, computing them lazily if not already cached
@@ -882,6 +945,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -906,6 +970,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: Some("ENST00000123456.5".to_string()),
+            exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
     }
@@ -1219,6 +1284,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            exon_cigars: Vec::new(),
             cached_introns: std::sync::OnceLock::new(),
         };
         assert_eq!(single_exon.intron_count(), 0);

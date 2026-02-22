@@ -61,6 +61,11 @@ pub struct CdotTranscript {
     #[serde(default)]
     pub cds_end: Option<u64>,
 
+    /// Per-exon CIGAR alignment data from cdot gap info (GFF3 Gap format).
+    /// Indexed in the same order as `exons` (sorted by tx position).
+    #[serde(skip)]
+    pub exon_cigars: Vec<Option<Vec<CigarOp>>>,
+
     /// Gene ID (e.g., "HGNC:1100").
     #[serde(default)]
     pub gene_id: Option<String>,
@@ -138,25 +143,40 @@ impl RawCdotTranscript {
         let strand = parse_strand(build.strand.as_deref().unwrap_or("+"))?;
 
         // Parse exons: [genomic_start, genomic_end, exon_num, tx_start, tx_end, gap_info]
-        let mut exons: Vec<[u64; 4]> = build
+        let mut exon_pairs: Vec<([u64; 4], Option<Vec<CigarOp>>)> = build
             .exons
             .iter()
             .filter_map(|e| {
                 if e.len() >= 5 {
-                    Some([
+                    let exon = [
                         e[0].as_u64()?,
                         e[1].as_u64()?,
                         e[3].as_u64()?, // tx_start is at index 3
                         e[4].as_u64()?, // tx_end is at index 4
-                    ])
+                    ];
+                    // Parse CIGAR gap info from index 5 if present
+                    let cigar = if e.len() > 5 {
+                        e[5].as_str().and_then(|s| match parse_cigar(s) {
+                            Ok(ops) => Some(ops),
+                            Err(err) => {
+                                log::warn!("Malformed CIGAR string '{}': {}", s, err);
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    Some((exon, cigar))
                 } else {
                     None
                 }
             })
             .collect();
 
-        // Sort exons by transcript position
-        exons.sort_by_key(|e| e[2]);
+        // Sort exons by transcript position, keeping CIGARs in sync
+        exon_pairs.sort_by_key(|(e, _)| e[2]);
+        let (exons, exon_cigars): (Vec<[u64; 4]>, Vec<Option<Vec<CigarOp>>>) =
+            exon_pairs.into_iter().unzip();
 
         // Use transcript-level CDS coordinates (start_codon/stop_codon) if available
         // These are 0-indexed and more reliable than converting from genomic coords
@@ -194,6 +214,7 @@ impl RawCdotTranscript {
             contig: build.contig.clone(),
             strand,
             exons,
+            exon_cigars,
             cds_start,
             cds_end,
             gene_id: None,
@@ -229,6 +250,7 @@ impl RawCdotTranscript {
             gene_name: self.gene_name.clone(),
             contig,
             strand,
+            exon_cigars: Vec::new(),
             exons,
             cds_start: self.cds_start,
             cds_end: self.cds_end,
@@ -487,6 +509,102 @@ pub enum CdsPosition {
     Cds(i64),
     /// Position in 3' UTR (e.g., c.*100 would be ThreePrimeUtr(100)).
     ThreePrimeUtr(i64),
+}
+
+/// A single CIGAR operation from a GFF3 Gap attribute string.
+///
+/// cdot uses GFF3 Gap format (letter-first, space-separated), e.g. `M185 I3 M250`,
+/// which differs from SAM CIGAR format (`185M3I250M`).
+///
+/// - `M` (Match): alignment match — bases align between transcript and genome.
+/// - `I` (Insertion): bases present in the transcript but not the genome.
+/// - `D` (Deletion): bases present in the genome but not the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CigarOp {
+    /// Alignment match of `n` bases.
+    Match(u64),
+    /// Insertion of `n` bases in the transcript (not in genome).
+    Insertion(u64),
+    /// Deletion of `n` bases from the transcript (present in genome).
+    Deletion(u64),
+}
+
+/// Parse a GFF3 Gap attribute string into a sequence of CIGAR operations.
+///
+/// The format is space-separated tokens, each starting with an operation letter
+/// (`M`, `I`, or `D`) followed by a length, e.g. `"M185 I3 M250"`.
+///
+/// Returns an empty vector for empty or whitespace-only input.
+///
+/// # Errors
+///
+/// Returns an error if a token has an unrecognized operation letter or a non-numeric length.
+pub fn parse_cigar(cigar_str: &str) -> Result<Vec<CigarOp>, FerroError> {
+    let trimmed = cigar_str.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    trimmed
+        .split_whitespace()
+        .map(|token| {
+            if token.len() < 2 {
+                return Err(FerroError::parse(
+                    0,
+                    format!("Invalid CIGAR token (too short): \'{token}\'"),
+                ));
+            }
+            let (op_char, len_str) = token.split_at(1);
+            let length: u64 = len_str.parse().map_err(|_| {
+                FerroError::parse(0, format!("Invalid CIGAR length in token: \'{token}\'"))
+            })?;
+            match op_char {
+                "M" => Ok(CigarOp::Match(length)),
+                "I" => Ok(CigarOp::Insertion(length)),
+                "D" => Ok(CigarOp::Deletion(length)),
+                _ => Err(FerroError::parse(
+                    0,
+                    format!("Unknown CIGAR operation \'{op_char}\' in token: \'{token}\'"),
+                )),
+            }
+        })
+        .collect()
+}
+
+/// Compute the cumulative insertion offset at a given 1-based transcript position.
+///
+/// Walks through the CIGAR operations and counts insertion bases that occur
+/// before `tx_pos`. Insertions add bases to the transcript that do not exist
+/// in the genome, so CDS numbering (which follows the genome) must account
+/// for them.
+///
+/// Returns the total number of insertion bases encountered before `tx_pos`.
+pub fn cumulative_insertion_offset(ops: &[CigarOp], tx_pos: u64) -> u64 {
+    let mut current_tx: u64 = 0;
+    let mut cumulative: u64 = 0;
+
+    for op in ops {
+        match op {
+            CigarOp::Match(len) => {
+                current_tx += len;
+            }
+            CigarOp::Insertion(len) => {
+                // If the entire insertion is before tx_pos, count it all
+                if current_tx + len <= tx_pos {
+                    cumulative += len;
+                }
+                current_tx += len;
+            }
+            CigarOp::Deletion(_) => {
+                // Deletions don't advance the transcript position
+            }
+        }
+        if current_tx >= tx_pos {
+            break;
+        }
+    }
+
+    cumulative
 }
 
 /// Raw cdot JSON file structure (as it appears on disk).
@@ -787,6 +905,7 @@ mod tests {
             ],
             cds_start: Some(50), // CDS starts 50bp into transcript
             cds_end: Some(400),  // CDS ends 400bp into transcript
+            exon_cigars: Vec::new(),
             gene_id: None,
             protein: None,
         }
@@ -805,6 +924,7 @@ mod tests {
             ],
             cds_start: Some(50),
             cds_end: Some(400),
+            exon_cigars: Vec::new(),
             gene_id: None,
             protein: None,
         }
@@ -1047,5 +1167,160 @@ mod tests {
         assert_eq!(tx.gene_name.as_deref(), Some("COL1A1"));
         assert_eq!(tx.strand, Strand::Plus);
         assert_eq!(tx.exons.len(), 2);
+    }
+
+    // =========================================================================
+    // CIGAR parsing tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_cigar_simple_match() {
+        let ops = parse_cigar("M185").unwrap();
+        assert_eq!(ops, vec![CigarOp::Match(185)]);
+    }
+
+    #[test]
+    fn test_parse_cigar_with_insertion() {
+        let ops = parse_cigar("M185 I3 M250").unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                CigarOp::Match(185),
+                CigarOp::Insertion(3),
+                CigarOp::Match(250),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_cigar_with_deletion() {
+        let ops = parse_cigar("M504 D2 M123").unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                CigarOp::Match(504),
+                CigarOp::Deletion(2),
+                CigarOp::Match(123),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_cigar_complex() {
+        let ops = parse_cigar("M6 D1 M4 I2 M3").unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                CigarOp::Match(6),
+                CigarOp::Deletion(1),
+                CigarOp::Match(4),
+                CigarOp::Insertion(2),
+                CigarOp::Match(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_cigar_empty() {
+        let ops = parse_cigar("").unwrap();
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cigar_whitespace_only() {
+        let ops = parse_cigar("   ").unwrap();
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cigar_invalid_operation() {
+        let result = parse_cigar("X5");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cigar_invalid_length() {
+        let result = parse_cigar("Mabc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cigar_too_short_token() {
+        let result = parse_cigar("M");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_before_insertion() {
+        // CIGAR: M185 I3 M250 — 3bp insertion at tx position 186-188
+        // At tx position 100 (before insertion): offset = 0
+        let cigar = vec![
+            CigarOp::Match(185),
+            CigarOp::Insertion(3),
+            CigarOp::Match(250),
+        ];
+        assert_eq!(cumulative_insertion_offset(&cigar, 100), 0);
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_after_insertion() {
+        // At tx position 200 (after insertion): offset = 3
+        let cigar = vec![
+            CigarOp::Match(185),
+            CigarOp::Insertion(3),
+            CigarOp::Match(250),
+        ];
+        assert_eq!(cumulative_insertion_offset(&cigar, 200), 3);
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_at_end() {
+        // At tx position 437 (end of exon, 185+3+250-1): offset = 3
+        let cigar = vec![
+            CigarOp::Match(185),
+            CigarOp::Insertion(3),
+            CigarOp::Match(250),
+        ];
+        assert_eq!(cumulative_insertion_offset(&cigar, 437), 3);
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_no_insertions() {
+        let cigar = vec![CigarOp::Match(500)];
+        assert_eq!(cumulative_insertion_offset(&cigar, 250), 0);
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_multiple_insertions() {
+        // M100 I2 M100 I5 M100 — two insertions
+        let cigar = vec![
+            CigarOp::Match(100),
+            CigarOp::Insertion(2),
+            CigarOp::Match(100),
+            CigarOp::Insertion(5),
+            CigarOp::Match(100),
+        ];
+        // Before first insertion
+        assert_eq!(cumulative_insertion_offset(&cigar, 50), 0);
+        // After first insertion, before second
+        assert_eq!(cumulative_insertion_offset(&cigar, 150), 2);
+        // After both insertions
+        assert_eq!(cumulative_insertion_offset(&cigar, 300), 7);
+    }
+
+    #[test]
+    fn test_cumulative_insertion_offset_with_deletion() {
+        // M100 D5 M100 I3 M100 — deletion doesn't affect insertion offset
+        let cigar = vec![
+            CigarOp::Match(100),
+            CigarOp::Deletion(5),
+            CigarOp::Match(100),
+            CigarOp::Insertion(3),
+            CigarOp::Match(100),
+        ];
+        // Before insertion (deletions don't advance tx position)
+        assert_eq!(cumulative_insertion_offset(&cigar, 150), 0);
+        // After insertion
+        assert_eq!(cumulative_insertion_offset(&cigar, 250), 3);
     }
 }

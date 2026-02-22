@@ -513,6 +513,7 @@ mod tests {
             cds_end: Some(400),  // CDS ends at tx pos 400
             gene_id: None,
             protein: None,
+            exon_cigars: Vec::new(),
         };
         cdot.add_transcript("NM_TEST.1".to_string(), tx);
 
@@ -530,6 +531,7 @@ mod tests {
             cds_end: Some(400),
             gene_id: None,
             protein: None,
+            exon_cigars: Vec::new(),
         };
         cdot.add_transcript("NM_MINUS.1".to_string(), tx_minus);
 

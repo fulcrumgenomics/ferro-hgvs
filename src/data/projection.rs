@@ -295,6 +295,7 @@ mod tests {
             cds_end: Some(400),
             gene_id: None,
             protein: None,
+            exon_cigars: Vec::new(),
         };
         cdot.add_transcript("NM_000001.1".to_string(), tx1);
 
@@ -308,6 +309,7 @@ mod tests {
             cds_end: Some(300),
             gene_id: None,
             protein: None,
+            exon_cigars: Vec::new(),
         };
         cdot.add_transcript("NM_000001.2".to_string(), tx2);
 
