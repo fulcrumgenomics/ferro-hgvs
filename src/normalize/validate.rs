@@ -137,6 +137,13 @@ fn validate_sequence(stated: &[Base], ref_seq: &[u8], start: u64, end: u64) -> V
         let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
         return ValidationResult::mismatch(stated_str, format!("(position {} out of range)", end));
     }
+    if start_idx > end_idx {
+        let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
+        return ValidationResult::mismatch(
+            stated_str,
+            format!("(inverted range: start {} > end {})", start, end),
+        );
+    }
 
     let actual_bytes = &ref_seq[start_idx..end_idx];
 
@@ -301,5 +308,19 @@ mod tests {
         let config = NormalizeConfig::silent();
         let ok = apply_validation_policy(&result, &config, "c.1G>T");
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn test_validate_sequence_inverted_range() {
+        // Regression: inverted-range variants (start > end) like
+        // NC_000011.10:g.5238138_5153222insTATTT must not panic.
+        let edit = NaEdit::Deletion {
+            sequence: Some(Sequence::from_str("ATG").unwrap()),
+            length: None,
+        };
+        let ref_seq = b"ATGC";
+        // start=3 end=1 → start_idx(2) > end_idx(1), should return mismatch not panic
+        let result = validate_reference(&edit, ref_seq, 3, 1);
+        assert!(!result.valid);
     }
 }

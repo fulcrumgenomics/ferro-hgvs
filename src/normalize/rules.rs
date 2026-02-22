@@ -44,9 +44,14 @@ pub fn insertion_is_duplication(ref_seq: &[u8], pos: u64, inserted_seq: &[u8]) -
     let ins_len = inserted_seq.len();
     let pos_idx = pos as usize;
 
+    // Guard against positions beyond the reference sequence
+    if ref_seq.is_empty() || pos_idx > ref_seq.len() {
+        return false;
+    }
+
     // Check if sequence before the insertion point matches the inserted sequence
     // (this would be a duplication of the preceding sequence)
-    if pos_idx >= ins_len {
+    if pos_idx >= ins_len && pos_idx <= ref_seq.len() {
         let before_start = pos_idx - ins_len;
         if ref_seq[before_start..pos_idx] == inserted_seq[..] {
             return true;
@@ -682,6 +687,18 @@ mod tests {
 
         // Inserting ATG at position 6 (after second ATG) is a dup
         assert!(insertion_is_duplication(ref_seq, 6, b"ATG"));
+    }
+
+    #[test]
+    fn test_insertion_is_duplication_pos_beyond_ref() {
+        // Regression: inverted-range insertions (start > end) like
+        // NC_000011.10:g.5238138_5153222insTATTT produce a pos far
+        // beyond the reference sequence length.  Must return false,
+        // not panic.
+        let ref_seq = b"ATGATGATG";
+        assert!(!insertion_is_duplication(ref_seq, 95, b"TATTT"));
+        assert!(!insertion_is_duplication(b"", 95, b"TATTT"));
+        assert!(!insertion_is_duplication(b"", 0, b"A"));
     }
 
     #[test]

@@ -187,20 +187,40 @@ pub fn normalize_batch<P: AsRef<Path>>(
             }
 
             match parse_hgvs(variant) {
-                Ok(parsed) => match normalizer.normalize(&parsed) {
-                    Ok(normalized) => VariantResult {
-                        input: variant.clone(),
-                        success: true,
-                        output: Some(normalized.to_string()),
-                        error: None,
-                    },
-                    Err(e) => VariantResult {
-                        input: variant.clone(),
-                        success: false,
-                        output: None,
-                        error: Some(format!("{}", e)),
-                    },
-                },
+                Ok(parsed) => {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        normalizer.normalize(&parsed)
+                    })) {
+                        Ok(Ok(normalized)) => VariantResult {
+                            input: variant.clone(),
+                            success: true,
+                            output: Some(normalized.to_string()),
+                            error: None,
+                        },
+                        Ok(Err(e)) => VariantResult {
+                            input: variant.clone(),
+                            success: false,
+                            output: None,
+                            error: Some(format!("{}", e)),
+                        },
+                        Err(payload) => {
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .map(|s| s.as_str())
+                                .or_else(|| payload.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            VariantResult {
+                                input: variant.clone(),
+                                success: false,
+                                output: None,
+                                error: Some(format!(
+                                    "internal error: panic during normalization: {}",
+                                    msg
+                                )),
+                            }
+                        }
+                    }
+                }
                 Err(e) => VariantResult {
                     input: variant.clone(),
                     success: false,
