@@ -57,5 +57,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 
+# Manuscript (benchmark workflow, figures, drafts)
+manuscript/
+
 # Pixi
 .pixi/
