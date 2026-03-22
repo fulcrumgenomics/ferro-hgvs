@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ferro-hgvs"
-version = "0.1.0"
+dynamic = ["version"]
 description = "HGVS variant normalizer - Python bindings for the ferro bioinformatics toolkit"
 readme = "README.md"
 license = {text = "MIT"}
