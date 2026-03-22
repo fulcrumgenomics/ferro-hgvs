@@ -87,14 +87,20 @@ async fn test_validate_handler_dangerous_input() {
     let state = create_test_state();
 
     let request = ValidateRequest {
-        hgvs: "NM_000249.4:c.350C>T; rm -rf /".to_string(),
+        hgvs: "NM_000249.4:c.350C>T`whoami`".to_string(),
     };
 
     let result =
         ferro_hgvs::service::handlers::validate::validate_single(State(state), Json(request)).await;
 
-    // Dangerous characters should be rejected
-    assert!(result.is_err());
+    // Dangerous characters (backtick) should be rejected at the validation layer
+    let (status, Json(error_response)) = result.unwrap_err();
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        error_response.message.contains("dangerous"),
+        "Expected 'dangerous' in error message, got: {}",
+        error_response.message
+    );
 }
 
 // ==================== Effect Handler Tests ====================
