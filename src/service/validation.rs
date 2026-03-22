@@ -19,14 +19,33 @@ const MIN_TIMEOUT_SECONDS: u32 = 1;
 /// Maximum allowed variants in batch request
 const MAX_BATCH_SIZE: usize = 1000;
 
-/// Comprehensive HGVS pattern for basic format validation
-/// Matches patterns like: NM_000001.1:c.123A>G, NC_000001.11:g.123del, etc.
-/// Note: > is allowed as it's used in substitutions like A>G
-/// The regex excludes dangerous shell characters but allows valid HGVS characters
+/// Comprehensive HGVS pattern for basic format validation.
+///
+/// Accepts standard accession formats:
+///   - RefSeq: NC_000001.11, NM_000088.3, NP_000001.1, etc.
+///   - Ensembl: ENST, ENSG, ENSP, ENSE, ENSR
+///   - LRG: LRG_1
+///   - GenBank: U12345.1, AF118569.1
+///   - Assembly-prefixed: GRCh36/37/38, hg18/19/38
+///
+/// Followed by a coordinate type prefix (c./g./m./n./p./r.) and variant body.
 static HGVS_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    // Use a simpler pattern that validates basic HGVS format
-    // Dangerous characters are checked separately in validate_hgvs
-    Regex::new(r"^[A-Z]{2}_\d+\.\d+:[cgmnpr]\..+$").unwrap()
+    Regex::new(
+        r"(?x)
+        ^
+        (?:
+            [A-Za-z]{2,4}_\d+(?:\.\d+)?          # RefSeq / LRG (NM_000088.3, LRG_1)
+          | ENS[TGPER]\d+(?:\.\d+)?               # Ensembl (transcript/gene/protein/exon/regulatory)
+          | [A-Z]\d{5}(?:\.\d+)?                  # GenBank (U12345.1)
+          | [A-Z]{2}\d{6}(?:\.\d+)?               # GenBank (AF118569.1)
+          | (?:GRCh\d+|hg(?:18|19|38))\([^)]+\)   # Assembly-prefixed (GRCh38(chr1), hg38(chr1))
+        )
+        :[cgmnpro]\.
+        .+
+        $
+        ",
+    )
+    .unwrap()
 });
 
 /// Validation errors for user input
@@ -101,9 +120,12 @@ pub fn validate_hgvs(input: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::InvalidFormat);
     }
 
-    // Security: check for dangerous characters that could be used in injection attacks
-    // Note: > is allowed as it's used in HGVS substitutions like A>G
-    if input.chars().any(|c| "<|&;`$(){}[]\\".contains(c)) {
+    // Security: check for dangerous characters that could be used in injection attacks.
+    // Note: > is allowed (HGVS substitutions like A>G).
+    // [] and () are allowed (repeats like C[8], predicted effects like p.(Val600Glu),
+    // uncertain positions, allele notation, and assembly-prefixed accessions).
+    // ; is allowed (allele phase separator like [var1;var2]).
+    if input.chars().any(|c| "<|&`${}\\".contains(c)) {
         return Err(ValidationError::DangerousCharacters);
     }
 
@@ -203,21 +225,88 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_hgvs_repeats() {
+        // Repeat notation uses square brackets — must be accepted
+        assert!(validate_hgvs("NM_003820.4:c.495_500C[8]").is_ok());
+        assert!(validate_hgvs("NC_000001.11:g.2560658_2560663C[8]").is_ok());
+        // Multi-repeat
+        assert!(validate_hgvs("NM_000001.1:c.100_105CTG[9]TTG[1]CTG[13]").is_ok());
+        // Uncertain repeat count
+        assert!(validate_hgvs("NM_000001.1:c.100_105CAG[10_15]").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_predicted_effects() {
+        // Predicted protein effects use parentheses — must be accepted
+        assert!(validate_hgvs("NP_000001.1:p.(Val600Glu)").is_ok());
+        assert!(validate_hgvs("NP_000001.1:p.(=)").is_ok());
+        assert!(validate_hgvs("NP_000001.1:p.(?)").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_uncertain_positions() {
+        // Uncertain positions use parentheses — must be accepted
+        assert!(validate_hgvs("NM_000001.1:c.(100_200)del").is_ok());
+        assert!(validate_hgvs("NC_000001.11:g.(?_100)_(200_?)del").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_allele_notation() {
+        // Allele notation uses square brackets and semicolons
+        assert!(validate_hgvs("NM_000001.1:c.[123A>G;456C>T]").is_ok());
+        assert!(validate_hgvs("NM_000001.1:c.[123A>G];[456C>T]").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_assembly_prefixed_accessions() {
+        // Assembly-prefixed genomic accessions (GRCh and hg short names)
+        assert!(validate_hgvs("GRCh38(chr1):g.2560658_2560663C[8]").is_ok());
+        assert!(validate_hgvs("GRCh37(chr1):g.12345A>G").is_ok());
+        assert!(validate_hgvs("GRCh36(chr1):g.100del").is_ok());
+        assert!(validate_hgvs("hg38(chr1):g.12345A>G").is_ok());
+        assert!(validate_hgvs("hg19(chr1):g.12345A>G").is_ok());
+        assert!(validate_hgvs("hg18(chr1):g.12345A>G").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_ensembl_accessions() {
+        assert!(validate_hgvs("ENST00000123456.1:c.123A>G").is_ok());
+        assert!(validate_hgvs("ENSG00000123456.1:g.100A>G").is_ok());
+        assert!(validate_hgvs("ENSP00000123456.1:p.Val600Glu").is_ok());
+        assert!(validate_hgvs("ENSE00000123456.1:g.100A>G").is_ok());
+        assert!(validate_hgvs("ENSR00000123456.1:g.100A>G").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_lrg_accessions() {
+        assert!(validate_hgvs("LRG_1:g.12345A>G").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_genbank_accessions() {
+        assert!(validate_hgvs("U12345.1:g.100A>G").is_ok());
+    }
+
+    #[test]
     fn test_validate_hgvs_dangerous_characters() {
         // Test various dangerous characters that could be used in attacks
         // Note: > is allowed as it's used in HGVS substitutions
         let dangerous_inputs = vec![
-            "NM_000001.1:c.123A<G", // < is not allowed
+            "NM_000001.1:c.123A<G",
             "NM_000001.1:c.123del|rm -rf /",
             "NM_000001.1:c.123del$(whoami)",
             "NM_000001.1:c.123del{backdoor}",
-            "NM_000001.1:c.123del[injection]",
             "NM_000001.1:c.123del\\evil",
+            "NM_000001.1:c.123del`whoami`",
+            "NM_000001.1:c.123del&rm",
         ];
 
         for input in dangerous_inputs {
             let result = validate_hgvs(input);
-            assert!(matches!(result, Err(ValidationError::DangerousCharacters)));
+            assert!(
+                matches!(result, Err(ValidationError::DangerousCharacters)),
+                "Expected DangerousCharacters for input: {input}"
+            );
         }
     }
 
