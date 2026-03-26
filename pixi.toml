@@ -24,8 +24,9 @@ rsync = ">=3.4.1,<4"
 
 [pypi-dependencies]
 # Mutalyzer - independent HGVS implementation with algebra-based normalizer
-mutalyzer = ">=3.0"
-mutalyzer-hgvs-parser = ">=0.3"
+# Pinned for reproducible benchmark results across local and deployed environments.
+mutalyzer = "==3.1.1"
+mutalyzer-hgvs-parser = "==0.3.9"
 
 # biocommons/hgvs - canonical Python HGVS implementation
 # Note: requires UTA database connection (remote by default at uta.biocommons.org)
