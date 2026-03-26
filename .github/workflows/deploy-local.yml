@@ -1,0 +1,194 @@
+name: Deploy to Local Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'pixi.toml'
+      - 'config/**'
+      - '.github/workflows/deploy-local.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BINARY_NAME: ferro-web
+  CONFIG_FILE: /opt/ferro-web/service.toml
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, linux, x64, ferro-deploy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libsqlite3-dev
+
+      - name: Setup Rust
+        run: |
+          if ! command -v rustc &> /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup Pixi
+        run: |
+          if ! command -v pixi &> /dev/null; then
+            curl -fsSL https://pixi.sh/install.sh | bash
+          fi
+          echo "$HOME/.pixi/bin" >> $GITHUB_PATH
+
+      - name: Install Python dependencies via Pixi
+        run: |
+          export PATH="$HOME/.pixi/bin:$PATH"
+          pixi install
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-web-hgvs-rs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-web-hgvs-rs-
+
+      - name: Build release binary (with hgvs-rs)
+        run: |
+          source "$HOME/.cargo/env"
+          cargo build --release --features "web-service hgvs-rs" --bin ferro-web
+
+      - name: Deploy binary
+        run: |
+          sudo systemctl stop ferro-web || true
+          sudo cp target/release/${{ env.BINARY_NAME }} /usr/local/bin/
+          sudo chmod +x /usr/local/bin/${{ env.BINARY_NAME }}
+
+      - name: Ensure directories exist
+        run: |
+          sudo mkdir -p /opt/ferro-web
+          sudo mkdir -p /var/lib/ferro-web/reference
+          sudo mkdir -p /var/lib/ferro-web/seqrepo
+          sudo mkdir -p /var/lib/ferro-web/mutalyzer-reference
+
+      - name: Install service config
+        run: |
+          sudo tee ${{ env.CONFIG_FILE }} > /dev/null << 'EOF'
+          [server]
+          host = "127.0.0.1"
+          port = 8080
+          request_timeout_seconds = 120
+          enable_cors = true
+
+          [tools.ferro]
+          enabled = true
+          reference_dir = "/var/lib/ferro-web/reference"
+          shuffle_direction = "3prime"
+          error_mode = "lenient"
+
+          # Mutalyzer runs as a local Python subprocess for reproducibility and
+          # offline operation. The MUTALYZER_SETTINGS env var approach is used
+          # to configure cache and reference paths — see settings_file below.
+          # Requires the mutalyzer Python package installed via pixi.
+          [tools.mutalyzer]
+          enabled = true
+          mode = "local"
+          settings_file = "/var/lib/ferro-web/mutalyzer_settings.txt"
+          allow_network = true
+          timeout_seconds = 60
+
+          [tools.biocommons]
+          enabled = true
+          uta_url = "postgresql://anonymous:anonymous@localhost:5432/uta/uta_20210129b"
+          uta_schema = "uta_20210129b"
+          seqrepo_path = "/var/lib/ferro-web/seqrepo/2021-01-29"
+          docker_container = "ferro-uta"
+          parallel_workers = 1
+
+          [tools.hgvs_rs]
+          enabled = true
+          uta_url = "postgresql://anonymous:anonymous@localhost:5432/uta"
+          uta_schema = "uta_20210129b"
+          seqrepo_path = "/var/lib/ferro-web/seqrepo/2021-01-29"
+          parallel_workers = 4
+          EOF
+
+      - name: Install mutalyzer settings
+        run: |
+          sudo tee /var/lib/ferro-web/mutalyzer_settings.txt > /dev/null << 'EOF'
+          MUTALYZER_CACHE_DIR=/var/lib/ferro-web/mutalyzer-reference
+          MUTALYZER_FILE_CACHE_ADD=true
+          EOF
+
+      - name: Install systemd service
+        run: |
+          sudo tee /etc/systemd/system/ferro-web.service > /dev/null << 'EOF'
+          [Unit]
+          Description=ferro-hgvs web service
+          After=network.target docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=simple
+          User=ubuntu
+          ExecStart=/usr/local/bin/ferro-web serve -c /opt/ferro-web/service.toml
+          Restart=always
+          RestartSec=5
+          Environment=RUST_LOG=info
+          Environment=PATH=%h/.pixi/envs/default/bin:/usr/local/bin:/usr/bin:/bin
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          sudo systemctl daemon-reload
+          sudo systemctl enable ferro-web
+
+      - name: Ensure UTA container is running
+        run: |
+          if ! sudo docker ps -a | grep -q ferro-uta; then
+            sudo docker run -d --name ferro-uta -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust biocommons/uta:uta_20210129b
+          else
+            sudo docker start ferro-uta || true
+          fi
+          # Wait for postgres to accept connections
+          ready=0
+          for i in {1..30}; do
+            if sudo docker exec ferro-uta pg_isready -U anonymous 2>/dev/null; then
+              echo "UTA database ready"
+              ready=1
+              break
+            fi
+            echo "Waiting for UTA database ($i/30)..."
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "UTA database did not become ready in time"
+            exit 1
+          fi
+
+      - name: Start service
+        run: |
+          sudo systemctl start ferro-web || true
+
+      - name: Verify deployment
+        run: |
+          for i in {1..12}; do
+            if curl -sf http://localhost:8080/health; then
+              echo "Service healthy"
+              exit 0
+            fi
+            echo "Attempt $i/12: waiting for service..."
+            sleep 5
+          done
+          echo "Service failed to become healthy within 60s"
+          exit 1
