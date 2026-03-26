@@ -1,0 +1,77 @@
+# ferro-hgvs web service configuration
+#
+# Copy this file to service.toml and adjust paths for your environment:
+#   cp config/service.example.toml config/service.toml
+#
+# Then start the service:
+#   ferro-web serve -c config/service.toml
+
+[server]
+host = "0.0.0.0"
+port = 3000
+request_timeout_seconds = 60
+enable_cors = true
+max_batch_size = 1000
+max_concurrent_batches = 10
+
+# ferro (native Rust normalizer)
+[tools.ferro]
+enabled = true
+reference_dir = "data/ferro-reference"
+shuffle_direction = "3prime"
+error_mode = "lenient"
+
+# Mutalyzer runs as a local Python subprocess for reproducibility and offline
+# operation. This avoids version drift between the mutalyzer.nl API and the
+# locally installed package, and keeps benchmark comparisons consistent.
+#
+# Requirements:
+#   - mutalyzer Python package (installed via pixi, pinned in pixi.toml)
+#   - A mutalyzer settings file (key=value format, sets MUTALYZER_CACHE_DIR
+#     and MUTALYZER_FILE_CACHE_ADD) — passed via the MUTALYZER_SETTINGS env
+#     var at subprocess launch time
+#   - A populated cache directory (built by `ferro prepare` or by running
+#     with allow_network = true to fetch from NCBI/EBI on first access)
+#
+# Available modes:
+#   - "local" (recommended): Spawns python3 subprocess, calls
+#     mutalyzer.description.Description.normalize() directly. Consistent
+#     with benchmark tool (compare.rs) behavior.
+#   - "api": Makes HTTP GET requests to a Mutalyzer API endpoint. Useful
+#     for testing against mutalyzer.nl or a local Mutalyzer HTTP server,
+#     but results may differ from local mode due to version differences.
+[tools.mutalyzer]
+enabled = true
+mode = "local"
+timeout_seconds = 60
+# Path to mutalyzer settings file (key=value format).
+# Must define MUTALYZER_CACHE_DIR and optionally MUTALYZER_FILE_CACHE_ADD.
+settings_file = "data/mutalyzer_settings.txt"
+allow_network = false  # Set to true to allow NCBI/EBI fetches for uncached sequences
+
+# API mode settings (only used when mode = "api"):
+# api_url = "https://mutalyzer.nl"
+# rate_limit_ms = 100
+# [tools.mutalyzer.connection_pool]
+# max_connections = 10
+# idle_timeout_seconds = 30
+# [tools.mutalyzer.circuit_breaker]
+# failure_threshold = 5
+# recovery_timeout_seconds = 60
+
+# Biocommons/hgvs (requires UTA database + SeqRepo)
+[tools.biocommons]
+enabled = true
+uta_url = "postgresql://anonymous:anonymous@localhost:5432/uta/uta_20210129b"
+uta_schema = "uta_20210129b"
+seqrepo_path = "data/seqrepo/2021-01-29"
+docker_container = "ferro-uta"
+parallel_workers = 1
+
+# hgvs-rs (Rust HGVS, requires UTA database + SeqRepo)
+[tools.hgvs_rs]
+enabled = true
+uta_url = "postgresql://anonymous:anonymous@localhost:5432/uta"
+uta_schema = "uta_20210129b"
+seqrepo_path = "data/seqrepo/2021-01-29"
+parallel_workers = 4
