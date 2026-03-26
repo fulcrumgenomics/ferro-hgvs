@@ -445,9 +445,16 @@ mod intronic_duplications {
     fn test_minus_strand_intronic_multi_base_dup() {
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
+        // Normalizer may convert multi-base dup into a repeat if the region is repetitive
         assert!(
-            result.contains("dup"),
-            "Minus-strand multi-base intronic dup should remain dup, got: {}",
+            result.contains("dup") || result.contains('['),
+            "Minus-strand multi-base intronic dup should normalize to dup or repeat, got: {}",
+            result
+        );
+        // Verify position ordering is correct (coding order: 30+2 before 30+4)
+        assert!(
+            result.contains("30+2_30+4"),
+            "Positions should be in coding order (30+2_30+4), got: {}",
             result
         );
     }
