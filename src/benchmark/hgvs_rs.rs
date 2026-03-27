@@ -44,6 +44,8 @@ pub struct HgvsRsConfig {
     pub seqrepo_path: String,
     /// Optional LRG-to-RefSeq mapping file for LRG transcript translation
     pub lrg_mapping_file: Option<String>,
+    /// Use in-memory provider instead of UTA+SeqRepo for benchmarking
+    pub in_memory: bool,
 }
 
 impl Default for HgvsRsConfig {
@@ -53,6 +55,7 @@ impl Default for HgvsRsConfig {
             uta_db_schema: "uta_20210129b".to_string(),
             seqrepo_path: "/usr/local/share/seqrepo/2021-01-29".to_string(),
             lrg_mapping_file: None,
+            in_memory: false,
         }
     }
 }
@@ -163,6 +166,15 @@ impl HgvsRsNormalizer {
         let mapper_config = MapperConfig::default();
         let mapper = Mapper::new(&mapper_config, provider);
 
+        Ok(Self { mapper })
+    }
+
+    /// Create a new normalizer using a pre-built Provider (e.g., InMemoryProvider).
+    pub fn with_provider(
+        provider: Arc<dyn hgvs::data::interface::Provider + Send + Sync>,
+    ) -> Result<Self, FerroError> {
+        let mapper_config = MapperConfig::default();
+        let mapper = Mapper::new(&mapper_config, provider);
         Ok(Self { mapper })
     }
 
@@ -281,7 +293,23 @@ pub fn run_hgvs_rs_normalize(
     let start = Instant::now();
 
     // Create the normalizer
-    let normalizer = HgvsRsNormalizer::new(config)?;
+    let normalizer = if config.in_memory {
+        let im_config = super::inmemory_provider::InMemoryProviderConfig {
+            uta_db_url: config.uta_db_url.clone(),
+            uta_db_schema: config.uta_db_schema.clone(),
+            seqrepo_path: Some(config.seqrepo_path.clone()),
+        };
+        let provider = Arc::new(
+            super::inmemory_provider::InMemoryProvider::new(&im_config).map_err(|e| {
+                FerroError::Io {
+                    msg: format!("Failed to create in-memory provider: {}", e),
+                }
+            })?,
+        );
+        HgvsRsNormalizer::with_provider(provider)?
+    } else {
+        HgvsRsNormalizer::new(config)?
+    };
 
     // Run normalization sequentially
     let results: Vec<crate::benchmark::ParseResult> = patterns
@@ -372,11 +400,34 @@ pub fn run_hgvs_rs_normalize_parallel(
         workers
     );
     let init_start = Instant::now();
-    let normalizers: Vec<_> = (0..workers)
-        .map(|_| {
-            HgvsRsNormalizer::new(config).map_err(|e| format!("Failed to create normalizer: {}", e))
-        })
-        .collect();
+    let normalizers: Vec<_> = if config.in_memory {
+        // Single shared in-memory provider for all workers
+        let im_config = super::inmemory_provider::InMemoryProviderConfig {
+            uta_db_url: config.uta_db_url.clone(),
+            uta_db_schema: config.uta_db_schema.clone(),
+            seqrepo_path: Some(config.seqrepo_path.clone()),
+        };
+        let provider = Arc::new(
+            super::inmemory_provider::InMemoryProvider::new(&im_config).map_err(|e| {
+                FerroError::Io {
+                    msg: format!("Failed to create in-memory provider: {}", e),
+                }
+            })?,
+        );
+        (0..workers)
+            .map(|_| {
+                HgvsRsNormalizer::with_provider(provider.clone())
+                    .map_err(|e| format!("Failed to create normalizer: {}", e))
+            })
+            .collect()
+    } else {
+        (0..workers)
+            .map(|_| {
+                HgvsRsNormalizer::new(config)
+                    .map_err(|e| format!("Failed to create normalizer: {}", e))
+            })
+            .collect()
+    };
     let init_elapsed = init_start.elapsed();
     eprintln!(
         "Normalizer initialization took {:.3}s ({:.3}s per worker)",

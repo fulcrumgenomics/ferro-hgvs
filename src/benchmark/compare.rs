@@ -1065,6 +1065,7 @@ pub fn compare_normalize<P: AsRef<Path>>(
                             .unwrap_or_else(|| "uta_20210129b".to_string()),
                         seqrepo_path: config.hgvs_rs_seqrepo_path.clone().unwrap_or_default(),
                         lrg_mapping_file: None, // LRG mapping not supported in compare workflow yet
+                        in_memory: false,
                     };
                     let (results, elapsed, error_counts) =
                         crate::benchmark::run_hgvs_rs_normalize_parallel(
