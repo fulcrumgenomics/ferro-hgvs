@@ -299,72 +299,53 @@ pub fn has_mutalyzer_normalizer() -> bool {
 ///
 /// This calls the mutalyzer package directly for local normalization,
 /// avoiding HTTP API calls for fair performance comparison.
-pub fn run_mutalyzer_normalizer_subprocess(
+///
+/// When `offline` is false, network calls are tracked and reported.
+/// When `offline` is true, network access is blocked to force cache-only operation.
+fn run_mutalyzer_normalizer_impl(
     input_file: &str,
     output_file: &str,
     settings_file: Option<&str>,
+    offline: bool,
 ) -> Result<(), FerroError> {
     use std::process::Command;
 
-    // Python script for local normalization
     let python_code = r#"
 import sys
 import json
 import time
 import os
 
-# Network call tracking - must be set up before any imports that use urllib
+offline = sys.argv[4] == "true"
+
+# Network setup: track calls when online, block when offline
 network_calls = []
-_original_urlopen = None
-
-def _tracking_urlopen(url, *args, **kwargs):
-    """Track network calls made by urllib."""
-    url_str = url if isinstance(url, str) else url.full_url if hasattr(url, 'full_url') else str(url)
-    start = time.perf_counter()
-    try:
-        result = _original_urlopen(url, *args, **kwargs)
-        elapsed = time.perf_counter() - start
-        network_calls.append({"url": url_str[:200], "elapsed_seconds": elapsed, "success": True})
-        return result
-    except Exception as e:
-        elapsed = time.perf_counter() - start
-        network_calls.append({"url": url_str[:200], "elapsed_seconds": elapsed, "success": False, "error": str(e)[:100]})
-        raise
-
-# Install network tracking
 import urllib.request
-_original_urlopen = urllib.request.urlopen
-urllib.request.urlopen = _tracking_urlopen
 
-# Set up mutalyzer settings if provided
-# We must configure the cache BEFORE importing mutalyzer, because
-# mutalyzer_retriever.configuration loads settings at import time.
-cache_dir = None
-cache_add = False
+if offline:
+    def _blocked_urlopen(*args, **kwargs):
+        raise ConnectionError("Network access disabled in offline mode")
+    urllib.request.urlopen = _blocked_urlopen
+else:
+    _original_urlopen = urllib.request.urlopen
+    def _tracking_urlopen(url, *args, **kwargs):
+        url_str = url if isinstance(url, str) else url.full_url if hasattr(url, 'full_url') else str(url)
+        start = time.perf_counter()
+        try:
+            result = _original_urlopen(url, *args, **kwargs)
+            elapsed = time.perf_counter() - start
+            network_calls.append({"url": url_str[:200], "elapsed_seconds": elapsed, "success": True})
+            return result
+        except Exception as e:
+            elapsed = time.perf_counter() - start
+            network_calls.append({"url": url_str[:200], "elapsed_seconds": elapsed, "success": False, "error": str(e)[:100]})
+            raise
+    urllib.request.urlopen = _tracking_urlopen
+
+# Set MUTALYZER_SETTINGS env var BEFORE importing mutalyzer.
+# mutalyzer-retriever reads config from this file at import time.
 if len(sys.argv) > 3 and sys.argv[3]:
-    settings_file = sys.argv[3]
-    try:
-        with open(settings_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('MUTALYZER_CACHE_DIR'):
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        cache_dir = parts[1].strip()
-                elif line.startswith('MUTALYZER_FILE_CACHE_ADD'):
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        cache_add = parts[1].strip().lower() in ('true', '1', 'yes')
-    except Exception as e:
-        print(f"WARNING: Failed to parse settings file: {e}", file=sys.stderr)
-
-# Import mutalyzer_retriever first and configure the cache directory
-# directly in its settings dict (env vars don't work after import)
-from mutalyzer_retriever import configuration
-if cache_dir:
-    configuration.settings['MUTALYZER_CACHE_DIR'] = cache_dir
-if cache_add:
-    configuration.settings['MUTALYZER_FILE_CACHE_ADD'] = True
+    os.environ['MUTALYZER_SETTINGS'] = sys.argv[3]
 
 try:
     from mutalyzer.description import Description
@@ -405,6 +386,13 @@ for pattern in patterns:
                 "error": error_msg[:200]
             })
             failed += 1
+    except ConnectionError as e:
+        results.append({
+            "input": pattern,
+            "success": False,
+            "error": f"Network access required but disabled: {str(e)[:150]}"
+        })
+        failed += 1
     except Exception as e:
         results.append({
             "input": pattern,
@@ -423,9 +411,11 @@ output_data = {
     "elapsed_seconds": elapsed,
     "patterns_per_second": len(patterns) / elapsed if elapsed > 0 else 0,
     "network_calls": len(network_calls),
-    "network_stats": network_calls[:50] if network_calls else [],  # First 50 for debugging
     "results": results
 }
+
+if not offline:
+    output_data["network_stats"] = network_calls[:50]
 
 with open(output_file, 'w') as f:
     json.dump(output_data, f, indent=2)
@@ -438,11 +428,9 @@ if network_calls:
     print(f"Network calls per pattern: {len(network_calls) / len(patterns):.2f}", file=sys.stderr)
     print(f"Total network time: {total_network_time:.2f}s", file=sys.stderr)
     print(f"Average time per call: {total_network_time / len(network_calls):.2f}s", file=sys.stderr)
-    # Show unique URLs called
     unique_urls = set()
     for c in network_calls:
         url = c.get('url', '')
-        # Extract domain/path pattern
         if 'ncbi.nlm.nih.gov' in url:
             unique_urls.add('NCBI')
         elif 'ebi.ac.uk' in url:
@@ -450,7 +438,7 @@ if network_calls:
         else:
             unique_urls.add(url[:60])
     print(f"Endpoints hit: {', '.join(sorted(unique_urls))}", file=sys.stderr)
-else:
+elif not offline:
     print(f"\n=== Network Statistics ===", file=sys.stderr)
     print(f"Total network calls: 0 (all cached)", file=sys.stderr)
 "#;
@@ -464,18 +452,33 @@ else:
         cmd.arg("");
     }
 
+    cmd.arg(if offline { "true" } else { "false" });
+
     let output = cmd.output().map_err(|e| FerroError::Io {
         msg: format!("Failed to run Python: {}", e),
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let mode = if offline { "offline" } else { "online" };
         return Err(FerroError::Io {
-            msg: format!("Mutalyzer normalizer failed: {}", stderr),
+            msg: format!("Mutalyzer normalizer ({}) failed: {}", mode, stderr),
         });
     }
 
     Ok(())
+}
+
+/// Run local mutalyzer normalization via Python subprocess.
+///
+/// This calls the mutalyzer package directly for local normalization,
+/// avoiding HTTP API calls for fair performance comparison.
+pub fn run_mutalyzer_normalizer_subprocess(
+    input_file: &str,
+    output_file: &str,
+    settings_file: Option<&str>,
+) -> Result<(), FerroError> {
+    run_mutalyzer_normalizer_impl(input_file, output_file, settings_file, false)
 }
 
 /// Normalize a single HGVS variant using local mutalyzer subprocess.
@@ -575,141 +578,7 @@ pub fn run_mutalyzer_normalizer_subprocess_offline(
     output_file: &str,
     settings_file: Option<&str>,
 ) -> Result<(), FerroError> {
-    use std::process::Command;
-
-    // Python script for local normalization with network disabled
-    let python_code = r#"
-import sys
-import json
-import time
-import os
-
-# Block network access
-def _blocked_urlopen(*args, **kwargs):
-    raise ConnectionError("Network access disabled in offline mode")
-
-import urllib.request
-urllib.request.urlopen = _blocked_urlopen
-
-# Set up mutalyzer settings if provided
-cache_dir = None
-cache_add = False
-if len(sys.argv) > 3 and sys.argv[3]:
-    settings_file = sys.argv[3]
-    try:
-        with open(settings_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('MUTALYZER_CACHE_DIR'):
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        cache_dir = parts[1].strip()
-                elif line.startswith('MUTALYZER_FILE_CACHE_ADD'):
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        cache_add = parts[1].strip().lower() in ('true', '1', 'yes')
-    except Exception as e:
-        print(f"WARNING: Failed to parse settings file: {e}", file=sys.stderr)
-
-# Import mutalyzer_retriever first and configure the cache directory
-from mutalyzer_retriever import configuration
-if cache_dir:
-    configuration.settings['MUTALYZER_CACHE_DIR'] = cache_dir
-if cache_add:
-    configuration.settings['MUTALYZER_FILE_CACHE_ADD'] = True
-
-try:
-    from mutalyzer.description import Description
-except ImportError:
-    print("ERROR: mutalyzer not installed", file=sys.stderr)
-    print("Install with: pip install mutalyzer", file=sys.stderr)
-    sys.exit(1)
-
-input_file = sys.argv[1]
-output_file = sys.argv[2]
-
-results = []
-successful = 0
-failed = 0
-
-with open(input_file, 'r') as f:
-    patterns = [line.strip() for line in f if line.strip()]
-
-start = time.perf_counter()
-
-for pattern in patterns:
-    try:
-        d = Description(description=pattern)
-        d.normalize()
-        if not d.errors:
-            output = d.output()
-            results.append({
-                "input": pattern,
-                "success": True,
-                "output": output.get("normalized_description", pattern)
-            })
-            successful += 1
-        else:
-            error_msg = str(d.errors[0]) if d.errors else "Unknown error"
-            results.append({
-                "input": pattern,
-                "success": False,
-                "error": error_msg[:200]
-            })
-            failed += 1
-    except ConnectionError as e:
-        results.append({
-            "input": pattern,
-            "success": False,
-            "error": f"Network access required but disabled: {str(e)[:150]}"
-        })
-        failed += 1
-    except Exception as e:
-        results.append({
-            "input": pattern,
-            "success": False,
-            "error": str(e)[:200]
-        })
-        failed += 1
-
-elapsed = time.perf_counter() - start
-
-output_data = {
-    "tool": "mutalyzer",
-    "total_patterns": len(patterns),
-    "successful": successful,
-    "failed": failed,
-    "elapsed_seconds": elapsed,
-    "patterns_per_second": len(patterns) / elapsed if elapsed > 0 else 0,
-    "network_calls": 0,
-    "results": results
-}
-
-with open(output_file, 'w') as f:
-    json.dump(output_data, f, indent=2)
-"#;
-
-    let mut cmd = Command::new("python3");
-    cmd.args(["-c", python_code, input_file, output_file]);
-
-    if let Some(settings) = settings_file {
-        cmd.arg(settings);
-    } else {
-        cmd.arg("");
-    }
-
-    let output = cmd.output().map_err(|e| FerroError::Io {
-        msg: format!("Failed to run Python: {}", e),
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FerroError::Io {
-            msg: format!("Mutalyzer normalizer (offline) failed: {}", stderr),
-        });
-    }
-
-    Ok(())
+    run_mutalyzer_normalizer_impl(input_file, output_file, settings_file, true)
 }
 
 #[cfg(test)]

@@ -49,9 +49,6 @@ results/
 # Local configuration (generated via `ferro-web config`)
 config/service.toml
 
-# Local deployment workflow
-.github/workflows/deploy-local.yml
-
 # Python
 __pycache__/
 *.pyc
