@@ -943,11 +943,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let g_start = mapper.cds_to_genomic_with_intron(start_pos)?;
         let g_end = mapper.cds_to_genomic_with_intron(end_pos)?;
 
-        // Ensure start <= end (may be reversed on minus strand)
-        let (g_start, g_end) = if g_start <= g_end {
-            (g_start, g_end)
-        } else {
+        // On minus strand, genomic coords may be reversed relative to coding order.
+        // Track whether we swap so we can restore coding order after normalization.
+        let swapped = g_start > g_end;
+        let (g_start, g_end) = if swapped {
             (g_end, g_start)
+        } else {
+            (g_start, g_end)
         };
 
         // Get a window of genomic sequence around the variant for normalization
@@ -1011,6 +1013,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_start = mapper.genomic_to_cds_intronic(new_g_start)?;
         let new_end = mapper.genomic_to_cds_intronic(new_g_end)?;
 
+        // Restore coding order if positions were swapped for genomic processing
+        let (new_start, new_end) = if swapped {
+            (new_end, new_start)
+        } else {
+            (new_start, new_end)
+        };
+
         let new_variant = CdsVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
@@ -1058,11 +1067,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let g_start = mapper.tx_to_genomic_with_intron(start_pos)?;
         let g_end = mapper.tx_to_genomic_with_intron(end_pos)?;
 
-        // Ensure start <= end (may be reversed on minus strand)
-        let (g_start, g_end) = if g_start <= g_end {
-            (g_start, g_end)
-        } else {
+        // On minus strand, genomic coords may be reversed relative to coding order.
+        // Track whether we swap so we can restore coding order after normalization.
+        let swapped = g_start > g_end;
+        let (g_start, g_end) = if swapped {
             (g_end, g_start)
+        } else {
+            (g_start, g_end)
         };
 
         // Get a window of genomic sequence around the variant
@@ -1121,6 +1132,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_start = mapper.genomic_to_tx_with_intron(new_g_start)?;
         let new_end = mapper.genomic_to_tx_with_intron(new_g_end)?;
 
+        // Restore coding order if positions were swapped for genomic processing
+        let (new_start, new_end) = if swapped {
+            (new_end, new_start)
+        } else {
+            (new_start, new_end)
+        };
+
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
@@ -1171,11 +1189,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let g_start = self.cds_pos_to_genomic(&mapper, start_pos)?;
         let g_end = self.cds_pos_to_genomic(&mapper, end_pos)?;
 
-        // Handle strand orientation - ensure start <= end
-        let (g_start, g_end) = if g_start <= g_end {
-            (g_start, g_end)
-        } else {
+        // On minus strand, genomic coords may be reversed relative to coding order.
+        // Track whether we swap so we can restore coding order after normalization.
+        let swapped = g_start > g_end;
+        let (g_start, g_end) = if swapped {
             (g_end, g_start)
+        } else {
+            (g_start, g_end)
         };
 
         // Fetch genomic sequence with window for normalization
@@ -1211,6 +1231,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // - Fully intronic (if shifted into intron)
         let new_start = mapper.genomic_to_cds_intronic(new_g_start)?;
         let new_end = mapper.genomic_to_cds_intronic(new_g_end)?;
+
+        // Restore coding order if positions were swapped for genomic processing
+        let (new_start, new_end) = if swapped {
+            (new_end, new_start)
+        } else {
+            (new_start, new_end)
+        };
 
         let new_variant = CdsVariant {
             accession: variant.accession.clone(),
