@@ -340,6 +340,10 @@ enum Commands {
         /// Warning: Network mode is significantly slower and requires internet access.
         #[arg(long)]
         allow_network: bool,
+
+        /// Use in-memory provider for hgvs-rs (pre-loads all data, eliminates DB I/O from timing)
+        #[arg(long)]
+        in_memory: bool,
     },
 
     // CompareTool → compare results subcommand
@@ -1044,6 +1048,7 @@ fn main() {
             workers,
             no_rewrite_intronic,
             allow_network,
+            in_memory,
         } => run_normalize_tool(
             tool,
             &input,
@@ -1057,6 +1062,7 @@ fn main() {
             workers,
             no_rewrite_intronic,
             allow_network,
+            in_memory,
         ),
 
         // CompareTool now handled by Compare::Results
@@ -1574,6 +1580,7 @@ fn run_normalize_hgvs_rs(
     seqrepo_path: &str,
     lrg_mapping: Option<&Path>,
     workers: usize,
+    in_memory: bool,
 ) -> Result<(), ferro_hgvs::FerroError> {
     use ferro_hgvs::benchmark::{run_hgvs_rs_normalize_parallel, HgvsRsConfig};
     use std::io::BufRead;
@@ -1601,6 +1608,7 @@ fn run_normalize_hgvs_rs(
         uta_db_schema: uta_db_schema.to_string(),
         seqrepo_path: seqrepo_path.to_string(),
         lrg_mapping_file: lrg_mapping.map(|p| p.to_string_lossy().to_string()),
+        in_memory,
     };
 
     // Run normalization (parallel or sequential)
@@ -3231,6 +3239,7 @@ fn run_normalize_tool(
     workers: usize,
     no_rewrite_intronic: bool,
     allow_network: bool,
+    _in_memory: bool,
 ) -> Result<(), ferro_hgvs::FerroError> {
     // Prerequisite: input file must exist
     if !input.exists() {
@@ -3530,6 +3539,7 @@ fn run_normalize_tool(
                     seqrepo.to_str().unwrap(),
                     lrg_mapping.as_ref().map(|p| p.as_path()),
                     workers,
+                    in_memory,
                 )
             }
         }
@@ -4362,6 +4372,7 @@ fn run_check_tool(
                             .map(|p| p.display().to_string())
                             .unwrap_or_default(),
                         lrg_mapping_file: None,
+                        in_memory: false,
                     };
                     match check_hgvs_rs_available(&config) {
                         Ok(()) => {
@@ -4483,6 +4494,7 @@ fn run_check_tool(
                             uta_db_schema: "uta_20210129b".to_string(),
                             seqrepo_path: sr_path.display().to_string(),
                             lrg_mapping_file: None,
+                            in_memory: false,
                         };
                         check_hgvs_rs_available(&config).is_ok()
                     } else {

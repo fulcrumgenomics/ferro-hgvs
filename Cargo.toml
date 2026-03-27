@@ -62,7 +62,7 @@ mmap = ["dep:memmap2"]
 protein-fetch = ["dep:ureq"]
 benchmark = ["dep:rayon", "dep:num_cpus", "dep:urlencoding", "dep:rand", "dep:tempfile", "protein-fetch", "dep:tokio", "dep:tokio-postgres", "dep:bytes", "dep:futures-util", "dep:rusqlite"]
 # hgvs-rs integration for native Rust HGVS normalization comparison
-hgvs-rs = ["benchmark", "dep:hgvs"]
+hgvs-rs = ["benchmark", "dep:hgvs", "dep:postgres", "dep:biocommons-bioutils", "dep:indexmap", "dep:seqrepo"]
 # Web service for multi-tool HGVS variant normalization
 web-service = ["dep:axum", "dep:tokio", "dep:tower", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:toml", "dep:async-trait", "dep:urlencoding", "dep:open", "benchmark"]
 # Long-running tests (e.g., full ClinVar validation). Run with: cargo test --release --features slow-tests
@@ -96,7 +96,23 @@ version = "3.14"
 optional = true
 
 [dependencies.hgvs]
+version = "0.20.1"
+optional = true
+
+[dependencies.postgres]
 version = "0.19"
+optional = true
+
+[dependencies.biocommons-bioutils]
+version = "0.1"
+optional = true
+
+[dependencies.indexmap]
+version = "2"
+optional = true
+
+[dependencies.seqrepo]
+version = "0.10"
 optional = true
 
 [dependencies.tokio]
@@ -182,8 +198,3 @@ harness = false
 [profile.release]
 lto = true
 codegen-units = 1
-
-# Use vendored hgvs-rs with NR_ transcript fix until PR is merged upstream
-# PR: https://github.com/varfish-org/hgvs-rs/pull/256
-[patch.crates-io]
-hgvs = { path = "vendor/hgvs-rs" }

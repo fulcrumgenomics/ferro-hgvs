@@ -914,6 +914,7 @@ dependencies = [
  "async-trait",
  "atty",
  "axum",
+ "biocommons-bioutils",
  "bytes",
  "chrono",
  "clap",
@@ -922,6 +923,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hgvs",
+ "indexmap",
  "indicatif",
  "log",
  "memchr",
@@ -931,6 +933,7 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "open",
+ "postgres",
  "proptest",
  "pyo3",
  "rand 0.8.5",
@@ -939,6 +942,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "rusqlite",
+ "seqrepo",
  "serde",
  "serde_json",
  "tempfile",
@@ -1262,7 +1266,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hgvs"
-version = "0.19.1"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec5869010edc75d57cafdca6f5e25cbdcd55c98cf37676975db760a363bb09e"
 dependencies = [
  "ahash",
  "base16ct",

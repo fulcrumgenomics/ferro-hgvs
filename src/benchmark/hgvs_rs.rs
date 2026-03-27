@@ -44,6 +44,8 @@ pub struct HgvsRsConfig {
     pub seqrepo_path: String,
     /// Optional LRG-to-RefSeq mapping file for LRG transcript translation
     pub lrg_mapping_file: Option<String>,
+    /// Use in-memory provider instead of UTA+SeqRepo for benchmarking
+    pub in_memory: bool,
 }
 
 impl Default for HgvsRsConfig {
@@ -53,6 +55,7 @@ impl Default for HgvsRsConfig {
             uta_db_schema: "uta_20210129b".to_string(),
             seqrepo_path: "/usr/local/share/seqrepo/2021-01-29".to_string(),
             lrg_mapping_file: None,
+            in_memory: false,
         }
     }
 }
@@ -163,6 +166,15 @@ impl HgvsRsNormalizer {
         let mapper_config = MapperConfig::default();
         let mapper = Mapper::new(&mapper_config, provider);
 
+        Ok(Self { mapper })
+    }
+
+    /// Create a new normalizer using a pre-built Provider (e.g., InMemoryProvider).
+    pub fn with_provider(
+        provider: Arc<dyn hgvs::data::interface::Provider + Send + Sync>,
+    ) -> Result<Self, FerroError> {
+        let mapper_config = MapperConfig::default();
+        let mapper = Mapper::new(&mapper_config, provider);
         Ok(Self { mapper })
     }
 
@@ -281,7 +293,23 @@ pub fn run_hgvs_rs_normalize(
     let start = Instant::now();
 
     // Create the normalizer
-    let normalizer = HgvsRsNormalizer::new(config)?;
+    let normalizer = if config.in_memory {
+        let im_config = super::inmemory_provider::InMemoryProviderConfig {
+            uta_db_url: config.uta_db_url.clone(),
+            uta_db_schema: config.uta_db_schema.clone(),
+            seqrepo_path: Some(config.seqrepo_path.clone()),
+        };
+        let provider = Arc::new(
+            super::inmemory_provider::InMemoryProvider::new(&im_config).map_err(|e| {
+                FerroError::Io {
+                    msg: format!("Failed to create in-memory provider: {}", e),
+                }
+            })?,
+        );
+        HgvsRsNormalizer::with_provider(provider)?
+    } else {
+        HgvsRsNormalizer::new(config)?
+    };
 
     // Run normalization sequentially
     let results: Vec<crate::benchmark::ParseResult> = patterns
@@ -340,8 +368,8 @@ pub fn run_hgvs_rs_normalize(
 
 /// Run hgvs-rs normalization on multiple patterns in parallel.
 ///
-/// Uses Rayon to parallelize across workers, with each worker creating its own
-/// database connection. This achieves significant speedup for bulk normalization.
+/// Uses a dedicated rayon thread pool with one normalizer (and DB connection) per
+/// thread, avoiding the previous approach of re-creating a normalizer for every chunk.
 ///
 /// Returns (results, elapsed_time, error_counts).
 pub fn run_hgvs_rs_normalize_parallel(
@@ -351,6 +379,7 @@ pub fn run_hgvs_rs_normalize_parallel(
 ) -> Result<HgvsRsNormalizeResult, crate::FerroError> {
     use rayon::prelude::*;
     use std::collections::HashMap;
+    use std::sync::Mutex;
     use std::time::Instant;
 
     if workers <= 1 {
@@ -364,24 +393,81 @@ pub fn run_hgvs_rs_normalize_parallel(
         None
     };
 
+    // Pre-create one normalizer per worker before starting the timer.
+    // This isolates provider initialization cost from normalization throughput.
+    eprintln!(
+        "Creating {} hgvs-rs normalizers (one per worker)...",
+        workers
+    );
+    let init_start = Instant::now();
+    let normalizers: Vec<_> = if config.in_memory {
+        // Single shared in-memory provider for all workers
+        let im_config = super::inmemory_provider::InMemoryProviderConfig {
+            uta_db_url: config.uta_db_url.clone(),
+            uta_db_schema: config.uta_db_schema.clone(),
+            seqrepo_path: Some(config.seqrepo_path.clone()),
+        };
+        let provider = Arc::new(
+            super::inmemory_provider::InMemoryProvider::new(&im_config).map_err(|e| {
+                FerroError::Io {
+                    msg: format!("Failed to create in-memory provider: {}", e),
+                }
+            })?,
+        );
+        (0..workers)
+            .map(|_| {
+                HgvsRsNormalizer::with_provider(provider.clone())
+                    .map_err(|e| format!("Failed to create normalizer: {}", e))
+            })
+            .collect()
+    } else {
+        (0..workers)
+            .map(|_| {
+                HgvsRsNormalizer::new(config)
+                    .map_err(|e| format!("Failed to create normalizer: {}", e))
+            })
+            .collect()
+    };
+    let init_elapsed = init_start.elapsed();
+    eprintln!(
+        "Normalizer initialization took {:.3}s ({:.3}s per worker)",
+        init_elapsed.as_secs_f64(),
+        init_elapsed.as_secs_f64() / workers as f64,
+    );
+
+    // Wrap each normalizer in a Mutex so rayon workers can claim one
+    let normalizer_pool: Vec<Mutex<Option<HgvsRsNormalizer>>> = normalizers
+        .into_iter()
+        .map(|r| match r {
+            Ok(n) => Mutex::new(Some(n)),
+            Err(_) => Mutex::new(None),
+        })
+        .collect();
+
+    // Track which normalizer each thread claims via thread-local index
+    let next_idx = std::sync::atomic::AtomicUsize::new(0);
+
     let start = Instant::now();
 
     // Calculate chunk size for parallel processing
     let chunk_size = patterns.len().div_ceil(workers).max(1);
 
-    // Process chunks in parallel, each chunk creates its own normalizer
-    // This avoids Tokio runtime conflicts with thread-local storage
+    // Process chunks in parallel, each rayon thread claims a normalizer from the pool
     let chunk_results: Vec<Vec<(usize, crate::benchmark::ParseResult)>> = patterns
         .chunks(chunk_size)
         .enumerate()
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|(chunk_idx, chunk)| {
-            // Create normalizer for this chunk
-            let normalizer = match HgvsRsNormalizer::new(config) {
-                Ok(n) => n,
-                Err(e) => {
-                    // Return error results for all patterns in this chunk
+            // Each rayon thread claims a normalizer by atomic index.
+            // Since we have exactly `workers` chunks and `workers` normalizers,
+            // each thread gets its own.
+            let idx =
+                next_idx.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % normalizer_pool.len();
+            let guard = normalizer_pool[idx].lock().unwrap();
+            let normalizer = match guard.as_ref() {
+                Some(n) => n,
+                None => {
                     return chunk
                         .iter()
                         .enumerate()
@@ -393,7 +479,7 @@ pub fn run_hgvs_rs_normalize_parallel(
                                     input: pattern.clone(),
                                     success: false,
                                     output: None,
-                                    error: Some(format!("Failed to create normalizer: {}", e)),
+                                    error: Some("Failed to create normalizer".to_string()),
                                     error_category: Some("CONNECTION_ERROR".to_string()),
                                     ref_mismatch: None,
                                     details: None,
@@ -404,7 +490,7 @@ pub fn run_hgvs_rs_normalize_parallel(
                 }
             };
 
-            // Process all patterns in this chunk with the same normalizer
+            // Process all patterns in this chunk with the claimed normalizer
             chunk
                 .iter()
                 .enumerate()
@@ -423,7 +509,6 @@ pub fn run_hgvs_rs_normalize_parallel(
 
                     // If we translated an LRG pattern, report with original accession
                     let output = if original_lrg.is_some() && hgvs_result.success {
-                        // Replace RefSeq back to LRG in output for consistency
                         hgvs_result.output.map(|o| {
                             if let Some(ref lrg) = original_lrg {
                                 if let Some(colon_pos) = o.find(':') {
@@ -442,7 +527,7 @@ pub fn run_hgvs_rs_normalize_parallel(
                     (
                         global_idx,
                         crate::benchmark::ParseResult {
-                            input: pattern.clone(), // Always report original input
+                            input: pattern.clone(),
                             success: hgvs_result.success,
                             output,
                             error: hgvs_result.error.clone(),

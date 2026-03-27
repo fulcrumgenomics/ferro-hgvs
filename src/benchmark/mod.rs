@@ -47,6 +47,8 @@ pub mod compare;
 pub mod extract;
 #[cfg(feature = "hgvs-rs")]
 pub mod hgvs_rs;
+#[cfg(feature = "hgvs-rs")]
+pub mod inmemory_provider;
 pub mod mutalyzer;
 pub mod normalize;
 pub mod parse;
