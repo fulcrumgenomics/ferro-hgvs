@@ -1,9 +1,9 @@
-//! In-memory hgvs-rs `Provider` backed by data pre-loaded from UTA PostgreSQL.
+//! In-memory hgvs-rs `Provider` backed by data pre-loaded from UTA PostgreSQL
+//! and SeqRepo.
 //!
 //! The goal is to eliminate all PostgreSQL I/O from benchmark measurements by
 //! loading every table/view that the `Provider` trait requires into HashMaps
-//! at construction time.  The actual `Provider` trait implementation will be
-//! added in a subsequent task.
+//! at construction time.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -12,10 +12,12 @@ use indexmap::IndexMap;
 use postgres::{Client, NoTls};
 
 use biocommons_bioutils::assemblies::{Assembly, ASSEMBLY_INFOS};
+use hgvs::data::error::Error as HgvsDataError;
 use hgvs::data::interface::{
-    GeneInfoRecord, TxExonsRecord, TxIdentityInfo, TxInfoRecord, TxMappingOptionsRecord,
-    TxSimilarityRecord,
+    GeneInfoRecord, Provider, TxExonsRecord, TxForRegionRecord, TxIdentityInfo, TxInfoRecord,
+    TxMappingOptionsRecord, TxSimilarityRecord,
 };
+use seqrepo::{AliasOrSeqId, Interface as SeqRepoInterface, Query as SeqRepoQuery, SeqRepo};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -219,6 +221,12 @@ impl InMemoryProvider {
         // -- tx_for_region index (exon_set + exon) -------------------------
         let tx_region_index = Self::load_tx_region_index(&mut conn, schema)?;
 
+        // -- SeqRepo sequences (optional) ------------------------------------
+        let mut sequences = sequences;
+        if let Some(ref seqrepo_path) = config.seqrepo_path {
+            Self::load_seqrepo_sequences(seqrepo_path, &mut sequences)?;
+        }
+
         let elapsed = total_start.elapsed();
         eprintln!(
             "InMemoryProvider loaded in {:.1}s  (gene_info={}, sequences={}, \
@@ -381,8 +389,10 @@ impl InMemoryProvider {
         let mut seq_id_to_seq: HashMap<String, String> = HashMap::with_capacity(rows.len());
         for row in &rows {
             let seq_id: String = row.get("seq_id");
-            let seq: String = row.get("seq");
-            seq_id_to_seq.insert(seq_id, seq);
+            let seq: Option<String> = row.get("seq");
+            if let Some(seq) = seq {
+                seq_id_to_seq.insert(seq_id, seq);
+            }
         }
         eprintln!(
             "  seq: {} sequences in {:.1}s",
@@ -718,6 +728,240 @@ impl InMemoryProvider {
         );
         Ok(map)
     }
+
+    /// Load sequences from a SeqRepo instance into the existing `sequences` map.
+    ///
+    /// The `seqrepo_path` should be the full path to the SeqRepo instance
+    /// directory (e.g. `/path/to/seqrepo/2021-01-29`).  The last component is
+    /// used as the instance name and the parent as the root directory.
+    fn load_seqrepo_sequences(
+        seqrepo_path: &str,
+        sequences: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let t = Instant::now();
+        eprintln!("Loading sequences from SeqRepo at {seqrepo_path} ...");
+
+        let path = std::path::Path::new(seqrepo_path);
+        let instance = path
+            .file_name()
+            .ok_or_else(|| format!("Could not extract instance name from path: {seqrepo_path}"))?
+            .to_str()
+            .ok_or_else(|| format!("Non-UTF8 path component in: {seqrepo_path}"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("Could not extract parent from path: {seqrepo_path}"))?;
+
+        let repo = SeqRepo::new(parent, instance)
+            .map_err(|e| format!("Failed to open SeqRepo at {seqrepo_path}: {e}"))?;
+
+        // Step 1: Collect all aliases, grouped by seq_id.
+        let query = SeqRepoQuery::default();
+        let mut seqid_to_aliases: HashMap<String, Vec<String>> = HashMap::new();
+        repo.alias_db()
+            .find(&query, |record_result| {
+                if let Ok(record) = record_result {
+                    seqid_to_aliases
+                        .entry(record.seqid.clone())
+                        .or_default()
+                        .push(record.alias);
+                }
+            })
+            .map_err(|e| format!("Failed to query SeqRepo aliases: {e}"))?;
+
+        eprintln!(
+            "  SeqRepo aliases: {} unique seq_ids, loading sequences ...",
+            seqid_to_aliases.len(),
+        );
+
+        // Step 2: For each unique seq_id, check if any alias is already loaded.
+        //         If not, fetch the sequence and store under all aliases.
+        let mut loaded = 0usize;
+        let mut skipped = 0usize;
+        for (seqid, aliases) in &seqid_to_aliases {
+            // Skip if all aliases for this seq_id are already present.
+            if aliases.iter().all(|a| sequences.contains_key(a)) {
+                skipped += aliases.len();
+                continue;
+            }
+
+            // Fetch the full sequence by seq_id.
+            let seq =
+                match repo.fetch_sequence_part(&AliasOrSeqId::SeqId(seqid.clone()), None, None) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("  WARNING: failed to fetch sequence for seq_id={seqid}: {e}");
+                        continue;
+                    }
+                };
+
+            // Store under each alias that is not already present.
+            for alias in aliases {
+                if !sequences.contains_key(alias) {
+                    sequences.insert(alias.clone(), seq.clone());
+                    loaded += 1;
+                }
+            }
+        }
+
+        eprintln!(
+            "  SeqRepo: loaded {} new alias->sequence mappings, skipped {} already present in {:.1}s",
+            loaded,
+            skipped,
+            t.elapsed().as_secs_f64(),
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provider trait implementation
+// ---------------------------------------------------------------------------
+
+impl Provider for InMemoryProvider {
+    fn data_version(&self) -> &str {
+        &self.data_version
+    }
+
+    fn schema_version(&self) -> &str {
+        &self.schema_version
+    }
+
+    fn get_assembly_map(&self, assembly: Assembly) -> IndexMap<String, String> {
+        self.assembly_maps
+            .get(&assembly)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn get_gene_info(&self, hgnc: &str) -> Result<GeneInfoRecord, HgvsDataError> {
+        self.gene_info
+            .get(hgnc)
+            .cloned()
+            .ok_or_else(|| HgvsDataError::NoGeneFound(hgnc.to_string()))
+    }
+
+    fn get_pro_ac_for_tx_ac(&self, tx_ac: &str) -> Result<Option<String>, HgvsDataError> {
+        Ok(self.tx_to_pro.get(tx_ac).cloned())
+    }
+
+    fn get_seq_part(
+        &self,
+        ac: &str,
+        begin: Option<usize>,
+        end: Option<usize>,
+    ) -> Result<String, HgvsDataError> {
+        let seq = self
+            .sequences
+            .get(ac)
+            .ok_or_else(|| HgvsDataError::NoSequenceRecord(ac.to_string()))?;
+        let start = begin.unwrap_or(0);
+        let stop = end.unwrap_or(seq.len());
+        Ok(seq[start..stop].to_string())
+    }
+
+    fn get_acs_for_protein_seq(&self, seq: &str) -> Result<Vec<String>, HgvsDataError> {
+        let md5 = hgvs::sequences::seq_md5(seq, true)?;
+        let mut acs = self.seq_id_to_acs.get(&md5).cloned().unwrap_or_default();
+        acs.push(format!("MD5_{md5}"));
+        Ok(acs)
+    }
+
+    fn get_similar_transcripts(
+        &self,
+        tx_ac: &str,
+    ) -> Result<Vec<TxSimilarityRecord>, HgvsDataError> {
+        Ok(self
+            .similar_transcripts
+            .get(tx_ac)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn get_tx_exons(
+        &self,
+        tx_ac: &str,
+        alt_ac: &str,
+        alt_aln_method: &str,
+    ) -> Result<Vec<TxExonsRecord>, HgvsDataError> {
+        let key = (
+            tx_ac.to_string(),
+            alt_ac.to_string(),
+            alt_aln_method.to_string(),
+        );
+        self.tx_exons.get(&key).cloned().ok_or_else(|| {
+            HgvsDataError::NoTxExons(
+                tx_ac.to_string(),
+                alt_ac.to_string(),
+                alt_aln_method.to_string(),
+            )
+        })
+    }
+
+    fn get_tx_for_gene(&self, gene: &str) -> Result<Vec<TxInfoRecord>, HgvsDataError> {
+        Ok(self.tx_for_gene.get(gene).cloned().unwrap_or_default())
+    }
+
+    fn get_tx_for_region(
+        &self,
+        alt_ac: &str,
+        alt_aln_method: &str,
+        start_i: i32,
+        end_i: i32,
+    ) -> Result<Vec<TxForRegionRecord>, HgvsDataError> {
+        let key = (alt_ac.to_string(), alt_aln_method.to_string());
+        let records = self.tx_region_index.get(&key);
+        let result = match records {
+            Some(entries) => entries
+                .iter()
+                .filter(|r| r.start_i < end_i && start_i <= r.end_i)
+                .map(|r| TxForRegionRecord {
+                    tx_ac: r.tx_ac.clone(),
+                    alt_ac: r.alt_ac.clone(),
+                    alt_strand: r.alt_strand,
+                    alt_aln_method: r.alt_aln_method.clone(),
+                    start_i: r.start_i,
+                    end_i: r.end_i,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok(result)
+    }
+
+    fn get_tx_identity_info(&self, tx_ac: &str) -> Result<TxIdentityInfo, HgvsDataError> {
+        self.tx_identity_info
+            .get(tx_ac)
+            .cloned()
+            .ok_or_else(|| HgvsDataError::NoTranscriptFound(tx_ac.to_string()))
+    }
+
+    fn get_tx_info(
+        &self,
+        tx_ac: &str,
+        alt_ac: &str,
+        alt_aln_method: &str,
+    ) -> Result<TxInfoRecord, HgvsDataError> {
+        let key = (
+            tx_ac.to_string(),
+            alt_ac.to_string(),
+            alt_aln_method.to_string(),
+        );
+        self.tx_info
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| HgvsDataError::NoAlignmentFound(tx_ac.to_string(), alt_ac.to_string()))
+    }
+
+    fn get_tx_mapping_options(
+        &self,
+        tx_ac: &str,
+    ) -> Result<Vec<TxMappingOptionsRecord>, HgvsDataError> {
+        Ok(self
+            .tx_mapping_options
+            .get(tx_ac)
+            .cloned()
+            .unwrap_or_default())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -782,5 +1026,107 @@ mod tests {
         );
 
         eprintln!("All InMemoryProvider sanity checks passed.");
+    }
+
+    /// Helper to build a provider with both UTA and SeqRepo loaded.
+    fn make_provider_with_seqrepo() -> InMemoryProvider {
+        let config = InMemoryProviderConfig {
+            seqrepo_path: Some("manuscript/benchmark/output/data/seqrepo/2021-01-29".to_string()),
+            ..Default::default()
+        };
+        InMemoryProvider::new(&config)
+            .expect("Failed to create InMemoryProvider — is UTA + SeqRepo available?")
+    }
+
+    /// Verify that SeqRepo loading adds genomic sequences not present in UTA.
+    #[test]
+    #[ignore]
+    fn test_seqrepo_loads_genomic_sequences() {
+        let provider = make_provider_with_seqrepo();
+
+        // A transcript sequence should be available from UTA.
+        assert!(
+            provider.sequences.contains_key("NM_000051.3"),
+            "NM_000051.3 (transcript) should be loaded from UTA"
+        );
+
+        // A genomic contig should be available from SeqRepo (not stored in UTA seq).
+        assert!(
+            provider.sequences.contains_key("NC_000011.10"),
+            "NC_000011.10 (genomic) should be loaded from SeqRepo"
+        );
+    }
+
+    /// Verify `get_seq_part` returns correct-length results.
+    #[test]
+    #[ignore]
+    fn test_get_seq_part() {
+        let provider = make_provider_with_seqrepo();
+
+        // Full sequence for a transcript.
+        let full = provider.get_seq("NM_000051.3").expect("get_seq failed");
+        assert!(
+            full.len() > 1000,
+            "NM_000051.3 sequence should be > 1000 bp"
+        );
+
+        // Partial sequence.
+        let part = provider
+            .get_seq_part("NM_000051.3", Some(100), Some(200))
+            .expect("get_seq_part failed");
+        assert_eq!(part.len(), 100, "slice [100..200] should be 100 bp");
+        assert_eq!(&full[100..200], part, "slice content should match");
+    }
+
+    /// Verify `get_tx_mapping_options` returns non-empty for NM_000051.3.
+    #[test]
+    #[ignore]
+    fn test_get_tx_mapping_options() {
+        let provider = make_provider_with_seqrepo();
+
+        let options = provider
+            .get_tx_mapping_options("NM_000051.3")
+            .expect("get_tx_mapping_options failed");
+        assert!(
+            !options.is_empty(),
+            "NM_000051.3 should have mapping options"
+        );
+    }
+
+    /// Verify `get_tx_identity_info` returns correct HGNC for NM_000051.3.
+    #[test]
+    #[ignore]
+    fn test_get_tx_identity_info() {
+        let provider = make_provider_with_seqrepo();
+
+        let info = provider
+            .get_tx_identity_info("NM_000051.3")
+            .expect("get_tx_identity_info failed");
+        assert_eq!(info.hgnc, "ATM", "NM_000051.3 should map to ATM gene");
+    }
+
+    /// Verify `get_tx_exons` returns non-empty for a known transcript+contig pair.
+    #[test]
+    #[ignore]
+    fn test_get_tx_exons() {
+        let provider = make_provider_with_seqrepo();
+
+        // First find a valid alt_ac for NM_000051.3 from mapping options.
+        let options = provider
+            .get_tx_mapping_options("NM_000051.3")
+            .expect("get_tx_mapping_options failed");
+        let opt = options
+            .iter()
+            .find(|o| o.alt_aln_method == "splign")
+            .expect("should have a splign alignment for NM_000051.3");
+
+        let exons = provider
+            .get_tx_exons("NM_000051.3", &opt.alt_ac, "splign")
+            .expect("get_tx_exons failed");
+        assert!(
+            !exons.is_empty(),
+            "NM_000051.3 should have exon records for {}",
+            opt.alt_ac,
+        );
     }
 }
