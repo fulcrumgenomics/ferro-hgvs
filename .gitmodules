@@ -1,4 +1,0 @@
-[submodule "vendor/hgvs-rs"]
-	path = vendor/hgvs-rs
-	url = https://github.com/nh13/hgvs-rs.git
-	branch = fix/non-coding-transcript-support

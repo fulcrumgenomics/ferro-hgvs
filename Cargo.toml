@@ -96,7 +96,7 @@ version = "3.14"
 optional = true
 
 [dependencies.hgvs]
-version = "0.19"
+version = "0.20.1"
 optional = true
 
 [dependencies.tokio]
@@ -182,8 +182,3 @@ harness = false
 [profile.release]
 lto = true
 codegen-units = 1
-
-# Use vendored hgvs-rs with NR_ transcript fix until PR is merged upstream
-# PR: https://github.com/varfish-org/hgvs-rs/pull/256
-[patch.crates-io]
-hgvs = { path = "vendor/hgvs-rs" }
