@@ -23,6 +23,8 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use crate::error::FerroError;
+use crate::liftover::aliases::ContigAliases;
+use crate::reference::transcript::GenomeBuild;
 use crate::reference::Strand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -649,6 +651,9 @@ pub struct CdotMapper {
     transcripts: HashMap<String, CdotTranscript>,
     /// Index from contig to transcript IDs that overlap.
     contig_index: HashMap<String, Vec<String>>,
+    /// Alias-to-canonical contig name mapping (e.g., "chr7" -> "NC_000007.14").
+    /// Allows lookups by UCSC-style names when `contig_index` keys are RefSeq accessions.
+    contig_alias_to_canonical: HashMap<String, String>,
     /// Index from base accession (without version) to versioned accession.
     base_to_versioned: HashMap<String, String>,
     /// LRG transcript to RefSeq transcript mapping (e.g., "LRG_1t1" -> "NM_000088.3").
@@ -661,6 +666,7 @@ impl CdotMapper {
         Self {
             transcripts: HashMap::new(),
             contig_index: HashMap::new(),
+            contig_alias_to_canonical: HashMap::new(),
             base_to_versioned: HashMap::new(),
             lrg_to_refseq: HashMap::new(),
         }
@@ -710,87 +716,25 @@ impl CdotMapper {
             }
         }
 
-        // Duplicate chr__ notation in contig_index keys
-        let refseq_chrom_aliases: Vec<(&str, &str)> = match genome_build {
-            "GRCh38" => [
-                ("NC_000001.11", "chr1"),
-                ("NC_000002.12", "chr2"),
-                ("NC_000003.12", "chr3"),
-                ("NC_000004.12", "chr4"),
-                ("NC_000005.10", "chr5"),
-                ("NC_000006.12", "chr6"),
-                ("NC_000007.14", "chr7"),
-                ("NC_000008.11", "chr8"),
-                ("NC_000009.12", "chr9"),
-                ("NC_000010.11", "chr10"),
-                ("NC_000011.10", "chr11"),
-                ("NC_000012.12", "chr12"),
-                ("NC_000013.11", "chr13"),
-                ("NC_000014.9", "chr14"),
-                ("NC_000015.10", "chr15"),
-                ("NC_000016.10", "chr16"),
-                ("NC_000017.11", "chr17"),
-                ("NC_000018.10", "chr18"),
-                ("NC_000019.10", "chr19"),
-                ("NC_000020.11", "chr20"),
-                ("NC_000021.9", "chr21"),
-                ("NC_000022.11", "chr22"),
-                ("NC_000023.11", "chrX"),
-                ("NC_000024.10", "chrY"),
-                ("NC_012920.1", "chrM"),
-            ]
-            .to_vec(),
-
-            "GRCh37" => [
-                ("NC_000001.10", "chr1"),
-                ("NC_000002.11", "chr2"),
-                ("NC_000003.11", "chr3"),
-                ("NC_000004.11", "chr4"),
-                ("NC_000005.9", "chr5"),
-                ("NC_000006.11", "chr6"),
-                ("NC_000007.13", "chr7"),
-                ("NC_000008.10", "chr8"),
-                ("NC_000009.11", "chr9"),
-                ("NC_000010.10", "chr10"),
-                ("NC_000011.9", "chr11"),
-                ("NC_000012.11", "chr12"),
-                ("NC_000013.10", "chr13"),
-                ("NC_000014.8", "chr14"),
-                ("NC_000015.9", "chr15"),
-                ("NC_000016.9", "chr16"),
-                ("NC_000017.10", "chr17"),
-                ("NC_000018.9", "chr18"),
-                ("NC_000019.9", "chr19"),
-                ("NC_000020.10", "chr20"),
-                ("NC_000021.8", "chr21"),
-                ("NC_000022.10", "chr22"),
-                ("NC_000023.10", "chrX"),
-                ("NC_000024.9", "chrY"),
-                ("NC_001807.4", "chrM"),
-                // ("NC_012920.1","chrMT"),
-            ]
-            .to_vec(),
-            _ => vec![],
-        };
-
-        for (refseq_id, alias) in refseq_chrom_aliases {
-            if let Some(transcripts) = mapper.contig_index.get(refseq_id) {
-                mapper
-                    .contig_index
-                    .insert(alias.to_string(), transcripts.clone());
-            }
-        }
+        mapper.populate_contig_aliases(genome_build);
 
         mapper
     }
 
-    /// Create from a parsed CdotFile (already normalized).
+    /// Create from a parsed CdotFile (already normalized), defaulting to GRCh38 aliases.
     pub fn from_cdot_file(cdot_file: CdotFile) -> Self {
+        Self::from_cdot_file_with_build(cdot_file, "GRCh38")
+    }
+
+    /// Create from a parsed CdotFile with a specific genome build for contig aliases.
+    pub fn from_cdot_file_with_build(cdot_file: CdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
 
         for (accession, transcript) in cdot_file.transcripts {
             mapper.add_transcript(accession, transcript);
         }
+
+        mapper.populate_contig_aliases(genome_build);
 
         mapper
     }
@@ -810,6 +754,66 @@ impl CdotMapper {
         }
 
         self.transcripts.insert(accession, transcript);
+    }
+
+    /// Build contig alias mappings from `ContigAliases` so that UCSC-style names
+    /// (e.g., "chr7") resolve to the RefSeq accessions used as `contig_index` keys.
+    fn populate_contig_aliases(&mut self, genome_build: &str) {
+        let build = match genome_build {
+            "GRCh37" => GenomeBuild::GRCh37,
+            "GRCh38" => GenomeBuild::GRCh38,
+            _ => {
+                log::warn!(
+                    "Unsupported genome build '{}'; contig alias resolution is disabled",
+                    genome_build
+                );
+                return;
+            }
+        };
+
+        let aliases = ContigAliases::default_human();
+        for refseq_contig in self.contig_index.keys() {
+            // Map UCSC alias (e.g., "chr7") -> RefSeq key (e.g., "NC_000007.14")
+            if let Some(ucsc) = aliases.refseq_to_ucsc(refseq_contig) {
+                self.contig_alias_to_canonical
+                    .insert(ucsc.to_string(), refseq_contig.clone());
+            }
+            // Map Ensembl alias (e.g., "7") -> RefSeq key
+            if let Some(ensembl) = aliases.refseq_to_ensembl(refseq_contig) {
+                self.contig_alias_to_canonical
+                    .insert(ensembl.to_string(), refseq_contig.clone());
+            }
+            // Also allow lookup by the other build's RefSeq accession via resolve
+            // (e.g., if someone passes "NC_000007.13" but data is GRCh38)
+            // This is handled implicitly since we only index contigs present in the data.
+        }
+
+        // Also map any non-RefSeq contig_index keys back through to_refseq
+        // in case the cdot data itself uses UCSC names.
+        let ucsc_keys: Vec<String> = self
+            .contig_index
+            .keys()
+            .filter(|k| k.starts_with("chr"))
+            .cloned()
+            .collect();
+        for ucsc_key in ucsc_keys {
+            if let Some(refseq) = aliases.resolve_to_refseq(&ucsc_key, build) {
+                self.contig_alias_to_canonical
+                    .insert(refseq.to_string(), ucsc_key.clone());
+            }
+        }
+    }
+
+    /// Resolve a contig name through aliases, returning the canonical key used in `contig_index`.
+    fn resolve_contig<'a>(&'a self, contig: &'a str) -> &'a str {
+        if self.contig_index.contains_key(contig) {
+            contig
+        } else {
+            self.contig_alias_to_canonical
+                .get(contig)
+                .map(|s| s.as_str())
+                .unwrap_or(contig)
+        }
     }
 
     /// Load LRG to RefSeq transcript mapping from a file.
@@ -910,18 +914,18 @@ impl CdotMapper {
         None
     }
 
-    /// Get all transcripts on a contig.
+    /// Get all transcripts on a contig. Resolves aliases (e.g., "chr7" -> "NC_000007.14").
     pub fn transcripts_on_contig(&self, contig: &str) -> Vec<&str> {
         self.contig_index
-            .get(contig)
+            .get(self.resolve_contig(contig))
             .map(|ids| ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
     }
 
-    /// Find transcripts overlapping a genomic position.
+    /// Find transcripts overlapping a genomic position. Resolves contig aliases.
     pub fn transcripts_at_position(&self, contig: &str, pos: u64) -> Vec<(&str, &CdotTranscript)> {
         self.contig_index
-            .get(contig)
+            .get(self.resolve_contig(contig))
             .map(|ids| {
                 ids.iter()
                     .filter_map(|id| {
@@ -1195,6 +1199,119 @@ mod tests {
 
         let tx_ids = mapper.transcripts_on_contig("NC_000002.12");
         assert!(tx_ids.is_empty());
+    }
+
+    #[test]
+    fn test_contig_alias_lookup_grch38() {
+        // Transcripts indexed by RefSeq accession should also be found by UCSC name.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // Lookup by RefSeq accession (canonical key)
+        assert_eq!(mapper.transcripts_on_contig("NC_000017.11").len(), 1);
+        // Lookup by UCSC alias
+        assert_eq!(mapper.transcripts_on_contig("chr17").len(), 1);
+        // Lookup by Ensembl alias
+        assert_eq!(mapper.transcripts_on_contig("17").len(), 1);
+        // Non-existent contig
+        assert!(mapper.transcripts_on_contig("chr99").is_empty());
+    }
+
+    #[test]
+    fn test_contig_alias_lookup_grch37() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "+",
+                            "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh37").unwrap();
+
+        assert_eq!(mapper.transcripts_on_contig("NC_000017.10").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("chr17").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("17").len(), 1);
+
+        // Verify the transcript was fully parsed (not dropped due to bad exon format)
+        let tx = mapper.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(tx.exons.len(), 1);
+        assert_eq!(tx.exons[0][0], 48263025); // genome_start
+        assert_eq!(tx.exons[0][1], 48263098); // genome_end
+    }
+
+    #[test]
+    fn test_contig_alias_transcripts_at_position() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // Position within transcript, looked up by UCSC alias
+        let results = mapper.transcripts_at_position("chr17", 50184100);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "NM_000088.3");
+
+        // Position outside transcript
+        let results = mapper.transcripts_at_position("chr17", 99999999);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_contig_alias_chrm() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_MITO.1": {
+                    "gene_name": "MT_TEST",
+                    "contig": "NC_012920.1",
+                    "strand": "+",
+                    "exons": [[100, 200, 0, 100]],
+                    "cds_start": 10,
+                    "cds_end": 90
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        assert_eq!(mapper.transcripts_on_contig("NC_012920.1").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("chrM").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("MT").len(), 1);
     }
 
     #[test]
