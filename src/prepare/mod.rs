@@ -38,8 +38,10 @@ pub struct PrepareConfig {
     pub download_refseqgene: bool,
     /// Download LRG sequences from EBI (~1325 files)
     pub download_lrg: bool,
-    /// Download cdot transcript metadata (CDS positions, exon coords, ~200MB)
+    /// Download GRCh38 cdot transcript metadata (CDS positions, exon coords, ~200MB)
     pub download_cdot: bool,
+    /// Download GRCh37 cdot transcript metadata (CDS positions, exon coords, ~200MB)
+    pub download_cdot_grch37: bool,
     /// Skip download if files exist
     pub skip_existing: bool,
     /// ClinVar file to extract missing accessions from
@@ -60,6 +62,7 @@ impl Default for PrepareConfig {
             download_refseqgene: false,
             download_lrg: false,
             download_cdot: true,
+            download_cdot_grch37: false,
             skip_existing: true,
             clinvar_file: None,
             patterns_file: None,
@@ -127,8 +130,11 @@ pub struct ReferenceManifest {
     /// LRG to RefSeq transcript mapping file
     #[serde(default)]
     pub lrg_refseq_mapping: Option<PathBuf>,
-    /// cdot transcript metadata JSON (if downloaded)
+    /// cdot transcript metadata JSON for GRCh38 (if downloaded)
     pub cdot_json: Option<PathBuf>,
+    /// cdot transcript metadata JSON for GRCh37 (if downloaded)
+    #[serde(default)]
+    pub cdot_grch37_json: Option<PathBuf>,
     /// Supplemental FASTA file (missing ClinVar transcripts fetched from NCBI)
     #[serde(default)]
     pub supplemental_fasta: Option<PathBuf>,
@@ -200,6 +206,10 @@ impl ReferenceManifest {
 
         if let Some(ref p) = self.cdot_json {
             self.cdot_json = Some(strip_prefix(p, base));
+        }
+
+        if let Some(ref p) = self.cdot_grch37_json {
+            self.cdot_grch37_json = Some(strip_prefix(p, base));
         }
 
         if let Some(ref p) = self.supplemental_fasta {
@@ -315,6 +325,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             .genome_grch37_fasta
             .map(|p| config.output_dir.join(p));
         existing.cdot_json = existing.cdot_json.map(|p| config.output_dir.join(p));
+        existing.cdot_grch37_json = existing.cdot_grch37_json.map(|p| config.output_dir.join(p));
         existing.lrg_refseq_mapping = existing
             .lrg_refseq_mapping
             .map(|p| config.output_dir.join(p));
@@ -338,6 +349,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
             cdot_json: None,
+            cdot_grch37_json: None,
             supplemental_fasta: None,
             legacy_transcripts_fasta: None,
             legacy_transcripts_metadata: None,
@@ -619,26 +631,24 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
     // Download cdot transcript metadata
     if config.download_cdot {
-        eprintln!("\n=== Downloading cdot transcript metadata (~200MB) ===");
+        eprintln!("\n=== Downloading GRCh38 cdot transcript metadata (~200MB) ===");
         let cdot_dir = config.output_dir.join("cdot");
-        fs::create_dir_all(&cdot_dir).map_err(|e| FerroError::Io {
-            msg: format!("Failed to create directory: {}", e),
-        })?;
+        manifest.cdot_json = Some(download_cdot(
+            urls::CDOT_REFSEQ_GRCH38,
+            &cdot_dir,
+            config.skip_existing,
+        )?);
+    }
 
-        let gz_path = cdot_dir.join("cdot-0.2.32.refseq.GRCh38.json.gz");
-        let json_path = cdot_dir.join("cdot-0.2.32.refseq.GRCh38.json");
-
-        if config.skip_existing && json_path.exists() {
-            eprintln!("  Skipping cdot download (exists)");
-        } else {
-            eprintln!("  Downloading cdot-0.2.32.refseq.GRCh38.json.gz...");
-            download_file(urls::CDOT_REFSEQ_GRCH38, &gz_path)?;
-            eprintln!("  Decompressing...");
-            decompress_gzip(&gz_path, &json_path)?;
-            eprintln!("  Done.");
-        }
-
-        manifest.cdot_json = Some(json_path);
+    // Download GRCh37 cdot transcript metadata
+    if config.download_cdot_grch37 {
+        eprintln!("\n=== Downloading GRCh37 cdot transcript metadata (~200MB) ===");
+        let cdot_dir = config.output_dir.join("cdot");
+        manifest.cdot_grch37_json = Some(download_cdot(
+            urls::CDOT_REFSEQ_GRCH37,
+            &cdot_dir,
+            config.skip_existing,
+        )?);
     }
 
     // Fetch missing transcripts from ClinVar or pattern files (requires benchmark feature)
@@ -864,7 +874,10 @@ pub fn print_reference_summary(manifest: &ReferenceManifest, reference_dir: &Pat
         eprintln!("  LRG files: {}", manifest.lrg_fastas.len());
     }
     if let Some(ref cdot) = manifest.cdot_json {
-        eprintln!("  cdot metadata: {}", cdot.display());
+        eprintln!("  cdot metadata (GRCh38): {}", cdot.display());
+    }
+    if let Some(ref cdot) = manifest.cdot_grch37_json {
+        eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
     }
     if let Some(ref supp) = manifest.supplemental_fasta {
         eprintln!("  Supplemental transcripts: {}", supp.display());
@@ -878,6 +891,46 @@ pub fn print_reference_summary(manifest: &ReferenceManifest, reference_dir: &Pat
 }
 
 // ============================================================================
+// ============================================================================
+// cdot helpers
+// ============================================================================
+
+/// Download and decompress a cdot JSON.gz file from `url` into `cdot_dir`.
+/// Returns the path to the decompressed JSON file.
+fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<PathBuf, FerroError> {
+    fs::create_dir_all(cdot_dir).map_err(|e| FerroError::Io {
+        msg: format!("Failed to create directory: {}", e),
+    })?;
+
+    let gz_filename = Path::new(url).file_name().ok_or_else(|| FerroError::Io {
+        msg: format!("cdot URL has no filename component: {}", url),
+    })?;
+    let gz_path = cdot_dir.join(gz_filename);
+    let json_path = gz_path.with_extension("");
+
+    if skip_existing && json_path.exists() {
+        eprintln!("  Skipping cdot download (exists)");
+    } else {
+        if skip_existing && gz_path.exists() {
+            eprintln!(
+                "  Reusing existing {}...",
+                gz_path.file_name().unwrap_or_default().to_string_lossy()
+            );
+        } else {
+            eprintln!(
+                "  Downloading {}...",
+                gz_path.file_name().unwrap_or_default().to_string_lossy()
+            );
+            download_file(url, &gz_path)?;
+        }
+        eprintln!("  Decompressing...");
+        decompress_gzip(&gz_path, &json_path)?;
+        eprintln!("  Done.");
+    }
+
+    Ok(json_path)
+}
+
 // Helper functions
 // ============================================================================
 
@@ -1578,6 +1631,7 @@ mod tests {
         assert!(!config.download_refseqgene);
         assert!(!config.download_lrg);
         assert!(config.download_cdot);
+        assert!(!config.download_cdot_grch37);
         assert!(config.skip_existing);
     }
 

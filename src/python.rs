@@ -2185,7 +2185,8 @@ impl PyPrepareConfig {
         download_lrg=false,
         download_cdot=true,
         skip_existing=true,
-        dry_run=false
+        dry_run=false,
+        download_cdot_grch37=false
     ))]
     fn new(
         output_dir: &str,
@@ -2197,6 +2198,7 @@ impl PyPrepareConfig {
         download_cdot: bool,
         skip_existing: bool,
         dry_run: bool,
+        download_cdot_grch37: bool,
     ) -> Self {
         Self {
             inner: PrepareConfig {
@@ -2207,6 +2209,7 @@ impl PyPrepareConfig {
                 download_refseqgene,
                 download_lrg,
                 download_cdot,
+                download_cdot_grch37,
                 skip_existing,
                 clinvar_file: None,
                 patterns_file: None,
@@ -2233,6 +2236,11 @@ impl PyPrepareConfig {
     #[getter]
     fn download_cdot(&self) -> bool {
         self.inner.download_cdot
+    }
+
+    #[getter]
+    fn download_cdot_grch37(&self) -> bool {
+        self.inner.download_cdot_grch37
     }
 }
 
@@ -2276,6 +2284,14 @@ impl PyReferenceManifest {
     fn cdot_json(&self) -> Option<String> {
         self.inner
             .cdot_json
+            .as_ref()
+            .map(|p| p.display().to_string())
+    }
+
+    #[getter]
+    fn cdot_grch37_json(&self) -> Option<String> {
+        self.inner
+            .cdot_grch37_json
             .as_ref()
             .map(|p| p.display().to_string())
     }

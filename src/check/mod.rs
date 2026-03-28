@@ -101,6 +101,16 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    if let Some(ref cdot) = manifest.cdot_grch37_json {
+        let full_path = reference_dir.join(cdot);
+        if !full_path.exists() {
+            result.warnings.push(format!(
+                "cdot GRCh37 JSON not found: {}",
+                full_path.display()
+            ));
+        }
+    }
+
     result
 }
 
@@ -155,9 +165,15 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
     }
 
     if let Some(ref cdot) = manifest.cdot_json {
-        eprintln!("  cdot metadata: {}", cdot.display());
+        eprintln!("  cdot metadata (GRCh38): {}", cdot.display());
     } else {
-        eprintln!("  cdot metadata: not available");
+        eprintln!("  cdot metadata (GRCh38): not available");
+    }
+
+    if let Some(ref cdot) = manifest.cdot_grch37_json {
+        eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
+    } else {
+        eprintln!("  cdot metadata (GRCh37): not available");
     }
 
     if let Some(ref supp) = manifest.supplemental_fasta {
@@ -211,6 +227,7 @@ mod tests {
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
             cdot_json: None,
+            cdot_grch37_json: None,
             supplemental_fasta: None,
             legacy_transcripts_fasta: None,
             legacy_transcripts_metadata: None,
