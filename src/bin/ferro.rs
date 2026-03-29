@@ -435,6 +435,14 @@ enum Commands {
         #[arg(long, default_value = "grch38", value_parser = ["grch38", "grch37", "all", "none"])]
         genome: String,
 
+        /// Skip transcript FASTA sequences (~2GB)
+        #[arg(long)]
+        no_transcripts: bool,
+
+        /// Skip cdot transcript metadata
+        #[arg(long)]
+        no_cdot: bool,
+
         /// Skip RefSeqGene sequences (~600MB)
         #[arg(long)]
         no_refseqgene: bool,
@@ -674,6 +682,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Prepare {
             output_dir,
             genome,
+            no_transcripts,
+            no_cdot,
             no_refseqgene,
             no_lrg,
             force,
@@ -683,6 +693,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => run_prepare(
             &output_dir,
             &genome,
+            no_transcripts,
+            no_cdot,
             no_refseqgene,
             no_lrg,
             force,
@@ -2650,6 +2662,8 @@ fn print_normalize_capabilities_dir(reference: Option<&PathBuf>) {
 fn run_prepare(
     output_dir: &Path,
     genome: &str,
+    no_transcripts: bool,
+    no_cdot: bool,
     no_refseqgene: bool,
     no_lrg: bool,
     force: bool,
@@ -2661,12 +2675,13 @@ fn run_prepare(
 
     let config = PrepareConfig {
         output_dir: output_dir.to_path_buf(),
-        download_transcripts: true,
+        download_transcripts: !no_transcripts,
         download_genome: genome == "grch38" || genome == "all",
         download_genome_grch37: genome == "grch37" || genome == "all",
         download_refseqgene: !no_refseqgene,
         download_lrg: !no_lrg,
-        download_cdot: true,
+        download_cdot: !no_cdot && (genome == "grch38" || genome == "all"),
+        download_cdot_grch37: !no_cdot && (genome == "grch37" || genome == "all"),
         skip_existing: !force,
         clinvar_file: clinvar.map(|p| p.to_path_buf()),
         patterns_file: patterns.map(|p| p.to_path_buf()),
