@@ -295,7 +295,7 @@ impl MultiFastaProvider {
                     "Loading cdot transcript metadata from {}...",
                     cdot_path.display()
                 );
-                match CdotMapper::from_json_file(&cdot_path) {
+                match CdotMapper::load(&cdot_path) {
                     Ok(mut mapper) => {
                         eprintln!(
                             "Loaded {} transcripts with CDS metadata",
@@ -435,12 +435,8 @@ impl MultiFastaProvider {
 
         eprintln!("Loaded {} sequences from FASTA", index.len());
 
-        // Load cdot (auto-detect gzipped or plain JSON)
-        let cdot_mapper = if cdot_path.extension().map(|e| e == "gz").unwrap_or(false) {
-            CdotMapper::from_json_gz(cdot_path)?
-        } else {
-            CdotMapper::from_json_file(cdot_path)?
-        };
+        // Load cdot (prefers bincode if available, falls back to JSON)
+        let cdot_mapper = CdotMapper::load(cdot_path)?;
         eprintln!(
             "Loaded {} transcripts from cdot",
             cdot_mapper.transcript_count()

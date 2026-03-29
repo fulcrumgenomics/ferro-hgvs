@@ -1307,7 +1307,7 @@ mod intronic_debug_tests {
             return;
         }
 
-        let cdot = CdotMapper::from_json_file(&cdot_path).expect("Failed to load cdot");
+        let cdot = CdotMapper::load(&cdot_path).expect("Failed to load cdot");
         let tx = cdot
             .get_transcript("NM_003742.4")
             .expect("NM_003742.4 not in cdot");
