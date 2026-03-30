@@ -36,6 +36,7 @@ pub struct LiftoverConfig {
 
 /// Server configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct ServerConfig {
     /// Host to bind to (default: "0.0.0.0")
     pub host: String,
@@ -96,6 +97,7 @@ pub enum MutalyzerMode {
 
 /// Mutalyzer tool configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct MutalyzerConfig {
     /// Whether tool is enabled
     pub enabled: bool,
