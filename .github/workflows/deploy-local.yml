@@ -89,6 +89,8 @@ jobs:
           port = 8080
           request_timeout_seconds = 120
           enable_cors = true
+          max_request_size = "10MB"
+          enable_tracing = true
 
           [tools.ferro]
           enabled = true
@@ -103,6 +105,7 @@ jobs:
           [tools.mutalyzer]
           enabled = true
           mode = "local"
+          api_url = "http://localhost:8082"
           settings_file = "/var/lib/ferro-web/mutalyzer_settings.txt"
           allow_network = true
           timeout_seconds = 60
@@ -145,7 +148,7 @@ jobs:
           Restart=always
           RestartSec=5
           Environment=RUST_LOG=info
-          Environment=PATH=%h/.pixi/envs/default/bin:/usr/local/bin:/usr/bin:/bin
+          Environment=PATH=${{ github.workspace }}/.pixi/envs/default/bin:/usr/local/bin:/usr/bin:/bin
 
           [Install]
           WantedBy=multi-user.target
