@@ -3236,9 +3236,10 @@ fn run_normalize_tool(
     workers: usize,
     no_rewrite_intronic: bool,
     allow_network: bool,
-    _in_memory: bool,
+    in_memory: bool,
 ) -> Result<(), ferro_hgvs::FerroError> {
-    // Prerequisite: input file must exist
+    let _ = in_memory; // Used only with hgvs-rs feature
+                       // Prerequisite: input file must exist
     if !input.exists() {
         return Err(ferro_hgvs::FerroError::Io {
             msg: format!(
