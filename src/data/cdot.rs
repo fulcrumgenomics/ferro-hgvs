@@ -26,6 +26,7 @@ use crate::error::FerroError;
 use crate::liftover::aliases::ContigAliases;
 use crate::reference::transcript::GenomeBuild;
 use crate::reference::Strand;
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -521,7 +522,7 @@ pub enum CdsPosition {
 /// - `M` (Match): alignment match — bases align between transcript and genome.
 /// - `I` (Insertion): bases present in the transcript but not the genome.
 /// - `D` (Deletion): bases present in the genome but not the transcript.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CigarOp {
     /// Alignment match of `n` bases.
     Match(u64),
@@ -644,6 +645,88 @@ pub struct CdotFile {
     pub genome_builds: Option<HashMap<String, serde_json::Value>>,
 }
 
+/// Bincode-friendly snapshot of CdotMapper data, without custom JSON deserializers.
+/// Used for deserialization only; serialization uses [`CdotMapperSnapshotRef`].
+#[derive(Deserialize)]
+struct CdotMapperSnapshot {
+    transcripts: HashMap<String, CdotTranscriptSnapshot>,
+    contig_index: HashMap<String, Vec<String>>,
+    contig_alias_to_canonical: HashMap<String, String>,
+    base_to_versioned: HashMap<String, String>,
+    lrg_to_refseq: HashMap<String, String>,
+}
+
+/// Borrowed view of CdotMapper for zero-copy serialization to bincode.
+#[derive(Serialize)]
+struct CdotMapperSnapshotRef<'a> {
+    transcripts: HashMap<&'a String, CdotTranscriptSnapshotRef<'a>>,
+    contig_index: &'a HashMap<String, Vec<String>>,
+    contig_alias_to_canonical: &'a HashMap<String, String>,
+    base_to_versioned: &'a HashMap<String, String>,
+    lrg_to_refseq: &'a HashMap<String, String>,
+}
+
+/// Bincode-friendly snapshot of CdotTranscript, using standard Strand serde.
+/// Used for deserialization only; serialization uses [`CdotTranscriptSnapshotRef`].
+#[derive(Deserialize)]
+struct CdotTranscriptSnapshot {
+    gene_name: Option<String>,
+    contig: String,
+    strand: Strand,
+    exons: Vec<[u64; 4]>,
+    cds_start: Option<u64>,
+    cds_end: Option<u64>,
+    exon_cigars: Vec<Option<Vec<CigarOp>>>,
+    gene_id: Option<String>,
+    protein: Option<String>,
+}
+
+/// Borrowed view of CdotTranscript for zero-copy serialization to bincode.
+#[derive(Serialize)]
+struct CdotTranscriptSnapshotRef<'a> {
+    gene_name: &'a Option<String>,
+    contig: &'a str,
+    strand: Strand,
+    exons: &'a Vec<[u64; 4]>,
+    cds_start: Option<u64>,
+    cds_end: Option<u64>,
+    exon_cigars: &'a Vec<Option<Vec<CigarOp>>>,
+    gene_id: &'a Option<String>,
+    protein: &'a Option<String>,
+}
+
+impl<'a> From<&'a CdotTranscript> for CdotTranscriptSnapshotRef<'a> {
+    fn from(tx: &'a CdotTranscript) -> Self {
+        Self {
+            gene_name: &tx.gene_name,
+            contig: &tx.contig,
+            strand: tx.strand,
+            exons: &tx.exons,
+            cds_start: tx.cds_start,
+            cds_end: tx.cds_end,
+            exon_cigars: &tx.exon_cigars,
+            gene_id: &tx.gene_id,
+            protein: &tx.protein,
+        }
+    }
+}
+
+impl From<CdotTranscriptSnapshot> for CdotTranscript {
+    fn from(snap: CdotTranscriptSnapshot) -> Self {
+        Self {
+            gene_name: snap.gene_name,
+            contig: snap.contig,
+            strand: snap.strand,
+            exons: snap.exons,
+            cds_start: snap.cds_start,
+            cds_end: snap.cds_end,
+            exon_cigars: snap.exon_cigars,
+            gene_id: snap.gene_id,
+            protein: snap.protein,
+        }
+    }
+}
+
 /// Coordinate mapper using cdot data.
 #[derive(Debug, Clone)]
 pub struct CdotMapper {
@@ -690,6 +773,106 @@ impl CdotMapper {
         let decoder = flate2::read::GzDecoder::new(reader);
         let reader = BufReader::new(decoder);
         Self::from_reader(reader)
+    }
+
+    /// Load from a pre-serialized bincode file (much faster than JSON).
+    pub fn from_bincode_file<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {
+            msg: format!("Failed to open cdot bincode file: {}", e),
+        })?;
+        let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let reader = BufReader::new(file);
+        // Use a size limit to prevent OOM on corrupt files. Allow 20x the file size
+        // (bincode is compact, but deserialized HashMap overhead can be significant).
+        // Limit deserialization size to prevent OOM on corrupt files (20x file size or 1MB min).
+        let size_limit = file_size.saturating_mul(20).max(1024 * 1024);
+        let snapshot: CdotMapperSnapshot = bincode::options()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(size_limit)
+            .deserialize_from(reader)
+            .map_err(|e| FerroError::Io {
+                msg: format!("Failed to deserialize cdot bincode: {}", e),
+            })?;
+        Ok(Self {
+            transcripts: snapshot
+                .transcripts
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            contig_index: snapshot.contig_index,
+            contig_alias_to_canonical: snapshot.contig_alias_to_canonical,
+            base_to_versioned: snapshot.base_to_versioned,
+            lrg_to_refseq: snapshot.lrg_to_refseq,
+        })
+    }
+
+    /// Write the mapper to a bincode file for fast subsequent loading.
+    pub fn to_bincode_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FerroError> {
+        let snapshot = CdotMapperSnapshotRef {
+            transcripts: self
+                .transcripts
+                .iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            contig_index: &self.contig_index,
+            contig_alias_to_canonical: &self.contig_alias_to_canonical,
+            base_to_versioned: &self.base_to_versioned,
+            lrg_to_refseq: &self.lrg_to_refseq,
+        };
+        let file = File::create(path.as_ref()).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create cdot bincode file: {}", e),
+        })?;
+        let writer = std::io::BufWriter::new(file);
+        bincode::options()
+            .with_fixint_encoding()
+            .serialize_into(writer, &snapshot)
+            .map_err(|e| FerroError::Io {
+                msg: format!("Failed to serialize cdot bincode: {}", e),
+            })
+    }
+
+    /// Load a cdot file, preferring a sibling `.bin` (bincode) file if available.
+    ///
+    /// Given a path to a `.json` or `.json.gz` file, checks for a `.bin` file in the
+    /// same directory. If the bincode file exists, loads from it (much faster). Otherwise
+    /// falls back to JSON parsing. Also handles `.bin` paths directly.
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        let path = path.as_ref();
+        let path_str = path.to_string_lossy();
+
+        // Direct bincode path — no JSON fallback available
+        if path_str.ends_with(".bin") {
+            return Self::from_bincode_file(path);
+        }
+
+        // Compute the canonical sibling .bin path:
+        // - foo.json.gz -> foo.bin (strip .gz then replace .json with .bin)
+        // - foo.json    -> foo.bin
+        let bin_path = if path_str.ends_with(".json.gz") {
+            path.with_extension("").with_extension("bin")
+        } else {
+            path.with_extension("bin")
+        };
+        if bin_path.exists() {
+            match Self::from_bincode_file(&bin_path) {
+                Ok(mapper) => return Ok(mapper),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load bincode {}: {}. Falling back to JSON.",
+                        bin_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // Fall back to JSON
+        if path_str.ends_with(".gz") {
+            Self::from_json_gz(path)
+        } else {
+            Self::from_json_file(path)
+        }
     }
 
     /// Load from any reader, defaulting to GRCh38 genome build.
@@ -1355,6 +1538,199 @@ mod tests {
         assert_eq!(tx.gene_name.as_deref(), Some("COL1A1"));
         assert_eq!(tx.strand, Strand::Plus);
         assert_eq!(tx.exons.len(), 2);
+    }
+
+    // =========================================================================
+    // Bincode serialization tests
+    // =========================================================================
+
+    #[test]
+    fn test_bincode_roundtrip() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [
+                        [50184096, 50184169, 0, 73],
+                        [50185022, 50185148, 73, 199]
+                    ],
+                    "cds_start": 149,
+                    "cds_end": 4544
+                },
+                "NM_000059.4": {
+                    "gene_name": "BRCA2",
+                    "contig": "NC_000013.11",
+                    "strand": "+",
+                    "exons": [[32315474, 32315667, 0, 193]],
+                    "cds_start": 40,
+                    "cds_end": 150
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        assert_eq!(original.transcript_count(), 2);
+
+        // Roundtrip through bincode file
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let bin_path = temp_dir.path().join("roundtrip.bin");
+        original.to_bincode_file(&bin_path).unwrap();
+        let decoded = CdotMapper::from_bincode_file(&bin_path).unwrap();
+
+        assert_eq!(decoded.transcript_count(), 2);
+        let tx = decoded.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(tx.gene_name.as_deref(), Some("COL1A1"));
+        assert_eq!(tx.contig, "NC_000017.11");
+        assert_eq!(tx.strand, Strand::Plus);
+        assert_eq!(tx.exons.len(), 2);
+
+        let tx2 = decoded.get_transcript("NM_000059.4").unwrap();
+        assert_eq!(tx2.gene_name.as_deref(), Some("BRCA2"));
+
+        // Contig index should be preserved
+        assert_eq!(decoded.transcripts_on_contig("NC_000017.11").len(), 1);
+        assert_eq!(decoded.transcripts_on_contig("NC_000013.11").len(), 1);
+
+        // Base-to-versioned index should be preserved
+        assert!(decoded.get_transcript("NM_000088.4").is_some()); // falls back to .3
+    }
+
+    #[test]
+    fn test_bincode_file_roundtrip() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let bin_path = temp_dir.path().join("test.bin");
+
+        original.to_bincode_file(&bin_path).unwrap();
+        assert!(bin_path.exists());
+
+        let loaded = CdotMapper::from_bincode_file(&bin_path).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert!(loaded.get_transcript("NM_000088.3").is_some());
+    }
+
+    #[test]
+    fn test_load_prefers_bincode() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // Mutate the mapper so bincode content differs from JSON
+        let mut from_bin = original.clone();
+        from_bin
+            .transcripts
+            .get_mut("NM_000088.3")
+            .unwrap()
+            .gene_name = Some("FROM_BIN".to_string());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let bin_path = temp_dir.path().join("cdot.bin");
+
+        // Write JSON file (gene_name = "COL1A1")
+        std::fs::write(&json_path, json).unwrap();
+
+        // Write bincode file (gene_name = "FROM_BIN")
+        from_bin.to_bincode_file(&bin_path).unwrap();
+
+        // load() given the JSON path should find and use the .bin sibling
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert_eq!(
+            loaded
+                .get_transcript("NM_000088.3")
+                .unwrap()
+                .gene_name
+                .as_deref(),
+            Some("FROM_BIN"),
+            "load() should prefer bincode over JSON"
+        );
+    }
+
+    #[test]
+    fn test_load_falls_back_to_json() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+
+        // Write only JSON, no bincode
+        std::fs::write(&json_path, json).unwrap();
+
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+    }
+
+    #[test]
+    fn test_load_falls_back_to_json_on_corrupt_bincode() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let bin_path = temp_dir.path().join("cdot.bin");
+
+        // Write valid JSON and corrupt bincode
+        std::fs::write(&json_path, json).unwrap();
+        std::fs::write(&bin_path, b"not valid bincode data").unwrap();
+
+        // load() should fall back to JSON despite corrupt .bin
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert!(loaded.get_transcript("NM_000088.3").is_some());
     }
 
     // =========================================================================

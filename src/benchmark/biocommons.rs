@@ -1131,7 +1131,7 @@ pub fn load_sequences_to_seqrepo(
 
         if let Some(cdot_file) = cdot_files.first() {
             eprintln!("  Loading cdot from {}...", cdot_file.display());
-            CdotMapper::from_json_file(cdot_file).ok()
+            CdotMapper::load(cdot_file).ok()
         } else {
             None
         }

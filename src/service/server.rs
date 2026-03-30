@@ -293,16 +293,10 @@ async fn update_health_cache(state: &AppState) {
     }
 }
 
-/// Load CdotMapper from a file path (handles both .json and .json.gz)
+/// Load CdotMapper from a file path (prefers bincode if available, falls back to JSON).
 fn load_cdot(path: &std::path::Path) -> Result<CdotMapper, ServiceError> {
-    let path_str = path.to_string_lossy();
-    if path_str.ends_with(".gz") {
-        CdotMapper::from_json_gz(path)
-            .map_err(|e| ServiceError::ConfigError(format!("Failed to load cdot: {}", e)))
-    } else {
-        CdotMapper::from_json_file(path)
-            .map_err(|e| ServiceError::ConfigError(format!("Failed to load cdot: {}", e)))
-    }
+    CdotMapper::load(path)
+        .map_err(|e| ServiceError::ConfigError(format!("Failed to load cdot: {}", e)))
 }
 
 #[cfg(test)]

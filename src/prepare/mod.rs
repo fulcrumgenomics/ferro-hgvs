@@ -895,7 +895,8 @@ pub fn print_reference_summary(manifest: &ReferenceManifest, reference_dir: &Pat
 // cdot helpers
 // ============================================================================
 
-/// Download and decompress a cdot JSON.gz file from `url` into `cdot_dir`.
+/// Download and decompress a cdot JSON.gz file from `url` into `cdot_dir`,
+/// then serialize to bincode for fast subsequent loading.
 /// Returns the path to the decompressed JSON file.
 fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<PathBuf, FerroError> {
     fs::create_dir_all(cdot_dir).map_err(|e| FerroError::Io {
@@ -908,8 +909,9 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
     let gz_path = cdot_dir.join(gz_filename);
     let json_path = gz_path.with_extension("");
 
-    if skip_existing && json_path.exists() {
+    let json_is_fresh = if skip_existing && json_path.exists() {
         eprintln!("  Skipping cdot download (exists)");
+        false
     } else {
         if skip_existing && gz_path.exists() {
             eprintln!(
@@ -925,6 +927,23 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
         }
         eprintln!("  Decompressing...");
         decompress_gzip(&gz_path, &json_path)?;
+        eprintln!("  Done.");
+        true
+    };
+
+    // Parse JSON and serialize to bincode for fast subsequent loading.
+    // Always regenerate bincode when JSON was freshly downloaded to avoid stale cache.
+    let bin_path = json_path.with_extension("bin");
+    if !json_is_fresh && skip_existing && bin_path.exists() {
+        eprintln!("  Skipping cdot bincode conversion (exists)");
+    } else {
+        eprintln!("  Converting cdot JSON to bincode for fast loading...");
+        let mapper = crate::data::cdot::CdotMapper::from_json_file(&json_path).map_err(|e| {
+            FerroError::Io {
+                msg: format!("Failed to parse cdot JSON: {}", e),
+            }
+        })?;
+        mapper.to_bincode_file(&bin_path)?;
         eprintln!("  Done.");
     }
 

@@ -1258,11 +1258,7 @@ fn run_populate_cache(
                 // Join with reference_dir since manifest paths are relative
                 let full_cdot_path = reference_dir.join(cdot_path);
                 eprintln!("Loading cdot from {}...", full_cdot_path.display());
-                let cdot = if cdot_path.ends_with(".gz") {
-                    CdotMapper::from_json_gz(&full_cdot_path)?
-                } else {
-                    CdotMapper::from_json_file(&full_cdot_path)?
-                };
+                let cdot = CdotMapper::load(&full_cdot_path)?;
 
                 let enhanced = enhance_nc_annotations(cache_dir, &cdot)?;
                 println!("Enhanced {} NC_ annotation files", enhanced);
@@ -1701,7 +1697,7 @@ fn derive_proteins_for_ferro(ferro_dir: &Path) -> Result<(), ferro_hgvs::FerroEr
         return Ok(());
     }
     println!("  Loading cdot for CDS coordinates...");
-    let cdot = CdotMapper::from_json_file(&cdot_path)?;
+    let cdot = CdotMapper::load(&cdot_path)?;
 
     // Load supplemental CDS metadata if available
     let mut supplemental_cds: HashMap<String, (Option<u64>, Option<u64>, String)> = HashMap::new();

@@ -85,7 +85,7 @@ async fn load_cdot_alignments_async(
 
     // Phase 0: Load cdot and determine what needs loading
     eprintln!("Loading cdot transcript data...");
-    let cdot = CdotMapper::from_json_file(cdot_path)?;
+    let cdot = CdotMapper::load(cdot_path)?;
 
     let cdot_accessions: Vec<String> = cdot
         .transcript_ids()

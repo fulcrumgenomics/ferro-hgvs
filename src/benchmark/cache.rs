@@ -199,11 +199,7 @@ pub fn populate_mutalyzer_cache<P: AsRef<Path>>(
     let cdot_path = reference_dir.join(cdot_relative);
 
     eprintln!("Loading cdot from {}...", cdot_path.display());
-    let mut cdot = if cdot_relative.ends_with(".gz") {
-        CdotMapper::from_json_gz(&cdot_path)?
-    } else {
-        CdotMapper::from_json_file(&cdot_path)?
-    };
+    let mut cdot = CdotMapper::load(&cdot_path)?;
     let transcript_count = cdot.transcript_count();
     eprintln!("  Loaded {} transcripts", transcript_count);
 
