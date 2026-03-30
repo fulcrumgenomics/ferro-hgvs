@@ -1038,3 +1038,160 @@ fn test_remaining_failing_patterns() {
     assert!(parse_hgvs("NP_000001.1:p.Asp200dup").is_ok());
     assert!(parse_hgvs("NC_000001.11:g.123_124delinsAluYb8").is_ok());
 }
+
+// =============================================================================
+// Compound reference syntax: NC_*(NM_*):c.… (Issue #12)
+// =============================================================================
+
+mod compound_reference {
+    use ferro_hgvs::{parse_hgvs, HgvsVariant};
+
+    #[test]
+    fn test_compound_ref_cds_substitution() {
+        let v = parse_hgvs("NC_000013.11(NM_004119.3):c.459A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NC_000013.11(NM_004119.3)"), "got: {}", s);
+        assert!(s.contains(":c.459A>G"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_intronic_insertion() {
+        // The exact variant from issue #12
+        let v = parse_hgvs(
+            "NC_000013.11(NM_004119.3):c.1837+2_1837+3insGGATATCTCAAATGGGAGTTTCCAAGAGAAAATTTAGAGTTTGGT",
+        )
+        .unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NC_000013.11(NM_004119.3)"), "got: {}", s);
+        assert!(s.contains(":c.1837+2_1837+3ins"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_genomic_variant() {
+        // NC with g. variant (outer context is redundant but valid)
+        let v = parse_hgvs("NC_000001.11(NC_000001.11):g.12345A>G").unwrap();
+        assert!(v.to_string().contains(":g.12345A>G"));
+    }
+
+    #[test]
+    fn test_compound_ref_noncoding_rna() {
+        let v = parse_hgvs("NC_000001.11(NR_046018.2):n.100A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NC_000001.11(NR_046018.2)"), "got: {}", s);
+        assert!(s.contains(":n.100A>G"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_protein() {
+        let v = parse_hgvs("NC_000013.11(NP_004110.2):p.Val600Glu").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NP_004110.2"), "got: {}", s);
+        assert!(s.contains(":p.Val600Glu"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_deletion() {
+        let v = parse_hgvs("NC_000013.11(NM_004119.3):c.100del").unwrap();
+        assert!(v.to_string().contains(":c.100del"));
+    }
+
+    #[test]
+    fn test_compound_ref_duplication() {
+        let v = parse_hgvs("NC_000013.11(NM_004119.3):c.100dup").unwrap();
+        assert!(v.to_string().contains(":c.100dup"));
+    }
+
+    #[test]
+    fn test_compound_ref_delins() {
+        let v = parse_hgvs("NC_000001.11(NM_000088.3):c.100_102delinsATG").unwrap();
+        assert!(v.to_string().contains(":c.100_102delinsATG"));
+    }
+
+    #[test]
+    fn test_compound_ref_ng_context() {
+        // NG (gene region) as genomic context
+        let v = parse_hgvs("NG_007400.1(NM_000088.3):c.459A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NG_007400.1(NM_000088.3)"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_lrg_context() {
+        let v = parse_hgvs("LRG_1(NM_000088.3):c.459A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("LRG_1(NM_000088.3)"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_ensembl_inner() {
+        let v = parse_hgvs("NC_000013.11(ENST00000241453.7):c.100A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("ENST00000241453.7"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_roundtrip() {
+        // Parse → Display → Parse should be stable
+        let input = "NC_000013.11(NM_004119.3):c.459A>G";
+        let v1 = parse_hgvs(input).unwrap();
+        let s1 = v1.to_string();
+        let v2 = parse_hgvs(&s1).unwrap();
+        let s2 = v2.to_string();
+        assert_eq!(s1, s2, "Roundtrip failed: {} -> {} -> {}", input, s1, s2);
+    }
+
+    #[test]
+    fn test_compound_ref_no_version_outer() {
+        let v = parse_hgvs("NC_000013(NM_004119.3):c.100A>G").unwrap();
+        let s = v.to_string();
+        assert!(s.contains("NC_000013(NM_004119.3)"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_compound_ref_with_gene_symbol() {
+        // NC_000013.11(FLT3):g.… — (FLT3) is a gene symbol, not a compound ref
+        // Gene symbols are parsed but not included in Display for genomic variants,
+        // so just verify it parses successfully and the accession is correct
+        let v = parse_hgvs("NC_000013.11(FLT3):g.12345A>G").unwrap();
+
+        // Assert gene_symbol is captured in the parsed variant
+        match &v {
+            HgvsVariant::Genome(genome) => {
+                assert_eq!(
+                    genome.gene_symbol.as_deref(),
+                    Some("FLT3"),
+                    "gene_symbol should be Some(\"FLT3\")"
+                );
+            }
+            other => panic!("expected Genome variant, got: {:?}", other),
+        }
+
+        let s = v.to_string();
+        assert!(
+            s.contains("NC_000013.11"),
+            "accession should be NC, got: {}",
+            s
+        );
+        assert!(
+            s.contains(":g.12345A>G"),
+            "variant should parse correctly, got: {}",
+            s
+        );
+        // The accession should NOT have genomic_context (FLT3 is a gene symbol)
+        assert!(
+            !s.contains("(FLT3)"),
+            "gene symbol should not appear in accession, got: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn test_bare_accession_still_works() {
+        // Existing bare accession parsing must not regress
+        let v = parse_hgvs("NM_004119.3:c.459A>G").unwrap();
+        assert_eq!(v.to_string(), "NM_004119.3:c.459A>G");
+
+        let v = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(v.to_string(), "NC_000001.11:g.12345A>G");
+    }
+}

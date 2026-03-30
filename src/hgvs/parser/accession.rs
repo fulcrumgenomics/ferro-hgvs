@@ -353,16 +353,84 @@ fn parse_assembly_accession(input: &str) -> IResult<&str, Accession> {
 }
 
 /// Parse a standard RefSeq-style accession with underscore (e.g., "NM_000088.3")
+/// Also handles compound reference syntax: NC_000013.11(NM_004119.3)
 fn parse_standard_accession(input: &str) -> IResult<&str, Accession> {
     let (input, prefix) = parse_prefix(input)?;
     let (input, _) = tag("_").parse(input)?;
     let (input, number) = parse_number(input)?;
     let (input, version) = opt(preceded(tag("."), parse_version)).parse(input)?;
 
-    Ok((
+    let outer = Accession::with_style(prefix.to_string(), number.to_string(), version, false);
+
+    // Check for compound reference syntax: outer(inner)
+    // Only attempt if the next char is '(' and the content looks like an accession
+    // (starts with a letter pattern that could be a RefSeq/Ensembl/LRG accession)
+    if let Some(rest) = input.strip_prefix('(') {
+        if looks_like_accession_start(rest) {
+            if let Ok((after_inner, inner)) = parse_compound_inner(rest) {
+                // Reject nested compound refs: inner must not already have a genomic_context
+                if inner.genomic_context.is_none() {
+                    if let Some(after_close) = after_inner.strip_prefix(')') {
+                        return Ok((after_close, inner.with_genomic_context(outer)));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((input, outer))
+}
+
+/// Check if the input starts with something that looks like an accession
+/// (not a gene symbol). Accessions have patterns like NC_, NM_, ENST, LRG_, etc.
+fn looks_like_accession_start(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    if bytes.len() < 3 {
+        return false;
+    }
+    // Standard RefSeq/GenBank: XX_digits (NC_, NM_, NP_, NR_, NG_, NW_, NT_, XM_, XR_, XP_, AC_)
+    if bytes.len() > 2
+        && bytes[2] == b'_'
+        && bytes[0].is_ascii_uppercase()
+        && bytes[1].is_ascii_uppercase()
+    {
+        return true;
+    }
+    // Ensembl: ENS followed by T/G/P/E/R
+    if bytes.len() >= 4 && bytes[0] == b'E' && bytes[1] == b'N' && bytes[2] == b'S' {
+        return true;
+    }
+    // LRG: LRG_
+    if bytes.len() >= 4
+        && bytes[0] == b'L'
+        && bytes[1] == b'R'
+        && bytes[2] == b'G'
+        && bytes[3] == b'_'
+    {
+        return true;
+    }
+    false
+}
+
+/// Parse the inner accession of a compound reference (after the opening paren)
+fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
+    let bytes = input.as_bytes();
+    // Try standard accession (NC_, NM_, etc.)
+    if bytes.len() > 2 && bytes[2] == b'_' {
+        if let Ok(result) = parse_standard_accession(input) {
+            return Ok(result);
+        }
+    }
+    // Try Ensembl
+    if bytes.len() >= 4 && bytes[0] == b'E' && bytes[1] == b'N' && bytes[2] == b'S' {
+        if let Ok(result) = parse_ensembl_accession(input) {
+            return Ok(result);
+        }
+    }
+    Err(nom::Err::Error(nom::error::Error::new(
         input,
-        Accession::with_style(prefix.to_string(), number.to_string(), version, false),
-    ))
+        nom::error::ErrorKind::Tag,
+    )))
 }
 
 /// Parse an Ensembl-style accession without underscore (e.g., "ENST00000012345.1")
@@ -664,5 +732,134 @@ mod tests {
         assert_eq!(&*acc.number, "000001");
         assert_eq!(acc.version, Some(11));
         assert!(!acc.ensembl_style); // RefSeq uses underscore style
+    }
+
+    // =========================================================================
+    // Compound reference syntax: NC_000013.11(NM_004119.3):c.…
+    // =========================================================================
+
+    #[test]
+    fn test_parse_compound_ref_nc_nm() {
+        // Genomic context NC with transcript NM
+        let (remaining, acc) =
+            parse_accession("NC_000013.11(NM_004119.3):c.1837+2_1837+3insA").unwrap();
+        assert_eq!(remaining, ":c.1837+2_1837+3insA");
+        // The primary accession is the transcript (inner)
+        assert_eq!(&*acc.prefix, "NM");
+        assert_eq!(&*acc.number, "004119");
+        assert_eq!(acc.version, Some(3));
+        // Genomic context stores the outer accession
+        let ctx = acc
+            .genomic_context
+            .as_ref()
+            .expect("should have genomic context");
+        assert_eq!(&*ctx.prefix, "NC");
+        assert_eq!(&*ctx.number, "000013");
+        assert_eq!(ctx.version, Some(11));
+    }
+
+    #[test]
+    fn test_parse_compound_ref_nc_nr() {
+        // Genomic context with non-coding RNA transcript
+        let (remaining, acc) = parse_accession("NC_000001.11(NR_046018.2):n.100A>G").unwrap();
+        assert_eq!(remaining, ":n.100A>G");
+        assert_eq!(&*acc.prefix, "NR");
+        assert_eq!(&*acc.number, "046018");
+        assert_eq!(acc.version, Some(2));
+        assert!(acc.genomic_context.is_some());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_nc_np() {
+        // Genomic context with protein accession
+        let (remaining, acc) = parse_accession("NC_000013.11(NP_004110.2):p.Val600Glu").unwrap();
+        assert_eq!(remaining, ":p.Val600Glu");
+        assert_eq!(&*acc.prefix, "NP");
+        assert_eq!(acc.genomic_context.is_some(), true);
+    }
+
+    #[test]
+    fn test_parse_compound_ref_ng_nm() {
+        // NG (gene region) context with transcript
+        let (remaining, acc) = parse_accession("NG_007400.1(NM_000088.3):c.459A>G").unwrap();
+        assert_eq!(remaining, ":c.459A>G");
+        assert_eq!(&*acc.prefix, "NM");
+        let ctx = acc.genomic_context.as_ref().unwrap();
+        assert_eq!(&*ctx.prefix, "NG");
+    }
+
+    #[test]
+    fn test_parse_compound_ref_no_version_outer() {
+        // Outer accession without version
+        let (remaining, acc) = parse_accession("NC_000013(NM_004119.3):c.100A>G").unwrap();
+        assert_eq!(remaining, ":c.100A>G");
+        assert_eq!(&*acc.prefix, "NM");
+        let ctx = acc.genomic_context.as_ref().unwrap();
+        assert_eq!(ctx.version, None);
+    }
+
+    #[test]
+    fn test_parse_compound_ref_no_version_inner() {
+        // Inner accession without version
+        let (remaining, acc) = parse_accession("NC_000013.11(NM_004119):c.100A>G").unwrap();
+        assert_eq!(remaining, ":c.100A>G");
+        assert_eq!(acc.version, None);
+        assert!(acc.genomic_context.is_some());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_display_roundtrip() {
+        // Accession Display should produce the compound format
+        let (_, acc) = parse_accession("NC_000013.11(NM_004119.3):c.100A>G").unwrap();
+        assert_eq!(acc.full(), "NC_000013.11(NM_004119.3)");
+        assert_eq!(acc.base(), "NC_000013.11(NM_004119)");
+    }
+
+    #[test]
+    fn test_parse_compound_ref_does_not_break_gene_symbol() {
+        // A bare NC accession followed by a gene symbol should still work
+        // NC_000013.11(FLT3):g.… — (FLT3) is a gene symbol, not a compound ref
+        // This is handled at the variant parsing level, not at accession level
+        let (remaining, acc) = parse_accession("NC_000013.11:g.100A>G").unwrap();
+        assert_eq!(remaining, ":g.100A>G");
+        assert_eq!(&*acc.prefix, "NC");
+        assert!(acc.genomic_context.is_none());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_ensembl_inner() {
+        // Genomic context with Ensembl transcript
+        let (remaining, acc) = parse_accession("NC_000013.11(ENST00000241453.7):c.100A>G").unwrap();
+        assert_eq!(remaining, ":c.100A>G");
+        assert_eq!(&*acc.prefix, "ENST");
+        assert!(acc.is_ensembl());
+        assert!(acc.genomic_context.is_some());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_lrg_outer() {
+        // LRG as outer context
+        let (remaining, acc) = parse_accession("LRG_1(NM_000088.3):c.459A>G").unwrap();
+        assert_eq!(remaining, ":c.459A>G");
+        assert_eq!(&*acc.prefix, "NM");
+        let ctx = acc.genomic_context.as_ref().unwrap();
+        assert_eq!(&*ctx.prefix, "LRG");
+    }
+
+    #[test]
+    fn test_parse_nested_compound_ref_rejected() {
+        // Nested compound refs like NC_...(NG_...(NM_...)) should not be accepted
+        // The inner accession should not already carry a genomic_context
+        let (remaining, acc) =
+            parse_accession("NC_000013.11(NG_000001.1(NM_004119.3)):c.100A>G").unwrap();
+        // Should parse NC_000013.11 as a bare accession, not as a compound
+        // because the inner itself is compound (NG wrapping NM) which is rejected
+        assert!(
+            acc.genomic_context.is_none(),
+            "nested compound refs should be rejected, got: {}",
+            acc.full()
+        );
+        assert_eq!(&*acc.prefix, "NC");
+        assert!(remaining.starts_with('('));
     }
 }

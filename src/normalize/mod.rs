@@ -338,7 +338,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Get sequence from provider - can't normalize with unknown positions
-        let accession = variant.accession.full();
+        let accession = variant.accession.transcript_accession();
         let start = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos.base,
             None => {
@@ -439,7 +439,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Try to get transcript first - we need it for intronic normalization too
-        let accession = variant.accession.full();
+        let accession = variant.accession.transcript_accession();
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
@@ -538,7 +538,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Try to get transcript first - we need it for intronic normalization too
-        let accession = variant.accession.full();
+        let accession = variant.accession.transcript_accession();
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
@@ -665,7 +665,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(), FerroError> {
         use crate::hgvs::edit::ProteinEdit;
 
-        let accession = variant.accession.full();
+        let accession = variant.accession.transcript_accession();
 
         // Get start and end positions
         let start_pos = match variant.loc_edit.location.start.inner() {
@@ -860,7 +860,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Try to get transcript (RNA uses the same accession as mRNA transcripts)
-        let accession = variant.accession.full();
+        let accession = variant.accession.transcript_accession();
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             Err(_) => return Ok((HV::Rna(variant.clone()), vec![])),

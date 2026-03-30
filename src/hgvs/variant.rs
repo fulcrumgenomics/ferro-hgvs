@@ -97,6 +97,10 @@ pub struct Accession {
     /// Chromosome name (e.g., "chr1", "chr23") for assembly/chromosome notation
     #[serde(default)]
     pub chromosome: Option<Arc<str>>,
+    /// Genomic context accession for compound reference syntax
+    /// e.g., NC_000013.11 in NC_000013.11(NM_004119.3):c.…
+    #[serde(default)]
+    pub genomic_context: Option<Box<Accession>>,
 }
 
 impl Accession {
@@ -122,6 +126,7 @@ impl Accession {
             ensembl_style,
             assembly: None,
             chromosome: None,
+            genomic_context: None,
         }
     }
 
@@ -139,6 +144,7 @@ impl Accession {
             ensembl_style,
             assembly: None,
             chromosome: None,
+            genomic_context: None,
         }
     }
 
@@ -151,7 +157,16 @@ impl Accession {
             ensembl_style: false,
             assembly: Some(assembly.into()),
             chromosome: Some(chromosome.into()),
+            genomic_context: None,
         }
+    }
+
+    /// Create a compound reference with genomic context
+    /// e.g., NC_000013.11(NM_004119.3) where `context` is NC_000013.11
+    /// and the primary accession is NM_004119.3
+    pub fn with_genomic_context(mut self, context: Accession) -> Self {
+        self.genomic_context = Some(Box::new(context));
+        self
     }
 
     /// Check if this is an assembly/chromosome style reference
@@ -226,10 +241,16 @@ impl Accession {
         if let (Some(assembly), Some(chromosome)) = (&self.assembly, &self.chromosome) {
             return format!("{}({})", assembly, chromosome);
         }
-        if self.ensembl_style {
+        let base = if self.ensembl_style {
             format!("{}{}", self.prefix, self.number)
         } else {
             format!("{}_{}", self.prefix, self.number)
+        };
+        // Compound reference: context(base)
+        if let Some(ctx) = &self.genomic_context {
+            format!("{}({})", ctx.full(), base)
+        } else {
+            base
         }
     }
 
@@ -239,6 +260,39 @@ impl Accession {
         if self.is_assembly_ref() {
             return self.base();
         }
+        let full = match self.version {
+            Some(v) => {
+                if self.ensembl_style {
+                    format!("{}{}.{}", self.prefix, self.number, v)
+                } else {
+                    format!("{}_{}.{}", self.prefix, self.number, v)
+                }
+            }
+            None => {
+                if self.ensembl_style {
+                    format!("{}{}", self.prefix, self.number)
+                } else {
+                    format!("{}_{}", self.prefix, self.number)
+                }
+            }
+        };
+        // Compound reference: context(full)
+        if let Some(ctx) = &self.genomic_context {
+            format!("{}({})", ctx.full(), full)
+        } else {
+            full
+        }
+    }
+
+    /// Returns the bare accession string for provider/transcript lookups,
+    /// stripping any genomic context wrapper. For compound references like
+    /// `NC_000013.11(NM_004119.3)`, this returns just `"NM_004119.3"`.
+    pub fn transcript_accession(&self) -> String {
+        // Assembly/chromosome notation (e.g. GRCh38(chr1)) uses base() directly
+        if self.is_assembly_ref() {
+            return self.base();
+        }
+
         match self.version {
             Some(v) => {
                 if self.ensembl_style {
@@ -247,7 +301,13 @@ impl Accession {
                     format!("{}_{}.{}", self.prefix, self.number, v)
                 }
             }
-            None => self.base(),
+            None => {
+                if self.ensembl_style {
+                    format!("{}{}", self.prefix, self.number)
+                } else {
+                    format!("{}_{}", self.prefix, self.number)
+                }
+            }
         }
     }
 }
@@ -1366,5 +1426,40 @@ mod tests {
         assert_eq!(variant.gene_symbol, Some("BRCA1".to_string()));
         let display = format!("{}", variant);
         assert!(display.contains("NC_000001.11"));
+    }
+
+    #[test]
+    fn test_transcript_accession_bare() {
+        let acc = Accession::new("NM", "004119", Some(3));
+        assert_eq!(acc.transcript_accession(), "NM_004119.3");
+        assert_eq!(acc.full(), "NM_004119.3");
+    }
+
+    #[test]
+    fn test_transcript_accession_with_genomic_context() {
+        let inner = Accession::new("NM", "004119", Some(3));
+        let outer = Accession::new("NC", "000013", Some(11));
+        let compound = inner.with_genomic_context(outer);
+
+        // full() includes the compound wrapper
+        assert_eq!(compound.full(), "NC_000013.11(NM_004119.3)");
+        // transcript_accession() returns just the bare inner accession
+        assert_eq!(compound.transcript_accession(), "NM_004119.3");
+    }
+
+    #[test]
+    fn test_transcript_accession_assembly_ref() {
+        let acc = Accession::from_assembly("GRCh38", "chr1");
+        assert_eq!(acc.transcript_accession(), "GRCh38(chr1)");
+    }
+
+    #[test]
+    fn test_transcript_accession_ensembl_with_context() {
+        let inner = Accession::with_style("ENST", "00000241453", Some(7), true);
+        let outer = Accession::new("NC", "000013", Some(11));
+        let compound = inner.with_genomic_context(outer);
+
+        assert_eq!(compound.full(), "NC_000013.11(ENST00000241453.7)");
+        assert_eq!(compound.transcript_accession(), "ENST00000241453.7");
     }
 }
