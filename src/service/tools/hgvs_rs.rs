@@ -39,6 +39,7 @@ impl HgvsRsService {
                     .lrg_mapping_file
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
+                in_memory: false,
             };
 
             // Create the HGVS-RS normalizer
