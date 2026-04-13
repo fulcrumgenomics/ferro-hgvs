@@ -157,7 +157,6 @@ impl ReferenceManifest {
     /// directory containing the manifest, regardless of where `prepare` was run from.
     pub fn make_paths_relative(&mut self) {
         let base = self.reference_dir.clone();
-
         self.for_each_path_mut(
             |vec| {
                 for p in vec {
@@ -180,7 +179,6 @@ impl ReferenceManifest {
     ///
     /// Called when loading a manifest to ensure all paths are absolute for use in the program.
     pub fn make_paths_absolute(&mut self) {
-
         let base = self.reference_dir.clone();
         self.for_each_path_mut(
             |vec| {
