@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod manifest;
-pub use manifest::{ReferenceManifest, check_references, print_reference_summary};
+pub use manifest::{check_references, print_reference_summary, ReferenceManifest};
 
 /// Legacy GenBank accessions referenced in ClinVar but not in RefSeq.
 ///
@@ -492,7 +492,10 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
     manifest.save()?;
     eprintln!("\n=== Preparation complete ===");
-    eprintln!("Manifest: {}", manifest.reference_dir.join("manifest.json").display());
+    eprintln!(
+        "Manifest: {}",
+        manifest.reference_dir.join("manifest.json").display()
+    );
     Ok(manifest)
 }
 
