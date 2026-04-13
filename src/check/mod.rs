@@ -71,8 +71,7 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
 
     // Validate transcript files exist
     for fasta in &manifest.transcript_fastas {
-        let full_path = reference_dir.join(fasta);
-        let fna_path = full_path.with_extension("").with_extension("fna");
+        let fna_path = fasta.with_extension("").with_extension("fna");
         if !fna_path.exists() {
             result.warnings.push(format!(
                 "Transcript FASTA not found: {}",
@@ -83,30 +82,27 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
 
     // Validate genome file if specified
     if let Some(ref genome) = manifest.genome_fasta {
-        let full_path = reference_dir.join(genome);
-        if !full_path.exists() {
+        if !genome.exists() {
             result
                 .warnings
-                .push(format!("Genome FASTA not found: {}", full_path.display()));
+                .push(format!("Genome FASTA not found: {}", genome.display()));
         }
     }
 
     // Validate cdot file if specified
     if let Some(ref cdot) = manifest.cdot_json {
-        let full_path = reference_dir.join(cdot);
-        if !full_path.exists() {
+        if !cdot.exists() {
             result
                 .warnings
-                .push(format!("cdot JSON not found: {}", full_path.display()));
+                .push(format!("cdot JSON not found: {}", cdot.display()));
         }
     }
 
     if let Some(ref cdot) = manifest.cdot_grch37_json {
-        let full_path = reference_dir.join(cdot);
-        if !full_path.exists() {
+        if !cdot.exists() {
             result.warnings.push(format!(
                 "cdot GRCh37 JSON not found: {}",
-                full_path.display()
+                cdot.display()
             ));
         }
     }
@@ -235,6 +231,7 @@ mod tests {
             legacy_genbank_metadata: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            reference_dir: dir.path().to_path_buf(),
         };
 
         let mut file = File::create(&manifest_path).unwrap();
