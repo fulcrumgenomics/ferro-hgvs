@@ -100,10 +100,9 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
 
     if let Some(ref cdot) = manifest.cdot_grch37_json {
         if !cdot.exists() {
-            result.warnings.push(format!(
-                "cdot GRCh37 JSON not found: {}",
-                cdot.display()
-            ));
+            result
+                .warnings
+                .push(format!("cdot GRCh37 JSON not found: {}", cdot.display()));
         }
     }
 

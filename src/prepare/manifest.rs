@@ -150,7 +150,6 @@ impl ReferenceManifest {
         opt_fn(&mut self.legacy_genbank_metadata);
     }
 
-
     /// Convert all paths in the manifest to be relative to the reference directory.
     ///
     /// This ensures the manifest is portable - paths work when running from the
@@ -210,7 +209,6 @@ impl ReferenceManifest {
             },
         );
     }
-
 }
 
 /// Check what reference data is available.
@@ -282,7 +280,10 @@ mod tests {
 
         manifest.make_paths_relative();
 
-        assert_eq!(manifest.transcript_fastas[0], PathBuf::from("transcripts.fa"));
+        assert_eq!(
+            manifest.transcript_fastas[0],
+            PathBuf::from("transcripts.fa")
+        );
         assert_eq!(manifest.cdot_json, Some(PathBuf::from("cdot.json")));
     }
 
@@ -295,15 +296,24 @@ mod tests {
 
         manifest.make_paths_absolute();
 
-        assert_eq!(manifest.transcript_fastas[0], PathBuf::from("/ref/data/transcripts.fa"));
-        assert_eq!(manifest.cdot_json, Some(PathBuf::from("/ref/data/cdot.json")));
+        assert_eq!(
+            manifest.transcript_fastas[0],
+            PathBuf::from("/ref/data/transcripts.fa")
+        );
+        assert_eq!(
+            manifest.cdot_json,
+            Some(PathBuf::from("/ref/data/cdot.json"))
+        );
     }
 
     #[test]
     fn test_deduplicate_paths() {
         let mut manifest = ReferenceManifest::default();
-        manifest.transcript_fastas =
-            vec![PathBuf::from("b.fa"), PathBuf::from("a.fa"), PathBuf::from("b.fa")];
+        manifest.transcript_fastas = vec![
+            PathBuf::from("b.fa"),
+            PathBuf::from("a.fa"),
+            PathBuf::from("b.fa"),
+        ];
         manifest.lrg_fastas = vec![PathBuf::from("lrg.fa"), PathBuf::from("lrg.fa")];
 
         manifest.deduplicate_paths();
