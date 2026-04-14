@@ -4,8 +4,6 @@
 //! is properly configured and available for normalization.
 
 use crate::prepare::ReferenceManifest;
-use crate::FerroError;
-use std::fs::File;
 use std::path::Path;
 
 /// Result of checking reference data.
@@ -61,8 +59,8 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         ));
     }
 
-    // Try to load manifest
-    let manifest = match load_manifest(&manifest_path) {
+    // Try to load manifest (paths are automatically made absolute)
+    let manifest = match ReferenceManifest::load_or_default(reference_dir) {
         Ok(m) => m,
         Err(e) => return CheckResult::failure(format!("Failed to load manifest: {}", e)),
     };
@@ -109,16 +107,6 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
     result
 }
 
-/// Load manifest from file.
-fn load_manifest(manifest_path: &Path) -> Result<ReferenceManifest, FerroError> {
-    let file = File::open(manifest_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open manifest: {}", e),
-    })?;
-
-    serde_json::from_reader(file).map_err(|e| FerroError::Io {
-        msg: format!("Failed to parse manifest: {}", e),
-    })
-}
 
 /// Print a detailed summary of reference data.
 pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
@@ -196,7 +184,7 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::fs::File;
     use tempfile::TempDir;
 
     #[test]
@@ -210,11 +198,14 @@ mod tests {
     #[test]
     fn test_check_valid_manifest() {
         let dir = TempDir::new().unwrap();
-        let manifest_path = dir.path().join("manifest.json");
+
+        // Create a real transcript FASTA file with a relative path (as .fna, the expected format)
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
 
         let manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
-            transcript_fastas: Vec::new(),
+            transcript_fastas: vec![std::path::PathBuf::from("example.fna")],
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
@@ -228,16 +219,16 @@ mod tests {
             legacy_transcripts_metadata: None,
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
-            transcript_count: 0,
-            available_prefixes: Vec::new(),
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
         };
 
-        let mut file = File::create(&manifest_path).unwrap();
-        write!(file, "{}", serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        manifest.save().unwrap();
 
         let result = check_reference(dir.path());
         assert!(result.valid);
         assert!(result.manifest.is_some());
+        assert!(result.warnings.is_empty(), "Expected no warnings for valid relative paths");
     }
 }
