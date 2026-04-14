@@ -316,10 +316,15 @@ mod tests {
 
     #[test]
     fn test_make_paths_relative() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let ref_path = temp_dir.path().to_path_buf();
+
         let mut manifest = ReferenceManifest::default();
-        manifest.reference_dir = PathBuf::from("/ref/data");
-        manifest.transcript_fastas = vec![PathBuf::from("/ref/data/transcripts.fa")];
-        manifest.cdot_json = Some(PathBuf::from("/ref/data/cdot.json"));
+        manifest.reference_dir = ref_path.clone();
+        manifest.transcript_fastas = vec![ref_path.join("transcripts.fa")];
+        manifest.cdot_json = Some(ref_path.join("cdot.json"));
 
         manifest.make_paths_relative();
 
@@ -332,8 +337,13 @@ mod tests {
 
     #[test]
     fn test_make_paths_absolute() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let ref_path = temp_dir.path().to_path_buf();
+
         let mut manifest = ReferenceManifest::default();
-        manifest.reference_dir = PathBuf::from("/ref/data");
+        manifest.reference_dir = ref_path.clone();
         manifest.transcript_fastas = vec![PathBuf::from("transcripts.fa")];
         manifest.cdot_json = Some(PathBuf::from("cdot.json"));
 
@@ -341,11 +351,11 @@ mod tests {
 
         assert_eq!(
             manifest.transcript_fastas[0],
-            PathBuf::from("/ref/data/transcripts.fa")
+            ref_path.join("transcripts.fa")
         );
         assert_eq!(
             manifest.cdot_json,
-            Some(PathBuf::from("/ref/data/cdot.json"))
+            Some(ref_path.join("cdot.json"))
         );
     }
 
