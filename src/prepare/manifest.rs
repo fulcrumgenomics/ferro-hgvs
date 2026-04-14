@@ -5,7 +5,7 @@
 
 use crate::FerroError;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -63,7 +63,8 @@ pub struct ReferenceManifest {
 impl Default for ReferenceManifest {
     fn default() -> Self {
         Self {
-            prepared_at: chrono::Utc::now().to_rfc3339(),
+            // Empty string by default; `save()` populates this with the current time.
+            prepared_at: String::new(),
             transcript_fastas: Vec::new(),
             genome_fasta: None,
             genome_grch37_fasta: None,
@@ -107,107 +108,189 @@ impl ReferenceManifest {
         Ok(manifest)
     }
 
+    /// Validate the reference-root invariant before saving.
+    ///
+    /// Ensures that:
+    /// 1. `reference_dir` is set (not empty PathBuf from default)
+    /// 2. All tracked paths can be made relative to `reference_dir`
+    /// 3. No absolute or out-of-root paths are written to manifest
+    /// 4. No relative paths contain `..` components that could escape `reference_dir`
+    ///
+    /// Returns an Io error with a clear message if validation fails.
+    fn validate_reference_root_invariant(&self) -> Result<(), FerroError> {
+        // Check that reference_dir is set (not empty)
+        if self.reference_dir.as_os_str().is_empty() {
+            return Err(FerroError::Io {
+                msg: "Invariant violation: reference_dir must be set before saving manifest. \
+                       Manifest may have been created with default() and not properly initialized. \
+                       Call load_or_default(reference_dir) instead."
+                    .to_string(),
+            });
+        }
+
+        let base = self.reference_dir.as_path();
+        let mut out_of_root_paths = Vec::new();
+        self.for_each_path(|p| {
+            // Reject `..` components anywhere; otherwise after `make_paths_relative`
+            // they would be persisted unchanged and resolve outside `reference_dir`
+            // when loaded.
+            if p.components().any(|c| matches!(c, Component::ParentDir)) {
+                out_of_root_paths.push(format!(
+                    "path '{}' contains a '..' component that could escape reference_dir",
+                    p.display()
+                ));
+            } else if p.is_absolute() && !p.starts_with(base) {
+                out_of_root_paths.push(format!(
+                    "path '{}' is outside reference_dir '{}'",
+                    p.display(),
+                    base.display()
+                ));
+            }
+        });
+
+        if !out_of_root_paths.is_empty() {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "Invariant violation: {} path(s) are outside reference_dir. \
+                     Manifest can only contain paths relative to reference_dir or within it:\n  {}",
+                    out_of_root_paths.len(),
+                    out_of_root_paths.join("\n  ")
+                ),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Save manifest to its reference directory.
     ///
-    /// Automatically deduplicates paths and converts them to relative (for portability)
-    /// before serializing to JSON.
-    pub fn save(&self) -> Result<(), FerroError> {
-        let mut manifest = self.clone();
-        manifest.deduplicate_paths();
-        manifest.make_paths_relative();
+    /// Automatically deduplicates paths in-place and refreshes `prepared_at` so that
+    /// re-runs of `prepare` reflect when the manifest was last persisted. The on-disk
+    /// JSON stores paths relative to `reference_dir` for portability, while the
+    /// in-memory manifest retains its absolute paths.
+    ///
+    /// Validates the reference-root invariant to ensure all paths are within or can be
+    /// made relative to the reference directory. Returns an Io error if validation fails.
+    pub fn save(&mut self) -> Result<(), FerroError> {
+        // Validate invariant before any modifications
+        self.validate_reference_root_invariant()?;
+
+        self.prepared_at = chrono::Utc::now().to_rfc3339();
+        self.deduplicate_paths();
+
+        // Serialize a relative-path view without mutating the in-memory absolute paths.
+        let mut on_disk = self.clone();
+        on_disk.make_paths_relative();
 
         let manifest_path = self.reference_dir.join("manifest.json");
         let file = File::create(&manifest_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to create manifest: {}", e),
         })?;
-        serde_json::to_writer_pretty(file, &manifest).map_err(|e| FerroError::Io {
+        serde_json::to_writer_pretty(file, &on_disk).map_err(|e| FerroError::Io {
             msg: format!("Failed to write manifest: {}", e),
         })
     }
 
-    /// Apply closures to all Vec<PathBuf> and Option<PathBuf> fields.
-    fn for_each_path_mut(
-        &mut self,
-        mut vec_fn: impl FnMut(&mut Vec<PathBuf>),
-        mut opt_fn: impl FnMut(&mut Option<PathBuf>),
-    ) {
-        // Vec<PathBuf> fields
-        vec_fn(&mut self.transcript_fastas);
-        vec_fn(&mut self.refseqgene_fastas);
-        vec_fn(&mut self.lrg_fastas);
-        vec_fn(&mut self.lrg_xmls);
+    /// Apply a closure to every tracked path, read-only.
+    fn for_each_path(&self, mut f: impl FnMut(&Path)) {
+        for p in self
+            .transcript_fastas
+            .iter()
+            .chain(self.refseqgene_fastas.iter())
+            .chain(self.lrg_fastas.iter())
+            .chain(self.lrg_xmls.iter())
+        {
+            f(p);
+        }
+        for p in [
+            &self.genome_fasta,
+            &self.genome_grch37_fasta,
+            &self.lrg_refseq_mapping,
+            &self.cdot_json,
+            &self.cdot_grch37_json,
+            &self.supplemental_fasta,
+            &self.legacy_transcripts_fasta,
+            &self.legacy_transcripts_metadata,
+            &self.legacy_genbank_fasta,
+            &self.legacy_genbank_metadata,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            f(p);
+        }
+    }
 
-        // Option<PathBuf> fields
-        opt_fn(&mut self.genome_fasta);
-        opt_fn(&mut self.genome_grch37_fasta);
-        opt_fn(&mut self.lrg_refseq_mapping);
-        opt_fn(&mut self.cdot_json);
-        opt_fn(&mut self.cdot_grch37_json);
-        opt_fn(&mut self.supplemental_fasta);
-        opt_fn(&mut self.legacy_transcripts_fasta);
-        opt_fn(&mut self.legacy_transcripts_metadata);
-        opt_fn(&mut self.legacy_genbank_fasta);
-        opt_fn(&mut self.legacy_genbank_metadata);
+    /// Apply a closure to every tracked path, mutably.
+    fn for_each_path_mut(&mut self, mut f: impl FnMut(&mut PathBuf)) {
+        for v in [
+            &mut self.transcript_fastas,
+            &mut self.refseqgene_fastas,
+            &mut self.lrg_fastas,
+            &mut self.lrg_xmls,
+        ] {
+            for p in v.iter_mut() {
+                f(p);
+            }
+        }
+        for o in [
+            &mut self.genome_fasta,
+            &mut self.genome_grch37_fasta,
+            &mut self.lrg_refseq_mapping,
+            &mut self.cdot_json,
+            &mut self.cdot_grch37_json,
+            &mut self.supplemental_fasta,
+            &mut self.legacy_transcripts_fasta,
+            &mut self.legacy_transcripts_metadata,
+            &mut self.legacy_genbank_fasta,
+            &mut self.legacy_genbank_metadata,
+        ] {
+            if let Some(p) = o.as_mut() {
+                f(p);
+            }
+        }
     }
 
     /// Convert all paths in the manifest to be relative to the reference directory.
     ///
     /// This ensures the manifest is portable - paths work when running from the
     /// directory containing the manifest, regardless of where `prepare` was run from.
-    pub fn make_paths_relative(&mut self) {
+    /// Paths that cannot be stripped (e.g., outside `reference_dir`) are left
+    /// unchanged; callers must run `validate_reference_root_invariant` first to
+    /// guarantee a fully relative result.
+    fn make_paths_relative(&mut self) {
         let base = self.reference_dir.clone();
-        self.for_each_path_mut(
-            |vec| {
-                for p in vec {
-                    if let Ok(stripped) = p.strip_prefix(&base) {
-                        *p = stripped.to_path_buf();
-                    }
-                }
-            },
-            |opt| {
-                if let Some(p) = opt {
-                    if let Ok(stripped) = p.strip_prefix(&base) {
-                        *p = stripped.to_path_buf();
-                    }
-                }
-            },
-        );
+        self.for_each_path_mut(|p| {
+            if let Ok(stripped) = p.strip_prefix(&base) {
+                *p = stripped.to_path_buf();
+            }
+        });
     }
 
     /// Convert all relative paths to absolute, resolved against the manifest's reference directory.
     ///
     /// Called when loading a manifest to ensure all paths are absolute for use in the program.
-    pub fn make_paths_absolute(&mut self) {
+    /// Paths that are already absolute are left unchanged.
+    fn make_paths_absolute(&mut self) {
         let base = self.reference_dir.clone();
-        self.for_each_path_mut(
-            |vec| {
-                for p in vec {
-                    if !p.is_absolute() {
-                        *p = base.join(p.as_path());
-                    }
-                }
-            },
-            |opt| {
-                if let Some(p) = opt {
-                    if !p.is_absolute() {
-                        *p = base.join(p.as_path());
-                    }
-                }
-            },
-        );
+        self.for_each_path_mut(|p| {
+            if !p.is_absolute() {
+                *p = base.join(p.as_path());
+            }
+        });
     }
 
     /// Deduplicate paths in all path lists.
-    pub fn deduplicate_paths(&mut self) {
-        self.for_each_path_mut(
-            |vec| {
-                vec.sort();
-                vec.dedup();
-            },
-            |_opt| {
-                // no-op: Option<PathBuf> is a single value, so dedup is irrelevant
-            },
-        );
+    fn deduplicate_paths(&mut self) {
+        for v in [
+            &mut self.transcript_fastas,
+            &mut self.refseqgene_fastas,
+            &mut self.lrg_fastas,
+            &mut self.lrg_xmls,
+        ] {
+            v.sort();
+            v.dedup();
+        }
     }
 }
 
@@ -225,46 +308,6 @@ pub fn check_references(reference_dir: &Path) -> Result<ReferenceManifest, Ferro
     }
 
     ReferenceManifest::load_or_default(reference_dir)
-}
-
-/// Print a summary of reference data.
-pub fn print_reference_summary(manifest: &ReferenceManifest) {
-    eprintln!("=== Reference Data Summary ===");
-    eprintln!("  Directory: {}", manifest.reference_dir.display());
-    eprintln!("  Prepared at: {}", manifest.prepared_at);
-    eprintln!("  Transcripts: {}", manifest.transcript_count);
-    eprintln!(
-        "  Available prefixes: {}",
-        manifest.available_prefixes.join(", ")
-    );
-
-    if let Some(ref genome) = manifest.genome_fasta {
-        eprintln!("  GRCh38 genome: {}", genome.display());
-    }
-    if let Some(ref genome) = manifest.genome_grch37_fasta {
-        eprintln!("  GRCh37 genome: {}", genome.display());
-    }
-    if !manifest.refseqgene_fastas.is_empty() {
-        eprintln!("  RefSeqGene files: {}", manifest.refseqgene_fastas.len());
-    }
-    if !manifest.lrg_fastas.is_empty() {
-        eprintln!("  LRG files: {}", manifest.lrg_fastas.len());
-    }
-    if let Some(ref cdot) = manifest.cdot_json {
-        eprintln!("  cdot metadata (GRCh38): {}", cdot.display());
-    }
-    if let Some(ref cdot) = manifest.cdot_grch37_json {
-        eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
-    }
-    if let Some(ref supp) = manifest.supplemental_fasta {
-        eprintln!("  Supplemental transcripts: {}", supp.display());
-    }
-    if let Some(ref legacy) = manifest.legacy_transcripts_fasta {
-        eprintln!("  Legacy transcripts: {}", legacy.display());
-    }
-    if let Some(ref genbank) = manifest.legacy_genbank_fasta {
-        eprintln!("  Legacy GenBank: {}", genbank.display());
-    }
 }
 
 #[cfg(test)]
@@ -334,7 +377,7 @@ mod tests {
         let ref_dir = dir.path();
 
         // Create manifest with absolute paths
-        let manifest = ReferenceManifest {
+        let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
             transcript_fastas: vec![ref_dir.join("transcripts.fa")],
             genome_fasta: Some(ref_dir.join("genome.fa")),
@@ -376,18 +419,15 @@ mod tests {
 
         // Check that paths are relative (not absolute)
         assert_eq!(
-            json["transcript_fastas"][0],
-            "transcripts.fa",
+            json["transcript_fastas"][0], "transcripts.fa",
             "transcript_fastas should be stored as relative path"
         );
         assert_eq!(
-            json["genome_fasta"],
-            "genome.fa",
+            json["genome_fasta"], "genome.fa",
             "genome_fasta should be stored as relative path"
         );
         assert_eq!(
-            json["cdot_json"],
-            "cdot.json",
+            json["cdot_json"], "cdot.json",
             "cdot_json should be stored as relative path"
         );
 
@@ -395,7 +435,10 @@ mod tests {
         let loaded = ReferenceManifest::load_or_default(ref_dir).unwrap();
 
         // Verify loaded manifest has reference_dir set
-        assert_eq!(loaded.reference_dir, ref_dir, "reference_dir should be set after load");
+        assert_eq!(
+            loaded.reference_dir, ref_dir,
+            "reference_dir should be set after load"
+        );
 
         // Verify paths were converted back to absolute
         assert_eq!(
@@ -417,5 +460,116 @@ mod tests {
         // Verify all other fields are preserved
         assert_eq!(loaded.transcript_count, 100);
         assert_eq!(loaded.available_prefixes, vec!["NM"]);
+    }
+
+    #[test]
+    fn test_validate_reference_root_invariant_rejects_out_of_root_paths() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+
+        // In-root paths (absolute, under reference_dir) should pass.
+        let mut manifest = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_fastas: vec![dir.path().join("transcripts.fa")],
+            cdot_json: Some(dir.path().join("cdot.json")),
+            ..ReferenceManifest::default()
+        };
+        manifest
+            .validate_reference_root_invariant()
+            .expect("in-root absolute paths should validate");
+
+        // An absolute path outside reference_dir in a Vec field should fail.
+        manifest
+            .transcript_fastas
+            .push(other.path().join("rogue.fa"));
+        let err = manifest
+            .validate_reference_root_invariant()
+            .expect_err("out-of-root vec path must be rejected");
+        assert!(format!("{}", err).contains("rogue.fa"));
+
+        // An absolute path outside reference_dir in an Option field should also fail.
+        manifest.transcript_fastas.pop();
+        manifest.legacy_transcripts_fasta = Some(other.path().join("legacy.fa"));
+        let err = manifest
+            .validate_reference_root_invariant()
+            .expect_err("out-of-root option path must be rejected");
+        assert!(format!("{}", err).contains("legacy.fa"));
+
+        // Empty reference_dir should fail with the dedicated message.
+        let bad = ReferenceManifest::default();
+        let err = bad
+            .validate_reference_root_invariant()
+            .expect_err("default manifest must fail validation");
+        assert!(format!("{}", err).contains("reference_dir must be set"));
+    }
+
+    #[test]
+    fn test_validate_reference_root_invariant_rejects_parent_dir_components() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // A relative path with `..` would resolve outside reference_dir on load.
+        let mut manifest = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_fastas: vec![PathBuf::from("../escape.fa")],
+            ..ReferenceManifest::default()
+        };
+        let err = manifest
+            .validate_reference_root_invariant()
+            .expect_err("relative '..' path must be rejected");
+        assert!(format!("{}", err).contains("escape.fa"));
+        assert!(format!("{}", err).contains(".."));
+
+        // Same check on Option fields.
+        manifest.transcript_fastas.clear();
+        manifest.cdot_json = Some(PathBuf::from("subdir/../../oops.json"));
+        let err = manifest
+            .validate_reference_root_invariant()
+            .expect_err("Option path with '..' must be rejected");
+        assert!(format!("{}", err).contains("oops.json"));
+    }
+
+    #[test]
+    fn test_save_refreshes_prepared_at() {
+        use std::io::Read;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let ref_dir = dir.path();
+
+        let stale_timestamp = "2020-01-01T00:00:00+00:00".to_string();
+        let mut manifest = ReferenceManifest {
+            prepared_at: stale_timestamp.clone(),
+            reference_dir: ref_dir.to_path_buf(),
+            ..ReferenceManifest::default()
+        };
+
+        manifest.save().unwrap();
+
+        let mut contents = String::new();
+        File::open(ref_dir.join("manifest.json"))
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let saved_prepared_at = json["prepared_at"].as_str().unwrap();
+
+        assert_ne!(
+            saved_prepared_at, stale_timestamp,
+            "save() should refresh prepared_at to a new timestamp on each call"
+        );
+        // Sanity check: the new timestamp should parse as RFC 3339
+        chrono::DateTime::parse_from_rfc3339(saved_prepared_at)
+            .expect("prepared_at should be a valid RFC 3339 timestamp");
+
+        // save() should also update the in-memory `prepared_at` so it stays in
+        // sync with the persisted value.
+        assert_eq!(
+            manifest.prepared_at, saved_prepared_at,
+            "save() should refresh in-memory prepared_at to match what was persisted"
+        );
     }
 }

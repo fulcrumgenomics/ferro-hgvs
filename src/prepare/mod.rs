@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod manifest;
-pub use manifest::{check_references, print_reference_summary, ReferenceManifest};
+pub use manifest::{check_references, ReferenceManifest};
 
 /// Legacy GenBank accessions referenced in ClinVar but not in RefSeq.
 ///
@@ -169,13 +169,20 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
             if config.skip_existing && output_path.exists() {
                 eprintln!("  Skipping {} (exists)", filename);
+                // Treat skipped pre-existing files as discovered so downstream
+                // steps (count_transcripts, manifest persistence) see them.
+                if !manifest.transcript_fastas.contains(&output_path) {
+                    manifest.transcript_fastas.push(output_path);
+                }
                 continue;
             }
 
             match download_file(&url, &output_path) {
                 Ok(_) => {
                     eprintln!("  Downloaded {}", filename);
-                    manifest.transcript_fastas.push(output_path);
+                    if !manifest.transcript_fastas.contains(&output_path) {
+                        manifest.transcript_fastas.push(output_path);
+                    }
                 }
                 Err(e) => {
                     // File might not exist (numbering ends at some point)
@@ -190,7 +197,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
         // Decompress and index
         eprintln!("\n=== Processing transcript files ===");
-        for gz_path in &manifest.transcript_fastas.clone() {
+        for gz_path in &manifest.transcript_fastas {
             let fasta_path = gz_path.with_extension("").with_extension("fna");
 
             if config.skip_existing && fasta_path.exists() {

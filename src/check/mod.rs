@@ -67,13 +67,22 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
 
     let mut result = CheckResult::success(manifest.clone());
 
-    // Validate transcript files exist
+    // Validate transcript files exist.
+    //
+    // `transcript_fastas` is populated by `prepare_references` with `.fna.gz`
+    // RefSeq RNA paths; map those to the decompressed `.fna` companion to check.
+    // Any other extension is checked as-is rather than silently rewritten.
     for fasta in &manifest.transcript_fastas {
-        let fna_path = fasta.with_extension("").with_extension("fna");
-        if !fna_path.exists() {
+        let check_path = fasta
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|name| name.ends_with(".fna.gz"))
+            .map(|name| fasta.with_file_name(&name[..name.len() - ".gz".len()]))
+            .unwrap_or_else(|| fasta.clone());
+        if !check_path.exists() {
             result.warnings.push(format!(
                 "Transcript FASTA not found: {}",
-                fna_path.display()
+                check_path.display()
             ));
         }
     }
@@ -106,7 +115,6 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
 
     result
 }
-
 
 /// Print a detailed summary of reference data.
 pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
@@ -203,9 +211,9 @@ mod tests {
         let transcript_fasta = dir.path().join("example.fna");
         File::create(&transcript_fasta).unwrap();
 
-        let manifest = ReferenceManifest {
+        let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
-            transcript_fastas: vec![std::path::PathBuf::from("example.fna")],
+            transcript_fastas: vec![transcript_fasta.clone()],
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
@@ -229,6 +237,9 @@ mod tests {
         let result = check_reference(dir.path());
         assert!(result.valid);
         assert!(result.manifest.is_some());
-        assert!(result.warnings.is_empty(), "Expected no warnings for valid relative paths");
+        assert!(
+            result.warnings.is_empty(),
+            "Expected no warnings for valid relative paths"
+        );
     }
 }
