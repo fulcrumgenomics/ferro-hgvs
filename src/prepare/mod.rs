@@ -169,7 +169,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
             if config.skip_existing && output_path.exists() {
                 eprintln!("  Skipping {} (exists)", filename);
-                manifest.transcript_fastas.push(output_path);
                 continue;
             }
 
@@ -299,7 +298,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                 if !fai_path.exists() {
                     index_fasta(&fasta_path)?;
                 }
-                manifest.refseqgene_fastas.push(fasta_path);
                 continue;
             }
 
@@ -354,7 +352,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                     index_fasta(&fasta_path)?;
                 }
                 fasta_skipped += 1;
-                manifest.lrg_fastas.push(fasta_path.clone());
                 lrg_exists = true;
             } else {
                 match download_file(&fasta_url, &fasta_path) {
@@ -378,7 +375,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             if lrg_exists {
                 if config.skip_existing && xml_path.exists() {
                     xml_skipped += 1;
-                    manifest.lrg_xmls.push(xml_path);
                 } else {
                     match download_file(&xml_url, &xml_path) {
                         Ok(_) => {

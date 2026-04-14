@@ -324,4 +324,98 @@ mod tests {
         );
         assert_eq!(manifest.lrg_fastas, vec![PathBuf::from("lrg.fa")]);
     }
+
+    #[test]
+    fn test_roundtrip_save_load_with_relative_paths() {
+        use std::io::Read;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let ref_dir = dir.path();
+
+        // Create manifest with absolute paths
+        let manifest = ReferenceManifest {
+            prepared_at: "2024-01-01T00:00:00Z".to_string(),
+            transcript_fastas: vec![ref_dir.join("transcripts.fa")],
+            genome_fasta: Some(ref_dir.join("genome.fa")),
+            genome_grch37_fasta: Some(ref_dir.join("genome37.fa")),
+            refseqgene_fastas: vec![ref_dir.join("ng.fa")],
+            lrg_fastas: vec![ref_dir.join("lrg.fa")],
+            lrg_xmls: vec![ref_dir.join("lrg.xml")],
+            lrg_refseq_mapping: Some(ref_dir.join("lrg_mapping.txt")),
+            cdot_json: Some(ref_dir.join("cdot.json")),
+            cdot_grch37_json: Some(ref_dir.join("cdot37.json")),
+            supplemental_fasta: Some(ref_dir.join("supplemental.fa")),
+            legacy_transcripts_fasta: Some(ref_dir.join("legacy.fa")),
+            legacy_transcripts_metadata: Some(ref_dir.join("legacy.json")),
+            legacy_genbank_fasta: Some(ref_dir.join("genbank.fa")),
+            legacy_genbank_metadata: Some(ref_dir.join("genbank.json")),
+            transcript_count: 100,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: ref_dir.to_path_buf(),
+        };
+
+        // Save the manifest (which should make paths relative)
+        manifest.save().unwrap();
+
+        // Verify on disk: paths are relative and reference_dir is not serialized
+        let manifest_file = ref_dir.join("manifest.json");
+        let mut contents = String::new();
+        File::open(&manifest_file)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+
+        // Check that reference_dir is not in the serialized JSON
+        assert!(
+            json.get("reference_dir").is_none(),
+            "reference_dir should not be serialized"
+        );
+
+        // Check that paths are relative (not absolute)
+        assert_eq!(
+            json["transcript_fastas"][0],
+            "transcripts.fa",
+            "transcript_fastas should be stored as relative path"
+        );
+        assert_eq!(
+            json["genome_fasta"],
+            "genome.fa",
+            "genome_fasta should be stored as relative path"
+        );
+        assert_eq!(
+            json["cdot_json"],
+            "cdot.json",
+            "cdot_json should be stored as relative path"
+        );
+
+        // Load the manifest back
+        let loaded = ReferenceManifest::load_or_default(ref_dir).unwrap();
+
+        // Verify loaded manifest has reference_dir set
+        assert_eq!(loaded.reference_dir, ref_dir, "reference_dir should be set after load");
+
+        // Verify paths were converted back to absolute
+        assert_eq!(
+            loaded.transcript_fastas[0],
+            ref_dir.join("transcripts.fa"),
+            "transcript_fastas should be absolute after load"
+        );
+        assert_eq!(
+            loaded.genome_fasta,
+            Some(ref_dir.join("genome.fa")),
+            "genome_fasta should be absolute after load"
+        );
+        assert_eq!(
+            loaded.cdot_json,
+            Some(ref_dir.join("cdot.json")),
+            "cdot_json should be absolute after load"
+        );
+
+        // Verify all other fields are preserved
+        assert_eq!(loaded.transcript_count, 100);
+        assert_eq!(loaded.available_prefixes, vec!["NM"]);
+    }
 }
