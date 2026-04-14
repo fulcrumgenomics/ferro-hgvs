@@ -107,14 +107,92 @@ impl ReferenceManifest {
         Ok(manifest)
     }
 
+    /// Validate the reference-root invariant before saving.
+    ///
+    /// Ensures that:
+    /// 1. `reference_dir` is set (not empty PathBuf from default)
+    /// 2. All tracked paths can be made relative to `reference_dir`
+    /// 3. No absolute or out-of-root paths are written to manifest
+    ///
+    /// Returns an Io error with a clear message if validation fails.
+    fn validate_reference_root_invariant(&self) -> Result<(), FerroError> {
+        // Check that reference_dir is set (not empty)
+        if self.reference_dir.as_os_str().is_empty() {
+            return Err(FerroError::Io {
+                msg: "Invariant violation: reference_dir must be set before saving manifest. \
+                       Manifest may have been created with default() and not properly initialized. \
+                       Call load_or_default(reference_dir) instead."
+                    .to_string(),
+            });
+        }
+
+        // Create a cloned copy to check path relativity without mutation
+        let mut check_manifest = self.clone();
+        check_manifest.deduplicate_paths();
+
+        // Verify all paths can be made relative to reference_dir
+        let base = self.reference_dir.clone();
+        let mut vec_errors = Vec::new();
+        let mut opt_errors = Vec::new();
+
+        check_manifest.for_each_path_mut(
+            |vec| {
+                for p in vec {
+                    // Check if path is absolute and doesn't start with reference_dir
+                    if p.is_absolute() && !p.starts_with(&base) {
+                        vec_errors.push(format!(
+                            "path '{}' is outside reference_dir '{}'",
+                            p.display(),
+                            base.display()
+                        ));
+                    }
+                }
+            },
+            |opt| {
+                if let Some(p) = opt {
+                    // Check if path is absolute and doesn't start with reference_dir
+                    if p.is_absolute() && !p.starts_with(&base) {
+                        opt_errors.push(format!(
+                            "path '{}' is outside reference_dir '{}'",
+                            p.display(),
+                            base.display()
+                        ));
+                    }
+                }
+            },
+        );
+
+        let mut out_of_root_paths = vec_errors;
+        out_of_root_paths.extend(opt_errors);
+
+        if !out_of_root_paths.is_empty() {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "Invariant violation: {} path(s) are outside reference_dir. \
+                     Manifest can only contain paths relative to reference_dir or within it:\n  {}",
+                    out_of_root_paths.len(),
+                    out_of_root_paths.join("\n  ")
+                ),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Save manifest to its reference directory.
     ///
     /// Automatically deduplicates paths and converts them to relative (for portability)
     /// before serializing to JSON.
+    ///
+    /// Validates the reference-root invariant to ensure all paths are within or can be
+    /// made relative to the reference directory. Returns an Io error if validation fails.
     pub fn save(&self) -> Result<(), FerroError> {
+        // Validate invariant before any modifications
+        self.validate_reference_root_invariant()?;
+
         let mut manifest = self.clone();
-        manifest.deduplicate_paths();
         manifest.make_paths_relative();
+        manifest.deduplicate_paths();
 
         let manifest_path = self.reference_dir.join("manifest.json");
         let file = File::create(&manifest_path).map_err(|e| FerroError::Io {
@@ -376,18 +454,15 @@ mod tests {
 
         // Check that paths are relative (not absolute)
         assert_eq!(
-            json["transcript_fastas"][0],
-            "transcripts.fa",
+            json["transcript_fastas"][0], "transcripts.fa",
             "transcript_fastas should be stored as relative path"
         );
         assert_eq!(
-            json["genome_fasta"],
-            "genome.fa",
+            json["genome_fasta"], "genome.fa",
             "genome_fasta should be stored as relative path"
         );
         assert_eq!(
-            json["cdot_json"],
-            "cdot.json",
+            json["cdot_json"], "cdot.json",
             "cdot_json should be stored as relative path"
         );
 
@@ -395,7 +470,10 @@ mod tests {
         let loaded = ReferenceManifest::load_or_default(ref_dir).unwrap();
 
         // Verify loaded manifest has reference_dir set
-        assert_eq!(loaded.reference_dir, ref_dir, "reference_dir should be set after load");
+        assert_eq!(
+            loaded.reference_dir, ref_dir,
+            "reference_dir should be set after load"
+        );
 
         // Verify paths were converted back to absolute
         assert_eq!(

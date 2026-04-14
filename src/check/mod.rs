@@ -107,7 +107,6 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
     result
 }
 
-
 /// Print a detailed summary of reference data.
 pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
     if !result.valid {
@@ -229,6 +228,9 @@ mod tests {
         let result = check_reference(dir.path());
         assert!(result.valid);
         assert!(result.manifest.is_some());
-        assert!(result.warnings.is_empty(), "Expected no warnings for valid relative paths");
+        assert!(
+            result.warnings.is_empty(),
+            "Expected no warnings for valid relative paths"
+        );
     }
 }
