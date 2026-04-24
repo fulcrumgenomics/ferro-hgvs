@@ -29,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           submodules: true
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -51,16 +52,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-13, macos-14]
+        runner: [macos-15-intel, macos-14]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64
           - runner: macos-14
             target: aarch64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           submodules: true
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -86,6 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           submodules: true
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -108,6 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           submodules: true
           persist-credentials: false
       - name: Build sdist
