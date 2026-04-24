@@ -18,6 +18,8 @@ jobs:
           lfs: true
           submodules: true
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: 1.94.0
       - uses: taiki-e/install-action@3f7f2bd74f95d407a45d96b106f26d4f6c238fab  # cargo-llvm-cov
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
