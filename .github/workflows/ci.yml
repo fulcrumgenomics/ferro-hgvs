@@ -24,7 +24,7 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.94.0  # TODO(#35): unpin once new clippy lints are fixed
           components: rustfmt
       - run: cargo fmt --all -- --check
 
