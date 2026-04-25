@@ -388,10 +388,7 @@ mod tests {
             manifest.transcript_fastas[0],
             ref_path.join("transcripts.fa")
         );
-        assert_eq!(
-            manifest.cdot_json,
-            Some(ref_path.join("cdot.json"))
-        );
+        assert_eq!(manifest.cdot_json, Some(ref_path.join("cdot.json")));
     }
 
     #[test]
