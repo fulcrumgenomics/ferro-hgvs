@@ -86,7 +86,7 @@ fn normalize(hgvs_string: &str, direction: &str) -> PyResult<String> {
 }
 
 /// Python wrapper for HgvsVariant
-#[pyclass(name = "HgvsVariant")]
+#[pyclass(name = "HgvsVariant", from_py_object)]
 #[derive(Clone)]
 pub struct PyHgvsVariant {
     pub(crate) inner: HgvsVariant,
@@ -315,7 +315,7 @@ impl PyHgvsVariant {
     }
 
     /// Convert to a dictionary representation
-    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         dict.set_item("string", self.inner.to_string())?;
         dict.set_item("variant_type", self.variant_type())?;
@@ -347,7 +347,7 @@ impl PyHgvsVariant {
         // Allele info
         dict.set_item("num_variants", get_num_variants(&self.inner))?;
 
-        Ok(dict.into())
+        Ok(dict)
     }
 
     /// Convert to JSON string
@@ -480,7 +480,7 @@ fn spdi_to_hgvs_variant(spdi: &PySpdiVariant) -> PyResult<PyHgvsVariant> {
 }
 
 /// Python wrapper for SpdiVariant
-#[pyclass(name = "SpdiVariant")]
+#[pyclass(name = "SpdiVariant", from_py_object)]
 #[derive(Clone)]
 pub struct PySpdiVariant {
     inner: SpdiVariant,
@@ -589,14 +589,14 @@ impl PySpdiVariant {
     }
 
     /// Convert to a dictionary representation
-    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         dict.set_item("sequence", &self.inner.sequence)?;
         dict.set_item("position", self.inner.position)?;
         dict.set_item("deletion", &self.inner.deletion)?;
         dict.set_item("insertion", &self.inner.insertion)?;
         dict.set_item("variant_type", self.inner.variant_type())?;
-        Ok(dict.into())
+        Ok(dict)
     }
 }
 
@@ -605,7 +605,7 @@ impl PySpdiVariant {
 // ============================================================================
 
 /// Python wrapper for ZeroBasedPos
-#[pyclass(name = "ZeroBasedPos")]
+#[pyclass(name = "ZeroBasedPos", from_py_object)]
 #[derive(Clone)]
 pub struct PyZeroBasedPos {
     inner: ZeroBasedPos,
@@ -675,7 +675,7 @@ impl PyZeroBasedPos {
 }
 
 /// Python wrapper for OneBasedPos
-#[pyclass(name = "OneBasedPos")]
+#[pyclass(name = "OneBasedPos", from_py_object)]
 #[derive(Clone)]
 pub struct PyOneBasedPos {
     inner: OneBasedPos,
@@ -762,7 +762,7 @@ fn index_to_hgvs_pos(idx: usize) -> u64 {
 // ============================================================================
 
 /// Equivalence level between two variants
-#[pyclass(name = "EquivalenceLevel", eq, eq_int)]
+#[pyclass(name = "EquivalenceLevel", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyEquivalenceLevel {
     /// Exactly identical (same string representation)
@@ -818,7 +818,7 @@ impl PyEquivalenceLevel {
 }
 
 /// Result of an equivalence check
-#[pyclass(name = "EquivalenceResult")]
+#[pyclass(name = "EquivalenceResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyEquivalenceResult {
     /// The determined equivalence level
@@ -924,7 +924,7 @@ impl PyEquivalenceChecker {
 // ============================================================================
 
 /// Sequence Ontology consequence term
-#[pyclass(name = "Consequence", eq, eq_int)]
+#[pyclass(name = "Consequence", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyConsequence {
     TranscriptAblation = 0,
@@ -1028,7 +1028,7 @@ impl PyConsequence {
 }
 
 /// Variant impact level (VEP-style)
-#[pyclass(name = "Impact", eq, eq_int)]
+#[pyclass(name = "Impact", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PyImpact {
     Modifier = 0,
@@ -1061,7 +1061,7 @@ impl PyImpact {
 }
 
 /// Protein effect prediction result
-#[pyclass(name = "ProteinEffect")]
+#[pyclass(name = "ProteinEffect", from_py_object)]
 #[derive(Clone)]
 pub struct PyProteinEffect {
     inner: ProteinEffect,
@@ -1226,7 +1226,7 @@ fn parse_amino_acid(code: &str) -> PyResult<AminoAcid> {
 // ============================================================================
 
 /// Context for parsing MAVE-HGVS short-form notation
-#[pyclass(name = "MaveContext")]
+#[pyclass(name = "MaveContext", from_py_object)]
 #[derive(Clone)]
 pub struct PyMaveContext {
     inner: MaveContext,
@@ -1356,7 +1356,7 @@ fn is_mave_short_form_variant(hgvs_string: &str) -> bool {
 // ============================================================================
 
 /// Progress information for batch processing
-#[pyclass(name = "BatchProgress")]
+#[pyclass(name = "BatchProgress", from_py_object)]
 #[derive(Clone)]
 pub struct PyBatchProgress {
     #[pyo3(get)]
@@ -1535,7 +1535,7 @@ impl PyBatchProcessor {
 // ============================================================================
 
 /// Error handling mode
-#[pyclass(name = "ErrorMode", eq, eq_int)]
+#[pyclass(name = "ErrorMode", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyErrorMode {
     /// Strict mode - reject all non-standard input
@@ -1567,7 +1567,7 @@ impl From<PyErrorMode> for ErrorMode {
 }
 
 /// Error type for configurable error handling
-#[pyclass(name = "ErrorType", eq, eq_int)]
+#[pyclass(name = "ErrorType", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PyErrorType {
     LowercaseAminoAcid = 0,
@@ -1638,7 +1638,7 @@ impl From<PyErrorType> for ErrorType {
 }
 
 /// Override behavior for a specific error type
-#[pyclass(name = "ErrorOverride", eq, eq_int)]
+#[pyclass(name = "ErrorOverride", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyErrorOverride {
     /// Use the base mode's behavior
@@ -1678,7 +1678,7 @@ impl From<PyErrorOverride> for ErrorOverride {
 }
 
 /// Warning generated during preprocessing
-#[pyclass(name = "CorrectionWarning")]
+#[pyclass(name = "CorrectionWarning", from_py_object)]
 #[derive(Clone)]
 pub struct PyCorrectionWarning {
     #[pyo3(get)]
@@ -1713,7 +1713,7 @@ impl PyCorrectionWarning {
 }
 
 /// Error handling configuration
-#[pyclass(name = "ErrorConfig")]
+#[pyclass(name = "ErrorConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyErrorConfig {
     inner: ErrorConfig,
@@ -1854,7 +1854,7 @@ fn parse_lenient(
 // ============================================================================
 
 /// A codon change representing a DNA variant
-#[pyclass(name = "CodonChange")]
+#[pyclass(name = "CodonChange", from_py_object)]
 #[derive(Clone)]
 pub struct PyCodonChange {
     inner: CodonChange,
@@ -1898,7 +1898,7 @@ impl PyCodonChange {
 }
 
 /// Codon table (genetic code)
-#[pyclass(name = "CodonTable")]
+#[pyclass(name = "CodonTable", from_py_object)]
 #[derive(Clone)]
 pub struct PyCodonTable {
     inner: CodonTable,
@@ -2033,7 +2033,7 @@ fn format_rsid_value(rsid_num: u64) -> String {
 }
 
 /// Result of rsID lookup
-#[pyclass(name = "RsIdResult")]
+#[pyclass(name = "RsIdResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyRsIdResult {
     inner: RsIdResult,
@@ -2164,7 +2164,7 @@ impl PyInMemoryRsIdLookup {
 // ============================================================================
 
 /// A VCF record
-#[pyclass(name = "VcfRecord")]
+#[pyclass(name = "VcfRecord", from_py_object)]
 #[derive(Clone)]
 pub struct PyVcfRecord {
     inner: VcfRecord,
@@ -2292,7 +2292,7 @@ fn vcf_to_genomic_hgvs(record: &PyVcfRecord, alt_index: usize) -> PyResult<PyHgv
 // ============================================================================
 
 /// Configuration for reference data preparation
-#[pyclass(name = "PrepareConfig")]
+#[pyclass(name = "PrepareConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyPrepareConfig {
     inner: PrepareConfig,
@@ -2314,6 +2314,7 @@ impl PyPrepareConfig {
         dry_run=false,
         download_cdot_grch37=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         output_dir: &str,
         download_transcripts: bool,
@@ -2371,7 +2372,7 @@ impl PyPrepareConfig {
 }
 
 /// Manifest of prepared reference data
-#[pyclass(name = "ReferenceManifest")]
+#[pyclass(name = "ReferenceManifest", from_py_object)]
 #[derive(Clone)]
 pub struct PyReferenceManifest {
     inner: ReferenceManifest,
@@ -2474,7 +2475,7 @@ fn check_reference_data(directory: &str) -> PyResult<PyReferenceManifest> {
 // ============================================================================
 
 /// Genome build (GRCh37 or GRCh38)
-#[pyclass(name = "GenomeBuild", eq, eq_int)]
+#[pyclass(name = "GenomeBuild", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyGenomeBuild {
     GRCh37 = 0,
@@ -2504,7 +2505,7 @@ impl PyGenomeBuild {
 }
 
 /// Strand direction
-#[pyclass(name = "Strand", eq, eq_int)]
+#[pyclass(name = "Strand", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyStrand {
     Plus = 0,

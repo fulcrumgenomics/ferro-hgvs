@@ -39,7 +39,7 @@ clap = { version = "4", features = ["derive"] }
 noodles-vcf = "0.73"
 flate2 = "1.0"
 ahash = { version = "0.8", optional = true }
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 memmap2 = { version = "0.9", optional = true }
 memchr = "2.7"
 ureq = { version = "2.9", optional = true }
