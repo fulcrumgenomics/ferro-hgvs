@@ -270,8 +270,14 @@ class HgvsVariant:
         """Get the 1-based start position of the variant.
 
         Returns the base position (without intronic offset) for genomic, coding,
-        non-coding, RNA, and mitochondrial variants. For alleles, returns the start
-        of the first sub-variant. Returns None for protein variants.
+        non-coding, RNA, mitochondrial, and circular variants. For single-element
+        alleles, delegates to the sub-variant. Returns None for protein variants,
+        RNA fusions, null/unknown alleles, and alleles with multiple sub-variants
+        (whose start is ambiguous).
+
+        Note: 5' UTR (``c.-5A>G``) and 3' UTR (``c.*5A>G``) positions are returned
+        as raw base values and are indistinguishable from CDS positions at the same
+        numeric value.
         """
         ...
 
@@ -279,8 +285,9 @@ class HgvsVariant:
     def end(self) -> Optional[int]:
         """Get the 1-based end position (inclusive) of the variant.
 
-        For point variants, end equals start. For alleles, returns the end
-        of the first sub-variant. Returns None for protein variants.
+        For point variants, end equals start. For single-element alleles,
+        delegates to the sub-variant. Returns None for protein variants, RNA
+        fusions, null/unknown alleles, and alleles with multiple sub-variants.
         """
         ...
 
@@ -288,8 +295,10 @@ class HgvsVariant:
     def offset(self) -> Optional[int]:
         """Get the intronic offset of the start position.
 
-        Only meaningful for coding (c.) variants with intronic positions.
-        For c.93+1G>T, returns 1. For exonic variants, returns None.
+        Meaningful for coding (c.), non-coding (n.), and RNA (r.) variants with
+        intronic positions. For ``c.93+1G>T``, returns 1. For exonic positions,
+        returns None. Always returns None for variant types without intronic
+        offsets (genomic, mitochondrial, circular, protein, fusion, allele).
         """
         ...
 
@@ -297,8 +306,9 @@ class HgvsVariant:
     def substitution_bases(self) -> Optional[Tuple[str, str]]:
         """Get the substitution reference and alternative bases.
 
-        Returns a tuple (ref_base, alt_base) for substitution edits,
-        e.g., ("A", "G") for A>G. Returns None for non-substitution edits.
+        Returns a tuple (ref_base, alt_base) of single-character strings for
+        substitution edits, e.g., ("A", "G") for A>G. Returns None for
+        non-substitution edits.
         """
         ...
 

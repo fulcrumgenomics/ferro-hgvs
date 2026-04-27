@@ -136,10 +136,16 @@ impl PyHgvsVariant {
 
     /// Get the 1-based start position of the variant.
     ///
-    /// For genomic (g.), coding (c.), non-coding (n.), RNA (r.), and mitochondrial (m.)
-    /// variants, returns the base position (without intronic offset).
-    /// For alleles, returns the start of the first sub-variant.
-    /// Returns None for protein variants and null/unknown alleles.
+    /// For genomic (g.), coding (c.), non-coding (n.), RNA (r.), mitochondrial (m.),
+    /// and circular (o.) variants, returns the base position (without intronic
+    /// offset). For single-element alleles, delegates to the sub-variant.
+    /// Returns None for protein variants, RNA fusions, null/unknown alleles, and
+    /// alleles with multiple sub-variants (whose start is ambiguous).
+    ///
+    /// 5' UTR (`c.-5A>G`) and 3' UTR (`c.*5A>G`) positions are returned as raw
+    /// base values and are indistinguishable from CDS positions at the same
+    /// numeric value. Use the variant string or `to_dict()` representation when
+    /// the UTR distinction matters.
     #[getter]
     fn start(&self) -> Option<i64> {
         get_variant_start(&self.inner)
@@ -147,9 +153,9 @@ impl PyHgvsVariant {
 
     /// Get the 1-based end position (inclusive) of the variant.
     ///
-    /// For point variants, end equals start.
-    /// For alleles, returns the end of the first sub-variant.
-    /// Returns None for protein variants and null/unknown alleles.
+    /// For point variants, end equals start. For single-element alleles,
+    /// delegates to the sub-variant. Returns None for protein variants, RNA
+    /// fusions, null/unknown alleles, and alleles with multiple sub-variants.
     #[getter]
     fn end(&self) -> Option<i64> {
         get_variant_end(&self.inner)
@@ -157,9 +163,10 @@ impl PyHgvsVariant {
 
     /// Get the intronic offset of the start position.
     ///
-    /// Only meaningful for coding (c.) variants with intronic positions.
-    /// For c.93+1G>T, returns 1. For c.100A>G (exonic), returns None.
-    /// Always returns None for non-CDS variant types.
+    /// Meaningful for coding (c.), non-coding (n.), and RNA (r.) variants with
+    /// intronic positions. For `c.93+1G>T`, returns 1. For exonic positions,
+    /// returns None. Always returns None for variant types without intronic
+    /// offsets (genomic, mitochondrial, circular, protein, fusion, allele).
     #[getter]
     fn offset(&self) -> Option<i64> {
         get_variant_offset(&self.inner)
@@ -168,9 +175,9 @@ impl PyHgvsVariant {
     /// Get the substitution reference and alternative bases.
     ///
     /// Returns a tuple (ref_base, alt_base) for substitution edits,
-    /// e.g., ("A", "G") for A>G. Returns None for non-substitution edits.
+    /// e.g., ('A', 'G') for A>G. Returns None for non-substitution edits.
     #[getter]
-    fn substitution_bases(&self) -> Option<(String, String)> {
+    fn substitution_bases(&self) -> Option<(char, char)> {
         get_substitution_bases(&self.inner)
     }
 
