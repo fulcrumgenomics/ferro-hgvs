@@ -722,9 +722,7 @@ impl HgvsVariant {
 
         // Don't use compact form for types that aren't simple coordinate-based variants,
         // or when the first variant has no accession (e.g. NullAllele, UnknownAllele)
-        if first_acc.is_none()
-            || matches!(first_type, "allele" | "null" | "unknown" | "r::r")
-        {
+        if first_acc.is_none() || matches!(first_type, "allele" | "null" | "unknown" | "r::r") {
             return false;
         }
 
