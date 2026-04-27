@@ -332,16 +332,11 @@ fn get_na_edit(variant: &HgvsVariant) -> Option<&NaEdit> {
 ///
 /// Returns `Some(('A', 'G'))` for a substitution, `None` for other edit types.
 pub fn get_substitution_bases(variant: &HgvsVariant) -> Option<(char, char)> {
-    let edit = get_na_edit(variant)?;
-    match edit {
+    match get_na_edit(variant)? {
         NaEdit::Substitution {
             reference,
             alternative,
-        } => {
-            let ref_char = (*reference as u8) as char;
-            let alt_char = (*alternative as u8) as char;
-            Some((ref_char, alt_char))
-        }
+        } => Some((reference.to_char(), alternative.to_char())),
         _ => None,
     }
 }
@@ -382,27 +377,16 @@ fn compute_span(variant: &HgvsVariant) -> Option<i64> {
 /// Returns None if the indel length cannot be determined (e.g., uncertain inserted
 /// sequence length, protein variants, unknown edits).
 pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
-    let edit = get_na_edit(variant)?;
-    match edit {
-        NaEdit::Substitution { .. } | NaEdit::SubstitutionNoRef { .. } => Some(0),
-        NaEdit::Inversion { .. } => Some(0),
-        NaEdit::Identity { .. } => Some(0),
-        NaEdit::Deletion { .. } => {
-            let span = compute_span(variant)?;
-            Some(-span)
-        }
-        NaEdit::Duplication { .. } => {
-            let span = compute_span(variant)?;
-            Some(span)
-        }
-        NaEdit::Insertion { sequence } => {
-            let ins_len = inserted_sequence_len(sequence)?;
-            Some(ins_len)
-        }
+    match get_na_edit(variant)? {
+        NaEdit::Substitution { .. }
+        | NaEdit::SubstitutionNoRef { .. }
+        | NaEdit::Inversion { .. }
+        | NaEdit::Identity { .. } => Some(0),
+        NaEdit::Deletion { .. } => Some(-compute_span(variant)?),
+        NaEdit::Duplication { .. } => Some(compute_span(variant)?),
+        NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence } => {
-            let span = compute_span(variant)?;
-            let ins_len = inserted_sequence_len(sequence)?;
-            Some(ins_len - span)
+            Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
         }
         _ => None,
     }
