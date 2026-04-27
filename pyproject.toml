@@ -37,6 +37,7 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.4",
     "poethepoet>=0.36",
+    "twine>=6.0",
 ]
 
 [tool.maturin]
