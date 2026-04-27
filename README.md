@@ -32,6 +32,16 @@ correctness or stability.
 
 ## Installation
 
+### Python
+
+```bash
+pip install ferro-hgvs
+```
+
+Pre-built wheels are available for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), and Windows (x86_64) on Python 3.10+.
+
+### Rust
+
 Add to your `Cargo.toml`:
 
 ```toml
@@ -82,6 +92,22 @@ fn main() -> Result<(), ferro_hgvs::FerroError> {
 
     Ok(())
 }
+```
+
+### Python
+
+```python
+import ferro_hgvs
+
+# Parse a variant
+variant = ferro_hgvs.parse("NM_000088.3:c.459A>G")
+print(variant.variant_type)  # "coding"
+print(variant.reference)     # "NM_000088.3"
+print(str(variant))          # "NM_000088.3:c.459A>G"
+
+# Normalize with reference data
+normalizer = ferro_hgvs.Normalizer(reference_json="ferro-reference/cdot.json")
+normalized = normalizer.normalize("NM_000088.3:c.459del")
 ```
 
 ## Supported HGVS Syntax
