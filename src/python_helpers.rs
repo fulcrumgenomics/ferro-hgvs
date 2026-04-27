@@ -3,7 +3,9 @@
 //! These functions are separated from the PyO3 code so they can be unit tested
 //! without requiring the Python runtime.
 
-use crate::hgvs::edit::NaEdit;
+use crate::hgvs::edit::{InsertedSequence, NaEdit};
+use crate::hgvs::interval::Interval;
+use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::HgvsVariant;
 use crate::normalize::ShuffleDirection;
@@ -196,6 +198,220 @@ pub fn get_variant_edit_type(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null",
         HgvsVariant::UnknownAllele => "unknown",
+    }
+}
+
+// ============== Position Accessors ==============
+
+/// Extract the start base position from a genome interval
+fn genome_interval_start(interval: &Interval<GenomePos>) -> Option<i64> {
+    interval.start.inner().map(|pos| pos.base as i64)
+}
+
+/// Extract the end base position from a genome interval
+fn genome_interval_end(interval: &Interval<GenomePos>) -> Option<i64> {
+    interval.end.inner().map(|pos| pos.base as i64)
+}
+
+/// Extract the start base position from a CDS interval
+fn cds_interval_start(interval: &Interval<CdsPos>) -> Option<i64> {
+    interval.start.inner().map(|pos| pos.base)
+}
+
+/// Extract the end base position from a CDS interval
+fn cds_interval_end(interval: &Interval<CdsPos>) -> Option<i64> {
+    interval.end.inner().map(|pos| pos.base)
+}
+
+/// Extract the start base position from a transcript interval
+fn tx_interval_start(interval: &Interval<TxPos>) -> Option<i64> {
+    interval.start.inner().map(|pos| pos.base)
+}
+
+/// Extract the end base position from a transcript interval
+fn tx_interval_end(interval: &Interval<TxPos>) -> Option<i64> {
+    interval.end.inner().map(|pos| pos.base)
+}
+
+/// Extract the start base position from an RNA interval
+fn rna_interval_start(interval: &Interval<RnaPos>) -> Option<i64> {
+    interval.start.inner().map(|pos| pos.base)
+}
+
+/// Extract the end base position from an RNA interval
+fn rna_interval_end(interval: &Interval<RnaPos>) -> Option<i64> {
+    interval.end.inner().map(|pos| pos.base)
+}
+
+/// Get the start position (base only, no offset) for any variant.
+///
+/// Returns the 1-based start position for genomic, coding, non-coding, RNA, and
+/// mitochondrial variants. For single-element alleles, delegates to that
+/// sub-variant. Returns None for protein, RNA fusion, null/unknown allele
+/// variants, and alleles with multiple sub-variants (whose start is ambiguous).
+///
+/// Note: 5' UTR (`c.-5A>G`) and 3' UTR (`c.*5A>G`) positions are returned as
+/// raw base values and are indistinguishable from CDS positions at the same
+/// numeric value. Callers needing to distinguish these cases should inspect
+/// the variant string or AST directly.
+pub fn get_variant_start(variant: &HgvsVariant) -> Option<i64> {
+    match variant {
+        HgvsVariant::Genome(v) => genome_interval_start(&v.loc_edit.location),
+        HgvsVariant::Cds(v) => cds_interval_start(&v.loc_edit.location),
+        HgvsVariant::Tx(v) => tx_interval_start(&v.loc_edit.location),
+        HgvsVariant::Rna(v) => rna_interval_start(&v.loc_edit.location),
+        HgvsVariant::Mt(v) => genome_interval_start(&v.loc_edit.location),
+        HgvsVariant::Circular(v) => genome_interval_start(&v.loc_edit.location),
+        HgvsVariant::Allele(a) => match a.variants.as_slice() {
+            [single] => get_variant_start(single),
+            _ => None,
+        },
+        HgvsVariant::Protein(_)
+        | HgvsVariant::RnaFusion(_)
+        | HgvsVariant::NullAllele
+        | HgvsVariant::UnknownAllele => None,
+    }
+}
+
+/// Get the end position (base only, no offset) for any variant.
+///
+/// Returns the 1-based end position (inclusive). For point variants, end == start.
+/// For single-element alleles, delegates to that sub-variant. Returns None for
+/// protein, RNA fusion, null/unknown allele variants, and alleles with multiple
+/// sub-variants (whose end is ambiguous).
+pub fn get_variant_end(variant: &HgvsVariant) -> Option<i64> {
+    match variant {
+        HgvsVariant::Genome(v) => genome_interval_end(&v.loc_edit.location),
+        HgvsVariant::Cds(v) => cds_interval_end(&v.loc_edit.location),
+        HgvsVariant::Tx(v) => tx_interval_end(&v.loc_edit.location),
+        HgvsVariant::Rna(v) => rna_interval_end(&v.loc_edit.location),
+        HgvsVariant::Mt(v) => genome_interval_end(&v.loc_edit.location),
+        HgvsVariant::Circular(v) => genome_interval_end(&v.loc_edit.location),
+        HgvsVariant::Allele(a) => match a.variants.as_slice() {
+            [single] => get_variant_end(single),
+            _ => None,
+        },
+        HgvsVariant::Protein(_)
+        | HgvsVariant::RnaFusion(_)
+        | HgvsVariant::NullAllele
+        | HgvsVariant::UnknownAllele => None,
+    }
+}
+
+/// Get the intronic offset of the start position for CDS, transcript, and RNA
+/// variants.
+///
+/// For `c.93+1G>T`, returns `Some(1)`. For exonic positions (no offset), returns
+/// `None`. Returns `None` for variant types without intronic offsets (genomic,
+/// mitochondrial, circular, protein, fusion, allele, null/unknown).
+pub fn get_variant_offset(variant: &HgvsVariant) -> Option<i64> {
+    match variant {
+        HgvsVariant::Cds(v) => v.loc_edit.location.start.inner().and_then(|pos| pos.offset),
+        HgvsVariant::Tx(v) => v.loc_edit.location.start.inner().and_then(|pos| pos.offset),
+        HgvsVariant::Rna(v) => v.loc_edit.location.start.inner().and_then(|pos| pos.offset),
+        _ => None,
+    }
+}
+
+// ============== Edit Accessors ==============
+
+/// Get the NaEdit from a variant, if it has one.
+fn get_na_edit(variant: &HgvsVariant) -> Option<&NaEdit> {
+    match variant {
+        HgvsVariant::Genome(v) => v.loc_edit.edit.inner(),
+        HgvsVariant::Cds(v) => v.loc_edit.edit.inner(),
+        HgvsVariant::Tx(v) => v.loc_edit.edit.inner(),
+        HgvsVariant::Rna(v) => v.loc_edit.edit.inner(),
+        HgvsVariant::Mt(v) => v.loc_edit.edit.inner(),
+        HgvsVariant::Circular(v) => v.loc_edit.edit.inner(),
+        _ => None,
+    }
+}
+
+/// Get the substitution reference and alternative bases.
+///
+/// Returns `Some(('A', 'G'))` for a substitution, `None` for other edit types.
+pub fn get_substitution_bases(variant: &HgvsVariant) -> Option<(char, char)> {
+    match get_na_edit(variant)? {
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => Some((reference.to_char(), alternative.to_char())),
+        _ => None,
+    }
+}
+
+/// Check if the variant represents an identity (no-change, `=`) edit.
+pub fn is_identity(variant: &HgvsVariant) -> bool {
+    matches!(get_na_edit(variant), Some(NaEdit::Identity { .. }))
+}
+
+/// Compute the span of the affected region from the interval.
+///
+/// Used for deletion/duplication/delins length calculations; not used for
+/// insertions, whose length comes from the inserted sequence rather than the
+/// flanking positions.
+///
+/// Returns `None` for circular (`o.`) variants where `end < start`, which
+/// represent origin-crossing intervals whose span depends on the contig length
+/// (not available here).
+fn compute_span(variant: &HgvsVariant) -> Option<i64> {
+    let start = get_variant_start(variant)?;
+    let end = get_variant_end(variant)?;
+    if matches!(variant, HgvsVariant::Circular(_)) && end < start {
+        return None;
+    }
+    Some((end - start) + 1)
+}
+
+/// Compute the net indel length (bases gained or lost) for a variant.
+///
+/// - Substitution: 0 (same number of bases)
+/// - Deletion: -(span)
+/// - Insertion: +(inserted length), or None if length is unknowable
+/// - Delins: inserted_length - span, or None if inserted length is unknowable
+/// - Duplication: +(span)
+/// - Inversion: 0
+/// - Identity: 0
+///
+/// Returns None if the indel length cannot be determined (e.g., uncertain inserted
+/// sequence length, protein variants, unknown edits).
+pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
+    match get_na_edit(variant)? {
+        NaEdit::Substitution { .. }
+        | NaEdit::SubstitutionNoRef { .. }
+        | NaEdit::Inversion { .. }
+        | NaEdit::Identity { .. } => Some(0),
+        NaEdit::Deletion { .. } => Some(-compute_span(variant)?),
+        NaEdit::Duplication { .. } => Some(compute_span(variant)?),
+        NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
+        NaEdit::Delins { sequence } => {
+            Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
+        }
+        _ => None,
+    }
+}
+
+/// Get the length of an inserted sequence, if deterministic.
+fn inserted_sequence_len(seq: &InsertedSequence) -> Option<i64> {
+    seq.len().map(|n| n as i64)
+}
+
+/// Check if a variant causes a frameshift (indel_length % 3 != 0).
+///
+/// Returns false if the indel length is 0 or cannot be determined.
+pub fn is_frameshift(variant: &HgvsVariant) -> bool {
+    match get_indel_length(variant) {
+        Some(len) if len != 0 => len % 3 != 0,
+        _ => false,
+    }
+}
+
+/// Get the number of sub-variants in an allele, or 1 for simple variants.
+pub fn get_num_variants(variant: &HgvsVariant) -> usize {
+    match variant {
+        HgvsVariant::Allele(a) => a.variants.len(),
+        _ => 1,
     }
 }
 
@@ -512,5 +728,285 @@ mod tests {
     fn test_get_variant_edit_type_unknown() {
         let variant = HgvsVariant::UnknownAllele;
         assert_eq!(get_variant_edit_type(&variant), "unknown");
+    }
+
+    // ===== Position Accessor Tests =====
+
+    #[test]
+    fn test_get_variant_start_genomic() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(12345));
+    }
+
+    #[test]
+    fn test_get_variant_start_coding() {
+        let variant = parse_hgvs("NM_000088.3:c.100A>G").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(100));
+    }
+
+    #[test]
+    fn test_get_variant_start_coding_intronic() {
+        let variant = parse_hgvs("NM_000088.3:c.93+1G>T").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(93));
+    }
+
+    #[test]
+    fn test_get_variant_end_range() {
+        let variant = parse_hgvs("NC_000001.11:g.12345_12350del").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(12345));
+        assert_eq!(get_variant_end(&variant), Some(12350));
+    }
+
+    #[test]
+    fn test_get_variant_end_point() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_variant_end(&variant), Some(12345));
+    }
+
+    #[test]
+    fn test_get_variant_offset_intronic() {
+        let variant = parse_hgvs("NM_000088.3:c.93+1G>T").unwrap();
+        assert_eq!(get_variant_offset(&variant), Some(1));
+    }
+
+    #[test]
+    fn test_get_variant_offset_exonic() {
+        let variant = parse_hgvs("NM_000088.3:c.100A>G").unwrap();
+        assert_eq!(get_variant_offset(&variant), None);
+    }
+
+    #[test]
+    fn test_get_variant_offset_genomic() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_variant_offset(&variant), None);
+    }
+
+    #[test]
+    fn test_get_variant_start_allele_multi() {
+        // Multi-sub-variant alleles have ambiguous start; return None.
+        let variant = parse_hgvs("NM_000088.3:c.[100A>G;200C>T]").unwrap();
+        assert_eq!(get_variant_start(&variant), None);
+        assert_eq!(get_variant_end(&variant), None);
+    }
+
+    #[test]
+    fn test_get_variant_start_allele_single() {
+        // Single-sub-variant alleles delegate to that sub-variant.
+        let variant = parse_hgvs("NM_000088.3:c.[100A>G]").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(100));
+        assert_eq!(get_variant_end(&variant), Some(100));
+    }
+
+    #[test]
+    fn test_get_variant_start_noncoding() {
+        let variant = parse_hgvs("NR_046018.2:n.100A>G").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(100));
+        assert_eq!(get_variant_end(&variant), Some(100));
+    }
+
+    #[test]
+    fn test_get_variant_offset_noncoding_intronic() {
+        let variant = parse_hgvs("NR_046018.2:n.100+5A>G").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(100));
+        assert_eq!(get_variant_offset(&variant), Some(5));
+    }
+
+    #[test]
+    fn test_get_variant_start_rna() {
+        let variant = parse_hgvs("NM_000088.3:r.100a>g").unwrap();
+        assert_eq!(get_variant_start(&variant), Some(100));
+        assert_eq!(get_variant_end(&variant), Some(100));
+    }
+
+    #[test]
+    fn test_get_variant_offset_rna_intronic() {
+        let variant = parse_hgvs("NM_000088.3:r.100+5a>g").unwrap();
+        assert_eq!(get_variant_offset(&variant), Some(5));
+    }
+
+    #[test]
+    fn test_get_variant_start_utr3() {
+        // c.*5A>G (3' UTR) returns the same base value as c.5A>G — the `*`
+        // marker is not exposed by start/end.
+        let utr = parse_hgvs("NM_000088.3:c.*5A>G").unwrap();
+        let cds = parse_hgvs("NM_000088.3:c.5A>G").unwrap();
+        assert_eq!(get_variant_start(&utr), Some(5));
+        assert_eq!(get_variant_start(&cds), Some(5));
+    }
+
+    #[test]
+    fn test_get_variant_start_protein_is_none() {
+        let variant = parse_hgvs("NP_000001.1:p.Val100Glu").unwrap();
+        assert_eq!(get_variant_start(&variant), None);
+        assert_eq!(get_variant_end(&variant), None);
+        assert_eq!(get_variant_offset(&variant), None);
+        assert_eq!(get_indel_length(&variant), None);
+    }
+
+    #[test]
+    fn test_get_variant_start_null_allele_is_none() {
+        let variant = HgvsVariant::NullAllele;
+        assert_eq!(get_variant_start(&variant), None);
+        assert_eq!(get_variant_end(&variant), None);
+    }
+
+    #[test]
+    fn test_get_variant_start_unknown_allele_is_none() {
+        let variant = HgvsVariant::UnknownAllele;
+        assert_eq!(get_variant_start(&variant), None);
+        assert_eq!(get_variant_end(&variant), None);
+    }
+
+    // ===== Edit Accessor Tests =====
+
+    #[test]
+    fn test_get_substitution_bases() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_substitution_bases(&variant), Some(('A', 'G')));
+    }
+
+    #[test]
+    fn test_get_substitution_bases_not_sub() {
+        let variant = parse_hgvs("NC_000001.11:g.12345del").unwrap();
+        assert_eq!(get_substitution_bases(&variant), None);
+    }
+
+    #[test]
+    fn test_is_identity_true() {
+        let variant = parse_hgvs("NM_000088.3:c.100=").unwrap();
+        assert!(is_identity(&variant));
+    }
+
+    #[test]
+    fn test_is_identity_false() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert!(!is_identity(&variant));
+    }
+
+    // ===== Indel Length Tests =====
+
+    #[test]
+    fn test_indel_length_substitution() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(0));
+    }
+
+    #[test]
+    fn test_indel_length_deletion_point() {
+        let variant = parse_hgvs("NC_000001.11:g.12345del").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(-1));
+    }
+
+    #[test]
+    fn test_indel_length_deletion_range() {
+        let variant = parse_hgvs("NC_000001.11:g.12345_12350del").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(-6));
+    }
+
+    #[test]
+    fn test_indel_length_insertion() {
+        let variant = parse_hgvs("NC_000001.11:g.12345_12346insATG").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(3));
+    }
+
+    #[test]
+    fn test_indel_length_delins() {
+        // delins replaces 6 bases with 4 bases → net -2
+        let variant = parse_hgvs("NC_000001.11:g.12345_12350delinsATTT").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(-2));
+    }
+
+    #[test]
+    fn test_indel_length_duplication_point() {
+        let variant = parse_hgvs("NC_000001.11:g.12345dup").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(1));
+    }
+
+    #[test]
+    fn test_indel_length_duplication_range() {
+        let variant = parse_hgvs("NC_000001.11:g.12345_12347dup").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(3));
+    }
+
+    #[test]
+    fn test_indel_length_inversion() {
+        let variant = parse_hgvs("NC_000001.11:g.12345_12350inv").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(0));
+    }
+
+    #[test]
+    fn test_indel_length_insertion_count_is_none() {
+        // ins10 specifies a count, not a literal sequence — but the count is
+        // a known length, so we still report it.
+        let variant = parse_hgvs("NC_000001.11:g.12345_12346ins10").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(10));
+    }
+
+    #[test]
+    fn test_indel_length_insertion_range_is_none() {
+        // ins(10_20) has unknown exact length — must return None.
+        let variant = parse_hgvs("NC_000001.11:g.12345_12346ins(10_20)").unwrap();
+        assert_eq!(get_indel_length(&variant), None);
+    }
+
+    #[test]
+    fn test_indel_length_circular_normal() {
+        // Non-wrap-around circular variants compute span normally.
+        let variant = parse_hgvs("NC_001416.1:o.100_105del").unwrap();
+        assert_eq!(get_indel_length(&variant), Some(-6));
+    }
+
+    #[test]
+    fn test_indel_length_circular_wraparound_is_none() {
+        // Origin-crossing circular intervals (end < start) have an unknowable
+        // span without contig length, so indel_length must be None. The parser
+        // currently rejects wrap-around at the syntax level, but this guard is
+        // defensive for programmatic construction or future parser changes.
+        let mut variant = parse_hgvs("NC_001416.1:o.197_4344del").unwrap();
+        if let HgvsVariant::Circular(ref mut v) = variant {
+            std::mem::swap(&mut v.loc_edit.location.start, &mut v.loc_edit.location.end);
+        } else {
+            panic!("expected Circular variant");
+        }
+        assert_eq!(get_variant_start(&variant), Some(4344));
+        assert_eq!(get_variant_end(&variant), Some(197));
+        assert_eq!(get_indel_length(&variant), None);
+        assert!(!is_frameshift(&variant));
+    }
+
+    // ===== Frameshift Tests =====
+
+    #[test]
+    fn test_is_frameshift_true() {
+        // 1bp deletion is frameshift
+        let variant = parse_hgvs("NC_000001.11:g.12345del").unwrap();
+        assert!(is_frameshift(&variant));
+    }
+
+    #[test]
+    fn test_is_frameshift_false_in_frame() {
+        // 3bp deletion is in-frame
+        let variant = parse_hgvs("NC_000001.11:g.12345_12347del").unwrap();
+        assert!(!is_frameshift(&variant));
+    }
+
+    #[test]
+    fn test_is_frameshift_false_substitution() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert!(!is_frameshift(&variant));
+    }
+
+    // ===== Num Variants Tests =====
+
+    #[test]
+    fn test_num_variants_simple() {
+        let variant = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        assert_eq!(get_num_variants(&variant), 1);
+    }
+
+    #[test]
+    fn test_num_variants_allele() {
+        let variant = parse_hgvs("NM_000088.3:c.[100A>G;200C>T]").unwrap();
+        assert_eq!(get_num_variants(&variant), 2);
     }
 }

@@ -22,7 +22,9 @@ use crate::hgvs::variant::HgvsVariant;
 use crate::mave::{is_mave_short_form, parse_mave_hgvs, MaveContext};
 use crate::prepare::{check_references, prepare_references, PrepareConfig, ReferenceManifest};
 use crate::python_helpers::{
-    get_variant_edit_type, get_variant_reference, parse_direction, variant_type_str,
+    get_indel_length, get_num_variants, get_substitution_bases, get_variant_edit_type,
+    get_variant_end, get_variant_offset, get_variant_reference, get_variant_start, is_frameshift,
+    is_identity, parse_direction, variant_type_str,
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::{GenomeBuild, Strand};
@@ -132,6 +134,107 @@ impl PyHgvsVariant {
         get_variant_edit_type(&self.inner)
     }
 
+    /// Get the 1-based start position of the variant.
+    ///
+    /// For genomic (g.), coding (c.), non-coding (n.), RNA (r.), mitochondrial (m.),
+    /// and circular (o.) variants, returns the base position (without intronic
+    /// offset). For single-element alleles, delegates to the sub-variant.
+    /// Returns None for protein variants, RNA fusions, null/unknown alleles, and
+    /// alleles with multiple sub-variants (whose start is ambiguous).
+    ///
+    /// 5' UTR (`c.-5A>G`) and 3' UTR (`c.*5A>G`) positions are returned as raw
+    /// base values and are indistinguishable from CDS positions at the same
+    /// numeric value. Use the variant string or `to_dict()` representation when
+    /// the UTR distinction matters.
+    #[getter]
+    fn start(&self) -> Option<i64> {
+        get_variant_start(&self.inner)
+    }
+
+    /// Get the 1-based end position (inclusive) of the variant.
+    ///
+    /// For point variants, end equals start. For single-element alleles,
+    /// delegates to the sub-variant. Returns None for protein variants, RNA
+    /// fusions, null/unknown alleles, and alleles with multiple sub-variants.
+    #[getter]
+    fn end(&self) -> Option<i64> {
+        get_variant_end(&self.inner)
+    }
+
+    /// Get the intronic offset of the start position.
+    ///
+    /// Meaningful for coding (c.), non-coding (n.), and RNA (r.) variants with
+    /// intronic positions. For `c.93+1G>T`, returns 1. For exonic positions,
+    /// returns None. Always returns None for variant types without intronic
+    /// offsets (genomic, mitochondrial, circular, protein, fusion, allele).
+    #[getter]
+    fn offset(&self) -> Option<i64> {
+        get_variant_offset(&self.inner)
+    }
+
+    /// Get the substitution reference and alternative bases.
+    ///
+    /// Returns a tuple (ref_base, alt_base) for substitution edits,
+    /// e.g., ('A', 'G') for A>G. Returns None for non-substitution edits.
+    #[getter]
+    fn substitution_bases(&self) -> Option<(char, char)> {
+        get_substitution_bases(&self.inner)
+    }
+
+    /// Get the number of sub-variants.
+    ///
+    /// Returns 1 for simple variants, N for alleles with N sub-variants.
+    #[getter]
+    fn num_variants(&self) -> usize {
+        get_num_variants(&self.inner)
+    }
+
+    /// Get sub-variants as a list.
+    ///
+    /// For alleles, returns the constituent variants. For simple variants,
+    /// returns a single-element list containing self.
+    fn variants(&self) -> Vec<PyHgvsVariant> {
+        match &self.inner {
+            HgvsVariant::Allele(a) => a
+                .variants
+                .iter()
+                .map(|v| PyHgvsVariant { inner: v.clone() })
+                .collect(),
+            _ => vec![self.clone()],
+        }
+    }
+
+    /// Get the net indel length (bases gained or lost).
+    ///
+    /// - Substitution/inversion/identity: 0
+    /// - Deletion: negative (e.g., -3 for a 3bp deletion)
+    /// - Insertion: positive (length of inserted sequence)
+    /// - Delins: inserted_length - deleted_span
+    /// - Duplication: positive (span of duplicated region)
+    ///
+    /// Returns None if the length cannot be determined (e.g., uncertain
+    /// inserted sequence, protein variants).
+    #[getter]
+    fn indel_length(&self) -> Option<i64> {
+        get_indel_length(&self.inner)
+    }
+
+    /// Check if this variant is an identity (no-change) variant.
+    ///
+    /// Returns true for variants with the `=` edit type.
+    fn is_identity(&self) -> bool {
+        is_identity(&self.inner)
+    }
+
+    /// Check if this variant causes a frameshift.
+    ///
+    /// Returns true if indel_length % 3 != 0.
+    /// Returns false for substitutions, inversions, identity edits,
+    /// and cases where indel length cannot be determined.
+    fn is_frameshift(&self) -> bool {
+        is_frameshift(&self.inner)
+    }
+
     /// Check if this is a genomic variant (g. prefix)
     fn is_genomic(&self) -> bool {
         matches!(self.inner, HgvsVariant::Genome(_))
@@ -220,6 +323,29 @@ impl PyHgvsVariant {
             dict.set_item("reference", ref_str)?;
         }
         dict.set_item("edit_type", self.edit_type())?;
+
+        // Positional data
+        if let Some(start) = get_variant_start(&self.inner) {
+            dict.set_item("start", start)?;
+        }
+        if let Some(end) = get_variant_end(&self.inner) {
+            dict.set_item("end", end)?;
+        }
+        if let Some(offset) = get_variant_offset(&self.inner) {
+            dict.set_item("offset", offset)?;
+        }
+
+        // Edit details
+        if let Some((ref_base, alt_base)) = get_substitution_bases(&self.inner) {
+            dict.set_item("ref_base", ref_base)?;
+            dict.set_item("alt_base", alt_base)?;
+        }
+        if let Some(indel_len) = get_indel_length(&self.inner) {
+            dict.set_item("indel_length", indel_len)?;
+        }
+
+        // Allele info
+        dict.set_item("num_variants", get_num_variants(&self.inner))?;
 
         Ok(dict.into())
     }
