@@ -68,6 +68,30 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["ferro_hgvs"]
 
+[tool.poe.tasks]
+build        = {cmd = "maturin develop --features python",                help = "build the native extension in development mode"}
+check-format = {cmd = "ruff format --check --diff python/ tests/python/", help = "check Python code formatting"}
+check-lint   = {cmd = "ruff check python/ tests/python/",                 help = "lint Python sources"}
+check-typing = {cmd = "mypy",                                             help = "type-check Python sources"}
+
+check-tests.help     = "run Python tests (rebuilds the native extension first)"
+check-tests.sequence = ["build", {cmd = "pytest"}]
+
+check-all.help        = "run all checks: format, lint, typing, tests"
+check-all.ignore_fail = "return_non_zero"
+check-all.sequence    = ["check-format", "check-lint", "check-typing", "check-tests"]
+
+fix-format = {cmd = "ruff format python/ tests/python/",     help = "auto-format Python code"}
+fix-lint   = {cmd = "ruff check --fix python/ tests/python/", help = "auto-fix Python lint issues"}
+
+fix-all.help        = "run all auto-fixers: format, lint"
+fix-all.ignore_fail = "return_non_zero"
+fix-all.sequence    = ["fix-format", "fix-lint"]
+
+fix-and-check-all.help        = "auto-fix format and lint, then check typing and tests"
+fix-and-check-all.ignore_fail = "return_non_zero"
+fix-and-check-all.sequence    = ["fix-format", "fix-lint", "check-typing", "check-tests"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
