@@ -714,15 +714,17 @@ impl HgvsVariant {
     /// Check if all variants in a slice share the same accession and coordinate type.
     /// Used to determine whether the compact allele form can be used.
     pub(crate) fn all_share_accession_and_type(variants: &[HgvsVariant]) -> bool {
-        if variants.len() < 2 {
+        let Some(first) = variants.first() else {
             return true;
-        }
-        let first = &variants[0];
+        };
         let first_acc = first.accession();
         let first_type = first.variant_type();
 
-        // Don't use compact form for types that aren't simple coordinate-based variants
-        if matches!(first_type, "allele" | "null" | "unknown" | "r::r") {
+        // Don't use compact form for types that aren't simple coordinate-based variants,
+        // or when the first variant has no accession (e.g. NullAllele, UnknownAllele)
+        if first_acc.is_none()
+            || matches!(first_type, "allele" | "null" | "unknown" | "r::r")
+        {
             return false;
         }
 
@@ -1127,6 +1129,14 @@ mod tests {
             format!("{}", HgvsVariant::Allele(trans)),
             "[NM_000088.3:c.100A>G];[NM_000099.1:c.200C>T]"
         );
+    }
+
+    #[test]
+    fn test_allele_null_variant_uses_expanded_form() {
+        // A single NullAllele has no accession — must not panic, must use expanded form
+        let null = HgvsVariant::NullAllele;
+        let cis = AlleleVariant::cis(vec![null]);
+        assert_eq!(format!("{}", HgvsVariant::Allele(cis)), "[0]");
     }
 
     #[test]
