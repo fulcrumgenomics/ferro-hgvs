@@ -108,6 +108,64 @@ jobs:
       - name: Run Python tests
         run: uv run pytest tests/python/ -v
 
+  # Builds the release wheel with maturin and exercises it from a clean venv,
+  # outside the source tree. This catches packaging issues (missing data files,
+  # stale stubs, sys.path leakage) that the editable-mode install in the `test`
+  # job above can hide.
+  python-wheel-test:
+    name: Python Wheel Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: 1.94.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-wheel
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+      - name: Build release wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'maturin>=1.0,<2.0'
+          maturin build --release --features python --out dist
+      - name: Install wheel into clean venv
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install --upgrade pip
+          /tmp/wheel-venv/bin/pip install --no-index --find-links dist ferro-hgvs
+          /tmp/wheel-venv/bin/pip install pytest
+      - name: Verify import resolves to installed wheel
+        run: |
+          /tmp/wheel-venv/bin/python - <<'PY'
+          import ferro_hgvs
+          assert "/tmp/wheel-venv" in ferro_hgvs.__file__, ferro_hgvs.__file__
+          print("OK: imported from", ferro_hgvs.__file__)
+          PY
+      - name: Run Python tests against installed wheel
+        working-directory: /tmp
+        run: >
+          /tmp/wheel-venv/bin/pytest
+          --import-mode=importlib
+          --rootdir=/tmp
+          "$GITHUB_WORKSPACE/tests/python/" -v
+
   build:
     name: Build
     runs-on: ubuntu-latest
