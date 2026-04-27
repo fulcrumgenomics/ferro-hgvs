@@ -28,8 +28,8 @@ uv run pytest
 ```
 
 After modifying Python dependencies in `pyproject.toml`, run `uv lock` and commit
-the updated `uv.lock`. CI uses `--frozen` and will fail if the lockfile is out of
-sync.
+the updated `uv.lock`. CI uses `--locked` and will fail if the lockfile is out of
+sync with `pyproject.toml`.
 
 ## Development Workflow
 
