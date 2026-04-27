@@ -11,6 +11,9 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod manifest;
+pub use manifest::{check_references, ReferenceManifest};
+
 /// Legacy GenBank accessions referenced in ClinVar but not in RefSeq.
 ///
 /// These are historical sequence records (non-RefSeq) that are still
@@ -77,6 +80,7 @@ pub mod urls {
     pub const REFSEQ_RNA_BASE: &str =
         "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/mRNA_Prot/human.";
     pub const REFSEQ_RNA_SUFFIX: &str = ".rna.fna.gz";
+    pub const REFSEQ_RNA_COUNT: usize = 20;
 
     /// GRCh38 reference genome (with RefSeq accessions NC_000001.11, etc.)
     pub const GRCH38_GENOME: &str = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_genomic.fna.gz";
@@ -104,147 +108,6 @@ pub mod urls {
     /// Maps LRG transcript IDs (e.g., LRG_1t1) to RefSeq transcripts (e.g., NM_000088.3)
     pub const LRG_REFSEQ_MAPPING: &str =
         "https://ftp.ebi.ac.uk/pub/databases/lrgex/list_LRGs_transcripts_xrefs.txt";
-}
-
-/// Manifest of prepared reference data.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReferenceManifest {
-    /// When the data was prepared
-    pub prepared_at: String,
-    /// Transcript FASTA files
-    pub transcript_fastas: Vec<PathBuf>,
-    /// GRCh38 genome FASTA file (if downloaded)
-    pub genome_fasta: Option<PathBuf>,
-    /// GRCh37 genome FASTA file (if downloaded)
-    #[serde(default)]
-    pub genome_grch37_fasta: Option<PathBuf>,
-    /// RefSeqGene FASTA files (NG_* accessions)
-    #[serde(default)]
-    pub refseqgene_fastas: Vec<PathBuf>,
-    /// LRG FASTA files (LRG_* accessions)
-    #[serde(default)]
-    pub lrg_fastas: Vec<PathBuf>,
-    /// LRG XML files with full annotation structure
-    #[serde(default)]
-    pub lrg_xmls: Vec<PathBuf>,
-    /// LRG to RefSeq transcript mapping file
-    #[serde(default)]
-    pub lrg_refseq_mapping: Option<PathBuf>,
-    /// cdot transcript metadata JSON for GRCh38 (if downloaded)
-    pub cdot_json: Option<PathBuf>,
-    /// cdot transcript metadata JSON for GRCh37 (if downloaded)
-    #[serde(default)]
-    pub cdot_grch37_json: Option<PathBuf>,
-    /// Supplemental FASTA file (missing ClinVar transcripts fetched from NCBI)
-    #[serde(default)]
-    pub supplemental_fasta: Option<PathBuf>,
-    /// Legacy transcript versions FASTA (older versions not in current RefSeq)
-    #[serde(default)]
-    pub legacy_transcripts_fasta: Option<PathBuf>,
-    /// Legacy transcript metadata JSON (CDS coordinates, gene names)
-    #[serde(default)]
-    pub legacy_transcripts_metadata: Option<PathBuf>,
-    /// Legacy GenBank sequences FASTA (non-RefSeq sequences like U31929.1)
-    #[serde(default)]
-    pub legacy_genbank_fasta: Option<PathBuf>,
-    /// Legacy GenBank metadata JSON (CDS coordinates, gene names)
-    #[serde(default)]
-    pub legacy_genbank_metadata: Option<PathBuf>,
-    /// Total number of transcripts
-    pub transcript_count: usize,
-    /// List of available accession prefixes
-    pub available_prefixes: Vec<String>,
-}
-
-impl ReferenceManifest {
-    /// Convert all paths in the manifest to be relative to the given base directory.
-    ///
-    /// This ensures the manifest is portable - paths work when running from the
-    /// directory containing the manifest, regardless of where `prepare` was run from.
-    pub fn make_paths_relative(&mut self, base: &Path) {
-        fn strip_prefix(path: &Path, base: &Path) -> PathBuf {
-            path.strip_prefix(base)
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|_| path.to_path_buf())
-        }
-
-        self.transcript_fastas = self
-            .transcript_fastas
-            .iter()
-            .map(|p| strip_prefix(p, base))
-            .collect();
-
-        if let Some(ref p) = self.genome_fasta {
-            self.genome_fasta = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.genome_grch37_fasta {
-            self.genome_grch37_fasta = Some(strip_prefix(p, base));
-        }
-
-        self.refseqgene_fastas = self
-            .refseqgene_fastas
-            .iter()
-            .map(|p| strip_prefix(p, base))
-            .collect();
-
-        self.lrg_fastas = self
-            .lrg_fastas
-            .iter()
-            .map(|p| strip_prefix(p, base))
-            .collect();
-
-        self.lrg_xmls = self
-            .lrg_xmls
-            .iter()
-            .map(|p| strip_prefix(p, base))
-            .collect();
-
-        if let Some(ref p) = self.lrg_refseq_mapping {
-            self.lrg_refseq_mapping = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.cdot_json {
-            self.cdot_json = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.cdot_grch37_json {
-            self.cdot_grch37_json = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.supplemental_fasta {
-            self.supplemental_fasta = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.legacy_transcripts_fasta {
-            self.legacy_transcripts_fasta = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.legacy_transcripts_metadata {
-            self.legacy_transcripts_metadata = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.legacy_genbank_fasta {
-            self.legacy_genbank_fasta = Some(strip_prefix(p, base));
-        }
-
-        if let Some(ref p) = self.legacy_genbank_metadata {
-            self.legacy_genbank_metadata = Some(strip_prefix(p, base));
-        }
-    }
-
-    /// Deduplicate paths in all path lists.
-    pub fn deduplicate_paths(&mut self) {
-        fn dedup_vec(paths: &mut Vec<PathBuf>) {
-            let mut seen = HashSet::new();
-            paths.retain(|p| seen.insert(p.clone()));
-        }
-
-        dedup_vec(&mut self.transcript_fastas);
-        dedup_vec(&mut self.refseqgene_fastas);
-        dedup_vec(&mut self.lrg_fastas);
-        dedup_vec(&mut self.lrg_xmls);
-    }
 }
 
 /// Metadata for a legacy transcript fetched from GenBank.
@@ -287,78 +150,8 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         ),
     })?;
 
-    // Load existing manifest if present, otherwise start fresh
-    let manifest_path = config.output_dir.join("manifest.json");
-    let mut manifest = if manifest_path.exists() {
-        let file = File::open(&manifest_path).map_err(|e| FerroError::Io {
-            msg: format!("Failed to open existing manifest: {}", e),
-        })?;
-        let mut existing: ReferenceManifest =
-            serde_json::from_reader(file).map_err(|e| FerroError::Io {
-                msg: format!("Failed to parse existing manifest: {}", e),
-            })?;
-        existing.prepared_at = chrono::Utc::now().to_rfc3339();
-
-        // Resolve relative paths in manifest against output directory
-        existing.transcript_fastas = existing
-            .transcript_fastas
-            .into_iter()
-            .map(|p| config.output_dir.join(p))
-            .collect();
-        existing.refseqgene_fastas = existing
-            .refseqgene_fastas
-            .into_iter()
-            .map(|p| config.output_dir.join(p))
-            .collect();
-        existing.lrg_fastas = existing
-            .lrg_fastas
-            .into_iter()
-            .map(|p| config.output_dir.join(p))
-            .collect();
-        existing.lrg_xmls = existing
-            .lrg_xmls
-            .into_iter()
-            .map(|p| config.output_dir.join(p))
-            .collect();
-        existing.genome_fasta = existing.genome_fasta.map(|p| config.output_dir.join(p));
-        existing.genome_grch37_fasta = existing
-            .genome_grch37_fasta
-            .map(|p| config.output_dir.join(p));
-        existing.cdot_json = existing.cdot_json.map(|p| config.output_dir.join(p));
-        existing.cdot_grch37_json = existing.cdot_grch37_json.map(|p| config.output_dir.join(p));
-        existing.lrg_refseq_mapping = existing
-            .lrg_refseq_mapping
-            .map(|p| config.output_dir.join(p));
-        existing.supplemental_fasta = existing
-            .supplemental_fasta
-            .map(|p| config.output_dir.join(p));
-        existing.legacy_transcripts_fasta = existing
-            .legacy_transcripts_fasta
-            .map(|p| config.output_dir.join(p));
-
-        eprintln!("  Loaded existing manifest, will merge updates");
-        existing
-    } else {
-        ReferenceManifest {
-            prepared_at: chrono::Utc::now().to_rfc3339(),
-            transcript_fastas: Vec::new(),
-            genome_fasta: None,
-            genome_grch37_fasta: None,
-            refseqgene_fastas: Vec::new(),
-            lrg_fastas: Vec::new(),
-            lrg_xmls: Vec::new(),
-            lrg_refseq_mapping: None,
-            cdot_json: None,
-            cdot_grch37_json: None,
-            supplemental_fasta: None,
-            legacy_transcripts_fasta: None,
-            legacy_transcripts_metadata: None,
-            legacy_genbank_fasta: None,
-            legacy_genbank_metadata: None,
-            transcript_count: 0,
-            available_prefixes: Vec::new(),
-        }
-    };
+    // Load existing manifest if present, else default
+    let mut manifest = ReferenceManifest::load_or_default(&config.output_dir)?;
 
     // Download transcripts
     if config.download_transcripts {
@@ -369,21 +162,27 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         })?;
 
         // Download RefSeq RNA files (numbered 1-N)
-        for i in 1..=20 {
+        for i in 1..=urls::REFSEQ_RNA_COUNT {
             let filename = format!("human.{}.rna.fna.gz", i);
             let url = format!("{}{}{}", urls::REFSEQ_RNA_BASE, i, urls::REFSEQ_RNA_SUFFIX);
             let output_path = transcript_dir.join(&filename);
 
             if config.skip_existing && output_path.exists() {
                 eprintln!("  Skipping {} (exists)", filename);
-                manifest.transcript_fastas.push(output_path);
+                // Treat skipped pre-existing files as discovered so downstream
+                // steps (count_transcripts, manifest persistence) see them.
+                if !manifest.transcript_fastas.contains(&output_path) {
+                    manifest.transcript_fastas.push(output_path);
+                }
                 continue;
             }
 
             match download_file(&url, &output_path) {
                 Ok(_) => {
                     eprintln!("  Downloaded {}", filename);
-                    manifest.transcript_fastas.push(output_path);
+                    if !manifest.transcript_fastas.contains(&output_path) {
+                        manifest.transcript_fastas.push(output_path);
+                    }
                 }
                 Err(e) => {
                     // File might not exist (numbering ends at some point)
@@ -398,7 +197,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
         // Decompress and index
         eprintln!("\n=== Processing transcript files ===");
-        for gz_path in &manifest.transcript_fastas.clone() {
+        for gz_path in &manifest.transcript_fastas {
             let fasta_path = gz_path.with_extension("").with_extension("fna");
 
             if config.skip_existing && fasta_path.exists() {
@@ -506,7 +305,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                 if !fai_path.exists() {
                     index_fasta(&fasta_path)?;
                 }
-                manifest.refseqgene_fastas.push(fasta_path);
                 continue;
             }
 
@@ -561,7 +359,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                     index_fasta(&fasta_path)?;
                 }
                 fasta_skipped += 1;
-                manifest.lrg_fastas.push(fasta_path.clone());
                 lrg_exists = true;
             } else {
                 match download_file(&fasta_url, &fasta_path) {
@@ -585,7 +382,6 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             if lrg_exists {
                 if config.skip_existing && xml_path.exists() {
                     xml_skipped += 1;
-                    manifest.lrg_xmls.push(xml_path);
                 } else {
                     match download_file(&xml_url, &xml_path) {
                         Ok(_) => {
@@ -697,22 +493,12 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         }
     }
 
-    // Clean up and save manifest
-    // Convert paths to be relative to the output directory for portability
-    manifest.deduplicate_paths();
-    manifest.make_paths_relative(&config.output_dir);
-
-    let manifest_path = config.output_dir.join("manifest.json");
-    let file = File::create(&manifest_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to create manifest: {}", e),
-    })?;
-    serde_json::to_writer_pretty(file, &manifest).map_err(|e| FerroError::Io {
-        msg: format!("Failed to write manifest: {}", e),
-    })?;
-
+    manifest.save()?;
     eprintln!("\n=== Preparation complete ===");
-    eprintln!("Manifest: {}", manifest_path.display());
-
+    eprintln!(
+        "Manifest: {}",
+        manifest.reference_dir.join("manifest.json").display()
+    );
     Ok(manifest)
 }
 
@@ -826,68 +612,6 @@ fn fetch_supplemental_data(
     }
 
     Ok(())
-}
-
-/// Check what reference data is available.
-pub fn check_references(reference_dir: &Path) -> Result<ReferenceManifest, FerroError> {
-    let manifest_path = reference_dir.join("manifest.json");
-
-    if !manifest_path.exists() {
-        return Err(FerroError::Io {
-            msg: format!(
-                "No reference data found at {}. Run 'ferro prepare' first.",
-                reference_dir.display()
-            ),
-        });
-    }
-
-    let file = File::open(&manifest_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open manifest: {}", e),
-    })?;
-
-    serde_json::from_reader(file).map_err(|e| FerroError::Io {
-        msg: format!("Failed to parse manifest: {}", e),
-    })
-}
-
-/// Print a summary of reference data.
-pub fn print_reference_summary(manifest: &ReferenceManifest, reference_dir: &Path) {
-    eprintln!("=== Reference Data Summary ===");
-    eprintln!("  Directory: {}", reference_dir.display());
-    eprintln!("  Prepared at: {}", manifest.prepared_at);
-    eprintln!("  Transcripts: {}", manifest.transcript_count);
-    eprintln!(
-        "  Available prefixes: {}",
-        manifest.available_prefixes.join(", ")
-    );
-
-    if let Some(ref genome) = manifest.genome_fasta {
-        eprintln!("  GRCh38 genome: {}", genome.display());
-    }
-    if let Some(ref genome) = manifest.genome_grch37_fasta {
-        eprintln!("  GRCh37 genome: {}", genome.display());
-    }
-    if !manifest.refseqgene_fastas.is_empty() {
-        eprintln!("  RefSeqGene files: {}", manifest.refseqgene_fastas.len());
-    }
-    if !manifest.lrg_fastas.is_empty() {
-        eprintln!("  LRG files: {}", manifest.lrg_fastas.len());
-    }
-    if let Some(ref cdot) = manifest.cdot_json {
-        eprintln!("  cdot metadata (GRCh38): {}", cdot.display());
-    }
-    if let Some(ref cdot) = manifest.cdot_grch37_json {
-        eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
-    }
-    if let Some(ref supp) = manifest.supplemental_fasta {
-        eprintln!("  Supplemental transcripts: {}", supp.display());
-    }
-    if let Some(ref legacy) = manifest.legacy_transcripts_fasta {
-        eprintln!("  Legacy transcripts: {}", legacy.display());
-    }
-    if let Some(ref genbank) = manifest.legacy_genbank_fasta {
-        eprintln!("  Legacy GenBank: {}", genbank.display());
-    }
 }
 
 // ============================================================================

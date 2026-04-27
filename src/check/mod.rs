@@ -4,8 +4,6 @@
 //! is properly configured and available for normalization.
 
 use crate::prepare::ReferenceManifest;
-use crate::FerroError;
-use std::fs::File;
 use std::path::Path;
 
 /// Result of checking reference data.
@@ -61,68 +59,61 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         ));
     }
 
-    // Try to load manifest
-    let manifest = match load_manifest(&manifest_path) {
+    // Try to load manifest (paths are automatically made absolute)
+    let manifest = match ReferenceManifest::load_or_default(reference_dir) {
         Ok(m) => m,
         Err(e) => return CheckResult::failure(format!("Failed to load manifest: {}", e)),
     };
 
     let mut result = CheckResult::success(manifest.clone());
 
-    // Validate transcript files exist
+    // Validate transcript files exist.
+    //
+    // `transcript_fastas` is populated by `prepare_references` with `.fna.gz`
+    // RefSeq RNA paths; map those to the decompressed `.fna` companion to check.
+    // Any other extension is checked as-is rather than silently rewritten.
     for fasta in &manifest.transcript_fastas {
-        let full_path = reference_dir.join(fasta);
-        let fna_path = full_path.with_extension("").with_extension("fna");
-        if !fna_path.exists() {
+        let check_path = fasta
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|name| name.ends_with(".fna.gz"))
+            .map(|name| fasta.with_file_name(&name[..name.len() - ".gz".len()]))
+            .unwrap_or_else(|| fasta.clone());
+        if !check_path.exists() {
             result.warnings.push(format!(
                 "Transcript FASTA not found: {}",
-                fna_path.display()
+                check_path.display()
             ));
         }
     }
 
     // Validate genome file if specified
     if let Some(ref genome) = manifest.genome_fasta {
-        let full_path = reference_dir.join(genome);
-        if !full_path.exists() {
+        if !genome.exists() {
             result
                 .warnings
-                .push(format!("Genome FASTA not found: {}", full_path.display()));
+                .push(format!("Genome FASTA not found: {}", genome.display()));
         }
     }
 
     // Validate cdot file if specified
     if let Some(ref cdot) = manifest.cdot_json {
-        let full_path = reference_dir.join(cdot);
-        if !full_path.exists() {
+        if !cdot.exists() {
             result
                 .warnings
-                .push(format!("cdot JSON not found: {}", full_path.display()));
+                .push(format!("cdot JSON not found: {}", cdot.display()));
         }
     }
 
     if let Some(ref cdot) = manifest.cdot_grch37_json {
-        let full_path = reference_dir.join(cdot);
-        if !full_path.exists() {
-            result.warnings.push(format!(
-                "cdot GRCh37 JSON not found: {}",
-                full_path.display()
-            ));
+        if !cdot.exists() {
+            result
+                .warnings
+                .push(format!("cdot GRCh37 JSON not found: {}", cdot.display()));
         }
     }
 
     result
-}
-
-/// Load manifest from file.
-fn load_manifest(manifest_path: &Path) -> Result<ReferenceManifest, FerroError> {
-    let file = File::open(manifest_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open manifest: {}", e),
-    })?;
-
-    serde_json::from_reader(file).map_err(|e| FerroError::Io {
-        msg: format!("Failed to parse manifest: {}", e),
-    })
 }
 
 /// Print a detailed summary of reference data.
@@ -201,7 +192,7 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::fs::File;
     use tempfile::TempDir;
 
     #[test]
@@ -215,11 +206,14 @@ mod tests {
     #[test]
     fn test_check_valid_manifest() {
         let dir = TempDir::new().unwrap();
-        let manifest_path = dir.path().join("manifest.json");
 
-        let manifest = ReferenceManifest {
+        // Create a real transcript FASTA file with a relative path (as .fna, the expected format)
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
+
+        let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
-            transcript_fastas: Vec::new(),
+            transcript_fastas: vec![transcript_fasta.clone()],
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
@@ -233,15 +227,19 @@ mod tests {
             legacy_transcripts_metadata: None,
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
-            transcript_count: 0,
-            available_prefixes: Vec::new(),
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: dir.path().to_path_buf(),
         };
 
-        let mut file = File::create(&manifest_path).unwrap();
-        write!(file, "{}", serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        manifest.save().unwrap();
 
         let result = check_reference(dir.path());
         assert!(result.valid);
         assert!(result.manifest.is_some());
+        assert!(
+            result.warnings.is_empty(),
+            "Expected no warnings for valid relative paths"
+        );
     }
 }
