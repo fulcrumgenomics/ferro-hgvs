@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install dev dependencies
-        run: uv sync --extra dev --locked --no-install-project
+        run: uv sync --group dev --locked --no-install-project
       - name: Run ruff check
         run: uv run poe check-lint
       - name: Run ruff format
@@ -102,7 +102,9 @@ jobs:
       - name: Run Rust tests
         run: cargo nextest run --features dev
       - name: Install dev dependencies
-        run: uv sync --extra dev --locked --no-install-project
+        run: uv sync --group dev --locked --no-install-project
+      - name: Build and install Python wheel
+        run: uv run maturin develop --features python
       - name: Run Python tests
         run: uv run poe check-tests
 
