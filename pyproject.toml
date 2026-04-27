@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "HGVS variant normalizer - Python bindings for the ferro bioinformatics toolkit"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 keywords = ["hgvs", "variant", "normalization", "bioinformatics", "genomics"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -17,11 +17,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
@@ -37,6 +36,7 @@ dev = [
     "pytest>=7.0",
     "mypy>=1.0",
     "ruff>=0.4",
+    "poethepoet>=0.36",
 ]
 
 [tool.maturin]
@@ -45,7 +45,7 @@ python-source = "python"
 module-name = "ferro_hgvs"
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
@@ -64,14 +64,12 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Native extension re-exports - star imports are intentional
 "python/ferro_hgvs/__init__.py" = ["F403", "F405"]
-# Type stubs use Optional/List for Python 3.8 compatibility
-"python/ferro_hgvs/__init__.pyi" = ["UP006", "UP007"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ferro_hgvs"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 strict = true
