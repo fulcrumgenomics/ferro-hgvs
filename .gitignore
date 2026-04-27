@@ -54,9 +54,13 @@ __pycache__/
 *.pyc
 *.egg-info/
 .venv/
+*.so
 
 # Manuscript (benchmark workflow, figures, drafts)
 manuscript/
 
 # Pixi
 .pixi/
+
+# Claude
+.claude/
