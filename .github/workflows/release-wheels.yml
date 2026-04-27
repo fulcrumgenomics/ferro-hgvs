@@ -1,4 +1,4 @@
-name: Build Python wheels
+name: Build and publish Python wheels
 
 on:
   release:
@@ -55,6 +55,7 @@ jobs:
         with:
           name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
           path: dist
+          if-no-files-found: error
 
   macos:
     name: macOS ${{ matrix.target }} py${{ matrix.python-version }}
@@ -86,6 +87,7 @@ jobs:
         with:
           name: wheels-macos-${{ matrix.target }}-py${{ matrix.python-version }}
           path: dist
+          if-no-files-found: error
 
   windows:
     name: Windows py${{ matrix.python-version }}
@@ -112,6 +114,7 @@ jobs:
         with:
           name: wheels-windows-py${{ matrix.python-version }}
           path: dist
+          if-no-files-found: error
 
   sdist:
     name: sdist
@@ -130,10 +133,58 @@ jobs:
         with:
           name: sdist
           path: dist
+          if-no-files-found: error
+
+  check-metadata:
+    name: Check package metadata
+    needs: [linux, macos, windows, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install dev dependencies
+        run: uv sync --group dev --locked --no-install-project
+      - name: Run twine check
+        run: uv run --no-sync twine check --strict dist/*
+
+  smoke-test:
+    name: Smoke ${{ matrix.runner }} py${{ matrix.python-version }}
+    needs: [linux, macos, windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-14, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install built wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-index --only-binary :all: --find-links dist ferro-hgvs
+      - name: Smoke test (import + parse)
+        shell: bash
+        run: python -c "import ferro_hgvs; v = ferro_hgvs.parse('NM_000088.3:c.459A>G'); print(repr(v))"
 
   upload:
-    name: Upload to Release
-    needs: [linux, macos, windows, sdist]
+    name: Upload to GitHub Release
+    needs: [check-metadata, smoke-test, sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -149,3 +200,49 @@ jobs:
           TAG_NAME: ${{ github.event.release.tag_name || github.event.inputs.tag }}
           REPO: ${{ github.repository }}
         run: gh release upload "$TAG_NAME" dist/* --repo "$REPO" --clobber
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [check-metadata, smoke-test, sdist]
+    runs-on: ubuntu-latest
+    # Only publish on release events (not workflow_dispatch dry-runs)
+    if: github.event_name == 'release'
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ferro-hgvs
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          attestations: true
+          print-hash: true
+          verbose: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [publish-testpypi]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ferro-hgvs
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+        with:
+          packages-dir: dist/
+          attestations: true
+          print-hash: true
+          verbose: true
