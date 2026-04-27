@@ -31,7 +31,7 @@ Homepage = "https://github.com/fulcrumgenomics/ferro-hgvs"
 Repository = "https://github.com/fulcrumgenomics/ferro-hgvs"
 Documentation = "https://github.com/fulcrumgenomics/ferro-hgvs#readme"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=7.0",
@@ -74,8 +74,14 @@ known-first-party = ["ferro_hgvs"]
 python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
+warn_unreachable = true
 strict = true
 files = ["python/ferro_hgvs"]
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "exhaustive-match",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]

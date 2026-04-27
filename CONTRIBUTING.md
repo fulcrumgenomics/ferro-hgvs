@@ -22,7 +22,7 @@ cargo test --features dev
 ### Python Bindings Setup
 
 ```bash
-uv sync --extra dev
+uv sync --group dev
 uv run maturin develop --features python
 uv run pytest
 ```
