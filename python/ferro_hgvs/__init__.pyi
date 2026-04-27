@@ -1,7 +1,7 @@
 """Type stubs for ferro-hgvs Python bindings."""
 
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 __version__: str
 
@@ -263,6 +263,81 @@ class HgvsVariant:
     @property
     def edit_type(self) -> str:
         """Get the edit type as a string."""
+        ...
+
+    @property
+    def start(self) -> Optional[int]:
+        """Get the 1-based start position of the variant.
+
+        Returns the base position (without intronic offset) for genomic, coding,
+        non-coding, RNA, and mitochondrial variants. For alleles, returns the start
+        of the first sub-variant. Returns None for protein variants.
+        """
+        ...
+
+    @property
+    def end(self) -> Optional[int]:
+        """Get the 1-based end position (inclusive) of the variant.
+
+        For point variants, end equals start. For alleles, returns the end
+        of the first sub-variant. Returns None for protein variants.
+        """
+        ...
+
+    @property
+    def offset(self) -> Optional[int]:
+        """Get the intronic offset of the start position.
+
+        Only meaningful for coding (c.) variants with intronic positions.
+        For c.93+1G>T, returns 1. For exonic variants, returns None.
+        """
+        ...
+
+    @property
+    def substitution_bases(self) -> Optional[Tuple[str, str]]:
+        """Get the substitution reference and alternative bases.
+
+        Returns a tuple (ref_base, alt_base) for substitution edits,
+        e.g., ("A", "G") for A>G. Returns None for non-substitution edits.
+        """
+        ...
+
+    @property
+    def num_variants(self) -> int:
+        """Get the number of sub-variants.
+
+        Returns 1 for simple variants, N for alleles with N sub-variants.
+        """
+        ...
+
+    @property
+    def indel_length(self) -> Optional[int]:
+        """Get the net indel length (bases gained or lost).
+
+        - Substitution/inversion/identity: 0
+        - Deletion: negative (e.g., -3 for a 3bp deletion)
+        - Insertion: positive (length of inserted sequence)
+        - Delins: inserted_length - deleted_span
+        - Duplication: positive (span of duplicated region)
+
+        Returns None if the length cannot be determined.
+        """
+        ...
+
+    def variants(self) -> List[HgvsVariant]:
+        """Get sub-variants as a list.
+
+        For alleles, returns the constituent variants. For simple variants,
+        returns a single-element list containing self.
+        """
+        ...
+
+    def is_identity(self) -> bool:
+        """Check if this is an identity (no-change) variant."""
+        ...
+
+    def is_frameshift(self) -> bool:
+        """Check if this variant causes a frameshift (indel_length % 3 != 0)."""
         ...
 
     def normalize(self, direction: str = "3prime") -> HgvsVariant:
