@@ -3932,7 +3932,7 @@ mod comprehensive_normalization_tests {
             let result = normalize_to_string(provider, "[NM_TEST.1:c.4del;NM_TEST.1:c.13del]");
             // Both should shift to 3'-most positions
             assert!(
-                result.contains("c.9del") || result.contains("c.18del"),
+                result.contains("9del") || result.contains("18del"),
                 "Deletions should shift, got: {}",
                 result
             );

@@ -2370,15 +2370,15 @@ mod tests {
         // Verify it's still an allele
         assert!(matches!(result, HgvsVariant::Allele(_)));
 
-        // Verify output format preserves both variants
+        // Verify output format preserves both variants (compact form: ACC:c.[edit1;edit2])
         let output = format!("{}", result);
         assert!(
-            output.contains("c.10A>G"),
+            output.contains("10A>G"),
             "Allele should contain first variant, got: {}",
             output
         );
         assert!(
-            output.contains("c.20C>T"),
+            output.contains("20C>T"),
             "Allele should contain second variant, got: {}",
             output
         );
