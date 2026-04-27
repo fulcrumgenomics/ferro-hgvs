@@ -27,6 +27,10 @@ uv run maturin develop --features python
 uv run pytest
 ```
 
+After modifying Python dependencies in `pyproject.toml`, run `uv lock` and commit
+the updated `uv.lock`. CI uses `--frozen` and will fail if the lockfile is out of
+sync.
+
 ## Development Workflow
 
 ### Making Changes

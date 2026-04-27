@@ -34,11 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+          enable-cache: true
       - name: Install dev dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --frozen --no-install-project
       - name: Run ruff check
         run: uv run ruff check python/ tests/python/
       - name: Run ruff format
@@ -84,9 +84,9 @@ jobs:
           toolchain: 1.94.0
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+          enable-cache: true
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
@@ -102,7 +102,7 @@ jobs:
       - name: Run Rust tests
         run: cargo nextest run --features dev
       - name: Install dev dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --frozen --no-install-project
       - name: Build and install Python wheel
         run: uv run maturin develop --features python
       - name: Run Python tests

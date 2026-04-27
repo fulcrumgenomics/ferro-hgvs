@@ -53,6 +53,7 @@ config/service.toml
 __pycache__/
 *.pyc
 *.egg-info/
+.venv/
 
 # Manuscript (benchmark workflow, figures, drafts)
 manuscript/
