@@ -33,6 +33,7 @@ Documentation = "https://github.com/fulcrumgenomics/ferro-hgvs#readme"
 
 [project.optional-dependencies]
 dev = [
+    "maturin>=1.0,<2.0",
     "pytest>=7.0",
     "mypy>=1.0",
     "ruff>=0.4",

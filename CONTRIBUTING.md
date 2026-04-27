@@ -8,6 +8,7 @@ Thank you for considering contributing to ferro-hgvs!
 
 - Rust (stable)
 - Git
+- [uv](https://docs.astral.sh/uv/) (for Python development)
 
 ### Setup
 
@@ -16,6 +17,14 @@ git clone https://github.com/fulcrumgenomics/ferro-hgvs.git
 cd ferro-hgvs
 cargo build
 cargo test --features dev
+```
+
+### Python Bindings Setup
+
+```bash
+uv sync --extra dev
+uv run maturin develop --features python
+uv run pytest
 ```
 
 ## Development Workflow
