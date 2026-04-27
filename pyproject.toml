@@ -37,6 +37,7 @@ dev = [
     "pytest>=7.0",
     "mypy>=1.0",
     "ruff>=0.4",
+    "poethepoet>=0.36; python_version >= '3.10'",
 ]
 
 [tool.maturin]
@@ -69,6 +70,26 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["ferro_hgvs"]
+
+[tool.poe.tasks]
+build        = "maturin develop --features python"
+check-format = "ruff format --check --diff python/ tests/python/"
+check-lint   = "ruff check python/ tests/python/"
+check-typing = "mypy"
+
+check-tests.sequence = ["build", {cmd = "pytest"}]
+
+check-all.ignore_fail = "return_non_zero"
+check-all.sequence    = ["check-format", "check-lint", "check-typing", "check-tests"]
+
+fix-format = "ruff format python/ tests/python/"
+fix-lint   = "ruff check --fix python/ tests/python/"
+
+fix-all.ignore_fail = "return_non_zero"
+fix-all.sequence    = ["fix-format", "fix-lint"]
+
+fix-and-check-all.ignore_fail = "return_non_zero"
+fix-and-check-all.sequence    = ["fix-format", "fix-lint", "check-typing", "check-tests"]
 
 [tool.mypy]
 python_version = "3.8"
