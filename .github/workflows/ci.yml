@@ -40,11 +40,11 @@ jobs:
       - name: Install dev dependencies
         run: uv sync --group dev --locked --no-install-project
       - name: Run ruff check
-        run: uv run ruff check python/ tests/python/
+        run: uv run poe check-lint
       - name: Run ruff format
-        run: uv run ruff format --check python/ tests/python/
+        run: uv run poe check-format
       - name: Run mypy
-        run: uv run mypy python/ferro_hgvs/
+        run: uv run poe check-typing
 
   clippy:
     name: Clippy
@@ -103,10 +103,8 @@ jobs:
         run: cargo nextest run --features dev
       - name: Install dev dependencies
         run: uv sync --group dev --locked --no-install-project
-      - name: Build and install Python wheel
-        run: uv run maturin develop --features python
       - name: Run Python tests
-        run: uv run pytest tests/python/ -v
+        run: uv run poe check-tests
 
   build:
     name: Build
