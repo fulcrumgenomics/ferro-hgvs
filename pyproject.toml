@@ -64,8 +64,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Native extension re-exports - star imports are intentional
 "python/ferro_hgvs/__init__.py" = ["F403", "F405"]
-# Type stubs use Optional/List for broad compatibility
-"python/ferro_hgvs/__init__.pyi" = ["UP006", "UP007"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ferro_hgvs"]
