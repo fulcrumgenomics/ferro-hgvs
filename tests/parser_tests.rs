@@ -292,26 +292,26 @@ fn test_verified_roundtrip(#[case] input: &str) {
 #[case("LRG_673p1:p.Lys903delLys", "LRG_673p1:p.Lys903delLys")]
 // Protein insertion with numeric positions (ferro uses Xaa for unknown AA)
 #[case("NP_000018.2:p.42_43insAspAla", "NP_000018.2:p.Xaa42_Xaa43insAspAla")]
-// Allele notation (ferro expands accession to each variant)
+// Allele notation (ferro uses compact form per HGVS spec)
 #[case(
     "NM_000060.2:c.[1207T>G;1330G>C]",
-    "[NM_000060.2:c.1207T>G;NM_000060.2:c.1330G>C]"
+    "NM_000060.2:c.[1207T>G;1330G>C]"
 )]
 #[case(
     "NM_001040075.1:c.[533C>T;646G>C]",
-    "[NM_001040075.1:c.533C>T;NM_001040075.1:c.646G>C]"
+    "NM_001040075.1:c.[533C>T;646G>C]"
 )]
 #[case(
     "NM_000350.2:c.[1622T>C;3113C>T]",
-    "[NM_000350.2:c.1622T>C;NM_000350.2:c.3113C>T]"
+    "NM_000350.2:c.[1622T>C;3113C>T]"
 )]
 #[case(
     "NM_000350.3:c.[1531C>T;872C>T]",
-    "[NM_000350.3:c.1531C>T;NM_000350.3:c.872C>T]"
+    "NM_000350.3:c.[1531C>T;872C>T]"
 )]
 #[case(
     "NM_005157.6:c.[1516G>A;1531G>C]",
-    "[NM_005157.6:c.1516G>A;NM_005157.6:c.1531G>C]"
+    "NM_005157.6:c.[1516G>A;1531G>C]"
 )]
 // Missing ref base substitution (ferro preserves as-is)
 #[case("NG_008029.2:g.5049>A", "NG_008029.2:g.5049>A")]
@@ -534,7 +534,7 @@ fn test_expected_parse_errors(#[case] input: &str, #[case] _description: &str) {
 // Allele with separate brackets
 #[case(
     "NM_000350.2:c.[2588G>C];[5882G>A]",
-    "[NM_000350.2:c.2588G>C];[NM_000350.2:c.5882G>A]"
+    "NM_000350.2:c.[2588G>C];[5882G>A]"
 )]
 // Unknown position insertion
 #[case(
