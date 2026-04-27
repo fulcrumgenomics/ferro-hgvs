@@ -2790,7 +2790,7 @@ mod ferro_mutalyzer_differences {
     #[rstest]
     #[case(
         "NM_000030.2:c.[299_307dup;308G>A]",
-        "[NM_000030.2:c.299_307dup;NM_000030.2:c.308G>A]"
+        "NM_000030.2:c.[299_307dup;308G>A]"
     )]
     // Mutalyzer outputs: NM_000030.2:c.308delinsTCCTGGTTGA (collapses allele)
     #[ignore]
@@ -3004,11 +3004,8 @@ mod equivalence_derived_normalize {
     // From check_allelic_equivalence.
 
     #[rstest]
-    // Compact allelic → expanded
-    #[case(
-        "NM_000060.2:c.[1207T>G;1330G>C]",
-        "[NM_000060.2:c.1207T>G;NM_000060.2:c.1330G>C]"
-    )]
+    // Compact allelic round-trips through normalization (HGVS spec compact form)
+    #[case("NM_000060.2:c.[1207T>G;1330G>C]", "NM_000060.2:c.[1207T>G;1330G>C]")]
     #[ignore]
     fn test_allelic_expansion_normalization(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input)

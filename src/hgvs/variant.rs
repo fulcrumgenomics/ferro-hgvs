@@ -437,27 +437,36 @@ impl AlleleVariant {
     }
 }
 
+/// Write the `ACC:<type>.` prefix for compact allele form.
+///
+/// Per HGVS spec, bracketed `?` is only valid as a whole-allele marker (`[?]`),
+/// never mixed with concrete edits inside the same bracket. Compact form is
+/// suppressed when any sub-variant carries the per-variant `?` (e.g. `c.?`).
+fn use_compact_form(variants: &[HgvsVariant]) -> bool {
+    !variants.is_empty()
+        && HgvsVariant::all_share_accession_and_type(variants)
+        && !variants.iter().any(HgvsVariant::is_loc_edit_unknown)
+}
+
+fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt::Result {
+    write!(
+        f,
+        "{}:{}.",
+        first
+            .accession()
+            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
+        first.variant_type()
+    )
+}
+
 impl fmt::Display for AlleleVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Per HGVS spec, bracketed `?` is only valid as a whole-allele marker (`[?]`),
-        // never mixed with concrete edits inside the same bracket. Suppress compact
-        // form when any sub-variant carries the per-variant `?` (e.g. `c.?`, `r.?`).
-        let compact = HgvsVariant::all_share_accession_and_type(&self.variants)
-            && !self.variants.iter().any(HgvsVariant::is_loc_edit_unknown);
-
         match self.phase {
             AllelePhase::Cis => {
-                if compact && !self.variants.is_empty() {
+                if use_compact_form(&self.variants) {
                     // Compact form: ACC:g.[edit1;edit2]
-                    let first = &self.variants[0];
-                    write!(
-                        f,
-                        "{}:{}.[",
-                        first
-                            .accession()
-                            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
-                        first.variant_type()
-                    )?;
+                    write_compact_prefix(f, &self.variants[0])?;
+                    write!(f, "[")?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, ";")?;
@@ -478,17 +487,9 @@ impl fmt::Display for AlleleVariant {
                 }
             }
             AllelePhase::Trans => {
-                if compact && !self.variants.is_empty() {
+                if use_compact_form(&self.variants) {
                     // Compact form: ACC:g.[edit1];[edit2]
-                    let first = &self.variants[0];
-                    write!(
-                        f,
-                        "{}:{}.",
-                        first
-                            .accession()
-                            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
-                        first.variant_type()
-                    )?;
+                    write_compact_prefix(f, &self.variants[0])?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, ";")?;
@@ -510,17 +511,9 @@ impl fmt::Display for AlleleVariant {
                 }
             }
             AllelePhase::Unknown => {
-                if compact && !self.variants.is_empty() {
+                if use_compact_form(&self.variants) {
                     // Compact form: ACC:g.edit1(;)edit2
-                    let first = &self.variants[0];
-                    write!(
-                        f,
-                        "{}:{}.",
-                        first
-                            .accession()
-                            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
-                        first.variant_type()
-                    )?;
+                    write_compact_prefix(f, &self.variants[0])?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, "(;)")?;
@@ -818,7 +811,6 @@ pub struct TxVariant {
 }
 
 impl TxVariant {
-    /// Format just the position+edit portion (without `accession:n.` prefix).
     pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
@@ -920,7 +912,6 @@ pub struct MtVariant {
 }
 
 impl MtVariant {
-    /// Format just the position+edit portion (without `accession:m.` prefix).
     pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
@@ -945,7 +936,6 @@ pub struct CircularVariant {
 }
 
 impl CircularVariant {
-    /// Format just the position+edit portion (without `accession:o.` prefix).
     pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
