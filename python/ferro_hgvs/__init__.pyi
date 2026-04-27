@@ -1,7 +1,7 @@
 """Type stubs for ferro-hgvs Python bindings."""
 
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable
 
 __version__: str
 
@@ -140,9 +140,7 @@ def is_mave_short_form_variant(hgvs_string: str) -> bool:
 # Error Handling Functions
 # ============================================================================
 
-def parse_lenient(
-    hgvs_string: str, config: Optional[ErrorConfig] = None
-) -> ParseResultWithWarnings:
+def parse_lenient(hgvs_string: str, config: ErrorConfig | None = None) -> ParseResultWithWarnings:
     """Parse an HGVS string with lenient error handling.
 
     Args:
@@ -266,7 +264,7 @@ class HgvsVariant:
         ...
 
     @property
-    def start(self) -> Optional[int]:
+    def start(self) -> int | None:
         """Get the 1-based start position of the variant.
 
         Returns the base position (without intronic offset) for genomic, coding,
@@ -282,7 +280,7 @@ class HgvsVariant:
         ...
 
     @property
-    def end(self) -> Optional[int]:
+    def end(self) -> int | None:
         """Get the 1-based end position (inclusive) of the variant.
 
         For point variants, end equals start. For single-element alleles,
@@ -292,7 +290,7 @@ class HgvsVariant:
         ...
 
     @property
-    def offset(self) -> Optional[int]:
+    def offset(self) -> int | None:
         """Get the intronic offset of the start position.
 
         Meaningful for coding (c.), non-coding (n.), and RNA (r.) variants with
@@ -303,7 +301,7 @@ class HgvsVariant:
         ...
 
     @property
-    def substitution_bases(self) -> Optional[Tuple[str, str]]:
+    def substitution_bases(self) -> tuple[str, str] | None:
         """Get the substitution reference and alternative bases.
 
         Returns a tuple (ref_base, alt_base) of single-character strings for
@@ -321,7 +319,7 @@ class HgvsVariant:
         ...
 
     @property
-    def indel_length(self) -> Optional[int]:
+    def indel_length(self) -> int | None:
         """Get the net indel length (bases gained or lost).
 
         - Substitution/inversion/identity: 0
@@ -334,7 +332,7 @@ class HgvsVariant:
         """
         ...
 
-    def variants(self) -> List[HgvsVariant]:
+    def variants(self) -> list[HgvsVariant]:
         """Get sub-variants as a list.
 
         For alleles, returns the constituent variants. For simple variants,
@@ -354,7 +352,7 @@ class HgvsVariant:
         """Normalize this variant."""
         ...
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to a dictionary representation."""
         ...
 
@@ -414,7 +412,7 @@ class HgvsVariant:
 class Normalizer:
     """HGVS variant normalizer using a reference provider."""
 
-    def __init__(self, reference_json: Optional[str] = None, direction: str = "3prime") -> None:
+    def __init__(self, reference_json: str | None = None, direction: str = "3prime") -> None:
         """Create a new normalizer.
 
         Args:
@@ -505,7 +503,7 @@ class SpdiVariant:
         """Convert 0-based SPDI position to 1-based HGVS position."""
         ...
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to a dictionary representation."""
         ...
 
@@ -605,17 +603,17 @@ class EquivalenceResult:
         ...
 
     @property
-    def normalized_first(self) -> Optional[str]:
+    def normalized_first(self) -> str | None:
         """The normalized form of the first variant."""
         ...
 
     @property
-    def normalized_second(self) -> Optional[str]:
+    def normalized_second(self) -> str | None:
         """The normalized form of the second variant."""
         ...
 
     @property
-    def notes(self) -> List[str]:
+    def notes(self) -> list[str]:
         """Additional notes about the comparison."""
         ...
 
@@ -626,7 +624,7 @@ class EquivalenceResult:
 class EquivalenceChecker:
     """Equivalence checker for comparing HGVS variants."""
 
-    def __init__(self, reference_json: Optional[str] = None) -> None:
+    def __init__(self, reference_json: str | None = None) -> None:
         """Create a new equivalence checker.
 
         Args:
@@ -638,7 +636,7 @@ class EquivalenceChecker:
         """Check if two variants are equivalent."""
         ...
 
-    def all_equivalent(self, variants: List[HgvsVariant]) -> bool:
+    def all_equivalent(self, variants: list[HgvsVariant]) -> bool:
         """Check if multiple variants are all equivalent to each other."""
         ...
 
@@ -697,7 +695,7 @@ class ProteinEffect:
     """Protein effect prediction result."""
 
     @property
-    def consequences(self) -> List[Consequence]:
+    def consequences(self) -> list[Consequence]:
         """Get all applicable consequences."""
         ...
 
@@ -755,13 +753,13 @@ class MaveContext:
         ...
 
     @property
-    def protein_accession(self) -> Optional[str]: ...
+    def protein_accession(self) -> str | None: ...
     @property
-    def coding_accession(self) -> Optional[str]: ...
+    def coding_accession(self) -> str | None: ...
     @property
-    def genomic_accession(self) -> Optional[str]: ...
+    def genomic_accession(self) -> str | None: ...
     @property
-    def gene_symbol(self) -> Optional[str]: ...
+    def gene_symbol(self) -> str | None: ...
     def with_protein_accession(self, accession: str) -> MaveContext:
         """Set the protein sequence accession for p. variants."""
         ...
@@ -783,7 +781,7 @@ class MaveContext:
         ...
 
     @property
-    def noncoding_accession(self) -> Optional[str]: ...
+    def noncoding_accession(self) -> str | None: ...
     def has_accessions(self) -> bool:
         """Check if this context has any accessions defined."""
         ...
@@ -837,18 +835,18 @@ class BatchResult:
         """Success rate as a percentage."""
         ...
 
-    def successes(self) -> List[HgvsVariant]:
+    def successes(self) -> list[HgvsVariant]:
         """Get successfully parsed/normalized variants."""
         ...
 
-    def errors(self) -> List[tuple[int, str]]:
+    def errors(self) -> list[tuple[int, str]]:
         """Get errors as (index, error_message) tuples."""
         ...
 
 class BatchProcessor:
     """Batch processor for parsing and normalizing multiple variants."""
 
-    def __init__(self, reference_json: Optional[str] = None) -> None:
+    def __init__(self, reference_json: str | None = None) -> None:
         """Create a new batch processor.
 
         Args:
@@ -856,16 +854,16 @@ class BatchProcessor:
         """
         ...
 
-    def parse(self, variants: List[str]) -> BatchResult:
+    def parse(self, variants: list[str]) -> BatchResult:
         """Parse multiple HGVS strings."""
         ...
 
-    def parse_and_normalize(self, variants: List[str]) -> BatchResult:
+    def parse_and_normalize(self, variants: list[str]) -> BatchResult:
         """Parse and normalize multiple HGVS strings."""
         ...
 
     def parse_with_progress(
-        self, variants: List[str], callback: Callable[[BatchProgress], None]
+        self, variants: list[str], callback: Callable[[BatchProgress], None]
     ) -> BatchResult:
         """Parse multiple HGVS strings with progress callback."""
         ...
@@ -965,7 +963,7 @@ class ParseResultWithWarnings:
     @property
     def variant(self) -> HgvsVariant: ...
     @property
-    def warnings(self) -> List[CorrectionWarning]: ...
+    def warnings(self) -> list[CorrectionWarning]: ...
     @property
     def original_input(self) -> str: ...
     @property
@@ -996,7 +994,7 @@ class CodonChange:
         ...
 
     @property
-    def changed_positions(self) -> List[int]:
+    def changed_positions(self) -> list[int]:
         """Position(s) in codon that changed (1-indexed)."""
         ...
 
@@ -1015,7 +1013,7 @@ class CodonTable:
 class Backtranslator:
     """Backtranslation engine for converting protein changes to DNA changes."""
 
-    def __init__(self, codon_table: Optional[CodonTable] = None) -> None:
+    def __init__(self, codon_table: CodonTable | None = None) -> None:
         """Create a new backtranslator with the given codon table."""
         ...
 
@@ -1024,15 +1022,15 @@ class Backtranslator:
         """Create a backtranslator with the standard genetic code."""
         ...
 
-    def backtranslate_substitution(self, ref_aa: str, alt_aa: str) -> List[CodonChange]:
+    def backtranslate_substitution(self, ref_aa: str, alt_aa: str) -> list[CodonChange]:
         """Backtranslate an amino acid substitution."""
         ...
 
-    def backtranslate_to_stop(self, ref_aa: str) -> List[CodonChange]:
+    def backtranslate_to_stop(self, ref_aa: str) -> list[CodonChange]:
         """Backtranslate a nonsense mutation (amino acid to stop codon)."""
         ...
 
-    def backtranslate_stop_loss(self, alt_aa: str) -> List[CodonChange]:
+    def backtranslate_stop_loss(self, alt_aa: str) -> list[CodonChange]:
         """Backtranslate a stop loss (stop codon to amino acid)."""
         ...
 
@@ -1054,11 +1052,11 @@ class RsIdResult:
     @property
     def alternate(self) -> str: ...
     @property
-    def hgvs(self) -> Optional[str]: ...
+    def hgvs(self) -> str | None: ...
     @property
-    def allele_frequency(self) -> Optional[float]: ...
+    def allele_frequency(self) -> float | None: ...
     @property
-    def clinical_significance(self) -> Optional[str]: ...
+    def clinical_significance(self) -> str | None: ...
     def is_snv(self) -> bool:
         """Check if this is a substitution (SNV)."""
         ...
@@ -1083,7 +1081,7 @@ class InMemoryRsIdLookup:
         """Create with common test variants (BRAF V600E, BRCA1 185delAG)."""
         ...
 
-    def lookup(self, rsid: str) -> List[RsIdResult]:
+    def lookup(self, rsid: str) -> list[RsIdResult]:
         """Look up rsID and return matching variants."""
         ...
 
@@ -1099,7 +1097,7 @@ class VcfRecord:
     """A VCF record."""
 
     def __init__(
-        self, chrom: str, pos: int, reference: str, alternate: str, id: Optional[str] = None
+        self, chrom: str, pos: int, reference: str, alternate: str, id: str | None = None
     ) -> None:
         """Create a new VCF record.
 
@@ -1132,15 +1130,15 @@ class VcfRecord:
     @property
     def pos(self) -> int: ...
     @property
-    def id(self) -> Optional[str]: ...
+    def id(self) -> str | None: ...
     @property
     def reference(self) -> str: ...
     @property
-    def alternate(self) -> Optional[str]:
+    def alternate(self) -> str | None:
         """Get the first alternate allele (for simple variants)."""
         ...
     @property
-    def alternates(self) -> List[str]:
+    def alternates(self) -> list[str]:
         """Get all alternate alleles."""
         ...
 
@@ -1183,15 +1181,15 @@ class ReferenceManifest:
     @property
     def transcript_count(self) -> int: ...
     @property
-    def transcript_fastas(self) -> List[str]: ...
+    def transcript_fastas(self) -> list[str]: ...
     @property
-    def genome_fasta(self) -> Optional[str]: ...
+    def genome_fasta(self) -> str | None: ...
     @property
-    def cdot_json(self) -> Optional[str]: ...
+    def cdot_json(self) -> str | None: ...
     @property
-    def cdot_grch37_json(self) -> Optional[str]: ...
+    def cdot_grch37_json(self) -> str | None: ...
     @property
-    def available_prefixes(self) -> List[str]: ...
+    def available_prefixes(self) -> list[str]: ...
 
 # ============================================================================
 # Reference Classes
@@ -1221,7 +1219,7 @@ class CoordinateMapper:
     transcript (n.), and protein (p.) coordinate systems.
     """
 
-    def __init__(self, reference_json: Optional[str] = None) -> None:
+    def __init__(self, reference_json: str | None = None) -> None:
         """Create a new coordinate mapper.
 
         Args:
@@ -1231,8 +1229,8 @@ class CoordinateMapper:
         ...
 
     def c_to_g(
-        self, transcript_id: str, cds_position: int, offset: Optional[int] = None
-    ) -> Optional[tuple[str, int]]:
+        self, transcript_id: str, cds_position: int, offset: int | None = None
+    ) -> tuple[str, int] | None:
         """Convert a CDS position to genomic position.
 
         Args:
@@ -1250,7 +1248,7 @@ class CoordinateMapper:
         """
         ...
 
-    def g_to_c(self, transcript_id: str, genomic_position: int) -> tuple[int, Optional[int], bool]:
+    def g_to_c(self, transcript_id: str, genomic_position: int) -> tuple[int, int | None, bool]:
         """Convert a genomic position to CDS position.
 
         Args:
@@ -1287,9 +1285,9 @@ class CoordinateMapper:
         self,
         transcript_id: str,
         cds_position: int,
-        offset: Optional[int] = None,
+        offset: int | None = None,
         utr3: bool = False,
-    ) -> tuple[int, Optional[int]]:
+    ) -> tuple[int, int | None]:
         """Convert a CDS position to transcript position.
 
         Args:
@@ -1310,9 +1308,9 @@ class CoordinateMapper:
         self,
         transcript_id: str,
         tx_position: int,
-        offset: Optional[int] = None,
+        offset: int | None = None,
         downstream: bool = False,
-    ) -> tuple[int, Optional[int], bool]:
+    ) -> tuple[int, int | None, bool]:
         """Convert a transcript position to CDS position.
 
         Args:
@@ -1341,7 +1339,7 @@ class CoordinateMapper:
         """
         ...
 
-    def get_chromosome(self, transcript_id: str) -> Optional[str]:
+    def get_chromosome(self, transcript_id: str) -> str | None:
         """Get the chromosome of a transcript.
 
         Args:
