@@ -48,7 +48,7 @@ log = "0.4"
 # Core dependencies for prepare/check/commands (now part of main binary)
 indicatif = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "stream", "gzip", "deflate", "http2", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "stream", "gzip", "deflate", "http2", "rustls-tls", "macos-system-configuration"] }
 url = "2.4"
 regex = "1.10"
 once_cell = "1.20"
