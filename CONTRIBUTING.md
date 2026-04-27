@@ -8,6 +8,7 @@ Thank you for considering contributing to ferro-hgvs!
 
 - Rust (stable)
 - Git
+- [uv](https://docs.astral.sh/uv/) (for Python development)
 
 ### Setup
 
@@ -17,6 +18,18 @@ cd ferro-hgvs
 cargo build
 cargo test --features dev
 ```
+
+### Python Bindings Setup
+
+```bash
+uv sync --extra dev
+uv run maturin develop --features python
+uv run pytest
+```
+
+After modifying Python dependencies in `pyproject.toml`, run `uv lock` and commit
+the updated `uv.lock`. CI uses `--locked` and will fail if the lockfile is out of
+sync with `pyproject.toml`.
 
 ## Development Workflow
 

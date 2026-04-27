@@ -33,17 +33,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.12"
-      - name: Install linters
-        run: pip install ruff mypy
+          enable-cache: true
+      - name: Install dev dependencies
+        run: uv sync --extra dev --locked --no-install-project
       - name: Run ruff check
-        run: ruff check python/ tests/python/
+        run: uv run ruff check python/ tests/python/
       - name: Run ruff format
-        run: ruff format --check python/ tests/python/
+        run: uv run ruff format --check python/ tests/python/
       - name: Run mypy
-        run: mypy python/ferro_hgvs/
+        run: uv run mypy python/ferro_hgvs/
 
   clippy:
     name: Clippy
@@ -82,9 +83,10 @@ jobs:
         with:
           toolchain: 1.94.0
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           python-version: "3.12"
+          enable-cache: true
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
@@ -99,16 +101,12 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Run Rust tests
         run: cargo nextest run --features dev
-      - name: Install maturin and pytest
-        run: pip install maturin pytest
-      - name: Build Python wheel
-        run: |
-          rm -f target/wheels/*.whl
-          maturin build --features python
-      - name: Install wheel and run Python tests
-        run: |
-          pip install target/wheels/*.whl
-          pytest tests/python/ -v
+      - name: Install dev dependencies
+        run: uv sync --extra dev --locked --no-install-project
+      - name: Build and install Python wheel
+        run: uv run maturin develop --features python
+      - name: Run Python tests
+        run: uv run pytest tests/python/ -v
 
   build:
     name: Build
