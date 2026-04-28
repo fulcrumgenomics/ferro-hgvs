@@ -103,8 +103,6 @@ jobs:
         run: cargo nextest run --features dev
       - name: Install dev dependencies
         run: uv sync --group dev --locked --no-install-project
-      - name: Build and install Python wheel
-        run: uv run maturin develop --features python
       - name: Run Python tests
         run: uv run poe check-tests
 
