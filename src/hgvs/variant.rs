@@ -658,7 +658,7 @@ impl HgvsVariant {
     /// `NullAllele`, `UnknownAllele`) fall back to their full `Display` output. Callers
     /// guard against this via `all_share_accession_and_type`, which excludes those
     /// types from the compact branch.
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HgvsVariant::Genome(v) => v.fmt_loc_edit(f),
             HgvsVariant::Cds(v) => v.fmt_loc_edit(f),
@@ -759,7 +759,7 @@ pub struct GenomeVariant {
 
 impl GenomeVariant {
     /// Format just the position+edit portion (without `accession:g.` prefix).
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-entity identity (g.=) or unknown (g.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_entity() {
@@ -787,7 +787,7 @@ pub struct CdsVariant {
 
 impl CdsVariant {
     /// Format just the position+edit portion (without `accession:c.` prefix).
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-entity identity (c.=) or unknown (c.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_entity_identity() || edit.is_whole_entity_unknown() {
@@ -814,7 +814,7 @@ pub struct TxVariant {
 }
 
 impl TxVariant {
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -838,7 +838,7 @@ impl RnaVariant {
     /// Format just the position+edit portion (without `accession:r.` prefix).
     ///
     /// RNA uses lowercase nucleotides per HGVS spec.
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.loc_edit.edit {
             Mu::Certain(edit) => {
                 // For whole-entity patterns (r.=, r.?, r.spl, r.0), skip the position
@@ -878,7 +878,7 @@ pub struct ProteinVariant {
 
 impl ProteinVariant {
     /// Format just the position+edit portion (without `accession:p.` prefix).
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-protein identity (p.= or p.(=)), no-protein (p.0), or whole-protein unknown (p.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_protein_identity()
@@ -915,7 +915,7 @@ pub struct MtVariant {
 }
 
 impl MtVariant {
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -939,7 +939,7 @@ pub struct CircularVariant {
 }
 
 impl CircularVariant {
-    pub(crate) fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.loc_edit)
     }
 }
