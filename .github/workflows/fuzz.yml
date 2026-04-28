@@ -12,6 +12,9 @@ on:
         required: false
         default: '300'
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -28,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # nightly
@@ -57,10 +62,12 @@ jobs:
             fuzz-corpus-${{ matrix.target }}-
 
       - name: Run fuzzer
+        env:
+          FUZZ_SECONDS: ${{ github.event.inputs.fuzz_seconds || '300' }}
+          FUZZ_TARGET: ${{ matrix.target }}
         run: |
           cd fuzz
-          FUZZ_SECONDS="${{ github.event.inputs.fuzz_seconds || '300' }}"
-          timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run ${{ matrix.target }} -- -max_len=1024 || true
+          timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run "${FUZZ_TARGET}" -- -max_len=1024 || true
 
       - name: Save corpus
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5

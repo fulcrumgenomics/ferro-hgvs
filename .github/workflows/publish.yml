@@ -22,7 +22,8 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
-          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          # release-plz pushes tags/commits via the persisted token; do not disable.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }} # zizmor: ignore[artipacked]
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
