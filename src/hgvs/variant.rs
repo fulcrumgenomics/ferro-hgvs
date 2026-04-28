@@ -1183,6 +1183,86 @@ mod tests {
     }
 
     #[test]
+    fn test_allele_unknown_phase_compact_form() {
+        // 2+ unknown-phase variants sharing accession + coordinate type emit the
+        // bracket-less compact form `ACC:c.edit1(;)edit2`.
+        use crate::hgvs::location::CdsPos;
+
+        let make_var = |pos, alt| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+
+        let pair =
+            AlleleVariant::unknown_phase(vec![make_var(100, Base::G), make_var(200, Base::C)]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(pair)),
+            "NM_000088.3:c.100A>G(;)200A>C"
+        );
+
+        let triple = AlleleVariant::unknown_phase(vec![
+            make_var(100, Base::G),
+            make_var(200, Base::C),
+            make_var(300, Base::T),
+        ]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(triple)),
+            "NM_000088.3:c.100A>G(;)200A>C(;)300A>T"
+        );
+    }
+
+    #[test]
+    fn test_allele_mixed_coordinate_types_uses_expanded_form() {
+        // Same accession, different coordinate types (c. and n.) → expanded form.
+        // `all_share_accession_and_type` requires both fields to match.
+        use crate::hgvs::location::{CdsPos, TxPos};
+
+        let coding = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let noncoding = HgvsVariant::Tx(TxVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![coding.clone(), noncoding.clone()]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NM_000088.3:c.100A>G;NM_000088.3:n.200C>T]"
+        );
+
+        let trans = AlleleVariant::trans(vec![coding, noncoding]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(trans)),
+            "[NM_000088.3:c.100A>G];[NM_000088.3:n.200C>T]"
+        );
+    }
+
+    #[test]
     fn test_allele_unknown_phase_singleton_keeps_wrapper() {
         use crate::hgvs::location::CdsPos;
 
