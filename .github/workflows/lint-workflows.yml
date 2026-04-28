@@ -46,4 +46,4 @@ jobs:
       - name: Run zizmor
         run: zizmor .github/workflows/
       - name: Run actionlint
-        run: actionlint .github/workflows/*.yml
+        run: actionlint

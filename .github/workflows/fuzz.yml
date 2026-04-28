@@ -67,6 +67,10 @@ jobs:
           FUZZ_TARGET: ${{ matrix.target }}
         run: |
           cd fuzz
+          if ! [[ "$FUZZ_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid fuzz_seconds='$FUZZ_SECONDS' (must be a positive integer)" >&2
+            exit 1
+          fi
           timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run "${FUZZ_TARGET}" -- -max_len=1024 || true
 
       - name: Save corpus
