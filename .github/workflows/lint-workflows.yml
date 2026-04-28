@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/**'
+      - '.github/actionlint.yaml'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/**'
+      - '.github/actionlint.yaml'
 
 permissions:
   contents: read
@@ -28,12 +30,18 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: .github/workflows/lint-workflows.yml
       - name: Install zizmor
         run: pip install 'zizmor==1.24.1'
       - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           curl -sSL -o /tmp/actionlint.tgz \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tgz -C /usr/local/bin actionlint
       - name: Run zizmor
         run: zizmor .github/workflows/
