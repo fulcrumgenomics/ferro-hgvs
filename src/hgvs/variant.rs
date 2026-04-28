@@ -511,7 +511,10 @@ impl fmt::Display for AlleleVariant {
                 }
             }
             AllelePhase::Unknown => {
-                if use_compact_form(&self.variants) {
+                // Unknown-phase compact form has no surrounding brackets, so a
+                // singleton would print as `ACC:type.edit` and lose the allele
+                // wrapper. Only use compact form when there are 2+ sub-variants.
+                if self.variants.len() > 1 && use_compact_form(&self.variants) {
                     // Compact form: ACC:g.edit1(;)edit2
                     write_compact_prefix(f, &self.variants[0])?;
                     for (i, v) in self.variants.iter().enumerate() {
@@ -1176,6 +1179,32 @@ mod tests {
         assert_eq!(
             format!("{}", HgvsVariant::Allele(allele)),
             "NM_000088.3:c.[100A>G];[200A>C];[300A>T]"
+        );
+    }
+
+    #[test]
+    fn test_allele_unknown_phase_singleton_keeps_wrapper() {
+        use crate::hgvs::location::CdsPos;
+
+        // A singleton unknown-phase allele must keep the bracketed wrapper;
+        // the compact form `ACC:c.edit` would be indistinguishable from a
+        // bare variant and would not round-trip.
+        let var = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+
+        let allele = AlleleVariant::unknown_phase(vec![var]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(allele)),
+            "[NM_000088.3:c.100A>G]"
         );
     }
 
