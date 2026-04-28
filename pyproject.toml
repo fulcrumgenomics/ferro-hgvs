@@ -30,12 +30,12 @@ Homepage = "https://github.com/fulcrumgenomics/ferro-hgvs"
 Repository = "https://github.com/fulcrumgenomics/ferro-hgvs"
 Documentation = "https://github.com/fulcrumgenomics/ferro-hgvs#readme"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=7.0",
-    "mypy>=1.0",
-    "ruff>=0.4",
+    "mypy==1.20.2",
+    "ruff==0.15.12",
     "poethepoet>=0.36",
     "twine>=6.0",
 ]
@@ -70,13 +70,15 @@ ignore = [
 known-first-party = ["ferro_hgvs"]
 
 [tool.poe.tasks]
-build        = {cmd = "maturin develop --features python",                help = "build the native extension in development mode"}
+build-dev          = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin develop --features python", help = "build the native extension in development mode"}
+build-wheel        = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin build --features python",   help = "build a distributable wheel of the native extension"}
+
 check-format = {cmd = "ruff format --check --diff python/ tests/python/", help = "check Python code formatting"}
 check-lint   = {cmd = "ruff check python/ tests/python/",                 help = "lint Python sources"}
 check-typing = {cmd = "mypy",                                             help = "type-check Python sources"}
 
 check-tests.help     = "run Python tests (rebuilds the native extension first)"
-check-tests.sequence = ["build", {cmd = "pytest"}]
+check-tests.sequence = ["build-dev", {cmd = "pytest"}]
 
 check-all.help        = "run all checks: format, lint, typing, tests"
 check-all.ignore_fail = "return_non_zero"
@@ -97,8 +99,14 @@ fix-and-check-all.sequence    = ["fix-format", "fix-lint", "check-typing", "chec
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
+warn_unreachable = true
 strict = true
 files = ["python/ferro_hgvs"]
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "exhaustive-match",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
