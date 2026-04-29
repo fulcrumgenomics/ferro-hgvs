@@ -437,43 +437,107 @@ impl AlleleVariant {
     }
 }
 
+/// Write the `ACC:<type>.` prefix for compact allele form.
+///
+/// Per HGVS spec, bracketed `?` is only valid as a whole-allele marker (`[?]`),
+/// never mixed with concrete edits inside the same bracket. Compact form is
+/// suppressed when any sub-variant carries the per-variant `?` (e.g. `c.?`).
+fn use_compact_form(variants: &[HgvsVariant]) -> bool {
+    !variants.is_empty()
+        && HgvsVariant::all_share_accession_and_type(variants)
+        && !variants.iter().any(HgvsVariant::is_loc_edit_unknown)
+}
+
+fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt::Result {
+    write!(
+        f,
+        "{}:{}.",
+        first
+            .accession()
+            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
+        first.variant_type()
+    )
+}
+
 impl fmt::Display for AlleleVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.phase {
             AllelePhase::Cis => {
-                // [var1;var2]
-                write!(f, "[")?;
-                for (i, v) in self.variants.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ";")?;
+                if use_compact_form(&self.variants) {
+                    // Compact form: ACC:g.[edit1;edit2]
+                    write_compact_prefix(f, &self.variants[0])?;
+                    write!(f, "[")?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ";")?;
+                        }
+                        v.fmt_loc_edit(f)?;
                     }
-                    write!(f, "{}", v)?;
+                    write!(f, "]")
+                } else {
+                    // Expanded form: [ACC:g.edit1;ACC:g.edit2]
+                    write!(f, "[")?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ";")?;
+                        }
+                        write!(f, "{}", v)?;
+                    }
+                    write!(f, "]")
                 }
-                write!(f, "]")
             }
             AllelePhase::Trans => {
-                // [var1];[var2]
-                for (i, v) in self.variants.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ";")?;
+                if use_compact_form(&self.variants) {
+                    // Compact form: ACC:g.[edit1];[edit2]
+                    write_compact_prefix(f, &self.variants[0])?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ";")?;
+                        }
+                        write!(f, "[")?;
+                        v.fmt_loc_edit(f)?;
+                        write!(f, "]")?;
                     }
-                    write!(f, "[{}]", v)?;
+                    Ok(())
+                } else {
+                    // Expanded form: [ACC:g.edit1];[ACC:g.edit2]
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ";")?;
+                        }
+                        write!(f, "[{}]", v)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             AllelePhase::Unknown => {
-                // [var1(;)var2] - unknown phase
-                write!(f, "[")?;
-                for (i, v) in self.variants.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, "(;)")?;
+                // Unknown-phase compact form has no surrounding brackets, so a
+                // singleton would print as `ACC:type.edit` and lose the allele
+                // wrapper. Only use compact form when there are 2+ sub-variants.
+                if self.variants.len() > 1 && use_compact_form(&self.variants) {
+                    // Compact form: ACC:g.edit1(;)edit2
+                    write_compact_prefix(f, &self.variants[0])?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "(;)")?;
+                        }
+                        v.fmt_loc_edit(f)?;
                     }
-                    write!(f, "{}", v)?;
+                    Ok(())
+                } else {
+                    // Expanded form: [ACC:g.edit1(;)ACC:g.edit2]
+                    write!(f, "[")?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "(;)")?;
+                        }
+                        write!(f, "{}", v)?;
+                    }
+                    write!(f, "]")
                 }
-                write!(f, "]")
             }
             AllelePhase::Mosaic => {
-                // var1/var2 (single forward slash)
+                // var1/var2 (single forward slash) - always expanded
                 for (i, v) in self.variants.iter().enumerate() {
                     if i > 0 {
                         write!(f, "/")?;
@@ -483,7 +547,7 @@ impl fmt::Display for AlleleVariant {
                 Ok(())
             }
             AllelePhase::Chimeric => {
-                // var1//var2 (double forward slash)
+                // var1//var2 (double forward slash) - always expanded
                 for (i, v) in self.variants.iter().enumerate() {
                     if i > 0 {
                         write!(f, "//")?;
@@ -584,6 +648,87 @@ impl HgvsVariant {
     pub fn is_unknown_allele(&self) -> bool {
         matches!(self, HgvsVariant::UnknownAllele)
     }
+
+    /// Format just the position+edit portion (without accession and coordinate prefix).
+    ///
+    /// For `NM_000088.3:c.459A>G`, this writes `459A>G`. Used by `AlleleVariant::Display`
+    /// to emit the spec-correct compact form (`ACC:c.[edit1;edit2]`).
+    ///
+    /// Variant types that have no simple loc/edit form (`Allele`, `RnaFusion`,
+    /// `NullAllele`, `UnknownAllele`) fall back to their full `Display` output. Callers
+    /// guard against this via `all_share_accession_and_type`, which excludes those
+    /// types from the compact branch.
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HgvsVariant::Genome(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Cds(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Tx(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Rna(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Protein(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Mt(v) => v.fmt_loc_edit(f),
+            HgvsVariant::Circular(v) => v.fmt_loc_edit(f),
+            // These types have no compact form — fall back to full Display.
+            HgvsVariant::RnaFusion(v) => write!(f, "{}", v),
+            HgvsVariant::Allele(a) => write!(f, "{}", a),
+            HgvsVariant::NullAllele => write!(f, "0"),
+            HgvsVariant::UnknownAllele => write!(f, "?"),
+        }
+    }
+
+    /// True if this variant's loc/edit portion is the per-variant unknown form
+    /// (`g.?`, `c.?`, `n.?`, `r.?`, `p.?`, `m.?`, `o.?`).
+    ///
+    /// The HGVS spec uses bracketed `?` only as a whole-allele marker (`[?]`),
+    /// never mixed with concrete edits inside the same bracket. Compact form is
+    /// suppressed when any sub-variant matches this so the output isn't visually
+    /// ambiguous with the spec-sanctioned `[?]` form.
+    pub(crate) fn is_loc_edit_unknown(&self) -> bool {
+        match self {
+            HgvsVariant::Genome(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Cds(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Tx(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Rna(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Mt(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Circular(v) => is_na_edit_unknown(&v.loc_edit.edit),
+            HgvsVariant::Protein(v) => match &v.loc_edit.edit {
+                Mu::Unknown => true,
+                Mu::Certain(e) | Mu::Uncertain(e) => e.is_whole_protein_unknown(),
+            },
+            HgvsVariant::RnaFusion(_)
+            | HgvsVariant::Allele(_)
+            | HgvsVariant::NullAllele
+            | HgvsVariant::UnknownAllele => false,
+        }
+    }
+
+    /// Check if all variants in a slice share the same accession and coordinate type.
+    /// Used to determine whether the compact allele form can be used.
+    pub(crate) fn all_share_accession_and_type(variants: &[HgvsVariant]) -> bool {
+        let Some(first) = variants.first() else {
+            return true;
+        };
+        let first_acc = first.accession();
+        let first_type = first.variant_type();
+
+        // Don't use compact form for types that aren't simple coordinate-based variants,
+        // or when the first variant has no accession (e.g. NullAllele, UnknownAllele)
+        if first_acc.is_none() || matches!(first_type, "allele" | "null" | "unknown" | "r::r") {
+            return false;
+        }
+
+        variants[1..]
+            .iter()
+            .all(|v| v.variant_type() == first_type && v.accession() == first_acc)
+    }
+}
+
+/// True if a nucleotide-edit `Mu` wrapper represents the per-variant unknown form
+/// (e.g. `c.?`, `r.?`).
+fn is_na_edit_unknown(edit: &Mu<NaEdit>) -> bool {
+    match edit {
+        Mu::Unknown => true,
+        Mu::Certain(e) | Mu::Uncertain(e) => e.is_whole_entity_unknown(),
+    }
 }
 
 impl fmt::Display for HgvsVariant {
@@ -612,15 +757,23 @@ pub struct GenomeVariant {
     pub loc_edit: LocEdit<GenomeInterval, NaEdit>,
 }
 
-impl fmt::Display for GenomeVariant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl GenomeVariant {
+    /// Format just the position+edit portion (without `accession:g.` prefix).
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-entity identity (g.=) or unknown (g.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_entity() {
-                return write!(f, "{}:g.{}", self.accession, self.loc_edit.edit);
+                return write!(f, "{}", self.loc_edit.edit);
             }
         }
-        write!(f, "{}:g.{}", self.accession, self.loc_edit)
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
+impl fmt::Display for GenomeVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:g.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -632,15 +785,23 @@ pub struct CdsVariant {
     pub loc_edit: LocEdit<CdsInterval, NaEdit>,
 }
 
-impl fmt::Display for CdsVariant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CdsVariant {
+    /// Format just the position+edit portion (without `accession:c.` prefix).
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-entity identity (c.=) or unknown (c.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_entity_identity() || edit.is_whole_entity_unknown() {
-                return write!(f, "{}:c.{}", self.accession, self.loc_edit.edit);
+                return write!(f, "{}", self.loc_edit.edit);
             }
         }
-        write!(f, "{}:c.{}", self.accession, self.loc_edit)
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
+impl fmt::Display for CdsVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:c.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -652,9 +813,16 @@ pub struct TxVariant {
     pub loc_edit: LocEdit<TxInterval, NaEdit>,
 }
 
+impl TxVariant {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
 impl fmt::Display for TxVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:n.{}", self.accession, self.loc_edit)
+        write!(f, "{}:n.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -666,43 +834,37 @@ pub struct RnaVariant {
     pub loc_edit: LocEdit<RnaInterval, NaEdit>,
 }
 
-impl fmt::Display for RnaVariant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // RNA uses lowercase nucleotides per HGVS spec
-        // Format the edit using to_rna_string() for proper lowercase output
+impl RnaVariant {
+    /// Format just the position+edit portion (without `accession:r.` prefix).
+    ///
+    /// RNA uses lowercase nucleotides per HGVS spec.
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.loc_edit.edit {
-            crate::hgvs::uncertainty::Mu::Certain(edit) => {
+            Mu::Certain(edit) => {
                 // For whole-entity patterns (r.=, r.?, r.spl, r.0), skip the position
                 if edit.is_whole_entity() {
-                    write!(f, "{}:r.{}", self.accession, edit.to_rna_string())
+                    write!(f, "{}", edit.to_rna_string())
                 } else {
-                    write!(
-                        f,
-                        "{}:r.{}{}",
-                        self.accession,
-                        self.loc_edit.location,
-                        edit.to_rna_string()
-                    )
+                    write!(f, "{}{}", self.loc_edit.location, edit.to_rna_string())
                 }
             }
-            crate::hgvs::uncertainty::Mu::Uncertain(edit) => {
+            Mu::Uncertain(edit) => {
                 // For whole-entity patterns, skip the position
                 if edit.is_whole_entity() {
-                    write!(f, "{}:r.({})", self.accession, edit.to_rna_string())
+                    write!(f, "({})", edit.to_rna_string())
                 } else {
-                    write!(
-                        f,
-                        "{}:r.{}({})",
-                        self.accession,
-                        self.loc_edit.location,
-                        edit.to_rna_string()
-                    )
+                    write!(f, "{}({})", self.loc_edit.location, edit.to_rna_string())
                 }
             }
-            crate::hgvs::uncertainty::Mu::Unknown => {
-                write!(f, "{}:r.?", self.accession)
-            }
+            Mu::Unknown => write!(f, "?"),
         }
+    }
+}
+
+impl fmt::Display for RnaVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:r.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -714,29 +876,33 @@ pub struct ProteinVariant {
     pub loc_edit: LocEdit<ProtInterval, ProteinEdit>,
 }
 
-impl fmt::Display for ProteinVariant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ProteinVariant {
+    /// Format just the position+edit portion (without `accession:p.` prefix).
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // For whole-protein identity (p.= or p.(=)), no-protein (p.0), or whole-protein unknown (p.?), skip the position
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_protein_identity()
                 || edit.is_no_protein()
                 || edit.is_whole_protein_unknown()
             {
-                return write!(f, "{}:p.{}", self.accession, self.loc_edit.edit);
+                return write!(f, "{}", self.loc_edit.edit);
             }
         }
         // For predicted protein changes (uncertain edit), wrap position+edit in parentheses
         // e.g., p.(Arg248Gln) instead of p.Arg248(Gln)
         if self.loc_edit.edit.is_uncertain() {
             if let Some(edit) = self.loc_edit.edit.inner() {
-                return write!(
-                    f,
-                    "{}:p.({}{})",
-                    self.accession, self.loc_edit.location, edit
-                );
+                return write!(f, "({}{})", self.loc_edit.location, edit);
             }
         }
-        write!(f, "{}:p.{}", self.accession, self.loc_edit)
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
+impl fmt::Display for ProteinVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:p.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -748,9 +914,16 @@ pub struct MtVariant {
     pub loc_edit: LocEdit<GenomeInterval, NaEdit>,
 }
 
+impl MtVariant {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
 impl fmt::Display for MtVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:m.{}", self.accession, self.loc_edit)
+        write!(f, "{}:m.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -765,9 +938,16 @@ pub struct CircularVariant {
     pub loc_edit: LocEdit<GenomeInterval, NaEdit>,
 }
 
+impl CircularVariant {
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.loc_edit)
+    }
+}
+
 impl fmt::Display for CircularVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:o.{}", self.accession, self.loc_edit)
+        write!(f, "{}:o.", self.accession)?;
+        self.fmt_loc_edit(f)
     }
 }
 
@@ -902,7 +1082,7 @@ mod tests {
 
         assert_eq!(
             format!("{}", allele_variant),
-            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]"
+            "NM_000088.3:c.[100A>G;200C>T]"
         );
     }
 
@@ -938,8 +1118,257 @@ mod tests {
 
         assert_eq!(
             format!("{}", allele_variant),
-            "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]"
+            "NM_000088.3:c.[100A>G];[200C>T]"
         );
+    }
+
+    #[test]
+    fn test_allele_cis_three_variants() {
+        use crate::hgvs::location::CdsPos;
+
+        let make_var = |pos, alt| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+
+        let allele = AlleleVariant::cis(vec![
+            make_var(100, Base::G),
+            make_var(200, Base::C),
+            make_var(300, Base::T),
+        ]);
+
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(allele)),
+            "NM_000088.3:c.[100A>G;200A>C;300A>T]"
+        );
+    }
+
+    #[test]
+    fn test_allele_trans_three_variants() {
+        use crate::hgvs::location::CdsPos;
+
+        let make_var = |pos, alt| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+
+        let allele = AlleleVariant::trans(vec![
+            make_var(100, Base::G),
+            make_var(200, Base::C),
+            make_var(300, Base::T),
+        ]);
+
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(allele)),
+            "NM_000088.3:c.[100A>G];[200A>C];[300A>T]"
+        );
+    }
+
+    #[test]
+    fn test_allele_unknown_phase_compact_form() {
+        // 2+ unknown-phase variants sharing accession + coordinate type emit the
+        // bracket-less compact form `ACC:c.edit1(;)edit2`.
+        use crate::hgvs::location::CdsPos;
+
+        let make_var = |pos, alt| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+
+        let pair =
+            AlleleVariant::unknown_phase(vec![make_var(100, Base::G), make_var(200, Base::C)]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(pair)),
+            "NM_000088.3:c.100A>G(;)200A>C"
+        );
+
+        let triple = AlleleVariant::unknown_phase(vec![
+            make_var(100, Base::G),
+            make_var(200, Base::C),
+            make_var(300, Base::T),
+        ]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(triple)),
+            "NM_000088.3:c.100A>G(;)200A>C(;)300A>T"
+        );
+    }
+
+    #[test]
+    fn test_allele_mixed_coordinate_types_uses_expanded_form() {
+        // Same accession, different coordinate types (c. and n.) → expanded form.
+        // `all_share_accession_and_type` requires both fields to match.
+        use crate::hgvs::location::{CdsPos, TxPos};
+
+        let coding = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let noncoding = HgvsVariant::Tx(TxVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![coding.clone(), noncoding.clone()]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NM_000088.3:c.100A>G;NM_000088.3:n.200C>T]"
+        );
+
+        let trans = AlleleVariant::trans(vec![coding, noncoding]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(trans)),
+            "[NM_000088.3:c.100A>G];[NM_000088.3:n.200C>T]"
+        );
+    }
+
+    #[test]
+    fn test_allele_unknown_phase_singleton_keeps_wrapper() {
+        use crate::hgvs::location::CdsPos;
+
+        // A singleton unknown-phase allele must keep the bracketed wrapper;
+        // the compact form `ACC:c.edit` would be indistinguishable from a
+        // bare variant and would not round-trip.
+        let var = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+
+        let allele = AlleleVariant::unknown_phase(vec![var]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(allele)),
+            "[NM_000088.3:c.100A>G]"
+        );
+    }
+
+    #[test]
+    fn test_allele_mixed_accession_uses_expanded_form() {
+        use crate::hgvs::location::CdsPos;
+
+        // Different accessions → expanded form (no compact shorthand)
+        let var1 = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let var2 = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000099", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![var1.clone(), var2.clone()]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NM_000088.3:c.100A>G;NM_000099.1:c.200C>T]"
+        );
+
+        let trans = AlleleVariant::trans(vec![var1, var2]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(trans)),
+            "[NM_000088.3:c.100A>G];[NM_000099.1:c.200C>T]"
+        );
+    }
+
+    #[test]
+    fn test_allele_with_unknown_sub_variant_uses_expanded_form() {
+        // Per HGVS spec, bracketed `?` is reserved for the whole-allele marker (`[?]`).
+        // An allele containing a `c.?` sub-variant must NOT collapse to `[?;100A>G]` —
+        // that would visually conflict with the spec-sanctioned form.
+        use crate::hgvs::location::CdsPos;
+
+        let unknown = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::whole_entity_unknown(),
+            ),
+        });
+        let concrete = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+
+        let trans = AlleleVariant::trans(vec![concrete, unknown]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(trans)),
+            "[NM_000088.3:c.100A>G];[NM_000088.3:c.?]"
+        );
+    }
+
+    #[test]
+    fn test_allele_null_variant_uses_expanded_form() {
+        // A single NullAllele has no accession — must not panic, must use expanded form
+        let null = HgvsVariant::NullAllele;
+        let cis = AlleleVariant::cis(vec![null]);
+        assert_eq!(format!("{}", HgvsVariant::Allele(cis)), "[0]");
     }
 
     #[test]

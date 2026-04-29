@@ -2370,17 +2370,11 @@ mod tests {
         // Verify it's still an allele
         assert!(matches!(result, HgvsVariant::Allele(_)));
 
-        // Verify output format preserves both variants
-        let output = format!("{}", result);
-        assert!(
-            output.contains("c.10A>G"),
-            "Allele should contain first variant, got: {}",
-            output
-        );
-        assert!(
-            output.contains("c.20C>T"),
-            "Allele should contain second variant, got: {}",
-            output
+        // Verify output is the canonical compact form (ACC:c.[edit1;edit2])
+        assert_eq!(
+            format!("{}", result),
+            "NM_000088.3:c.[10A>G;20C>T]",
+            "Allele display should use canonical compact form"
         );
     }
 

@@ -3919,10 +3919,8 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Cis);
             assert_eq!(allele.variants.len(), 2);
         }
-        assert_eq!(
-            format!("{}", variant),
-            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]"
-        );
+        // Same-accession cis alleles render in compact form
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.[100A>G;200C>T]");
     }
 
     #[test]
@@ -3934,10 +3932,8 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Trans);
             assert_eq!(allele.variants.len(), 2);
         }
-        assert_eq!(
-            format!("{}", variant),
-            "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]"
-        );
+        // Same-accession trans alleles render in compact form
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.[100A>G];[200C>T]");
     }
 
     #[test]
@@ -4030,10 +4026,8 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Unknown);
             assert_eq!(allele.variants.len(), 2);
         }
-        assert_eq!(
-            format!("{}", variant),
-            "[NM_000088.3:c.100A>G(;)NM_000088.3:c.200C>T]"
-        );
+        // Same-accession unknown-phase alleles render in compact form
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.100A>G(;)200C>T");
     }
 
     #[test]
@@ -4065,11 +4059,8 @@ mod tests {
                 );
             }
         }
-        // Output expands to full format
-        assert_eq!(
-            format!("{}", variant),
-            "[NM_000088.3:c.145C>T;NM_000088.3:c.147C>G]"
-        );
+        // Output uses compact form (same accession)
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.[145C>T;147C>G]");
     }
 
     #[test]
@@ -4081,10 +4072,8 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Unknown);
             assert_eq!(allele.variants.len(), 2);
         }
-        assert_eq!(
-            format!("{}", variant),
-            "[NM_000088.3:c.145C>T(;)NM_000088.3:c.147C>G]"
-        );
+        // Output uses compact form (same accession)
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.145C>T(;)147C>G");
     }
 
     #[test]
