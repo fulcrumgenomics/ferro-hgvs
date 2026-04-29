@@ -16,6 +16,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   BINARY_NAME: ferro-web
   CONFIG_FILE: /opt/ferro-web/service.toml
@@ -27,6 +30,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -38,14 +42,14 @@ jobs:
           if ! command -v rustc &> /dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           fi
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Setup Pixi
         run: |
           if ! command -v pixi &> /dev/null; then
             curl -fsSL https://pixi.sh/install.sh | bash
           fi
-          echo "$HOME/.pixi/bin" >> $GITHUB_PATH
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
 
       - name: Install Python dependencies via Pixi
         run: |
