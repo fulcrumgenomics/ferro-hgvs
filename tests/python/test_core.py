@@ -46,18 +46,19 @@ class TestParsing:
         assert "dup" in str(variant)
 
     @pytest.mark.parametrize(
-        "hgvs",
+        ("hgvs", "selector"),
         [
-            "MYSEQ(1):c.100A>G",
-            "MY-SEQ(GENE1):c.100A>G",
-            "MYREF_SEQ(1):c.100A>G",
-            "MYREF_SEQ(1):p.(Arg8Gln)",
+            ("MYSEQ(1):c.100A>G", "1"),
+            ("MY-SEQ(GENE1):c.100A>G", "GENE1"),
+            ("MYREF_SEQ(1):c.100A>G", "1"),
+            ("MYREF_SEQ(1):p.(Arg8Gln)", "1"),
         ],
     )
-    def test_parse_accepts_gene_selector_on_non_refseq(self, hgvs: str) -> None:
-        # Issue #69: gene selectors must parse on any valid accession.
+    def test_parse_accepts_gene_selector_on_non_refseq(self, hgvs: str, selector: str) -> None:
+        # Issue #69: gene selectors must parse on any valid accession AND be
+        # captured on the variant — not silently dropped.
         variant = ferro_hgvs.parse(hgvs)
-        assert variant is not None
+        assert f'"gene_symbol":"{selector}"' in variant.to_json()
 
 
 class TestHgvsVariant:
