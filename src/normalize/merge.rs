@@ -29,23 +29,23 @@ struct Anchor {
 /// non-NaEdit, uncertain edit, disqualifying position, etc.) act as merge
 /// barriers — they pass through unchanged in their original input order.
 pub(crate) fn merge_consecutive_edits(
-    variants: &[HgvsVariant],
+    variants: Vec<HgvsVariant>,
     phase: AllelePhase,
 ) -> Vec<HgvsVariant> {
     if phase != AllelePhase::Cis || variants.len() < 2 {
-        return variants.to_vec();
+        return variants;
     }
 
     let mut output: Vec<HgvsVariant> = Vec::with_capacity(variants.len());
     for next in variants {
         if let Some(prev) = output.last() {
-            if let Some(merged) = try_merge_pair(prev, next) {
+            if let Some(merged) = try_merge_pair(prev, &next) {
                 let last = output.last_mut().unwrap();
                 *last = merged;
                 continue;
             }
         }
-        output.push(next.clone());
+        output.push(next);
     }
     output
 }
@@ -123,9 +123,6 @@ fn merge_anchors(a: Anchor, b: Anchor) -> Option<Anchor> {
     }
     let mut alt = a.alt;
     alt.extend(b.alt);
-    // Use the earliest start and the latest end so that the merged range
-    // covers the union. For an Insertion-only merge, `start = a.start` (= p+1)
-    // and `end = b.end` (= p), preserving the empty-range invariant.
     Some(Anchor {
         start: a.start.min(b.start),
         end: a.end.max(b.end),
@@ -160,7 +157,7 @@ fn anchor_from_loc_edit<L>(
             alt: Vec::new(),
         }),
         NaEdit::Delins { sequence } => {
-            let bases = sequence.as_literal()?.bases().to_vec();
+            let bases = sequence.bases()?.to_vec();
             Some(Anchor {
                 start,
                 end,
@@ -168,11 +165,10 @@ fn anchor_from_loc_edit<L>(
             })
         }
         NaEdit::Insertion { sequence } => {
-            // Insertion's interval is [p, p+1]; convert to anchor [p+1, p].
             if end != start.checked_add(1)? {
                 return None;
             }
-            let bases = sequence.as_literal()?.bases().to_vec();
+            let bases = sequence.bases()?.to_vec();
             Some(Anchor {
                 start: end,
                 end: start,
@@ -302,7 +298,6 @@ fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
 
 fn build_naedit<P>(merged: Anchor, mut to_pos: impl FnMut(u64) -> P) -> (Interval<P>, NaEdit) {
     let edit = if merged.start > merged.end {
-        // Empty-range anchor -> Insertion at boundary.
         debug_assert_eq!(
             merged.start,
             merged.end + 1,
@@ -322,7 +317,7 @@ fn build_naedit<P>(merged: Anchor, mut to_pos: impl FnMut(u64) -> P) -> (Interva
         }
     };
     let (lo, hi) = if merged.start > merged.end {
-        (merged.end, merged.start) // Insertion: original [p, p+1] interval
+        (merged.end, merged.start)
     } else {
         (merged.start, merged.end)
     };
@@ -336,12 +331,11 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty() {
-        assert!(merge_consecutive_edits(&[], AllelePhase::Cis).is_empty());
+        assert!(merge_consecutive_edits(vec![], AllelePhase::Cis).is_empty());
     }
 
     #[test]
     fn single_input_passes_through() {
-        // Single-variant alleles are not Phase-1 mergeable.
         let acc = Accession::new("NC", "000001", Some(11));
         let v = HgvsVariant::Genome(GenomeVariant {
             accession: acc,
@@ -354,7 +348,7 @@ mod tests {
                 },
             ),
         });
-        let out = merge_consecutive_edits(std::slice::from_ref(&v), AllelePhase::Cis);
+        let out = merge_consecutive_edits(vec![v], AllelePhase::Cis);
         assert_eq!(out.len(), 1);
     }
 }
