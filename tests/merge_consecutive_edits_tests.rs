@@ -356,3 +356,60 @@ fn test_no_merge_reverse_input_order() {
     assert!(result.contains("1000G>A"), "got {}", result);
     assert!(!result.contains("delins"), "got {}", result);
 }
+
+// =====================================================================
+// Chains and mixed-edit-type sequences.
+// =====================================================================
+
+#[test]
+fn test_merge_chain_three_consecutive_subs() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000G>A;1001A>C;1002C>T]"),
+        "NC_000001.11:g.1000_1002delinsACT",
+    );
+}
+
+#[test]
+fn test_merge_chain_sub_ins_sub_at_shared_boundary() {
+    // Chain across one shared boundary: sub at 100 + ins between 100 and 101 + sub at 101.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100G>A;100_101insT;101A>C]"),
+        "NC_000001.11:g.100_101delinsATC",
+    );
+}
+
+#[test]
+fn test_merge_long_chain_mixed_types() {
+    // 4-element chain spanning sub, del, sub, sub at consecutive positions.
+    // Position 100 sub, 101 del, 102 sub, 103 sub -> single delins 100..=103 alt = A_AA = AAA.
+    // (The del at 101 contributes no alt, so the merged alt is "A" + "" + "A" + "A" = "AAA".)
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100G>A;101del;102C>A;103T>A]"),
+        "NC_000001.11:g.100_103delinsAAA",
+    );
+}
+
+#[test]
+fn test_merge_same_position_twice_no_merge() {
+    // Two edits at the SAME position (zero gap, but overlap not adjacency)
+    // must not collapse into a single delins.
+    let result = normalize_to_string("NC_000001.11:g.[100G>A;100A>C]");
+    // The output should still contain both — we don't synthesize a "double mutation" form.
+    assert!(result.contains("100G>A"), "got {}", result);
+    assert!(result.contains("100A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+#[ignore = "Codon-frame exception for c. — tracked in issue #79"]
+fn test_codon_frame_exception_deferred() {
+    // Per HGVS spec: c.[145C>T;147C>G] (positions 145-147 share codon 49)
+    // must be expressed as c.145_147delinsTGG. Implementing this needs
+    // reference-provider access for the unchanged middle nucleotide and
+    // codon-frame logic; deferred to issue #79.
+    let provider = provider_with_simple_transcript();
+    assert_eq!(
+        normalize_with_provider(provider, "NM_TEST.1:c.[10A>G;12A>C]"),
+        "NM_TEST.1:c.10_12delinsGAC",
+    );
+}
