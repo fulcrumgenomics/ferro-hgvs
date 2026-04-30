@@ -281,6 +281,26 @@ pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(us
     Some((s, e))
 }
 
+/// Check if a delins should be represented as identity
+///
+/// Per the HGVS spec, a delins whose inserted sequence equals the deleted
+/// reference produces no change and must be expressed using identity
+/// notation (`=`). The rule applies for any matching length.
+///
+/// Examples:
+/// - g.1000delinsG where ref[1000] = G → g.1000=
+/// - g.1000_1002delinsGCA where ref[1000..1002] = GCA → g.1000_1002=
+pub fn delins_is_identity(ref_seq: &[u8], start: usize, end: usize, inserted_seq: &[u8]) -> bool {
+    if start >= end || end > ref_seq.len() {
+        return false;
+    }
+    let deleted_len = end - start;
+    if inserted_seq.len() != deleted_len {
+        return false;
+    }
+    &ref_seq[start..end] == inserted_seq
+}
+
 /// Check if a delins should be represented as a duplication
 ///
 /// In HGVS, if a delins deletes N bases and inserts 2N bases where the
@@ -715,6 +735,41 @@ mod tests {
             get_canonical_form(&del_edit, ref_seq, 3, 6),
             CanonicalForm::Deletion
         );
+    }
+
+    #[test]
+    fn test_delins_is_identity() {
+        let ref_seq = b"ACGTACGT";
+
+        // Single-base same → identity
+        assert!(delins_is_identity(ref_seq, 3, 4, b"T"));
+
+        // Multi-base same → identity
+        assert!(delins_is_identity(ref_seq, 1, 4, b"CGT"));
+
+        // Whole region, full match → identity
+        assert!(delins_is_identity(ref_seq, 0, 8, b"ACGTACGT"));
+
+        // Single-base differ → not identity
+        assert!(!delins_is_identity(ref_seq, 3, 4, b"A"));
+
+        // Multi-base differ at one position → not identity
+        assert!(!delins_is_identity(ref_seq, 1, 4, b"CGA"));
+
+        // Length mismatch (1→2) → not identity
+        assert!(!delins_is_identity(ref_seq, 3, 4, b"TT"));
+
+        // Length mismatch (2→1) → not identity
+        assert!(!delins_is_identity(ref_seq, 1, 3, b"C"));
+
+        // Empty insert → not identity
+        assert!(!delins_is_identity(ref_seq, 3, 4, b""));
+
+        // OOB end → false (no panic)
+        assert!(!delins_is_identity(ref_seq, 7, 9, b"TT"));
+
+        // Inverted range → false
+        assert!(!delins_is_identity(ref_seq, 5, 3, b"CG"));
     }
 
     #[test]

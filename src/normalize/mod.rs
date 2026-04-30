@@ -1406,13 +1406,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             NaEdit::Delins { sequence } => {
                 use crate::hgvs::edit::InsertedSequence;
 
-                // HGVS spec: delins should NOT be 3' shifted like del/dup/ins
-                // But we should check if delins should become a duplication first
-                // Example: c.5delinsGG where position 5 is G → dup
+                // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
+                // but a delins whose insert matches the deleted reference is
+                // identity, and a delins matching a dup pattern is a duplication.
                 if let InsertedSequence::Literal(seq) = sequence {
                     let seq_bytes: Vec<u8> = seq.bases().iter().map(|b| *b as u8).collect();
                     let start_idx = hgvs_pos_to_index(start);
                     let end_idx = end as usize;
+
+                    if rules::delins_is_identity(ref_seq, start_idx, end_idx, &seq_bytes) {
+                        return Ok((start, end, NaEdit::position_identity(), warnings.clone()));
+                    }
 
                     if rules::delins_is_duplication(ref_seq, start_idx, end_idx, &seq_bytes) {
                         // Convert to duplication with minimal notation
@@ -2060,6 +2064,66 @@ mod tests {
             "Delins should remain unchanged, got: {}",
             output
         );
+    }
+
+    #[test]
+    fn test_normalize_single_base_delins_same_base_becomes_identity() {
+        // Per HGVS, a delins whose insert equals the reference is identity (=).
+        // Transcript NM_000088.3 starts ATGCCCAAGG...; position 10 is G.
+        // c.10delinsG produces no change → c.10=.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10delinsG").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10=");
+    }
+
+    #[test]
+    fn test_normalize_multi_base_delins_same_seq_becomes_identity() {
+        // Transcript NM_000088.3 starts ATG at positions 1-3.
+        // c.1_3delinsATG produces no change → c.1_3=.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.1_3delinsATG").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.1_3=");
+    }
+
+    #[test]
+    fn test_normalize_delins_to_dup_still_works() {
+        // Regression guard: adding the identity check before the dup check must
+        // not block legitimate dup conversions. ref[5] = C; c.5delinsCC matches
+        // the dup pattern (insert == deleted twice) and must still normalize to dup.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.5delinsCC").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        let output = format!("{}", result);
+        assert!(
+            output.contains("dup"),
+            "delins matching dup pattern should normalize to dup, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("delins"),
+            "delins should not survive the dup conversion, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_delins_different_bases_unchanged() {
+        // c.1_3delinsACG (ref=ATG) differs at the middle base — not identity,
+        // not a dup pattern, so it stays as delins.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.1_3delinsACG").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.1_3delinsACG");
     }
 
     #[test]
