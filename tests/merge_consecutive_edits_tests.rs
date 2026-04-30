@@ -161,3 +161,198 @@ fn test_merge_skips_non_literal_ins() {
     );
     assert!(result.contains(';'), "expected separator in {}", result);
 }
+
+fn provider_with_simple_transcript() -> MockProvider {
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+    let mut provider = MockProvider::new();
+    let sequence: String =
+        "ATGCAAAAACCCCCGGGGGTTTTTAAAAACCCCCGGGGGTTTTTAAAAACCCCCGGGGGT".to_string();
+    let len = sequence.len() as u64;
+    let exons = vec![Exon::new(1, 1, len)];
+    let transcript = Transcript::new(
+        "NM_TEST.1".to_string(),
+        Some("TEST".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(1),
+        Some(60),
+        exons,
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+fn normalize_with_provider(provider: MockProvider, input: &str) -> String {
+    let normalizer = Normalizer::new(provider);
+    let variant = parse_hgvs(input).expect("parse failed");
+    let normalized = normalizer.normalize(&variant).expect("normalize failed");
+    format!("{}", normalized)
+}
+
+#[test]
+fn test_merge_cds_consecutive_subs() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:c.[10A>G;11A>C]",
+        ),
+        "NM_TEST.1:c.10_11delinsGC",
+    );
+}
+
+#[test]
+fn test_merge_tx_consecutive_subs() {
+    // n. compact form isn't accepted by the parser; use expanded form.
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "[NM_TEST.1:n.10A>G;NM_TEST.1:n.11A>C]",
+        ),
+        "NM_TEST.1:n.10_11delinsGC",
+    );
+}
+
+#[test]
+fn test_merge_rna_consecutive_subs_lowercase() {
+    // RNA uses lowercase nucleotides per HGVS spec; merged alt must preserve case.
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:r.[10a>g;11a>c]",
+        ),
+        "NM_TEST.1:r.10_11delinsgc",
+    );
+}
+
+#[test]
+fn test_merge_mt_consecutive_subs() {
+    // m. compact form isn't accepted by the parser; use expanded form.
+    assert_eq!(
+        normalize_to_string("[NC_012920.1:m.100G>A;NC_012920.1:m.101A>C]"),
+        "NC_012920.1:m.100_101delinsAC",
+    );
+}
+
+// =====================================================================
+// Negative cases — must round-trip unchanged.
+// =====================================================================
+
+#[test]
+fn test_no_merge_one_nt_gap() {
+    // One unchanged nucleotide between variants -> spec keeps them separate.
+    let result = normalize_to_string("NC_000001.11:g.[100G>A;102C>T]");
+    assert!(result.contains("100G>A"), "got {}", result);
+    assert!(result.contains("102C>T"), "got {}", result);
+    assert!(result.contains(';'), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_different_accessions() {
+    let result = normalize_to_string("[NC_000001.11:g.100G>A;NC_000002.11:g.101A>C]");
+    assert!(result.contains("NC_000001.11"), "got {}", result);
+    assert!(result.contains("NC_000002.11"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_different_variant_types() {
+    // Genome and Cds in the same allele bracket -> not mergeable.
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "[NC_000001.11:g.100G>A;NM_TEST.1:c.10A>C]",
+    );
+    assert!(result.contains("g.100G>A"), "got {}", result);
+    assert!(result.contains("c.10A>C"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_trans_phase() {
+    // [a];[b] (semicolon between bracket pairs) is trans phase per HGVS.
+    // The compact form g.[a];[b] isn't accepted by the parser; use expanded form.
+    let result = normalize_to_string("[NC_000001.11:g.100G>A];[NC_000001.11:g.101A>C]");
+    assert!(result.contains("100G>A"), "got {}", result);
+    assert!(result.contains("101A>C"), "got {}", result);
+    // No delins should appear.
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_intronic_position() {
+    // Intronic positions (non-zero offset) are excluded from the merge pass.
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:c.[10+1A>G;10+2T>G]",
+    );
+    assert!(result.contains("10+1A>G"), "got {}", result);
+    assert!(result.contains("10+2T>G"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_utr_boundary() {
+    // c.-1 and c.1 are physically adjacent but no valid HGVS range syntax
+    // spans the 5'UTR / CDS boundary (c.-1_1 doesn't exist).
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:c.[-1A>G;1A>T]",
+    );
+    assert!(result.contains("-1A>G"), "got {}", result);
+    assert!(result.contains("1A>T"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_uncertain_edit() {
+    // Mu::Uncertain (paren-wrapped edit) is not mergeable.
+    // The g. uncertain-edit syntax isn't supported by the parser, but c.
+    // accepts it via the expanded allele form.
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "[NM_TEST.1:c.(10A>G);NM_TEST.1:c.11A>C]",
+    );
+    assert!(result.contains("10(A>G)"), "got {}", result);
+    assert!(result.contains("11A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_duplication_adjacent_to_sub() {
+    let result = normalize_to_string("NC_000001.11:g.[100dup;101A>C]");
+    assert!(result.contains("100dup"), "got {}", result);
+    assert!(result.contains("101A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_inversion_adjacent_to_sub() {
+    let result = normalize_to_string("NC_000001.11:g.[100_102inv;103A>C]");
+    assert!(result.contains("100_102inv"), "got {}", result);
+    assert!(result.contains("103A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_two_ins_different_boundaries() {
+    // Two ins separated by an unchanged nucleotide at position 101 -> no merge.
+    let result = normalize_to_string("NC_000001.11:g.[100_101insT;101_102insA]");
+    assert!(result.contains("100_101insT"), "got {}", result);
+    assert!(result.contains("101_102insA"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_merge_reverse_input_order() {
+    // Input listed in reverse position order; the walk preserves input order
+    // and checks input-order adjacency (1001's anchor end + 1 != 1000's start),
+    // so no merge happens. Pins the no-resort decision.
+    let result = normalize_to_string("NC_000001.11:g.[1001A>C;1000G>A]");
+    assert!(result.contains("1001A>C"), "got {}", result);
+    assert!(result.contains("1000G>A"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
