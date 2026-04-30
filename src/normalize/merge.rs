@@ -95,6 +95,18 @@ fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
             let bases = sequence.as_literal()?.bases().to_vec();
             Some(Anchor { start, end, alt: bases })
         }
+        NaEdit::Insertion { sequence } => {
+            // Insertion's interval is [p, p+1]; anchor is start=p+1, end=p (empty range).
+            if end != start + 1 {
+                return None;
+            }
+            let bases = sequence.as_literal()?.bases().to_vec();
+            Some(Anchor {
+                start: end, // p+1
+                end: start, // p
+                alt: bases,
+            })
+        }
         _ => None,
     }
 }
@@ -123,9 +135,13 @@ fn build_genome_merged(
     end: u64,
     alt: Vec<Base>,
 ) -> GenomeVariant {
-    let location = Interval::new(GenomePos::new(start), GenomePos::new(end));
-    let edit = if alt.is_empty() {
-        // Spec-recommended no-sequence/no-length form.
+    let edit = if start > end {
+        // Empty range -> emit Insertion at boundary [end, start] = [start-1, start].
+        debug_assert_eq!(start, end + 1, "invariant: anchor span <= 1 nt");
+        NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::new(alt)),
+        }
+    } else if alt.is_empty() {
         NaEdit::Deletion {
             sequence: None,
             length: None,
@@ -134,6 +150,12 @@ fn build_genome_merged(
         NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::new(alt)),
         }
+    };
+    let location = if start > end {
+        // Insertion uses the original [end, start] interval.
+        Interval::new(GenomePos::new(end), GenomePos::new(start))
+    } else {
+        Interval::new(GenomePos::new(start), GenomePos::new(end))
     };
     GenomeVariant {
         accession: template.accession.clone(),

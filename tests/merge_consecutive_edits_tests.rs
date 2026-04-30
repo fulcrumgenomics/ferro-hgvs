@@ -101,3 +101,63 @@ fn test_merge_skips_non_literal_delins() {
     );
     assert!(result.contains(';'), "expected separator in {}", result);
 }
+
+#[test]
+fn test_merge_sub_then_ins() {
+    // Spec FAQ analogue (in g. context):
+    // sub at 100 + ins between 100 and 101 -> delins at 100 with alt = sub.alt + ins.bases.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100G>A;100_101insTA]"),
+        "NC_000001.11:g.100delinsATA",
+    );
+}
+
+#[test]
+fn test_merge_ins_then_sub() {
+    // Mirror: ins between 100 and 101 + sub at 101 -> delins at 101 with alt = ins.bases + sub.alt.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100_101insTA;101G>A]"),
+        "NC_000001.11:g.101delinsTAA",
+    );
+}
+
+#[test]
+fn test_merge_del_then_ins() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100del;100_101insTA]"),
+        "NC_000001.11:g.100delinsTA",
+    );
+}
+
+#[test]
+fn test_merge_ins_then_del() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100_101insTA;101del]"),
+        "NC_000001.11:g.101delinsTA",
+    );
+}
+
+#[test]
+fn test_merge_two_ins_same_boundary_preserves_input_order() {
+    // Two ins at the same boundary p|p+1 collapse into a single ins; bases
+    // are concatenated in input order (T then A -> TA).
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[100_101insT;100_101insA]"),
+        "NC_000001.11:g.100_101insTA",
+    );
+}
+
+#[test]
+fn test_merge_skips_non_literal_ins() {
+    // Ins with a non-Literal payload (e.g., ins10) is not safely
+    // concatenable; the pair passes through unchanged.
+    let input = "NC_000001.11:g.[100G>A;100_101ins10]";
+    let result = normalize_to_string(input);
+    assert!(result.contains("100G>A"), "expected 100G>A in {}", result);
+    assert!(
+        result.contains("100_101ins10"),
+        "expected 100_101ins10 in {}",
+        result
+    );
+    assert!(result.contains(';'), "expected separator in {}", result);
+}
