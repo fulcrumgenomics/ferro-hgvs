@@ -45,6 +45,20 @@ class TestParsing:
         variant = ferro_hgvs.parse("NM_000088.3:c.100dup")
         assert "dup" in str(variant)
 
+    @pytest.mark.parametrize(
+        "hgvs",
+        [
+            "MYSEQ(1):c.100A>G",
+            "MY-SEQ(GENE1):c.100A>G",
+            "MYREF_SEQ(1):c.100A>G",
+            "MYREF_SEQ(1):p.(Arg8Gln)",
+        ],
+    )
+    def test_parse_accepts_gene_selector_on_non_refseq(self, hgvs: str) -> None:
+        # Issue #69: gene selectors must parse on any valid accession.
+        variant = ferro_hgvs.parse(hgvs)
+        assert variant is not None
+
 
 class TestHgvsVariant:
     """Tests for HgvsVariant class."""
