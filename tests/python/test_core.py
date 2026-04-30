@@ -1,5 +1,7 @@
 """Tests for core ferro-hgvs functionality."""
 
+import json
+
 import pytest
 
 import ferro_hgvs
@@ -44,6 +46,23 @@ class TestParsing:
     def test_parse_duplication(self) -> None:
         variant = ferro_hgvs.parse("NM_000088.3:c.100dup")
         assert "dup" in str(variant)
+
+    @pytest.mark.parametrize(
+        ("hgvs", "selector"),
+        [
+            ("MYSEQ(1):c.100A>G", "1"),
+            ("MY-SEQ(GENE1):c.100A>G", "GENE1"),
+            ("MYREF_SEQ(1):c.100A>G", "1"),
+            ("MYREF_SEQ(1):p.(Arg8Gln)", "1"),
+        ],
+    )
+    def test_parse_accepts_gene_selector_on_non_refseq(self, hgvs: str, selector: str) -> None:
+        # Issue #69: gene selectors must parse on any valid accession AND be
+        # captured on the variant — not silently dropped.
+        variant = ferro_hgvs.parse(hgvs)
+        # to_json() wraps the variant body under its discriminator key (e.g. "Cds").
+        body = next(iter(json.loads(variant.to_json()).values()))
+        assert body["gene_symbol"] == selector
 
 
 class TestHgvsVariant:

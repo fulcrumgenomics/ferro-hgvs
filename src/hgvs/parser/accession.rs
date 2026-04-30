@@ -123,7 +123,10 @@ fn is_sam_refname_char(c: char) -> bool {
 /// Uses look-ahead to correctly identify the HGVS separator (`:` followed by type prefix).
 ///
 /// SAM spec: Reference names may contain printable ASCII `[!-~]` except `\ , " ' ( ) [ ] { } < >`
-/// and cannot start with `*` or `=`.
+/// and cannot start with `*` or `=`. Because `(` is forbidden in SAM refnames, a `(` before
+/// the type-prefix colon must be the start of an optional gene/transcript selector
+/// (e.g. `MYSEQ(GENE1):c.…`); the accession ends there and `parse_gene_symbol` consumes
+/// the selector next.
 fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
     // Check first character: cannot be empty, and cannot start with * or =
     let first_char = input.chars().next().ok_or_else(|| {
@@ -187,8 +190,11 @@ fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
         nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
     })?;
 
+    // See doc comment: '(' before the colon ends the accession (selector boundary).
+    let accession_end = memchr(b'(', &input_bytes[..separator_pos]).unwrap_or(separator_pos);
+
     // Validate all characters in the accession name are SAM-compatible
-    let accession_str = &input[..separator_pos];
+    let accession_str = &input[..accession_end];
     if accession_str.is_empty() || !accession_str.chars().all(is_sam_refname_char) {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -210,7 +216,7 @@ fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
     };
 
     Ok((
-        &input[separator_pos..],
+        &input[accession_end..],
         Accession::with_style(name.to_string(), String::new(), version, true),
     ))
 }
@@ -861,5 +867,67 @@ mod tests {
         );
         assert_eq!(&*acc.prefix, "NC");
         assert!(remaining.starts_with('('));
+    }
+
+    // =========================================================================
+    // Gene selectors on non-RefSeq accessions (issue #69)
+    // =========================================================================
+
+    #[test]
+    fn test_parse_simple_accession_with_gene_selector() {
+        // Bare accession not matching the RefSeq XX_digits pattern should still
+        // accept an optional gene/transcript selector in parentheses.
+        let (remaining, acc) = parse_accession("MYSEQ(1):c.100A>G").unwrap();
+        assert_eq!(remaining, "(1):c.100A>G");
+        assert_eq!(&*acc.prefix, "MYSEQ");
+        assert_eq!(acc.version, None);
+    }
+
+    #[test]
+    fn test_parse_simple_accession_with_gene_selector_dashed() {
+        let (remaining, acc) = parse_accession("MY-SEQ(GENE1):c.100A>G").unwrap();
+        assert_eq!(remaining, "(GENE1):c.100A>G");
+        assert_eq!(&*acc.prefix, "MY-SEQ");
+    }
+
+    #[test]
+    fn test_parse_simple_accession_with_underscore_and_selector() {
+        // An accession with an underscore that does not match the strict RefSeq
+        // 2-letter prefix shape (e.g. MYREF_SEQ vs NM_…). Falls through to the
+        // simple-accession path and must still accept a selector.
+        let (remaining, acc) = parse_accession("MYREF_SEQ(1):c.100A>G").unwrap();
+        assert_eq!(remaining, "(1):c.100A>G");
+        assert_eq!(&*acc.prefix, "MYREF_SEQ");
+    }
+
+    #[test]
+    fn test_parse_hgvs_simple_accession_with_selector_end_to_end() {
+        // End-to-end via the public parser: a non-RefSeq accession with a gene
+        // selector should parse, retain the bare accession, and capture the
+        // selector as gene_symbol. (Display does not currently re-emit the
+        // selector for any accession kind, matching existing RefSeq behavior.)
+        use crate::hgvs::parser::parse_hgvs;
+        use crate::hgvs::variant::HgvsVariant;
+        let variant = parse_hgvs("MYREF_SEQ(1):c.100A>G").unwrap();
+        let cds = match variant {
+            HgvsVariant::Cds(v) => v,
+            other => panic!("expected CdsVariant, got {other:?}"),
+        };
+        assert_eq!(&*cds.accession.prefix, "MYREF_SEQ");
+        assert_eq!(cds.gene_symbol.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn test_parse_hgvs_simple_accession_with_selector_protein() {
+        // Outer parens are the selector; the inner :p.(...) is the predicted form.
+        use crate::hgvs::parser::parse_hgvs;
+        use crate::hgvs::variant::HgvsVariant;
+        let variant = parse_hgvs("MYREF_SEQ(1):p.(Arg8Gln)").unwrap();
+        let prot = match variant {
+            HgvsVariant::Protein(v) => v,
+            other => panic!("expected ProteinVariant, got {other:?}"),
+        };
+        assert_eq!(&*prot.accession.prefix, "MYREF_SEQ");
+        assert_eq!(prot.gene_symbol.as_deref(), Some("1"));
     }
 }
