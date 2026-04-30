@@ -1,5 +1,7 @@
 """Tests for core ferro-hgvs functionality."""
 
+import json
+
 import pytest
 
 import ferro_hgvs
@@ -58,7 +60,9 @@ class TestParsing:
         # Issue #69: gene selectors must parse on any valid accession AND be
         # captured on the variant — not silently dropped.
         variant = ferro_hgvs.parse(hgvs)
-        assert f'"gene_symbol":"{selector}"' in variant.to_json()
+        # to_json() wraps the variant body under its discriminator key (e.g. "Cds").
+        body = next(iter(json.loads(variant.to_json()).values()))
+        assert body["gene_symbol"] == selector
 
 
 class TestHgvsVariant:

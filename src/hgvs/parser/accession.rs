@@ -123,7 +123,10 @@ fn is_sam_refname_char(c: char) -> bool {
 /// Uses look-ahead to correctly identify the HGVS separator (`:` followed by type prefix).
 ///
 /// SAM spec: Reference names may contain printable ASCII `[!-~]` except `\ , " ' ( ) [ ] { } < >`
-/// and cannot start with `*` or `=`.
+/// and cannot start with `*` or `=`. Because `(` is forbidden in SAM refnames, a `(` before
+/// the type-prefix colon must be the start of an optional gene/transcript selector
+/// (e.g. `MYSEQ(GENE1):c.…`); the accession ends there and `parse_gene_symbol` consumes
+/// the selector next.
 fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
     // Check first character: cannot be empty, and cannot start with * or =
     let first_char = input.chars().next().ok_or_else(|| {
@@ -187,8 +190,7 @@ fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
         nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
     })?;
 
-    // SAM refnames forbid '(', so a '(' before the type-prefix colon must be
-    // the start of a gene/transcript selector consumed by parse_gene_symbol.
+    // See doc comment: '(' before the colon ends the accession (selector boundary).
     let accession_end = memchr(b'(', &input_bytes[..separator_pos]).unwrap_or(separator_pos);
 
     // Validate all characters in the accession name are SAM-compatible
