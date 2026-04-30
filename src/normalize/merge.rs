@@ -4,9 +4,11 @@
 
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
 use crate::hgvs::interval::{Interval, UncertainBoundary};
-use crate::hgvs::location::GenomePos;
+use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
-use crate::hgvs::variant::{AllelePhase, GenomeVariant, HgvsVariant, LocEdit};
+use crate::hgvs::variant::{
+    AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
+};
 
 /// Anchor for a single sub-variant.
 ///
@@ -49,35 +51,101 @@ pub(crate) fn merge_consecutive_edits(
 }
 
 fn try_merge_pair(a: &HgvsVariant, b: &HgvsVariant) -> Option<HgvsVariant> {
-    // Phase 1: only Genome-Genome same-accession merging.
-    let (av, bv) = match (a, b) {
-        (HgvsVariant::Genome(av), HgvsVariant::Genome(bv)) => (av, bv),
-        _ => return None,
-    };
-    if av.accession != bv.accession {
-        return None;
+    match (a, b) {
+        (HgvsVariant::Genome(av), HgvsVariant::Genome(bv)) => {
+            try_merge_genome(av, bv).map(HgvsVariant::Genome)
+        }
+        (HgvsVariant::Cds(av), HgvsVariant::Cds(bv)) => try_merge_cds(av, bv).map(HgvsVariant::Cds),
+        (HgvsVariant::Tx(av), HgvsVariant::Tx(bv)) => try_merge_tx(av, bv).map(HgvsVariant::Tx),
+        (HgvsVariant::Rna(av), HgvsVariant::Rna(bv)) => try_merge_rna(av, bv).map(HgvsVariant::Rna),
+        (HgvsVariant::Mt(av), HgvsVariant::Mt(bv)) => try_merge_mt(av, bv).map(HgvsVariant::Mt),
+        _ => None,
     }
-    let a_anchor = genome_anchor(av)?;
-    let b_anchor = genome_anchor(bv)?;
-    if a_anchor.end + 1 != b_anchor.start {
-        return None;
-    }
-    let mut alt = a_anchor.alt;
-    alt.extend(b_anchor.alt);
-    Some(HgvsVariant::Genome(build_genome_merged(
-        av,
-        a_anchor.start,
-        b_anchor.end,
-        alt,
-    )))
 }
 
-fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
-    let edit = v.loc_edit.edit.inner()?;
-    if !v.loc_edit.edit.is_certain() {
+fn try_merge_genome(a: &GenomeVariant, b: &GenomeVariant) -> Option<GenomeVariant> {
+    if a.accession != b.accession {
         return None;
     }
-    let (start, end) = simple_genome_range(&v.loc_edit.location)?;
+    let aa = anchor_from_loc_edit(&a.loc_edit, simple_genome_range)?;
+    let ba = anchor_from_loc_edit(&b.loc_edit, simple_genome_range)?;
+    let merged = merge_anchors(aa, ba)?;
+    Some(build_genome_merged(a, merged))
+}
+
+fn try_merge_cds(a: &CdsVariant, b: &CdsVariant) -> Option<CdsVariant> {
+    if a.accession != b.accession {
+        return None;
+    }
+    let aa = anchor_from_loc_edit(&a.loc_edit, simple_cds_range)?;
+    let ba = anchor_from_loc_edit(&b.loc_edit, simple_cds_range)?;
+    let merged = merge_anchors(aa, ba)?;
+    Some(build_cds_merged(a, merged))
+}
+
+fn try_merge_tx(a: &TxVariant, b: &TxVariant) -> Option<TxVariant> {
+    if a.accession != b.accession {
+        return None;
+    }
+    let aa = anchor_from_loc_edit(&a.loc_edit, simple_tx_range)?;
+    let ba = anchor_from_loc_edit(&b.loc_edit, simple_tx_range)?;
+    let merged = merge_anchors(aa, ba)?;
+    Some(build_tx_merged(a, merged))
+}
+
+fn try_merge_rna(a: &RnaVariant, b: &RnaVariant) -> Option<RnaVariant> {
+    if a.accession != b.accession {
+        return None;
+    }
+    let aa = anchor_from_loc_edit(&a.loc_edit, simple_rna_range)?;
+    let ba = anchor_from_loc_edit(&b.loc_edit, simple_rna_range)?;
+    let merged = merge_anchors(aa, ba)?;
+    Some(build_rna_merged(a, merged))
+}
+
+fn try_merge_mt(a: &MtVariant, b: &MtVariant) -> Option<MtVariant> {
+    if a.accession != b.accession {
+        return None;
+    }
+    let aa = anchor_from_loc_edit(&a.loc_edit, simple_genome_range)?;
+    let ba = anchor_from_loc_edit(&b.loc_edit, simple_genome_range)?;
+    let merged = merge_anchors(aa, ba)?;
+    Some(build_mt_merged(a, merged))
+}
+
+/// Combine two adjacency-checked anchors into one merged anchor.
+/// Returns None if the pair is not strictly adjacent (`a.end + 1 == b.start`).
+/// For two `Insertion` anchors at the same boundary `p|p+1` (both `start=p+1, end=p`),
+/// `a.end + 1 = p + 1 == b.start = p + 1`, so adjacency holds.
+fn merge_anchors(a: Anchor, b: Anchor) -> Option<Anchor> {
+    if a.end.checked_add(1)? != b.start {
+        return None;
+    }
+    let mut alt = a.alt;
+    alt.extend(b.alt);
+    // Use the earliest start and the latest end so that the merged range
+    // covers the union. For an Insertion-only merge, `start = a.start` (= p+1)
+    // and `end = b.end` (= p), preserving the empty-range invariant.
+    Some(Anchor {
+        start: a.start.min(b.start),
+        end: a.end.max(b.end),
+        alt,
+    })
+}
+
+/// Extract an anchor from a sub-variant's location+edit. The `range_fn`
+/// callback returns `(start, end)` for the location only when it is "simple"
+/// (no offsets, no UTR markers, certain). Returns None when the edit is
+/// uncertain, unknown, or not a merge-eligible NaEdit variant.
+fn anchor_from_loc_edit<L>(
+    loc_edit: &LocEdit<Interval<L>, NaEdit>,
+    range_fn: impl Fn(&Interval<L>) -> Option<(u64, u64)>,
+) -> Option<Anchor> {
+    if !loc_edit.edit.is_certain() {
+        return None;
+    }
+    let edit = loc_edit.edit.inner()?;
+    let (start, end) = range_fn(&loc_edit.location)?;
     match edit {
         NaEdit::Substitution { alternative, .. } | NaEdit::SubstitutionNoRef { alternative } => {
             Some(Anchor {
@@ -93,17 +161,21 @@ fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
         }),
         NaEdit::Delins { sequence } => {
             let bases = sequence.as_literal()?.bases().to_vec();
-            Some(Anchor { start, end, alt: bases })
+            Some(Anchor {
+                start,
+                end,
+                alt: bases,
+            })
         }
         NaEdit::Insertion { sequence } => {
-            // Insertion's interval is [p, p+1]; anchor is start=p+1, end=p (empty range).
-            if end != start + 1 {
+            // Insertion's interval is [p, p+1]; convert to anchor [p+1, p].
+            if end != start.checked_add(1)? {
                 return None;
             }
             let bases = sequence.as_literal()?.bases().to_vec();
             Some(Anchor {
-                start: end, // p+1
-                end: start, // p
+                start: end,
+                end: start,
                 alt: bases,
             })
         }
@@ -112,56 +184,149 @@ fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
 }
 
 fn simple_genome_range(interval: &Interval<GenomePos>) -> Option<(u64, u64)> {
-    let start = simple_genome_pos(&interval.start)?;
-    let end = simple_genome_pos(&interval.end)?;
-    Some((start, end))
+    Some((
+        simple_genome_pos(&interval.start)?,
+        simple_genome_pos(&interval.end)?,
+    ))
 }
 
 fn simple_genome_pos(boundary: &UncertainBoundary<GenomePos>) -> Option<u64> {
-    let mu = boundary.as_single()?;
-    let pos = match mu {
-        Mu::Certain(p) => p,
-        _ => return None,
-    };
+    let pos = boundary.as_single().and_then(|mu| match mu {
+        Mu::Certain(p) => Some(p),
+        _ => None,
+    })?;
     if pos.is_special() || pos.offset.is_some() {
         return None;
     }
     Some(pos.base)
 }
 
-fn build_genome_merged(
-    template: &GenomeVariant,
-    start: u64,
-    end: u64,
-    alt: Vec<Base>,
-) -> GenomeVariant {
-    let edit = if start > end {
-        // Empty range -> emit Insertion at boundary [end, start] = [start-1, start].
-        debug_assert_eq!(start, end + 1, "invariant: anchor span <= 1 nt");
+fn simple_cds_range(interval: &Interval<CdsPos>) -> Option<(u64, u64)> {
+    Some((
+        simple_cds_pos(&interval.start)?,
+        simple_cds_pos(&interval.end)?,
+    ))
+}
+
+fn simple_cds_pos(boundary: &UncertainBoundary<CdsPos>) -> Option<u64> {
+    let pos = boundary.as_single().and_then(|mu| match mu {
+        Mu::Certain(p) => Some(p),
+        _ => None,
+    })?;
+    if pos.is_unknown() || pos.is_intronic() || pos.is_5utr() || pos.is_3utr() || pos.base < 1 {
+        return None;
+    }
+    Some(pos.base as u64)
+}
+
+fn simple_tx_range(interval: &Interval<TxPos>) -> Option<(u64, u64)> {
+    Some((
+        simple_tx_pos(&interval.start)?,
+        simple_tx_pos(&interval.end)?,
+    ))
+}
+
+fn simple_tx_pos(boundary: &UncertainBoundary<TxPos>) -> Option<u64> {
+    let pos = boundary.as_single().and_then(|mu| match mu {
+        Mu::Certain(p) => Some(p),
+        _ => None,
+    })?;
+    if pos.is_intronic() || pos.is_upstream() || pos.is_downstream() || pos.base < 1 {
+        return None;
+    }
+    Some(pos.base as u64)
+}
+
+fn simple_rna_range(interval: &Interval<RnaPos>) -> Option<(u64, u64)> {
+    Some((
+        simple_rna_pos(&interval.start)?,
+        simple_rna_pos(&interval.end)?,
+    ))
+}
+
+fn simple_rna_pos(boundary: &UncertainBoundary<RnaPos>) -> Option<u64> {
+    let pos = boundary.as_single().and_then(|mu| match mu {
+        Mu::Certain(p) => Some(p),
+        _ => None,
+    })?;
+    if pos.is_intronic() || pos.is_3utr() || pos.is_5utr() || pos.base < 1 {
+        return None;
+    }
+    Some(pos.base as u64)
+}
+
+fn build_genome_merged(template: &GenomeVariant, merged: Anchor) -> GenomeVariant {
+    let (location, edit) = build_naedit(merged, GenomePos::new);
+    GenomeVariant {
+        accession: template.accession.clone(),
+        gene_symbol: template.gene_symbol.clone(),
+        loc_edit: LocEdit::new(location, edit),
+    }
+}
+
+fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
+    let (location, edit) = build_naedit(merged, |b| CdsPos::new(b as i64));
+    CdsVariant {
+        accession: template.accession.clone(),
+        gene_symbol: template.gene_symbol.clone(),
+        loc_edit: LocEdit::new(location, edit),
+    }
+}
+
+fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
+    let (location, edit) = build_naedit(merged, |b| TxPos::new(b as i64));
+    TxVariant {
+        accession: template.accession.clone(),
+        gene_symbol: template.gene_symbol.clone(),
+        loc_edit: LocEdit::new(location, edit),
+    }
+}
+
+fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
+    let (location, edit) = build_naedit(merged, |b| RnaPos::new(b as i64));
+    RnaVariant {
+        accession: template.accession.clone(),
+        gene_symbol: template.gene_symbol.clone(),
+        loc_edit: LocEdit::new(location, edit),
+    }
+}
+
+fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
+    let (location, edit) = build_naedit(merged, GenomePos::new);
+    MtVariant {
+        accession: template.accession.clone(),
+        gene_symbol: template.gene_symbol.clone(),
+        loc_edit: LocEdit::new(location, edit),
+    }
+}
+
+fn build_naedit<P>(merged: Anchor, mut to_pos: impl FnMut(u64) -> P) -> (Interval<P>, NaEdit) {
+    let edit = if merged.start > merged.end {
+        // Empty-range anchor -> Insertion at boundary.
+        debug_assert_eq!(
+            merged.start,
+            merged.end + 1,
+            "invariant: insertion anchor span = 1 nt"
+        );
         NaEdit::Insertion {
-            sequence: InsertedSequence::Literal(Sequence::new(alt)),
+            sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
         }
-    } else if alt.is_empty() {
+    } else if merged.alt.is_empty() {
         NaEdit::Deletion {
             sequence: None,
             length: None,
         }
     } else {
         NaEdit::Delins {
-            sequence: InsertedSequence::Literal(Sequence::new(alt)),
+            sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
         }
     };
-    let location = if start > end {
-        // Insertion uses the original [end, start] interval.
-        Interval::new(GenomePos::new(end), GenomePos::new(start))
+    let (lo, hi) = if merged.start > merged.end {
+        (merged.end, merged.start) // Insertion: original [p, p+1] interval
     } else {
-        Interval::new(GenomePos::new(start), GenomePos::new(end))
+        (merged.start, merged.end)
     };
-    GenomeVariant {
-        accession: template.accession.clone(),
-        gene_symbol: template.gene_symbol.clone(),
-        loc_edit: LocEdit::new(location, edit),
-    }
+    (Interval::new(to_pos(lo), to_pos(hi)), edit)
 }
 
 #[cfg(test)]

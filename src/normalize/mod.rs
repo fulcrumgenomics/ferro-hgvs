@@ -228,8 +228,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // When merging collapses a Cis allele to a single sub-variant, unwrap
         // the Allele so the rendered output matches the HGVS spec's bracket-free
         // form (e.g., g.1000_1001delinsAC, not g.[1000_1001delinsAC]).
-        let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
-            && merged.len() == 1
+        let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis && merged.len() == 1
         {
             merged.pop().unwrap()
         } else {
