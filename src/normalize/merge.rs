@@ -91,6 +91,10 @@ fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
             end,
             alt: Vec::new(),
         }),
+        NaEdit::Delins { sequence } => {
+            let bases = sequence.as_literal()?.bases().to_vec();
+            Some(Anchor { start, end, alt: bases })
+        }
         _ => None,
     }
 }
