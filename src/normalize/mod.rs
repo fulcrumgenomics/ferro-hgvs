@@ -222,8 +222,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
             normalized = self.resolve_overlaps(normalized)?;
         }
 
-        // Third pass: merge consecutive edits per HGVS spec (issue #72)
-        let mut merged = merge::merge_consecutive_edits(&normalized, allele.phase);
+        // HGVS requires consecutive edits in cis to render as a single delins.
+        let mut merged = merge::merge_consecutive_edits(normalized, allele.phase);
 
         // When merging collapses a Cis allele to a single sub-variant, unwrap
         // the Allele so the rendered output matches the HGVS spec's bracket-free
