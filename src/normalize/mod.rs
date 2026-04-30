@@ -1406,14 +1406,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
             NaEdit::Delins { sequence } => {
                 use crate::hgvs::edit::InsertedSequence;
 
-                // HGVS spec: delins should NOT be 3' shifted like del/dup/ins
-                // But we should check if delins should become a duplication first
-                // Example: c.5delinsGG where position 5 is G → dup
+                // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
+                // but the edit-type priority (sub > del > inv > dup > ins) means
+                // we may need to rewrite it as a higher-priority form.
                 if let InsertedSequence::Literal(seq) = sequence {
                     let seq_bytes: Vec<u8> = seq.bases().iter().map(|b| *b as u8).collect();
                     let start_idx = hgvs_pos_to_index(start);
                     let end_idx = end as usize;
 
+                    // Single-base delins with a different alt base is a substitution
+                    // (e.g., g.1000delinsA where ref[1000]=G → g.1000G>A).
+                    if let Some((reference, alternative)) =
+                        rules::delins_is_substitution(ref_seq, start_idx, end_idx, &seq_bytes)
+                    {
+                        return Ok((
+                            start,
+                            start,
+                            NaEdit::Substitution {
+                                reference,
+                                alternative,
+                            },
+                            warnings.clone(),
+                        ));
+                    }
+
+                    // Example: c.5delinsGG where position 5 is G → dup
                     if rules::delins_is_duplication(ref_seq, start_idx, end_idx, &seq_bytes) {
                         // Convert to duplication with minimal notation
                         return Ok((
@@ -2058,6 +2075,53 @@ mod tests {
         assert!(
             output.contains("delinsAT"),
             "Delins should remain unchanged, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_single_base_delins_becomes_substitution() {
+        // HGVS edit-type priority: a 1→1 delins must be expressed as a substitution.
+        // Transcript NM_000088.3 starts ATGCCCAAGG...; position 10 is G.
+        // c.10delinsT replaces G with T → c.10G>T.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10delinsT").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10G>T");
+    }
+
+    #[test]
+    fn test_normalize_single_base_delins_same_base_unchanged() {
+        // c.10delinsG with ref=G is not a substitution (no change at the base).
+        // The conversion to substitution should not fire; delins is preserved.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10delinsG").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10delinsG");
+    }
+
+    #[test]
+    fn test_normalize_multi_base_delete_delins_unchanged() {
+        // 2→1 delins is not a single-base substitution and must not be rewritten.
+        // c.10_11delinsT (deletes GG, inserts T) stays as delins.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10_11delinsT").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        let output = format!("{}", result);
+        assert!(
+            output.contains("delinsT"),
+            "Multi-base delete delins should remain delins, got: {}",
+            output
+        );
+        assert!(
+            !output.contains(">"),
+            "Multi-base delete delins must not become a substitution, got: {}",
             output
         );
     }
