@@ -61,3 +61,43 @@ fn test_merge_dels_drops_length() {
         "NC_000001.11:g.1000_1004del",
     );
 }
+
+#[test]
+fn test_merge_sub_then_delins() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000G>A;1001_1002delinsTT]"),
+        "NC_000001.11:g.1000_1002delinsATT",
+    );
+}
+
+#[test]
+fn test_merge_delins_then_sub() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000_1001delinsTT;1002A>C]"),
+        "NC_000001.11:g.1000_1002delinsTTC",
+    );
+}
+
+#[test]
+fn test_merge_delins_then_delins() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000_1001delinsTT;1002_1003delinsAA]"),
+        "NC_000001.11:g.1000_1003delinsTTAA",
+    );
+}
+
+#[test]
+fn test_merge_skips_non_literal_delins() {
+    // delins with a non-Literal payload (e.g., delins10) is not safely
+    // concatenable; the design doc requires the pair to pass through.
+    let input = "NC_000001.11:g.[1000G>A;1001_1010delins10]";
+    let result = normalize_to_string(input);
+    // The output must still contain both edits separately (unchanged).
+    assert!(result.contains("1000G>A"), "expected 1000G>A in {}", result);
+    assert!(
+        result.contains("1001_1010delins"),
+        "expected 1001_1010delins in {}",
+        result
+    );
+    assert!(result.contains(';'), "expected separator in {}", result);
+}
