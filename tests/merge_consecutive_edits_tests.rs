@@ -18,3 +18,46 @@ fn test_merge_consecutive_subs_genome() {
         "NC_000001.11:g.1000_1001delinsAC",
     );
 }
+
+#[test]
+fn test_merge_consecutive_dels_genome() {
+    // Issue #72 example: two adjacent single-nt deletions become a single ranged del.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000del;1001del]"),
+        "NC_000001.11:g.1000_1001del",
+    );
+}
+
+#[test]
+fn test_merge_sub_then_del() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000G>A;1001del]"),
+        "NC_000001.11:g.1000_1001delinsA",
+    );
+}
+
+#[test]
+fn test_merge_del_then_sub() {
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000del;1001A>C]"),
+        "NC_000001.11:g.1000_1001delinsC",
+    );
+}
+
+#[test]
+fn test_merge_dels_drops_explicit_sequence() {
+    // Per design doc: del+del with explicit ref sequences emits the no-sequence form.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000delA;1001delC]"),
+        "NC_000001.11:g.1000_1001del",
+    );
+}
+
+#[test]
+fn test_merge_dels_drops_length() {
+    // Per design doc: del+del with length specifiers emits no-sequence/no-length form.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000_1002del3;1003_1004del2]"),
+        "NC_000001.11:g.1000_1004del",
+    );
+}

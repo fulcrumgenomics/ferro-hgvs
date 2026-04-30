@@ -49,7 +49,7 @@ pub(crate) fn merge_consecutive_edits(
 }
 
 fn try_merge_pair(a: &HgvsVariant, b: &HgvsVariant) -> Option<HgvsVariant> {
-    // Phase 1: only Genome-Genome same-accession sub+sub merging.
+    // Phase 1: only Genome-Genome same-accession merging.
     let (av, bv) = match (a, b) {
         (HgvsVariant::Genome(av), HgvsVariant::Genome(bv)) => (av, bv),
         _ => return None,
@@ -64,7 +64,7 @@ fn try_merge_pair(a: &HgvsVariant, b: &HgvsVariant) -> Option<HgvsVariant> {
     }
     let mut alt = a_anchor.alt;
     alt.extend(b_anchor.alt);
-    Some(HgvsVariant::Genome(build_genome_delins(
+    Some(HgvsVariant::Genome(build_genome_merged(
         av,
         a_anchor.start,
         b_anchor.end,
@@ -73,16 +73,23 @@ fn try_merge_pair(a: &HgvsVariant, b: &HgvsVariant) -> Option<HgvsVariant> {
 }
 
 fn genome_anchor(v: &GenomeVariant) -> Option<Anchor> {
-    let edit = v.loc_edit.edit.inner()?; // Mu::Certain or Mu::Uncertain; filter Uncertain below
+    let edit = v.loc_edit.edit.inner()?;
     if !v.loc_edit.edit.is_certain() {
         return None;
     }
     let (start, end) = simple_genome_range(&v.loc_edit.location)?;
     match edit {
-        NaEdit::Substitution { alternative, .. } => Some(Anchor {
+        NaEdit::Substitution { alternative, .. } | NaEdit::SubstitutionNoRef { alternative } => {
+            Some(Anchor {
+                start,
+                end,
+                alt: vec![*alternative],
+            })
+        }
+        NaEdit::Deletion { .. } => Some(Anchor {
             start,
             end,
-            alt: vec![*alternative],
+            alt: Vec::new(),
         }),
         _ => None,
     }
@@ -106,15 +113,23 @@ fn simple_genome_pos(boundary: &UncertainBoundary<GenomePos>) -> Option<u64> {
     Some(pos.base)
 }
 
-fn build_genome_delins(
+fn build_genome_merged(
     template: &GenomeVariant,
     start: u64,
     end: u64,
     alt: Vec<Base>,
 ) -> GenomeVariant {
     let location = Interval::new(GenomePos::new(start), GenomePos::new(end));
-    let edit = NaEdit::Delins {
-        sequence: InsertedSequence::Literal(Sequence::new(alt)),
+    let edit = if alt.is_empty() {
+        // Spec-recommended no-sequence/no-length form.
+        NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        }
+    } else {
+        NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(alt)),
+        }
     };
     GenomeVariant {
         accession: template.accession.clone(),
