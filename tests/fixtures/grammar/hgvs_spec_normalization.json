@@ -1,0 +1,4122 @@
+{
+  "description": "HGVS spec v21.0 examples paired with ferro's current normalize() output. Used by tests/hgvs_spec_normalization_tests.rs (issue #84) and tracked under issue #83.",
+  "spec_source": "https://hgvs-nomenclature.org/stable/",
+  "spec_repo": "https://github.com/HGVSnomenclature/hgvs-nomenclature",
+  "spec_version": "21.0",
+  "tracking_issue": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+  "ferro_version": "0.3.0",
+  "default_prefixes": {
+    "c": "NM_004006.2",
+    "n": "NR_002196.1",
+    "r": "NM_004006.3",
+    "g": "NC_000023.11",
+    "p": "NP_003997.1",
+    "m": "NC_012920.1",
+    "o": "NC_000023.11"
+  },
+  "groups": [
+    {
+      "name": "(top)",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "c.76A>G",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.76A>G",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.76A>G"
+        }
+      ]
+    },
+    {
+      "name": "1.1 DNA substitution",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000023.10:g.33038255C>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.33038255C>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NG_012232.1(NM_004006.2):c.93+1G>T",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1(NM_004006.2):c.93+1G>T",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.54G>H",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.54G>H",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.123=",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.123=",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.94-23_188+33=",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.94-23_188+33=",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.85=/T>C",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.85=//T>C",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.76a>g",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.76a>g",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.76a>g"
+        },
+        {
+          "input": "c.(76A>G)",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.76(A>G)",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.2:c.(76A>G)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.10:g.33357783G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.33357783G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10(NM_004006.1):c.-128354C>T",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10(NM_004006.1):c.-128354C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10(NM_000109.3):c.-401C>T",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10(NM_000109.3):c.-401C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "L01538.1:g.1407C>T",
+          "spec_expected": "<same as input>",
+          "current": "L01538.1:g.1407C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32849790T>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32849790T>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32389644G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32389644G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.9:g.32317682G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.9:g.32317682G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32407761G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32407761G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NG_012232.1:g.954966C>T",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1:g.954966C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199:g.954966C>T",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199:g.954966C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.4375C>T",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4375C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NR_002196.1:n.601G>T",
+          "spec_expected": "<same as input>",
+          "current": "NR_002196.1:n.601G>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Arg1459Ter",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg1459Ter",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Arg1459*",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg1459Ter",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.9:g.32290917C>T",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.9:g.32290917C>T",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:c.5234G>A",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:c.5234G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10(NM_004006.3):c.357+1G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10(NM_004006.3):c.357+1G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.357+1G>A",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.357+1G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.11T>G",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.11T>G",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_012920.1:m.3243A>G",
+          "spec_expected": "<same as input>",
+          "current": "NC_012920.1:m.3243A>G",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_012920.1(MT-TL1):m.3243A>G",
+          "spec_expected": "<same as input>",
+          "current": "NC_012920.1:m.3243A>G",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_012920.1(MT-TL1):n.14A>G",
+          "spec_expected": "<same as input>",
+          "current": "NC_012920.1:n.14A>G",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_012920.1:m.3460G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_012920.1:m.3460G>A",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_012920.1(MT-ND1):m.3460G>A",
+          "spec_expected": "<same as input>",
+          "current": "NC_012920.1:m.3460G>A",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.78T>C",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.78T>C",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.78T>C"
+        },
+        {
+          "input": "c.-78G>A",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.-78G>A",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.-78G>A"
+        },
+        {
+          "input": "c.*78T>A",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.*78T>A",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.*78T>A"
+        },
+        {
+          "input": "c.78+45T>G",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.78+45T>G",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.78+45T>G"
+        },
+        {
+          "input": "c.79-45G>T",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.79-45G>T",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.79-45G>T"
+        },
+        {
+          "input": "c.-106+2T>A",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.-106+2T>A",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.-106+2T>A"
+        },
+        {
+          "input": "c.*639-1G>A",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.*639-1G>A",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.*639-1G>A"
+        },
+        {
+          "input": "c.88+2T>G",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.88+2T>G",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.88+2T>G"
+        },
+        {
+          "input": "c.89-1G>T",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.89-1G>T",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.89-1G>T"
+        }
+      ]
+    },
+    {
+      "name": "1.2 DNA deletion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000001.11:g.1234del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.1234del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11:g.1234_2345del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.1234_2345del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.33344591del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.33344591del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.5697del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.5697del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32343183del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32343183del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.33344590_33344592del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.183_186+48del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.183_186+48del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.3921del",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.3921del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.1704+1del",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.1704+1del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.1813del",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.1813del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(3996_4196)_(5090_5284)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.(3996_4196)_(5090_5284)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(?_31120496)_(33339477_?)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592=/del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592=//del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NG_012232.1:g.123_128del",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1:g.123_128del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000492.3:c.1521_1523del",
+          "spec_expected": "<same as input>",
+          "current": "NM_000492.3:c.1521_1523del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000492.3:c.1522_1524del",
+          "spec_expected": "<same as input>",
+          "current": "NM_000492.3:c.1522_1524del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32361300del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32361300del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.1:c.5697del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.1:c.5697del",
+          "status": "preserved"
+        },
+        {
+          "input": "c.57_58del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.57_58del",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.57_58del"
+        },
+        {
+          "input": "NC_000006.11:g.117198495_117198496del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000006.11:g.117198495_117198496del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32459297del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32459297del",
+          "status": "preserved"
+        },
+        {
+          "input": "c.4375_4379del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4375_4379del",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.4375_4379del"
+        }
+      ]
+    },
+    {
+      "name": "1.3 DNA duplication",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000001.11:g.1234dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.1234dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11:g.1234_2345dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.1234_2345dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.20dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.20dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.33229410dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.33229410dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.5697dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.5697dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32343183dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32343183dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.20_23dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.20_23dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.33211290_33211293dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.33211290_33211293dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.260_264+48dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.260_264+48dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32844735_32844787dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32844735_32844787dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.3921dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.3921dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32441180dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32441180dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.1704+1dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.1704+1dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.1813dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.1813dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.4072-1234_5155-246dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.720_991dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.720_991dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11(NM_206933.2):c.[675-542_1211-703dup;1211-703_1211-702insGTAAA]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11(NM_206933.2):c.[675-542_1211-703dup;1211-703_1211-702insGTAAA]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(32381076_32382698)_(32430031_32456357)[3]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11(NM_004006.2):c.(4071+1_4072-1)_(5154+1_5155-1)[3]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31060227_31100351)_(33274278_33417151)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(?_31120496)_(33339477_?)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.pter_qtersup",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11:g.pter_qter[2]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.pter_qter[2]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592=/dup",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592=//dup",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.4375_4385dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4375_4385dup",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.4375_4385dup"
+        }
+      ]
+    },
+    {
+      "name": "1.4 DNA insertion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000001.11:g.1234_1235insACGT",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.1234_1235insACGT",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32867861_32867862insT",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32867861_32867862insT",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.169_170insA",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.169_170insA",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32862923_32862924insCCT",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32862923_32862924insCCT",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.240_241insAGG",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.240_241insAGG",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.849_850ins858_895",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.849_850ins[858_895]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.419_420ins[T;401_419]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.419_420ins[T;401_419]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.849_850ins850_900inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.849_850ins[850_900inv]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.900_901ins850_900inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.900_901ins[850_900inv]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.(222_226)insG",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.(222)_(226)insG",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000004.11:g.(3076562_3076732)insN[12]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000004.11:g.(3076562)_(3076732)insN[12]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.10:g.32717298_32717299insN",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32717298_32717299insN",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.761_762insN",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.761_762insN",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.761_762insNNNNN",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.761_762insNNNNN",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.1:c.761_762insN[5]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.1:c.761_762insN[5]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32717298_32717299insN[100]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32717298_32717299insN[100]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.32717298_32717299insN[(80_120)]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32717298_32717299insN[80_120]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.10:g.32717298_32717299insN[?]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32717298_32717299insN[?]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754]",
+          "status": "preserved"
+        },
+        {
+          "input": "g.?_?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]",
+          "status": "diverges",
+          "input_prefixed": "NC_000023.11:g.?_?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.11:g.?ins[NC_000022.10:g.35788169_35788352]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.4375_4376insACCT",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4375_4376insACCT",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.4375_4376insACCT"
+        }
+      ]
+    },
+    {
+      "name": "1.5 DNA inversion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000023.10:g.32361330_32361333inv",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.32361330_32361333inv",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.5657_5660inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.5657_5660inv",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.4145_4160inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4145_4160inv",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.111754331_111966764inv",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.111754331_111966764inv",
+          "status": "preserved"
+        }
+      ]
+    },
+    {
+      "name": "1.6 DNA deletion-insertion (delins)",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000001.11:g.123delinsAC",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.123delinsAC",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11:g.123_129delinsAC",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.123_129delinsAC",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.32386323delinsGA",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.32386323delinsGA",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.6775_6777delinsC",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.6775_6777delinsC",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.79_80delinsTT",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.79_80delinsTT",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.145_147delinsTGG",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.145_147delinsTGG",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.9002_9009delinsTTT",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.9002_9009delinsTTT",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
+          "spec_expected": "<same as input>",
+          "current": "NC_000022.10:g.42522624_42522669delins[42536337_42536382]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000797.3:c.812_829delins908_925",
+          "spec_expected": "<same as input>",
+          "current": "NM_000797.3:c.812_829delins[908_925]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.812_829delinsN[12]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.812_829delinsN[12]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_007294.3:c.2077delinsATA",
+          "spec_expected": "<same as input>",
+          "current": "NM_007294.3:c.2077delinsATA",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.145_147delinsTGG",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.145_147delinsTGG",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.2077delinsATA",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.2077delinsATA",
+          "status": "preserved"
+        },
+        {
+          "input": "c.4375_4376delinsAGTT",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.4375_4376delinsAGTT",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.2:c.4375_4376delinsAGTT"
+        }
+      ]
+    },
+    {
+      "name": "1.7 DNA repeats",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000014.8:g.123CAG[23]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000014.8:g.123CAG[23]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000014.8:g.123_191CAG[19]CAA[4]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000014.8:g.123_191CAG[19]CAA[4]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000014.8:g.101179660_101179695TG[14]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000014.8:g.101179660_101179695TG[14]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_023035.2:c.6955_6993CAG[26]",
+          "spec_expected": "<same as input>",
+          "current": "NM_023035.2:c.6955_6993CAG[26]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000003.12:g.63912687_63912716AGC[13]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.63912687_63912716AGC[13]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000333.3:c.89_118AGC[13]",
+          "spec_expected": "<same as input>",
+          "current": "NM_000333.3:c.89_118AGC[13]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000003.12:g.(63912602_63912844)insN[9]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.(63912602)_(63912844)insN[9]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_000333.3:c.(4_246)insN[9]",
+          "spec_expected": "<same as input>",
+          "current": "NM_000333.3:c.(4)_(246)insN[9]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000003.12:g.(63912602_63912844)delN[15]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_000333.3:c.(4_246)delN[15]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_002024.5:c.-128_-69GGC[10]GGA[1]GGC[9]GGA[1]GGC[10]",
+          "spec_expected": "<same as input>",
+          "current": "NM_002024.5:c.-128_-69GGC[10]GGA[1]GGC[9]GGA[1]GGC[10]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_002024.5:c.-128_-69GGC[68]GGA[1]GGC[10]",
+          "spec_expected": "<same as input>",
+          "current": "NM_002024.5:c.-128_-69GGC[68]GGA[1]GGC[10]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_002024.5:c.-128_-69GGM[108]",
+          "spec_expected": "<same as input>",
+          "current": "NM_002024.5:c.-128_-69GGM[108]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_002024.5:c.(-144_-16)insN[(1800_2400)]",
+          "spec_expected": "<same as input>",
+          "current": "NM_002024.5:c.(-144)_(-16)insN[1800_2400]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_763t1:c.52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_763t1:c.52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_763t1:c.54_110GCA[23]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_763t1:c.54_110GCA[23]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000492.3:c.1210-33_1210-6GT[11]T[6]",
+          "spec_expected": "<same as input>",
+          "current": "NM_000492.3:c.1210-33_1210-6GT[11]T[6]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_000492.3:c.1210-12_1210-6T[7]",
+          "spec_expected": "<same as input>",
+          "current": "NM_000492.3:c.1210-12_1210-6T[7]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11:g.57367047_57367121ATAAA[15]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.57367047_57367121ATAAA[15]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_021080.3:c.-136-75952_-136-75878ATTTT[15]",
+          "spec_expected": "<same as input>",
+          "current": "NM_021080.3:c.-136-75952_-136-75878ATTTT[15]",
+          "status": "preserved"
+        },
+        {
+          "input": "c.1210-33_1210-6GT[(9_13)]T[(4_8)]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.1210-33_1210-6GT[9_13]T[4_8]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.2:c.1210-33_1210-6GT[(9_13)]T[(4_8)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.1210-12_1210-6T[(5_9)]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.1210-12_1210-6T[5_9]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.2:c.1210-12_1210-6T[(5_9)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000003.12:g.63912687AGC[(50_60)]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.63912687AGC[50_60]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000003.12:g.63912687AGC[(60_?)]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.63912687AGC[60_?]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.8 DNA alleles",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000001.11:g.[123G>A;345del]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000001.11:g.[123G>A;345del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000001.11:g.[123G>A];[345del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000001.11:g.123G>A(;)345del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.[2376G>C;3103del]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376G>C;3103del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.[30683643A>G;33038273T>G]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.[30683643A>G;33038273T>G]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376G>C];[3103del]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376G>C];[3103del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376G>C];[2376G>C]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376G>C];[2376G>C]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.[2376G>C];[2376=]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376G>C];[2376=]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376del];[2376=]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376del];[2376=]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376_2399dup];[2376_2399=]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376_2399dup];[2376_2399=]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376_2377insGT];[2376_2377=]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.[2376_2377insGT];[2376_2377=]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.[2376G>C];[?]",
+          "spec_expected": "<same as input>",
+          "current": "[NM_004006.2:c.2376G>C];[?]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.2376G>C(;)3103del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:c.2376G>C(;)3103del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.[296T>G];[476T>C](;)1083G>C(;)1406del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:c.[76A>C];[76=]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:c.[76A>C];[76=]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:c.[76A>C];[0]",
+          "spec_expected": "<same as input>",
+          "current": "[LRG_199t1:c.76A>C];[0]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "[NM_004004.2:c.35del];[NM_006783.1:c.689_690insT]",
+          "spec_expected": "<same as input>",
+          "current": "[NM_004004.2:c.35del];[NM_006783.1:c.689_690insT]",
+          "status": "preserved"
+        },
+        {
+          "input": "[GJB2:c.35del];[GJB6:c.689_690insT]",
+          "spec_expected": "<same as input>",
+          "current": "[GJB2:c.35del];[GJB6:c.689_690insT]",
+          "status": "preserved"
+        },
+        {
+          "input": "[M59228.1:g.250G>C;AF209160.1:g.572CA[(11_21)];Z11861.1:g.61T>C;Z16803.1:g.114A[(18_22)]]",
+          "spec_expected": "<same as input>",
+          "current": "[M59228.1:g.250G>C;AF209160.1:g.572CA[11_21];Z11861.1:g.61T>C;Z16803.1:g.114A[18_22]]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "[C;13;T;21]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.1:c.[837G>A;1704+51T>C;3734C>T;6438+2669T[(16_23)];6571C>T;7098+13212GT[(15_19)]]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.1:c.[837G>A;1704+51T>C;3734C>T;6438+2669T[16_23];6571C>T;7098+13212GT[15_19]]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "[G;C;C;18;T;17]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "OPRM1:c.[118A>G];[118A=]",
+          "spec_expected": "<same as input>",
+          "current": "OPRM1:c.[118A>G];[118A=]",
+          "status": "preserved"
+        },
+        {
+          "input": "OPRM1:c.[118A=];[118A=]",
+          "spec_expected": "<same as input>",
+          "current": "OPRM1:c.[118A=];[118A=]",
+          "status": "preserved"
+        },
+        {
+          "input": "OPRM1:c.[118>G];[118>G]",
+          "spec_expected": "<same as input>",
+          "current": "OPRM1:c.[118>G];[118>G]",
+          "status": "preserved"
+        },
+        {
+          "input": "g.[123456A>G;345678G>C]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.[123456A>G;345678G>C]",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.[123456A>G;345678G>C]"
+        },
+        {
+          "input": "g.[123456A>G];[345678G>C]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NC_000023.11:g.[123456A>G];[345678G>C]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.9 DNA complex / large rearrangements",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000009.12:g.pter_26393001delins102425452_qterinv",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000009.12:g.102425452_qterdelinspter_26393001inv",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000006.12:g.[776788_93191545inv;93191546T>C]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000006.12:g.[776788_93191545inv;93191546T>C]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000002.12:g.[32310435_32310710del;32310711_171827243inv;insG]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11:g.(86200001_103700000)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(86200001)_(103700000)del",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000022.11:g.pter_(12200001_14700000)del::(37600001_410000000)_qterdel",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000008.11:g.(127300001_131500000)_(131500001_136400000)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000008.11:g.(127300001_131500000)_(131500001_136400000)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000008.11:g.(131500001_136400000)ins(127300001_131500000)_(131500001_136400000)inv",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
+          "spec_expected": "<same as input>",
+          "current": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.89555676_100352080del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.89555676_100352080del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_410000000)_qterdel]sup",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.10 Methylation / epigenetic",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "g.12345678_12345901|gom",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.12345678_12345901|gom",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.12345678_12345901|gom"
+        },
+        {
+          "input": "g.12345678_12345901|lom",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.12345678_12345901|lom",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.12345678_12345901|lom"
+        },
+        {
+          "input": "g.12345678_12345901|met=",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.12345678_12345901|met=",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.12345678_12345901|met="
+        }
+      ]
+    },
+    {
+      "name": "1.11 RNA substitution",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123c>g",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123c>g",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.76a>c",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.76a>c",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.(1388g>a)",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.1388g>a",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.3:r.123=",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123=",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.1:r.-14a>c",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.1:r.-14a>c",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.*41u>a",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.*41u>a",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.[897u>g,832_960del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.1:r.0",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.1:r.0",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.spl",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.spl",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.?",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.?",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.85=/u>c",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.3:r.85=//u>c",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:r.11u>g",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.11u>g",
+          "status": "preserved"
+        },
+        {
+          "input": "r.123a>u",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123a>u",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.123a>u"
+        },
+        {
+          "input": "r.76a>u",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.76a>u",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.76a>u"
+        },
+        {
+          "input": "r.123c>u",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123c>u",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.123c>u"
+        },
+        {
+          "input": "r.124a>u",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.124a>u",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.124a>u"
+        },
+        {
+          "input": "r.(76a>c)",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.76a>c",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.3:r.(76a>c)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.(=)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.(=)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.0?",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.0?",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.spl?",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.spl?",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.12 RNA deletion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123_127del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_127del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.10del",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.10del",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:r.6_8del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.6_8del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_2t1:r.1034_1036del",
+          "spec_expected": "<same as input>",
+          "current": "LRG_2t1:r.1034_1036del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.(4072_5145del)",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.4072_5145del",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:r.=/6_8del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.123_128del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_128del",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.123_128del"
+        }
+      ]
+    },
+    {
+      "name": "1.13 RNA duplication",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123_345dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_345dup",
+          "status": "preserved"
+        },
+        {
+          "input": "r.7dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.7dup",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.7dup"
+        },
+        {
+          "input": "r.6_8dup",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.6_8dup",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.6_8dup"
+        },
+        {
+          "input": "r.17_18ins5_16",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.17_18ins[5_16]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.3:r.17_18ins5_16",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.14 RNA insertion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123_124insauc",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_124insauc",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.426_427insa",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.426_427insa",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.756_757insuacu",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.756_757insuacu",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:r.(222_226)insg",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.(222)_(226)insg",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:r.549_550insn",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.549_550insn",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:r.761_762insnnnnn",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.761_762insnnnnn",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.1149_1150insn[100]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.1149_1150insn[100]",
+          "status": "preserved"
+        },
+        {
+          "input": "NG_012232.1(NM_004006.2):r.2949_2950ins[2950-30_2950-12;2950-4_2950-1]",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1(NM_004006.2):r.2949_2950ins[2950-30_2950-12;2950-4_2950-1]",
+          "status": "preserved"
+        },
+        {
+          "input": "r.2949_2950ins[2950-30_2950-12;uuag]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.2949_2950ins[2950-30_2950-12;uuag]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.2949_2950ins[2950-30_2950-12;uuag]"
+        },
+        {
+          "input": "LRG_199t1:r.186_187ins186+1_186+4",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.186_187ins[186+1_186+4]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10(NM_004006.2):r.186_187ins[186+1_186+4]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1(NM_004006.2):r.186_187ins[186+1_186+4]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10(NM_004006.2):r.357_358ins[357+1_357+12]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
+          "spec_expected": "<same as input>",
+          "current": "NG_012232.1(NM_004006.2):r.357_358ins[357+1_357+12]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.15 RNA inversion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123_345inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_345inv",
+          "status": "preserved"
+        },
+        {
+          "input": "r.177_180inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.177_180inv",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.177_180inv"
+        },
+        {
+          "input": "r.203_506inv",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.203_506inv",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.203_506inv"
+        }
+      ]
+    },
+    {
+      "name": "1.16 RNA delins",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.123_127delinsag",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123_127delinsag",
+          "status": "preserved"
+        },
+        {
+          "input": "r.775delinsga",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.775delinsga",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.775delinsga"
+        },
+        {
+          "input": "r.775_777delinsc",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.775_777delinsc",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.775_777delinsc"
+        },
+        {
+          "input": "r.902_909delinsuuu",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.902_909delinsuuu",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.902_909delinsuuu"
+        },
+        {
+          "input": "r.142_144delinsugg",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.142_144delinsugg",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.142_144delinsugg"
+        },
+        {
+          "input": "NM_004006.2:r.2623_2803delins2804_2949",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.2623_2803delins[2804_2949]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.415_1655delins[AC096506.5:g.409_1649]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.415_1655delins[AC096506.5:g.409_1649]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.415_1655delins[AC096506.5:g.409_1649]"
+        },
+        {
+          "input": "r.1401_1446delins[NR_002570.3:r.1513_1558]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.1401_1446delins[NR_002570.3:r.1513_1558]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.1401_1446delins[NR_002570.3:r.1513_1558]"
+        },
+        {
+          "input": "NM_007294.3:r.2077delinsaua",
+          "spec_expected": "<same as input>",
+          "current": "NM_007294.3:r.2077delinsaua",
+          "status": "preserved"
+        }
+      ]
+    },
+    {
+      "name": "1.17 RNA repeats",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.9495_9497[4]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.9495_9497[4]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.-110_-108[6]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.-110_-108[6]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.9495caa[4]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.9495caa[4]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.-110gcu[6]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.-110gcu[6]",
+          "status": "preserved"
+        },
+        {
+          "input": "r.-124_-123[14]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.-124_-123[14]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.-124_-123[14]"
+        },
+        {
+          "input": "r.-124_-123[14];[18]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.-124_-123[14];[18]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.-128_-126[79]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.-128_-126[79]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.-128_-126[79]"
+        },
+        {
+          "input": "r.-128_-126[(600_800)]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.-128_-126[600_800]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.3:r.-128_-126[(600_800)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.53agc[19]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.53agc[19]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.53agc[19]"
+        },
+        {
+          "input": "r.53_55[31]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.53_55[31]",
+          "status": "preserved",
+          "input_prefixed": "NM_004006.3:r.53_55[31]"
+        }
+      ]
+    },
+    {
+      "name": "1.18 RNA alleles",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NM_004006.3:r.[123c>a;345del]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.[123c>a;345del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.[123c>a];[345del]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.[123c>a];[345del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.3:r.123c>a(;)345del",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.3:r.123c>a(;)345del",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.[76a>u;103del]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.[76a>u;103del]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:r.[76a>u];[103del]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.[76a>u];[103del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:r.[76a>u];[76a>u]",
+          "spec_expected": "<same as input>",
+          "current": "NM_004006.2:r.[76a>u];[76a>u]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.[76a>u];[76=]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.[76a>u];[76=]",
+          "status": "preserved"
+        },
+        {
+          "input": "NM_004006.2:r.[76a>u];[?]",
+          "spec_expected": "<same as input>",
+          "current": "[NM_004006.2:r.76a>u];[?]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:r.[897u>g,832_960del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:r.[76a>c];[76=]",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199t1:r.[76a>c];[76=]",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199t1:r.[76a>c];[0]",
+          "spec_expected": "<same as input>",
+          "current": "[LRG_199t1:r.76a>c];[0]",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.[123a>u,122_154del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.[123a>u,122_154del]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.19 Protein substitution",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_003997.1:p.Trp24Cys",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp24Cys",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Trp24Ter",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp24Ter",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.W24*",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp24Ter",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Trp24Cys)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Trp24Cys)",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199p1:p.Trp24Cys",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199p1:p.Trp24Cys",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Cys188=",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Cys188=",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199p1:p.0",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199p1:p.0",
+          "status": "preserved"
+        },
+        {
+          "input": "LRG_199p1:p.(Met1?)",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199p1:p.(Met1?)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Leu2_Met124del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Leu2_Met124del",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Met1_Leu2insArgSerThrVal",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Met1_Leu2insArgSerThrVal",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Met1_Leu2insArgSerThrVal"
+        },
+        {
+          "input": "p.Met1ext-5",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Met1ext-5",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Met1ext-5"
+        },
+        {
+          "input": "NP_003997.1:p.?",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.?",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199p1:p.Trp24=/Cys",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199t1:p.(Trp24=/Cys)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.Gln2366Lys",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Gln2366Lys",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.Trp24_Val25delinsCysArg",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp24_Val25delinsCysArg",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Arg782Xaa",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg782Xaa",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Arg782Xaa"
+        },
+        {
+          "input": "LRG_199p1:p.(Val25Gly)",
+          "spec_expected": "<same as input>",
+          "current": "LRG_199p1:p.(Val25Gly)",
+          "status": "preserved"
+        },
+        {
+          "input": "YP_003024026.1:p.(Ala52Thr)",
+          "spec_expected": "<same as input>",
+          "current": "YP_003024026.1:p.(Ala52Thr)",
+          "status": "preserved"
+        },
+        {
+          "input": "p.(Ser123Arg)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ser123Arg)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Ser123Arg)"
+        },
+        {
+          "input": "p.(Cys123Gly)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Cys123Gly)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Cys123Gly)"
+        },
+        {
+          "input": "p.(Ser42Cys)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ser42Cys)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Ser42Cys)"
+        },
+        {
+          "input": "p.(Arg234=)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Arg234=)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Arg234=)"
+        },
+        {
+          "input": "p.Ser321Arg",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ser321Arg",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Ser321Arg"
+        },
+        {
+          "input": "p.Trp41*",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp41Ter",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Trp41*",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Gly26Cys)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Gly26Cys)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Gly26Cys)"
+        },
+        {
+          "input": "p.(Leu54=)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Leu54=)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Leu54=)"
+        },
+        {
+          "input": "p.(Ile43Val)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ile43Val)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Ile43Val)"
+        },
+        {
+          "input": "p.(Arg123Ser)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Arg123Ser)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Arg123Ser)"
+        },
+        {
+          "input": "p.(Arg1459Ter)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Arg1459Ter)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Arg1459Ter)"
+        },
+        {
+          "input": "p.Tyr4Ter",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Tyr4Ter",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Tyr4Ter"
+        },
+        {
+          "input": "p.Trp26Ter",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp26Ter",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Trp26Ter"
+        },
+        {
+          "input": "p.Trp26*",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Trp26Ter",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Trp26*",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.20 Protein deletion / duplication / insertion",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_003997.2:p.Val7del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Val7del",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.Lys23_Val25del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Lys23_Val25del",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Val7del)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Val7del)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.Trp4del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Trp4del",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Pro458_Gly460del)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Pro458_Gly460del)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(His321_Glu383del)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(His321_Glu383del)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Asp90_Val120del)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Asp90_Val120del)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(His321Leufs*3)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(His321LeufsTer3)",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.Val7=/del",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Val7=/del)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_000483.3:p.Phe508del",
+          "spec_expected": "<same as input>",
+          "current": "NP_000483.3:p.Phe508del",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Gly2_Met46del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Gly2_Met46del",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Gly2_Met46del"
+        },
+        {
+          "input": "p.Ser5del",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ser5del",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Ser5del"
+        },
+        {
+          "input": "NP_003997.2:p.Val7dup",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Val7dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.Lys23_Val25dup",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Lys23_Val25dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Val7dup)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Val7dup)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.Trp4dup",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Trp4dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Pro458_Gly460dup)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Pro458_Gly460dup)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(His321_Glu383dup)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(His321_Glu383dup)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Asp90_Val120dup)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Asp90_Val120dup)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.(Asn444Lysfs*15)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.(Asn444LysfsTer15)",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.Val7=/dup",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Val7=/dup)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.His4_Gln5insAla",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.His4_Gln5insAla",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.His4_Gln5insAla"
+        },
+        {
+          "input": "p.Lys2_Gly3insGlnSerLys",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Lys2_Gly3insGlnSerLys",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Lys2_Gly3insGlnSerLys"
+        },
+        {
+          "input": "p.(Met3_His4insGlyTer)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Met3_His4insGlyTer)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Met3_His4insGlyTer)"
+        },
+        {
+          "input": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+          "spec_expected": "<same as input>",
+          "current": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Arg78_Gly79insXaa[23]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.Arg78_Gly79insXaa[23]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_060250.2:p.Gln746_Lys747ins*63",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Ser332_Ser333insXaa)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ser332_Ser333insXaa)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.(Val582_Asn583insXaa[5])",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Val582_Asn583insXaaXaaXaaXaaXaa)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Val582_Asn583insXaaXaaXaaXaaXaa)",
+          "status": "preserved"
+        },
+        {
+          "input": "p.His7_Gln8insGly4_Ser6",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.His7_Gln8insGly4_Ser6",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.21 Protein delins",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_004371.2:p.Asn47delinsSerSerTer",
+          "spec_expected": "<same as input>",
+          "current": "NP_004371.2:p.Asn47delinsSerSerTer",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_004371.2:p.(Asn47delinsSerSerTer)",
+          "spec_expected": "<same as input>",
+          "current": "NP_004371.2:p.(Asn47delinsSerSerTer)",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003070.3:p.Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu",
+          "spec_expected": "<same as input>",
+          "current": "NP_003070.3:p.Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Cys28delinsTrpVal",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Cys28delinsTrpVal",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Cys28delinsTrpVal"
+        },
+        {
+          "input": "p.Cys28_Lys29delinsTrp",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Cys28_Lys29delinsTrp",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Cys28_Lys29delinsTrp"
+        },
+        {
+          "input": "p.(Pro578_Lys579delinsLeuTer)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Pro578_Lys579delinsLeuTer)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Pro578_Lys579delinsLeuTer)"
+        },
+        {
+          "input": "NP_000213.1:p.(Val559_Glu561del)",
+          "spec_expected": "<same as input>",
+          "current": "NP_000213.1:p.(Val559_Glu561del)",
+          "status": "preserved"
+        },
+        {
+          "input": "p.[Ser44Arg;Trp46Arg]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.[Ser44Arg;Trp46Arg]",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.[Ser44Arg;Trp46Arg]"
+        }
+      ]
+    },
+    {
+      "name": "1.22 Protein repeats",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_0123456.1:p.Ala2[10]",
+          "spec_expected": "<same as input>",
+          "current": "NP_0123456.1:p.Ala2[10]",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_0123456.1:p.Ala2[10];[11]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_0123456.1:p.Arg65_Ser67[12]",
+          "spec_expected": "<same as input>",
+          "current": "NP_0123456.1:p.Arg65_Ser67[12]",
+          "status": "preserved"
+        },
+        {
+          "input": "p.Ala2[10]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ala2[10]",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Ala2[10]"
+        },
+        {
+          "input": "p.Ala2[12]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ala2[12]",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Ala2[12]"
+        },
+        {
+          "input": "p.Gln18[23]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Gln18[23]",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Gln18[23]"
+        },
+        {
+          "input": "p.(Gln18)[(70_80)]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Gln18)_(Gln18)[70_80]",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(Gln18)[(70_80)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.23 Protein frameshift",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_0123456.1:p.Arg97ProfsTer23",
+          "spec_expected": "<same as input>",
+          "current": "NP_0123456.1:p.Arg97ProfsTer23",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_0123456.1:p.Arg97fs",
+          "spec_expected": "<same as input>",
+          "current": "NP_0123456.1:p.Arg97fs",
+          "status": "preserved"
+        },
+        {
+          "input": "p.(Arg123LysfsTer34)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Arg123LysfsTer34)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Arg123LysfsTer34)"
+        },
+        {
+          "input": "p.Arg97ProfsTer23",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg97ProfsTer23",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Arg97ProfsTer23"
+        },
+        {
+          "input": "p.Arg97Profs*23",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg97ProfsTer23",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Arg97Profs*23",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Arg97fs",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg97fs",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Arg97fs"
+        },
+        {
+          "input": "p.(Tyr4*)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Tyr4Ter)",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(Tyr4*)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Glu5ValfsTer5",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Glu5ValfsTer5",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Glu5ValfsTer5"
+        },
+        {
+          "input": "p.Glu5fs",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Glu5fs",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Glu5fs"
+        },
+        {
+          "input": "p.Ile327Argfs*?",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ile327Argfs",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Ile327Argfs*?",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Ile327fs",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ile327fs",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Ile327fs"
+        },
+        {
+          "input": "p.Gln151Thrfs*9",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Gln151ThrfsTer9",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Gln151Thrfs*9",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Arg456GlyfsTer17",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg456GlyfsTer17",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.Arg456GlyfsTer17"
+        },
+        {
+          "input": "p.Arg456Glyfs*17",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Arg456GlyfsTer17",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Arg456Glyfs*17",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.24 Protein extension",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_003997.2:p.Met1ext-5",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Met1ext-5",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.2:p.Ter110GlnextTer17",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.2:p.Ter110Glnext*17",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Ter110GlnextTer17)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ter110Glnext*17)",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(Ter110GlnextTer17)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(*110Glnext*17)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ter110Glnext*17)",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(*110Glnext*17)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Ter327ArgextTer?",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ter327Argext*?",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.Ter327ArgextTer?",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.*327Argext*?",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.Ter327Argext*?",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.*327Argext*?",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Met1ext-8)",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Met1ext-8)",
+          "status": "preserved",
+          "input_prefixed": "NP_003997.1:p.(Met1ext-8)"
+        }
+      ]
+    },
+    {
+      "name": "1.25 Protein alleles",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NP_003997.1:p.[Ser73Arg;Asn103del]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.[Ser73Arg;Asn103del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.[Ser73Arg];[Asn103del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Ser73Arg)(;)(Asn103del)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[Ser68Arg;Asn594del]",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.[Ser68Arg;Asn594del]",
+          "status": "preserved"
+        },
+        {
+          "input": "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[Ser68Arg];[Ser68Arg]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[Ser68Arg];[Asn594del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[(Ser68Arg)];[?]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[Ser68Arg];[Ser68=]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.2:p.[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NP_003997.1:p.[Lys31Asn,Val25_Lys31del]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.[Ser86Arg];[Ser86=]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.[Ser86Arg];[Ser86=]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.[Ser86Arg];[0]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.[Ser86Arg];[0]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.26 Uncertain / range",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "NC_000023.10:g.(33038277_33038278)C>T",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(33038277)_(33038278)C>T",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11:g.(31729716_31774235)_(32216847_32287541)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31729716_31774235)_(32216847_32287541)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31729663_31774080)_(32216973_32287624)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31729663_31774080)_(32216973_32287624)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.(32218983_32238146)_(32984039_33252615)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(32218983_32238146)_(32984039_33252615)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.(?_32238146)_(32984039_?)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(?_32238146)_(32984039_?)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000013.11:g.(19385993_19394916)_(25045592_25059364)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000013.11:g.(19385993_19394916)_(25045592_25059364)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000013.11:g.(?_19394916)_(25045592_?)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000013.11:g.(?_19394916)_(25045592_?)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.(32057077_32364657)_(32975163_33394206)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(32057077_32364657)_(32975163_33394206)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.(?_32364657)_(32975163_?)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(?_32364657)_(32975163_?)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.10:g.(32057077_32364657)_(32894352_33055973)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.10:g.(32057077_32364657)_(32894352_33055973)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31775822_31819974)_(32217064_32278336)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31775822_31819974)_(32217064_32278336)del",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31729716_31773911)_(32217064_32287541)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31729716_31773911)_(32217064_32287541)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31729662_31774079)_(32216972_32287623)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31729662_31774079)_(32216972_32287623)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "NC_000023.11:g.(31775822_31817965)_(32218461_32278336)dup",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(31775822_31817965)_(32218461_32278336)dup",
+          "status": "preserved"
+        },
+        {
+          "input": "g.(123456_234567)_(345678_456789)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(123456_234567)_(345678_456789)del",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.(123456_234567)_(345678_456789)del"
+        },
+        {
+          "input": "g.(?_234567)_(345678_?)del",
+          "spec_expected": "<same as input>",
+          "current": "NC_000023.11:g.(?_234567)_(345678_?)del",
+          "status": "preserved",
+          "input_prefixed": "NC_000023.11:g.(?_234567)_(345678_?)del"
+        },
+        {
+          "input": "c.(370A>C^372C>R)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.(370A>C^372C>R)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "1.27 Special protein cases",
+      "kind": "compliant",
+      "cases": [
+        {
+          "input": "p.(Ala123_Pro131)Ter",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ala123)_(Pro131)Ter",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)Ter",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Ala123_Pro131)fs",
+          "spec_expected": "<same as input>",
+          "current": "NP_003997.1:p.(Ala123)_(Pro131)fs",
+          "status": "diverges",
+          "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)fs",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Ala123_Pro131)insXaa[4]",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)insXaa[4]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Gly719(Ala^Ser)fsTer23",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.Gly719(Ala^Ser)fsTer23",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Gly23GlufsTer7^Gly23CysfsTer26)",
+          "spec_expected": "<same as input>",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.1 3' rule shifting (true normalization)",
+      "kind": "needs-reference",
+      "cases": [
+        {
+          "input": "c.79_80GC>TT",
+          "spec_expected": "NG_012232.1:g.12_13delinsTG",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NM_004006.2:c.79_80GC>TT",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.3922del",
+          "spec_expected": "LRG_199t1:c.3921del",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NM_004006.2:c.3922del",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.1_24dup",
+          "spec_expected": "c.9_32dup",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NM_004006.2:c.1_24dup",
+          "spec_expected_prefixed": "NM_004006.2:c.9_32dup",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.3922dup",
+          "spec_expected": "NC_000023.11(NM_004006.2):c.3921dup",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NM_004006.2:c.3922dup",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Val89_Gln119del",
+          "spec_expected": "p.(Asp90_Val120del)",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NP_003997.1:p.Val89_Gln119del",
+          "spec_expected_prefixed": "NP_003997.1:p.(Asp90_Val120del)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Val89_Gln119dup",
+          "spec_expected": "p.(Asp90_Val120dup)",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NP_003997.1:p.Val89_Gln119dup",
+          "spec_expected_prefixed": "NP_003997.1:p.(Asp90_Val120dup)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Ser4del",
+          "spec_expected": "p.Ser5del",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NP_003997.1:p.Ser4del",
+          "spec_expected_prefixed": "NP_003997.1:p.Ser5del",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.1033_1035del",
+          "spec_expected": "LRG_2t1:r.1034_1036del",
+          "current": null,
+          "status": "needs-reference",
+          "input_prefixed": "NM_004006.3:r.1033_1035del",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_002024.5:c.-129CGG[79]",
+          "spec_expected": "NM_002024.5:c.-128_-69GGC[68]GGA[1]GGC[10]",
+          "current": null,
+          "status": "needs-reference",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.2 Drop redundant deleted/duplicated sequence",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "NC_000023.11:g.33344591delA",
+          "spec_expected": "NC_000023.11:g.33344591del",
+          "current": "NC_000023.11:g.33344591del",
+          "status": "transformed"
+        },
+        {
+          "input": "NC_000023.11:g.33344590_33344592delGAT",
+          "spec_expected": "NC_000023.11:g.33344590_33344592del",
+          "current": "NC_000023.11:g.33344590_33344592del",
+          "status": "transformed"
+        },
+        {
+          "input": "NM_004006.2:c.20dupT",
+          "spec_expected": "NM_004006.2:c.20dup",
+          "current": "NM_004006.2:c.20dup",
+          "status": "transformed"
+        },
+        {
+          "input": "c.20_23dupTAGA",
+          "spec_expected": "NM_004006.2:c.20_23dup",
+          "current": "NM_004006.2:c.20_23dup",
+          "status": "transformed",
+          "input_prefixed": "NM_004006.2:c.20_23dupTAGA"
+        },
+        {
+          "input": "r.6_8deluug",
+          "spec_expected": "NM_004006.2:r.6_8del",
+          "current": "NM_004006.3:r.6_8deluug",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.6_8deluug",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.6_8dupugc",
+          "spec_expected": "r.6_8dup",
+          "current": "NM_004006.3:r.6_8dupugc",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.6_8dupugc",
+          "spec_expected_prefixed": "NM_004006.3:r.6_8dup",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.4375_4379delCGATT",
+          "spec_expected": "c.4375_4379del",
+          "current": "NM_004006.2:c.4375_4379del",
+          "status": "transformed",
+          "input_prefixed": "NM_004006.2:c.4375_4379delCGATT",
+          "spec_expected_prefixed": "NM_004006.2:c.4375_4379del"
+        },
+        {
+          "input": "c.4375_4385dupCGATTATTCCA",
+          "spec_expected": "c.4375_4385dup",
+          "current": "NM_004006.2:c.4375_4385dup",
+          "status": "transformed",
+          "input_prefixed": "NM_004006.2:c.4375_4385dupCGATTATTCCA",
+          "spec_expected_prefixed": "NM_004006.2:c.4375_4385dup"
+        },
+        {
+          "input": "NC_000023.11:g.32386323delTinsGA",
+          "spec_expected": "NC_000023.11:g.32386323delinsGA",
+          "current": "NC_000023.11:g.32386323delinsGA",
+          "status": "transformed"
+        },
+        {
+          "input": "NC_000023.11:g.32386323delCinsGA",
+          "spec_expected": "NC_000023.11:g.32386323delinsGA",
+          "current": "NC_000023.11:g.32386323delinsGA",
+          "status": "transformed"
+        },
+        {
+          "input": "NM_004006.2:c.6775_6777delGAGinsC",
+          "spec_expected": "NM_004006.2:c.6775_6777delinsC",
+          "current": "NM_004006.2:c.6775_6777delinsC",
+          "status": "transformed"
+        },
+        {
+          "input": "c.4375_4376delCGinsAGTT",
+          "spec_expected": "c.4375_4376delinsAGTT",
+          "current": "NM_004006.2:c.4375_4376delinsAGTT",
+          "status": "transformed",
+          "input_prefixed": "NM_004006.2:c.4375_4376delCGinsAGTT",
+          "spec_expected_prefixed": "NM_004006.2:c.4375_4376delinsAGTT"
+        }
+      ]
+    },
+    {
+      "name": "2.3 Range vs. count notation (`del6` \u2192 range)",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "NG_012232.1:g.123del6",
+          "spec_expected": "NG_012232.1:g.123_128del",
+          "current": "NG_012232.1:g.123del",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "g.123dup6",
+          "spec_expected": "g.123_128dup",
+          "current": "NC_000023.11:g.123dup",
+          "status": "diverges",
+          "input_prefixed": "NC_000023.11:g.123dup6",
+          "spec_expected_prefixed": "NC_000023.11:g.123_128dup",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.123del6",
+          "spec_expected": "r.123_128del",
+          "current": "NM_004006.3:r.123del6",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.123del6",
+          "spec_expected_prefixed": "NM_004006.3:r.123_128del",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.5439_5430ins6",
+          "spec_expected": "insN[6]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.5439_5430ins6",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.4 Substitution \u2192 delins (consecutive nucleotides)",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "c.[79G>T;80C>T]",
+          "spec_expected": "LRG_199t1:c.79_80delinsTT",
+          "current": "NM_004006.2:c.[79G>T;80C>T]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.[79G>T;80C>T]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.79GC>TT",
+          "spec_expected": "NG_012232.1:g.12_13delinsTG",
+          "current": "NM_004006.2:c.79delinsTT",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.2:c.79GC>TT",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NG_012232.1:g.12GC>TG",
+          "spec_expected": "NG_012232.1:g.12_13delinsTG",
+          "current": "NG_012232.1:g.12delinsTG",
+          "status": "diverges",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "g.4GC>TG",
+          "spec_expected": "delinsTG",
+          "current": "NC_000023.11:g.4delinsTG",
+          "status": "diverges",
+          "input_prefixed": "NC_000023.11:g.4GC>TG",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.[145C>T;147C>G]",
+          "spec_expected": "NM_004006.2:c.145_147delinsTGG",
+          "current": "NM_004006.2:c.[145C>T;147C>G]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.[145C>T;147C>G]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NG_012232.1:g.12G>T(;)13C>G",
+          "spec_expected": "NG_012232.1:g.12_13delinsTG",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_007294.3:c.[2077G>A;2077_2078insTA]",
+          "spec_expected": "NM_007294.3:c.2077delinsATA",
+          "current": "NM_007294.3:c.[2077G>A;2077_2078insTA]",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.76_77aa>ug",
+          "spec_expected": "NM_004006.3:r.76_77delinsug",
+          "current": "NM_004006.3:r.76_77delinsug",
+          "status": "transformed",
+          "input_prefixed": "NM_004006.3:r.76_77aa>ug"
+        },
+        {
+          "input": "NM_007294.3:r.[2077g>a;2077_2078insua]",
+          "spec_expected": "NM_007294.3:r.2077delinsaua",
+          "current": "NM_007294.3:r.[2077g>a;2077_2078insua]",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.[142c>u;144a>g]",
+          "spec_expected": "r.142_144delinsugg",
+          "current": "NM_004006.3:r.[142c>u;144a>g]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.[142c>u;144a>g]",
+          "spec_expected_prefixed": "NM_004006.3:r.142_144delinsugg",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.[Arg76Ser;Cys77Trp]",
+          "spec_expected": "p.Arg76_Cys77delinsSerTrp",
+          "current": "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
+          "spec_expected_prefixed": "NP_003997.1:p.Arg76_Cys77delinsSerTrp",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.TrpVal24CysArg",
+          "spec_expected": "NP_003997.1:p.Trp24_Val25delinsCysArg",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.TrpVal24CysArg",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Ser44_Trp46delinsArgLeuArg",
+          "spec_expected": "p.[Ser44Arg;Trp46Arg]",
+          "current": "NP_003997.1:p.Ser44_Trp46delinsArgLeuArg",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Ser44_Trp46delinsArgLeuArg",
+          "spec_expected_prefixed": "NP_003997.1:p.[Ser44Arg;Trp46Arg]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.5 Insertion \u2192 duplication (tandem case)",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "c.19_20insT",
+          "spec_expected": "NM_004006.2:c.20dup",
+          "current": "NM_004006.2:c.19_20insT",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.19_20insT",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "g.456_457ins123_456",
+          "spec_expected": "dup",
+          "current": "NC_000023.11:g.456_457ins[123_456]",
+          "status": "diverges",
+          "input_prefixed": "NC_000023.11:g.456_457ins123_456",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.6_7insu",
+          "spec_expected": "dup",
+          "current": "NM_004006.3:r.6_7insu",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.6_7insu",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.456_457ins123_456",
+          "spec_expected": "dup",
+          "current": "NM_004006.3:r.456_457ins[123_456]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.3:r.456_457ins123_456",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.6 Inverted-duplication notation",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "g.123_456dupinv",
+          "spec_expected": "g.234_235ins123_234inv",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NC_000023.11:g.123_456dupinv",
+          "spec_expected_prefixed": "NC_000023.11:g.234_235ins123_234inv",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.123_456dupinv",
+          "spec_expected": "ins[..._...inv]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.3:r.123_456dupinv",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.124_500delinsoAB053210.2:r.1289-365_1289-73",
+          "spec_expected": "r.124_500delins[AB053210.2:r.1289-365_1289-73inv]",
+          "current": "NM_004006.3:r.124_500delins[oAB053210.2:r.1289-365_1289-73]",
+          "status": "diverges",
+          "input_prefixed": "NM_004006.3:r.124_500delinsoAB053210.2:r.1289-365_1289-73",
+          "spec_expected_prefixed": "NM_004006.3:r.124_500delins[AB053210.2:r.1289-365_1289-73inv]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.7 IVS notation removed",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "c.IVS2+2T>G",
+          "spec_expected": "c.88+2T>G",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.IVS2+2T>G",
+          "spec_expected_prefixed": "NM_004006.2:c.88+2T>G",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.IVS2-1G>T",
+          "spec_expected": "c.89-1G>T",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.IVS2-1G>T",
+          "spec_expected_prefixed": "NM_004006.2:c.89-1G>T",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.8 Allele/phase notation",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "[c.76A>C+c.83G>C]",
+          "spec_expected": "c.[76A>C;83G>C]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "[NM_004006.2:c.76A>C+c.83G>C]",
+          "spec_expected_prefixed": "NM_004006.2:c.[76A>C;83G>C]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.[76A>C;c.83G>C]",
+          "spec_expected": "c.[76A>C;83G>C]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.[76A>C;c.83G>C]",
+          "spec_expected_prefixed": "NM_004006.2:c.[76A>C;83G>C]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "[r.76a>c+r.83g>c]",
+          "spec_expected": "r.[76a>c;83g>c]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "[NM_004006.3:r.76a>c+r.83g>c]",
+          "spec_expected_prefixed": "NM_004006.3:r.[76a>c;83g>c]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "[p.Ser73Arg+p.Asn103del]",
+          "spec_expected": "p.[Ser73Arg;Asn103del]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "[NP_003997.1:p.Ser73Arg+p.Asn103del]",
+          "spec_expected_prefixed": "NP_003997.1:p.[Ser73Arg;Asn103del]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.[76A>C]",
+          "spec_expected": "c.[76A>C];[76=]",
+          "current": "NM_004006.2:c.[76A>C]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.[76A>C]",
+          "spec_expected_prefixed": "NM_004006.2:c.[76A>C];[76=]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.[76A>C];[]",
+          "spec_expected": "c.[76A>C];[76=]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NM_004006.2:c.[76A>C];[]",
+          "spec_expected_prefixed": "NM_004006.2:c.[76A>C];[76=]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.[76a>c]",
+          "spec_expected": "r.[76a>c];[=]",
+          "current": "NM_004006.3:r.[76a>c]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.[76a>c]",
+          "spec_expected_prefixed": "NM_004006.3:r.[76a>c];[=]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.[Ser73Arg];[]",
+          "spec_expected": "p.[Ser73Arg];[Ser73=]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.[Ser73Arg];[]",
+          "spec_expected_prefixed": "NP_003997.1:p.[Ser73Arg];[Ser73=]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.([Phe233Leu;Cys690Trp])",
+          "spec_expected": "p.[(Phe233Leu;Cys690Trp)]",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.([Phe233Leu;Cys690Trp])",
+          "spec_expected_prefixed": "NP_003997.1:p.[(Phe233Leu;Cys690Trp)]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.9 Range separator (hyphen \u2192 underscore)",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "c.12-14del",
+          "spec_expected": "c.12_14del",
+          "current": "NM_004006.2:c.12-14del",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.12-14del",
+          "spec_expected_prefixed": "NM_004006.2:c.12_14del",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.123-65_-50",
+          "spec_expected": "c.123-65_123-50",
+          "current": "NM_004006.2:c.123-65_-50",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.123-65_-50",
+          "spec_expected_prefixed": "NM_004006.2:c.123-65_123-50",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.10 Insertion missing flanking position",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "c.52insT",
+          "spec_expected": "c.51_52insT",
+          "current": "NM_004006.2:c.52insT",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.2:c.52insT",
+          "spec_expected_prefixed": "NM_004006.2:c.51_52insT",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "g.123\u02c6124insG",
+          "spec_expected": "g.123_124insG",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NC_000023.11:g.123\u02c6124insG",
+          "spec_expected_prefixed": "NC_000023.11:g.123_124insG",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.His4Gln5insAla",
+          "spec_expected": "p.His4_Gln5insAla",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.His4Gln5insAla",
+          "spec_expected_prefixed": "NP_003997.1:p.His4_Gln5insAla",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.11 Reference-sequence form",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "NM_004006",
+          "spec_expected": "NM_004006.3",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_004006.2:c.357+1G>A",
+          "spec_expected": "NC_000023.10(NM_004006.3):c.357+1G>A",
+          "current": "NM_004006.2:c.357+1G>A",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "LRG_199:c.357+1G>A",
+          "spec_expected": "LRG_199t1:c.357+1G>A",
+          "current": "LRG_199:c.357+1G>A",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.12 Reformulating nonsense / extension / frameshift",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "p.Trp24TerfsTer1",
+          "spec_expected": "p.Tyr4Ter",
+          "current": "NP_003997.1:p.Trp24TerfsTer1",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Trp24TerfsTer1",
+          "spec_expected_prefixed": "NP_003997.1:p.Tyr4Ter",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Tyr4_Cys5insTerGluAsp",
+          "spec_expected": "p.Tyr4Ter",
+          "current": "NP_003997.1:p.Tyr4_Cys5insTerGluAsp",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Tyr4_Cys5insTerGluAsp",
+          "spec_expected_prefixed": "NP_003997.1:p.Tyr4Ter",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Cys5_Ser6delinsTerGluAsp",
+          "spec_expected": "p.Tyr4Ter",
+          "current": "NP_003997.1:p.Cys5_Ser6delinsTerGluAsp",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Cys5_Ser6delinsTerGluAsp",
+          "spec_expected_prefixed": "NP_003997.1:p.Tyr4Ter",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Trp26_Arg1623del",
+          "spec_expected": "p.Trp26Ter",
+          "current": "NP_003997.1:p.Trp26_Arg1623del",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Trp26_Arg1623del",
+          "spec_expected_prefixed": "NP_003997.1:p.Trp26Ter",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.His150HisfsTer10",
+          "spec_expected": "p.Gln151Thrfs*9",
+          "current": "NP_003997.1:p.His150HisfsTer10",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.His150HisfsTer10",
+          "spec_expected_prefixed": "NP_003997.1:p.Gln151Thrfs*9",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Met1Valext-4",
+          "spec_expected": "p.Met1_Leu2insArgSerThrVal",
+          "current": "NP_003997.1:p.Met1Valext-4",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Met1Valext-4",
+          "spec_expected_prefixed": "NP_003997.1:p.Met1_Leu2insArgSerThrVal",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.(Met3_Ile3418delinsGly)",
+          "spec_expected": "p.(Met3_His4insGlyTer)",
+          "current": "NP_003997.1:p.(Met3_Ile3418delinsGly)",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.(Met3_Ile3418delinsGly)",
+          "spec_expected_prefixed": "NP_003997.1:p.(Met3_His4insGlyTer)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "insSerSerTerAlaPro",
+          "spec_expected": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+          "current": null,
+          "status": "parse-error",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_024312.4:c.2686A[10]",
+          "spec_expected": "NM_024312.4:c.2692_2693dup",
+          "current": "NM_024312.4:c.2686A[10]",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NM_024312.4:c.1738TA[6]",
+          "spec_expected": "NM_024312.4:c.1741_1742insTATATA",
+          "current": "NM_024312.4:c.1738TA[6]",
+          "status": "unchanged",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.13 Repeat notation",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "g.123CAG[23]",
+          "spec_expected": "g.123_191CAG[23]",
+          "current": "NC_000023.11:g.123CAG[23]",
+          "status": "unchanged",
+          "input_prefixed": "NC_000023.11:g.123CAG[23]",
+          "spec_expected_prefixed": "NC_000023.11:g.123_191CAG[23]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.123cug[23]",
+          "spec_expected": "r.123_125[23]",
+          "current": "NM_004006.3:r.123cug[23]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.123cug[23]",
+          "spec_expected_prefixed": "NM_004006.3:r.123_125[23]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "r.-123ug[14]",
+          "spec_expected": "r.-124_-123[14]",
+          "current": "NM_004006.3:r.-123ug[14]",
+          "status": "unchanged",
+          "input_prefixed": "NM_004006.3:r.-123ug[14]",
+          "spec_expected_prefixed": "NM_004006.3:r.-124_-123[14]",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "2.14 Polymorphism / silent / \"/\" notation",
+      "kind": "pair",
+      "cases": [
+        {
+          "input": "NM_004006.1:c.76A/G",
+          "spec_expected": "c.76A>G",
+          "current": null,
+          "status": "parse-error",
+          "spec_expected_prefixed": "NM_004006.2:c.76A>G",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.2366Gln/Lys",
+          "spec_expected": "NP_003997.1:p.Gln2366Lys",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.2366Gln/Lys",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.Leu54Leu",
+          "spec_expected": "p.(Leu54=)",
+          "current": "NP_003997.1:p.Leu54Leu",
+          "status": "unchanged",
+          "input_prefixed": "NP_003997.1:p.Leu54Leu",
+          "spec_expected_prefixed": "NP_003997.1:p.(Leu54=)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.54L/L",
+          "spec_expected": "p.(Leu54=)",
+          "current": null,
+          "status": "parse-error",
+          "input_prefixed": "NP_003997.1:p.54L/L",
+          "spec_expected_prefixed": "NP_003997.1:p.(Leu54=)",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        }
+      ]
+    },
+    {
+      "name": "3. Standalone non-compliant (no fix given on page)",
+      "kind": "reject",
+      "cases": [
+        {
+          "input": "chr1:g.1000_1005del",
+          "spec_expected": "<parse-error>",
+          "current": "chr1:g.1000_1005del",
+          "status": "false-acceptance",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.IVS4-2A>G",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.IVS4-2A>G"
+        },
+        {
+          "input": "g.234inv",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NC_000023.11:g.234inv"
+        },
+        {
+          "input": "r.234inv",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.234inv"
+        },
+        {
+          "input": "c.4072-?_5154+?dup",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.4072-?_5154+?dup"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(?_-244)_(31+1_32-1)dup",
+          "spec_expected": "<parse-error>",
+          "current": "NC_000023.11(NM_004006.2):c.(?_-244)_(31+1_32-1)dup",
+          "status": "false-acceptance",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(10086+1_10087-1)_(*2691_?)dup",
+          "spec_expected": "<parse-error>",
+          "current": "NC_000023.11(NM_004006.2):c.(10086+1_10087-1)_(*2691_?)dup",
+          "status": "false-acceptance",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "NC_000023.11(NM_004006.2):c.(-205839_-62966)_(*21568_*61692)dup",
+          "spec_expected": "<parse-error>",
+          "current": "NC_000023.11(NM_004006.2):c.(-205839_-62966)_(*21568_*61692)dup",
+          "status": "false-acceptance",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "c.4072-1234_5155-246dupXXXXX",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.4072-1234_5155-246dupXXXXX"
+        },
+        {
+          "input": "c.1813-1dup",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.1813-1dup"
+        },
+        {
+          "input": "r.EX17del",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.EX17del"
+        },
+        {
+          "input": "r.109u=",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.109u="
+        },
+        {
+          "input": "r.4567_4569=",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.4567_4569="
+        },
+        {
+          "input": "p.Arg45del6",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Arg45del6"
+        },
+        {
+          "input": "p.EX17del",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.EX17del"
+        },
+        {
+          "input": "p.(Met1Val)",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.(Met1Val)"
+        },
+        {
+          "input": "p.Ala11del",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Ala11del"
+        },
+        {
+          "input": "p.Ala2[9]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Ala2[9]"
+        },
+        {
+          "input": "p.Ala10_Ala11dup",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Ala10_Ala11dup"
+        },
+        {
+          "input": "p.Ala2[12]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Ala2[12]"
+        },
+        {
+          "input": "p.Tyr4*",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Tyr4*"
+        },
+        {
+          "input": "p.Tyr4Ter",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.Tyr4Ter"
+        },
+        {
+          "input": "LRG_199t1:c.[2376G>C;3103=];[2376=;3103del]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected"
+        },
+        {
+          "input": "c.2376[G>C];[G>C]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.2376[G>C];[G>C]"
+        },
+        {
+          "input": "c.2376G>C[];[]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.2376G>C[];[]"
+        },
+        {
+          "input": "c.[2376G>C];[=]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.[2376G>C];[=]"
+        },
+        {
+          "input": "c.2376G>A(;)3103del",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.2376G>A(;)3103del"
+        },
+        {
+          "input": "LRG_199t1:r.76a>u(;)(76a>u)",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected"
+        },
+        {
+          "input": "r.[76a>u];[=]",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.[76a>u];[=]"
+        },
+        {
+          "input": "NM_004006.2:c.[762_768del;767_774dup]",
+          "spec_expected": "<parse-error>",
+          "current": "NM_004006.2:c.[762_768del;767_774dup]",
+          "status": "false-acceptance",
+          "todo": "see https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+        },
+        {
+          "input": "p.His4insAla",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NP_003997.1:p.His4insAla"
+        },
+        {
+          "input": "r.123insg",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.123insg"
+        },
+        {
+          "input": "r.-14insG",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.3:r.-14insG"
+        },
+        {
+          "input": "g.123insG",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NC_000023.11:g.123insG"
+        },
+        {
+          "input": "c.23ins24",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected",
+          "input_prefixed": "NM_004006.2:c.23ins24"
+        },
+        {
+          "input": "NC_000002.12:g.pter_8247756::NC_000011.10:g.15825273_cen_qter",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected"
+        },
+        {
+          "input": "NC_000011.10:g.pter_15825272::NC_000002.12:g.8247757_cen_qter",
+          "spec_expected": "<parse-error>",
+          "current": null,
+          "status": "rejected"
+        }
+      ]
+    }
+  ]
+}
