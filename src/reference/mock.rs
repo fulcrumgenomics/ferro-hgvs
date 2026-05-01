@@ -29,7 +29,32 @@ impl MockProvider {
     /// Load transcripts from a JSON file
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
         let content = std::fs::read_to_string(path)?;
-        let transcripts: Vec<Transcript> = serde_json::from_str(&content)?;
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+
+        let (transcripts, proteins, genomic_sequences) = if value.is_array() {
+            let transcripts: Vec<Transcript> = serde_json::from_value(value)?;
+            (transcripts, HashMap::new(), HashMap::new())
+        } else {
+            let transcripts: Vec<Transcript> = value
+                .get("transcripts")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?
+                .unwrap_or_default();
+            let proteins: HashMap<String, String> = value
+                .get("proteins")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?
+                .unwrap_or_default();
+            let genomic_sequences: HashMap<String, String> = value
+                .get("genomic_sequences")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?
+                .unwrap_or_default();
+            (transcripts, proteins, genomic_sequences)
+        };
 
         let map: HashMap<String, Transcript> = transcripts
             .into_iter()
@@ -38,8 +63,8 @@ impl MockProvider {
 
         Ok(Self {
             transcripts: map,
-            proteins: HashMap::new(),
-            genomic_sequences: HashMap::new(),
+            proteins,
+            genomic_sequences,
         })
     }
 
@@ -369,5 +394,71 @@ mod tests {
         let provider = MockProvider::with_test_data();
         assert!(provider.has_transcript("NM_000088.3"));
         assert!(!provider.has_transcript("NONEXISTENT"));
+    }
+
+    #[test]
+    fn test_from_json_object_form_with_proteins_and_genomic() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "gene_symbol": "TEST",
+        "strand": "+",
+        "sequence": "ATGCATGCAT",
+        "cds_start": 1,
+        "cds_end": 10,
+        "exons": [{"number": 1, "start": 1, "end": 10}]
+      }],
+      "proteins": {
+        "NP_TEST.1": "MAPLE"
+      },
+      "genomic_sequences": {
+        "chr1": "ACGTACGTACGT"
+      }
+    }"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path()).unwrap();
+
+        assert!(provider.has_transcript("NM_TEST.1"));
+        assert!(provider.has_protein_data());
+        assert_eq!(
+            provider.get_protein_sequence("NP_TEST.1", 0, 5).unwrap(),
+            "MAPLE"
+        );
+        assert!(provider.has_genomic_data());
+        assert_eq!(
+            provider.get_genomic_sequence("chr1", 0, 4).unwrap(),
+            "ACGT"
+        );
+    }
+
+    #[test]
+    fn test_from_json_bare_array_form_still_works() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"[{
+      "id": "NM_TEST.1",
+      "gene_symbol": "TEST",
+      "strand": "+",
+      "sequence": "ATGCATGCAT",
+      "cds_start": 1,
+      "cds_end": 10,
+      "exons": [{"number": 1, "start": 1, "end": 10}]
+    }]"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path()).unwrap();
+
+        assert!(provider.has_transcript("NM_TEST.1"));
+        assert!(!provider.has_protein_data());
+        assert!(!provider.has_genomic_data());
     }
 }
