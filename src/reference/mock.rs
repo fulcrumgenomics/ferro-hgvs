@@ -26,7 +26,10 @@ impl MockProvider {
         }
     }
 
-    /// Load transcripts from a JSON file
+    /// Load reference data from a JSON file.
+    ///
+    /// Accepts either a bare array of `Transcript` records or an object
+    /// of the form `{ transcripts, proteins, genomic_sequences }`.
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
         let content = std::fs::read_to_string(path)?;
         let value: serde_json::Value = serde_json::from_str(&content)?;
@@ -34,7 +37,7 @@ impl MockProvider {
         let (transcripts, proteins, genomic_sequences) = if value.is_array() {
             let transcripts: Vec<Transcript> = serde_json::from_value(value)?;
             (transcripts, HashMap::new(), HashMap::new())
-        } else {
+        } else if value.is_object() {
             let transcripts: Vec<Transcript> = value
                 .get("transcripts")
                 .cloned()
@@ -54,6 +57,10 @@ impl MockProvider {
                 .transpose()?
                 .unwrap_or_default();
             (transcripts, proteins, genomic_sequences)
+        } else {
+            return Err(FerroError::Json {
+                msg: "MockProvider JSON root must be an array or object".to_string(),
+            });
         };
 
         let map: HashMap<String, Transcript> = transcripts
@@ -460,5 +467,32 @@ mod tests {
         assert!(provider.has_transcript("NM_TEST.1"));
         assert!(!provider.has_protein_data());
         assert!(!provider.has_genomic_data());
+    }
+
+    #[test]
+    fn test_from_json_empty_object_form() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"{}").unwrap();
+
+        let provider = MockProvider::from_json(file.path()).unwrap();
+
+        assert!(provider.is_empty());
+        assert!(!provider.has_protein_data());
+        assert!(!provider.has_genomic_data());
+    }
+
+    #[test]
+    fn test_from_json_rejects_scalar_root() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"42").unwrap();
+
+        let result = MockProvider::from_json(file.path());
+        assert!(result.is_err(), "scalar JSON root should be rejected");
     }
 }
