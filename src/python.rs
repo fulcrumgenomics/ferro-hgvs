@@ -455,7 +455,7 @@ impl PyHgvsVariant {
 /// HGVS variant normalizer using a reference provider
 #[pyclass(name = "Normalizer")]
 pub struct PyNormalizer {
-    provider: MockProvider,
+    provider: PyProvider,
     config: NormalizeConfig,
 }
 
@@ -472,16 +472,29 @@ impl PyNormalizer {
     #[pyo3(signature = (reference_json=None, direction="3prime"))]
     fn new(reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
         let provider = match reference_json {
-            Some(path) => MockProvider::from_json(Path::new(path))
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))?,
-            None => {
-                // Using test data - this is explicitly documented in the API
-                MockProvider::with_test_data()
-            }
+            Some(path) => PyProvider::from_json(Path::new(path))?,
+            None => PyProvider::test_data(),
         };
 
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
 
+        Ok(Self { provider, config })
+    }
+
+    /// Create a normalizer from a reference manifest written by `ferro prepare`.
+    ///
+    /// Args:
+    ///     manifest_path: Path to a manifest.json file (typically inside a
+    ///         directory produced by `ferro prepare`).
+    ///     direction: Shuffle direction - "3prime" (default) or "5prime"
+    ///
+    /// Returns:
+    ///     A Normalizer backed by a MultiFastaProvider.
+    #[staticmethod]
+    #[pyo3(signature = (manifest_path, direction="3prime"))]
+    fn from_manifest(manifest_path: &str, direction: &str) -> PyResult<Self> {
+        let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
+        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
         Ok(Self { provider, config })
     }
 
@@ -960,7 +973,7 @@ impl From<EquivalenceResult> for PyEquivalenceResult {
 /// Equivalence checker for comparing HGVS variants
 #[pyclass(name = "EquivalenceChecker")]
 pub struct PyEquivalenceChecker {
-    checker: EquivalenceChecker<MockProvider>,
+    checker: EquivalenceChecker<PyProvider>,
 }
 
 #[pymethods]
@@ -974,11 +987,25 @@ impl PyEquivalenceChecker {
     #[pyo3(signature = (reference_json=None))]
     fn new(reference_json: Option<&str>) -> PyResult<Self> {
         let provider = match reference_json {
-            Some(path) => MockProvider::from_json(Path::new(path))
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))?,
-            None => MockProvider::with_test_data(),
+            Some(path) => PyProvider::from_json(Path::new(path))?,
+            None => PyProvider::test_data(),
         };
 
+        Ok(Self {
+            checker: EquivalenceChecker::new(provider),
+        })
+    }
+
+    /// Create an equivalence checker from a reference manifest.
+    ///
+    /// Args:
+    ///     manifest_path: Path to a manifest.json file produced by `ferro prepare`.
+    ///
+    /// Returns:
+    ///     An EquivalenceChecker backed by a MultiFastaProvider.
+    #[staticmethod]
+    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+        let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         Ok(Self {
             checker: EquivalenceChecker::new(provider),
         })
@@ -1553,7 +1580,7 @@ impl PyBatchResult {
 /// Batch processor for parsing and normalizing multiple variants
 #[pyclass(name = "BatchProcessor")]
 pub struct PyBatchProcessor {
-    processor: BatchProcessor<MockProvider>,
+    processor: BatchProcessor<PyProvider>,
 }
 
 #[pymethods]
@@ -1567,11 +1594,25 @@ impl PyBatchProcessor {
     #[pyo3(signature = (reference_json=None))]
     fn new(reference_json: Option<&str>) -> PyResult<Self> {
         let provider = match reference_json {
-            Some(path) => MockProvider::from_json(Path::new(path))
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))?,
-            None => MockProvider::with_test_data(),
+            Some(path) => PyProvider::from_json(Path::new(path))?,
+            None => PyProvider::test_data(),
         };
 
+        Ok(Self {
+            processor: BatchProcessor::new(provider),
+        })
+    }
+
+    /// Create a batch processor from a reference manifest.
+    ///
+    /// Args:
+    ///     manifest_path: Path to a manifest.json file produced by `ferro prepare`.
+    ///
+    /// Returns:
+    ///     A BatchProcessor backed by a MultiFastaProvider.
+    #[staticmethod]
+    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+        let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         Ok(Self {
             processor: BatchProcessor::new(provider),
         })
@@ -2636,7 +2677,7 @@ impl PyStrand {
 /// transcript (n.), and protein (p.) coordinate systems.
 #[pyclass(name = "CoordinateMapper")]
 pub struct PyCoordinateMapper {
-    provider: MockProvider,
+    provider: PyProvider,
 }
 
 #[pymethods]
@@ -2650,11 +2691,23 @@ impl PyCoordinateMapper {
     #[pyo3(signature = (reference_json=None))]
     fn new(reference_json: Option<&str>) -> PyResult<Self> {
         let provider = match reference_json {
-            Some(path) => MockProvider::from_json(Path::new(path))
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))?,
-            None => MockProvider::with_test_data(),
+            Some(path) => PyProvider::from_json(Path::new(path))?,
+            None => PyProvider::test_data(),
         };
 
+        Ok(Self { provider })
+    }
+
+    /// Create a coordinate mapper from a reference manifest.
+    ///
+    /// Args:
+    ///     manifest_path: Path to a manifest.json file produced by `ferro prepare`.
+    ///
+    /// Returns:
+    ///     A CoordinateMapper backed by a MultiFastaProvider.
+    #[staticmethod]
+    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+        let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         Ok(Self { provider })
     }
 
