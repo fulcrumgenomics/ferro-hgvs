@@ -64,6 +64,31 @@ Mock transcript data for unit and integration tests.
 }
 ```
 
+### Object Form (Extended)
+
+`MockProvider::from_json` and the Python `Normalizer(reference_json=...)`,
+`EquivalenceChecker(reference_json=...)`, `BatchProcessor(reference_json=...)`,
+and `CoordinateMapper(reference_json=...)` constructors also accept an object
+form that supplies optional protein and genomic sequences:
+
+```json
+{
+  "transcripts": [
+    { "id": "NM_TEST.1", "...": "..." }
+  ],
+  "proteins": {
+    "NP_TEST.1": "MAPLE..."
+  },
+  "genomic_sequences": {
+    "NC_000023.11": "ACGT..."
+  }
+}
+```
+
+All three top-level keys are optional. `transcripts` follows the same schema
+as the bare-array form. The bare-array form continues to be accepted for
+backward compatibility.
+
 ---
 
 ## Parsing Test Schema
