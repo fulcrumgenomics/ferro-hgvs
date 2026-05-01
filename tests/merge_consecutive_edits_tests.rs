@@ -400,6 +400,60 @@ fn test_merge_same_position_twice_no_merge() {
     assert!(!result.contains("delins"), "got {}", result);
 }
 
+#[test]
+fn test_merge_chain_then_barrier_then_chain() {
+    // Three consecutive subs, then a duplication (a non-mergeable barrier),
+    // then two more consecutive subs. The expected output is two separate
+    // merged delins surrounding the dup. Pins the chain-flush-on-barrier
+    // and chain-restart-after-barrier paths used by deferred-materialization.
+    let result = normalize_to_string("NC_000001.11:g.[100G>A;101A>C;102C>T;103dup;104A>G;105G>T]");
+    assert!(result.contains("100_102delinsACT"), "got {}", result);
+    assert!(result.contains("103dup"), "got {}", result);
+    assert!(result.contains("104_105delinsGT"), "got {}", result);
+    // No spurious extra merges.
+    assert_eq!(
+        result.matches("delins").count(),
+        2,
+        "expected exactly two delins in {}",
+        result
+    );
+}
+
+#[test]
+fn test_merge_long_consecutive_chain_correctness() {
+    // 10-element chain of consecutive substitutions. The merged alt must be
+    // the concatenation of all alt bases in input order. Pins correctness
+    // for chains long enough that the deferred-materialization path
+    // dominates the work.
+    let result =
+        normalize_to_string("NC_000001.11:g.[1000G>A;1001A>C;1002C>T;1003T>G;1004G>A;1005A>C;1006C>T;1007T>G;1008G>A;1009A>C]");
+    assert_eq!(result, "NC_000001.11:g.1000_1009delinsACTGACTGAC");
+}
+
+#[test]
+fn test_merge_chain_at_input_end() {
+    // Chain spans the last variants in the allele — the loop ends mid-chain
+    // and the deferred-materialization version must flush at loop end, not
+    // leave the last chain unemitted.
+    let result = normalize_to_string("NC_000001.11:g.[100dup;101G>A;102A>C]");
+    assert!(result.contains("100dup"), "got {}", result);
+    assert!(result.contains("101_102delinsAC"), "got {}", result);
+}
+
+#[test]
+fn test_unmerged_pending_passes_through_unchanged() {
+    // A merge-eligible variant followed by a non-mergeable barrier with no
+    // mergeable predecessor: the eligible variant must emit AS-IS (a
+    // substitution, not a delins). Pins the was_merged=false flush path.
+    let result = normalize_to_string("NC_000001.11:g.[100G>A;200dup]");
+    assert!(result.contains("100G>A"), "got {}", result);
+    assert!(result.contains("200dup"), "got {}", result);
+    // CRITICAL: the lone sub must NOT have been turned into a delins by
+    // building from its anchor — that's the pitfall the was_merged flag
+    // exists to prevent.
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
 // =====================================================================
 // SPDI/VCF interaction with merge.
 //

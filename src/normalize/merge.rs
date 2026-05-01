@@ -29,9 +29,11 @@ struct Anchor {
 /// non-NaEdit, uncertain edit, disqualifying position, etc.) act as merge
 /// barriers — they pass through unchanged in their original input order.
 ///
-/// The walk caches the head-of-output's anchor so it isn't re-extracted on
-/// every iteration, and uses a cheap position-only adjacency precheck so
-/// non-adjacent delins/ins pairs skip the alt-bases allocation.
+/// Variants are pushed to `output` immediately on arrival. While a chain is
+/// growing, only the running anchor is updated (alt extended in place). At
+/// chain end the head of `output` is rebuilt once from the merged anchor.
+/// This keeps non-merging iterations as cheap as the no-merge baseline and
+/// makes a chain of N consecutive merges O(N) total instead of O(N^2).
 pub(crate) fn merge_consecutive_edits(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
@@ -41,36 +43,63 @@ pub(crate) fn merge_consecutive_edits(
     }
 
     let mut output: Vec<HgvsVariant> = Vec::with_capacity(variants.len());
-    // Cached anchor of `output.last()`. None means either output is empty or
-    // the head isn't merge-eligible — in either case we cannot extend.
-    let mut prev_anchor: Option<Anchor> = None;
+    // Anchor of `output.last()` while the head is merge-eligible. None once
+    // the head is non-eligible (a Duplication, uncertain edit, etc.) or
+    // output is empty.
+    let mut head_anchor: Option<Anchor> = None;
+    // Whether at least one merge has folded into `head_anchor`. While true,
+    // `output.last()` is stale relative to `head_anchor` and must be
+    // rebuilt before any external observation.
+    let mut head_merged = false;
 
     for next in variants {
-        if let Some(prev_a) = prev_anchor.as_ref() {
-            // Cheap adjacency precheck against next's positions only. This
-            // skips the alt-bases allocation when the pair won't merge.
-            if let Some((next_start, next_end)) = simple_range_for_variant(&next) {
-                if prev_a.end.checked_add(1) == Some(next_start)
-                    && same_accession_and_kind(output.last().unwrap(), &next)
-                {
-                    if let Some(next_anchor) = anchor_for_variant(&next) {
-                        debug_assert_eq!(next_anchor.start, next_start);
-                        debug_assert_eq!(next_anchor.end, next_end);
-                        let prev_a = prev_anchor.take().unwrap();
-                        let merged_anchor = merge_anchors(prev_a, next_anchor);
-                        let merged_v = build_merged(output.last().unwrap(), &merged_anchor);
-                        *output.last_mut().unwrap() = merged_v;
-                        prev_anchor = Some(merged_anchor);
-                        continue;
-                    }
-                }
+        let merged = 'try_merge: {
+            let Some(prev_a) = head_anchor.as_mut() else {
+                break 'try_merge false;
+            };
+            let Some((next_start, _)) = simple_range_for_variant(&next) else {
+                break 'try_merge false;
+            };
+            if prev_a.end.checked_add(1) != Some(next_start) {
+                break 'try_merge false;
             }
+            if !same_accession_and_kind(output.last().unwrap(), &next) {
+                break 'try_merge false;
+            }
+            let Some(next_anchor) = anchor_for_variant(&next) else {
+                break 'try_merge false;
+            };
+            // Extend in place — amortized O(1) per base added.
+            prev_a.alt.extend(next_anchor.alt);
+            prev_a.start = prev_a.start.min(next_anchor.start);
+            prev_a.end = prev_a.end.max(next_anchor.end);
+            true
+        };
+        if merged {
+            head_merged = true;
+            continue;
         }
-        // No merge — recompute prev_anchor for the new head.
-        prev_anchor = anchor_for_variant(&next);
+        // Chain ends here. If we'd been growing one, rebuild the head once
+        // from the final merged anchor before moving on.
+        if head_merged {
+            reconcile_head(&mut output, head_anchor.take().unwrap());
+            head_merged = false;
+        }
+        head_anchor = anchor_for_variant(&next);
         output.push(next);
     }
+    if head_merged {
+        reconcile_head(&mut output, head_anchor.take().unwrap());
+    }
     output
+}
+
+/// Replace `output.last()` with a freshly-built variant from `anchor`.
+/// Caller has established that the head is merge-eligible (so kind dispatch
+/// in `build_merged` is safe).
+fn reconcile_head(output: &mut [HgvsVariant], anchor: Anchor) {
+    let last = output.last_mut().expect("head must exist when head_merged");
+    *last = build_merged(last, anchor);
 }
 
 /// Same accession and same `HgvsVariant` discriminant.
@@ -141,28 +170,16 @@ fn simple_range_for_loc_edit<L>(
 
 /// Build the merged variant from the head of output and the merged anchor.
 /// Caller has already established that `head` and the partner are the same
-/// kind via `same_accession_and_kind`.
-fn build_merged(head: &HgvsVariant, merged: &Anchor) -> HgvsVariant {
+/// kind via `same_accession_and_kind`. Takes `merged` by value so the alt
+/// vec moves into the new variant rather than being cloned.
+fn build_merged(head: &HgvsVariant, merged: Anchor) -> HgvsVariant {
     match head {
-        HgvsVariant::Genome(g) => HgvsVariant::Genome(build_genome_merged(g, merged.clone())),
-        HgvsVariant::Cds(c) => HgvsVariant::Cds(build_cds_merged(c, merged.clone())),
-        HgvsVariant::Tx(t) => HgvsVariant::Tx(build_tx_merged(t, merged.clone())),
-        HgvsVariant::Rna(r) => HgvsVariant::Rna(build_rna_merged(r, merged.clone())),
-        HgvsVariant::Mt(m) => HgvsVariant::Mt(build_mt_merged(m, merged.clone())),
+        HgvsVariant::Genome(g) => HgvsVariant::Genome(build_genome_merged(g, merged)),
+        HgvsVariant::Cds(c) => HgvsVariant::Cds(build_cds_merged(c, merged)),
+        HgvsVariant::Tx(t) => HgvsVariant::Tx(build_tx_merged(t, merged)),
+        HgvsVariant::Rna(r) => HgvsVariant::Rna(build_rna_merged(r, merged)),
+        HgvsVariant::Mt(m) => HgvsVariant::Mt(build_mt_merged(m, merged)),
         _ => unreachable!("build_merged called with non-NaEdit variant kind"),
-    }
-}
-
-/// Combine two adjacency-checked anchors into one merged anchor.
-/// Caller has already verified `a.end + 1 == b.start`.
-fn merge_anchors(a: Anchor, b: Anchor) -> Anchor {
-    debug_assert_eq!(a.end.checked_add(1), Some(b.start));
-    let mut alt = a.alt;
-    alt.extend(b.alt);
-    Anchor {
-        start: a.start.min(b.start),
-        end: a.end.max(b.end),
-        alt,
     }
 }
 
