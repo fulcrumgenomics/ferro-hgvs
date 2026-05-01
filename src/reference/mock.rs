@@ -31,28 +31,36 @@ impl MockProvider {
     /// Accepts either a bare array of `Transcript` records or an object
     /// of the form `{ transcripts, proteins, genomic_sequences }`.
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
+        // `deny_unknown_fields` so a typo'd key (e.g. `transripts`) produces
+        // a clear error rather than silently defaulting to an empty provider.
         #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Array(Vec<Transcript>),
-            Object {
-                #[serde(default)]
-                transcripts: Vec<Transcript>,
-                #[serde(default)]
-                proteins: HashMap<String, String>,
-                #[serde(default)]
-                genomic_sequences: HashMap<String, String>,
-            },
+        #[serde(deny_unknown_fields)]
+        struct ObjectForm {
+            #[serde(default)]
+            transcripts: Vec<Transcript>,
+            #[serde(default)]
+            proteins: HashMap<String, String>,
+            #[serde(default)]
+            genomic_sequences: HashMap<String, String>,
         }
 
         let content = std::fs::read_to_string(path)?;
-        let (transcripts, proteins, genomic_sequences) = match serde_json::from_str(&content)? {
-            Raw::Array(transcripts) => (transcripts, HashMap::new(), HashMap::new()),
-            Raw::Object {
-                transcripts,
-                proteins,
-                genomic_sequences,
-            } => (transcripts, proteins, genomic_sequences),
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+
+        let (transcripts, proteins, genomic_sequences) = match value {
+            serde_json::Value::Array(_) => {
+                let transcripts: Vec<Transcript> = serde_json::from_value(value)?;
+                (transcripts, HashMap::new(), HashMap::new())
+            }
+            serde_json::Value::Object(_) => {
+                let obj: ObjectForm = serde_json::from_value(value)?;
+                (obj.transcripts, obj.proteins, obj.genomic_sequences)
+            }
+            _ => {
+                return Err(FerroError::Json {
+                    msg: "MockProvider JSON root must be an array or object".to_string(),
+                })
+            }
         };
 
         let map: HashMap<String, Transcript> = transcripts
@@ -484,7 +492,34 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"42").unwrap();
 
-        let result = MockProvider::from_json(file.path());
-        assert!(result.is_err(), "scalar JSON root should be rejected");
+        match MockProvider::from_json(file.path()) {
+            Err(FerroError::Json { msg }) => {
+                assert!(
+                    msg.contains("array or object"),
+                    "expected error message to mention 'array or object', got: {msg}",
+                );
+            }
+            Err(e) => panic!("expected FerroError::Json, got {e}"),
+            Ok(_) => panic!("expected scalar JSON root to be rejected"),
+        }
+    }
+
+    #[test]
+    fn test_from_json_rejects_unknown_field() {
+        // A typo'd top-level key must error rather than silently parse as an
+        // empty provider.
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(br#"{"transripts": []}"#).unwrap();
+
+        match MockProvider::from_json(file.path()) {
+            Err(e) => assert!(
+                format!("{e}").contains("transripts"),
+                "expected error to mention the unknown field, got {e}",
+            ),
+            Ok(_) => panic!("expected unknown field to be rejected"),
+        }
     }
 }
