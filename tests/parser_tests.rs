@@ -298,6 +298,9 @@ fn test_verified_roundtrip(#[case] input: &str) {
 #[case("NM_000350.2:c.[1622T>C;3113C>T]", "NM_000350.2:c.[1622T>C;3113C>T]")]
 #[case("NM_000350.3:c.[1531C>T;872C>T]", "NM_000350.3:c.[1531C>T;872C>T]")]
 #[case("NM_005157.6:c.[1516G>A;1531G>C]", "NM_005157.6:c.[1516G>A;1531G>C]")]
+// Singleton allele unwraps to bare form (HGVS spec: `[var]` denotes multi-variant)
+#[case("NM_000088.3:c.[10A>G]", "NM_000088.3:c.10A>G")]
+#[case("NC_000001.11:g.[100A>G]", "NC_000001.11:g.100A>G")]
 // Missing ref base substitution (ferro preserves as-is)
 #[case("NG_008029.2:g.5049>A", "NG_008029.2:g.5049>A")]
 #[case("NM_002055.4:c.1086>C", "NM_002055.4:c.1086>C")]

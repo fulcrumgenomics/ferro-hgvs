@@ -461,6 +461,12 @@ fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt:
 
 impl fmt::Display for AlleleVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Per HGVS spec, `[var]` denotes a multi-variant allele; a singleton
+        // is just the inner variant. (Mosaic/chimeric already emit bare via
+        // their separator-only loops; this unifies cis/trans/unknown.)
+        if self.variants.len() == 1 {
+            return self.variants[0].fmt(f);
+        }
         match self.phase {
             AllelePhase::Cis => {
                 if use_compact_form(&self.variants) {
@@ -1263,29 +1269,33 @@ mod tests {
     }
 
     #[test]
-    fn test_allele_unknown_phase_singleton_keeps_wrapper() {
+    fn test_allele_singleton_emits_bare_form() {
         use crate::hgvs::location::CdsPos;
 
-        // A singleton unknown-phase allele must keep the bracketed wrapper;
-        // the compact form `ACC:c.edit` would be indistinguishable from a
-        // bare variant and would not round-trip.
-        let var = HgvsVariant::Cds(CdsVariant {
-            accession: Accession::new("NM", "000088", Some(3)),
-            gene_symbol: None,
-            loc_edit: LocEdit::new(
-                CdsInterval::point(CdsPos::new(100)),
-                NaEdit::Substitution {
-                    reference: Base::A,
-                    alternative: Base::G,
-                },
-            ),
-        });
+        let make_var = || {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(100)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::G,
+                    },
+                ),
+            })
+        };
+        let bare = "NM_000088.3:c.100A>G";
 
-        let allele = AlleleVariant::unknown_phase(vec![var]);
-        assert_eq!(
-            format!("{}", HgvsVariant::Allele(allele)),
-            "[NM_000088.3:c.100A>G]"
-        );
+        for allele in [
+            AlleleVariant::cis(vec![make_var()]),
+            AlleleVariant::trans(vec![make_var()]),
+            AlleleVariant::unknown_phase(vec![make_var()]),
+            AlleleVariant::mosaic(vec![make_var()]),
+            AlleleVariant::chimeric(vec![make_var()]),
+        ] {
+            assert_eq!(format!("{}", HgvsVariant::Allele(allele)), bare);
+        }
     }
 
     #[test]
@@ -1364,11 +1374,12 @@ mod tests {
     }
 
     #[test]
-    fn test_allele_null_variant_uses_expanded_form() {
-        // A single NullAllele has no accession — must not panic, must use expanded form
+    fn test_allele_null_variant_singleton_delegates() {
+        // NullAllele has no accession; the singleton path must not invoke
+        // `use_compact_form` (which would deref the missing accession).
         let null = HgvsVariant::NullAllele;
         let cis = AlleleVariant::cis(vec![null]);
-        assert_eq!(format!("{}", HgvsVariant::Allele(cis)), "[0]");
+        assert_eq!(format!("{}", HgvsVariant::Allele(cis)), "0");
     }
 
     #[test]
