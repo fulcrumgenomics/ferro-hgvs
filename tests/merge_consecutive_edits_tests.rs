@@ -1,7 +1,7 @@
 //! Tests for HGVS-spec consecutive-edit merging in alleles.
 //! See docs/superpowers/specs/2026-04-30-merge-consecutive-allele-edits-design.md.
 
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use ferro_hgvs::{hgvs_to_spdi_simple, parse_hgvs, MockProvider, NormalizeConfig, Normalizer};
 
 fn normalize_to_string(input: &str) -> String {
     let normalizer = Normalizer::new(MockProvider::new());
@@ -395,6 +395,113 @@ fn test_merge_same_position_twice_no_merge() {
     // must not collapse into a single delins.
     let result = normalize_to_string("NC_000001.11:g.[100G>A;100A>C]");
     // The output should still contain both — we don't synthesize a "double mutation" form.
+    assert!(result.contains("100G>A"), "got {}", result);
+    assert!(result.contains("100A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+// =====================================================================
+// SPDI/VCF interaction with merge.
+//
+// Audit findings (recorded for future readers, not just tests):
+//   * Neither hgvs_to_spdi_simple nor any vcf::to_hgvs path *produces*
+//     HgvsVariant::Allele, so the merge pass cannot affect VCF/SPDI -> HGVS.
+//   * hgvs_to_spdi_simple accepts only HgvsVariant::Genome. Merge collapses
+//     a cis allele into a Genome (or Cds/etc.), changing which branch is
+//     taken downstream. For a sub-sub merge the result is a Delins, which
+//     SPDI cannot encode without the deleted reference sequence — that
+//     limitation is independent of merge and the test below pins it.
+//   * vcf::from_hgvs::HgvsToVcfConverter erred on multi-variant Cis
+//     alleles. Post-merge, those alleles become a single variant and now
+//     follow the single-variant convert path (success there is gated on
+//     reference availability for delins, which MockProvider lacks).
+// =====================================================================
+
+#[test]
+fn test_merged_allele_changes_variant_kind() {
+    // Before merge: HgvsVariant::Allele wrapping two Genome subs.
+    // After merge: a single Genome variant (no Allele wrapper) — so
+    // downstream code dispatching on variant kind hits the Genome branch.
+    use ferro_hgvs::HgvsVariant;
+    let normalizer = Normalizer::new(MockProvider::new());
+    let parsed = parse_hgvs("NC_000001.11:g.[1000G>A;1001A>C]").expect("parse failed");
+    assert!(matches!(parsed, HgvsVariant::Allele(_)));
+    let normalized = normalizer.normalize(&parsed).expect("normalize failed");
+    assert!(
+        matches!(normalized, HgvsVariant::Genome(_)),
+        "expected Genome after merge, got {:?}",
+        normalized
+    );
+}
+
+#[test]
+fn test_merged_delins_spdi_needs_reference() {
+    // Documents that hgvs_to_spdi_simple cannot encode a merged delins
+    // without reference data: the merged form drops per-base ref info from
+    // the input subs, and SPDI requires the deleted bases. Pre-merge this
+    // call would have failed with UnsupportedVariantType (Allele); post-merge
+    // it fails with MissingReferenceData (Delins). The capability hasn't
+    // changed — just the failure mode.
+    let normalizer = Normalizer::new(MockProvider::new());
+    let parsed = parse_hgvs("NC_000001.11:g.[1000G>A;1001A>C]").expect("parse failed");
+    let normalized = normalizer.normalize(&parsed).expect("normalize failed");
+    let err = hgvs_to_spdi_simple(&normalized).expect_err("delins requires ref data");
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("MissingReferenceData") || msg.contains("reference"),
+        "expected ref-data failure, got {}",
+        msg
+    );
+}
+
+#[test]
+fn test_unmerged_allele_still_unsupported_by_spdi() {
+    // Sanity check the non-merge path: hgvs_to_spdi_simple still refuses
+    // an Allele that didn't collapse (variants stay as separate sub-variants).
+    let normalizer = Normalizer::new(MockProvider::new());
+    // One nt gap -> no merge, still an Allele after normalize.
+    let parsed = parse_hgvs("NC_000001.11:g.[100G>A;102C>T]").expect("parse failed");
+    let normalized = normalizer.normalize(&parsed).expect("normalize failed");
+    let result = hgvs_to_spdi_simple(&normalized);
+    assert!(
+        result.is_err(),
+        "unmerged Allele should not convert to SPDI, got {:?}",
+        result
+    );
+}
+
+// =====================================================================
+// Merge runs even when overlap prevention is disabled.
+//
+// The merge pass uses a strict `a.end + 1 == b.start` adjacency check,
+// so an overlapping pair never merges regardless of the prevent_overlap
+// flag — but adjacent pairs still must merge.
+// =====================================================================
+
+fn normalize_to_string_no_overlap_check(input: &str) -> String {
+    let config = NormalizeConfig::default().with_overlap_prevention(false);
+    let normalizer = Normalizer::with_config(MockProvider::new(), config);
+    let variant = parse_hgvs(input).expect("parse failed");
+    let normalized = normalizer.normalize(&variant).expect("normalize failed");
+    format!("{}", normalized)
+}
+
+#[test]
+fn test_merge_still_runs_with_prevent_overlap_disabled() {
+    // Adjacent pair must still collapse to a delins; merge is independent
+    // of the overlap-prevention pre-pass.
+    assert_eq!(
+        normalize_to_string_no_overlap_check("NC_000001.11:g.[1000G>A;1001A>C]"),
+        "NC_000001.11:g.1000_1001delinsAC",
+    );
+}
+
+#[test]
+fn test_overlap_pair_does_not_merge_with_prevent_overlap_disabled() {
+    // Same-position pair is an overlap, not adjacency. Even with the
+    // overlap-prevention pre-pass disabled, the strict adjacency check
+    // in merge_consecutive_edits refuses to combine them.
+    let result = normalize_to_string_no_overlap_check("NC_000001.11:g.[100G>A;100A>C]");
     assert!(result.contains("100G>A"), "got {}", result);
     assert!(result.contains("100A>C"), "got {}", result);
     assert!(!result.contains("delins"), "got {}", result);
