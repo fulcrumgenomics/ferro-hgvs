@@ -438,10 +438,7 @@ mod tests {
             "MAPLE"
         );
         assert!(provider.has_genomic_data());
-        assert_eq!(
-            provider.get_genomic_sequence("chr1", 0, 4).unwrap(),
-            "ACGT"
-        );
+        assert_eq!(provider.get_genomic_sequence("chr1", 0, 4).unwrap(), "ACGT");
     }
 
     #[test]
