@@ -9,6 +9,7 @@ use pyo3::types::PyDict;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::backtranslate::{Backtranslator, CodonChange, CodonTable};
 use crate::batch::{BatchProcessor, BatchProgress, BatchResult};
@@ -28,11 +29,105 @@ use crate::python_helpers::{
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::{GenomeBuild, Strand};
-use crate::reference::MockProvider;
+use crate::reference::{MockProvider, MultiFastaProvider};
 use crate::rsid::{format_rsid, parse_rsid as rust_parse_rsid, InMemoryRsIdLookup, RsIdResult};
 use crate::spdi::{hgvs_to_spdi_simple, parse_spdi as rust_parse_spdi, spdi_to_hgvs, SpdiVariant};
 use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
 use crate::{parse_hgvs, NormalizeConfig, Normalizer};
+
+// ============================================================================
+// PyProvider — wraps either MockProvider or MultiFastaProvider for the Python
+// surface. Cheap to clone (Arc shares the heavy MultiFasta state).
+// ============================================================================
+
+#[derive(Clone)]
+pub(crate) enum PyProvider {
+    Mock(MockProvider),
+    MultiFasta(Arc<MultiFastaProvider>),
+}
+
+impl ReferenceProvider for PyProvider {
+    fn get_transcript(
+        &self,
+        id: &str,
+    ) -> Result<crate::reference::transcript::Transcript, crate::error::FerroError> {
+        match self {
+            PyProvider::Mock(p) => p.get_transcript(id),
+            PyProvider::MultiFasta(p) => p.get_transcript(id),
+        }
+    }
+
+    fn get_sequence(
+        &self,
+        id: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, crate::error::FerroError> {
+        match self {
+            PyProvider::Mock(p) => p.get_sequence(id, start, end),
+            PyProvider::MultiFasta(p) => p.get_sequence(id, start, end),
+        }
+    }
+
+    fn get_genomic_sequence(
+        &self,
+        contig: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, crate::error::FerroError> {
+        match self {
+            PyProvider::Mock(p) => p.get_genomic_sequence(contig, start, end),
+            PyProvider::MultiFasta(p) => p.get_genomic_sequence(contig, start, end),
+        }
+    }
+
+    fn has_genomic_data(&self) -> bool {
+        match self {
+            PyProvider::Mock(p) => p.has_genomic_data(),
+            PyProvider::MultiFasta(p) => p.has_genomic_data(),
+        }
+    }
+
+    fn get_protein_sequence(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, crate::error::FerroError> {
+        match self {
+            PyProvider::Mock(p) => p.get_protein_sequence(accession, start, end),
+            PyProvider::MultiFasta(p) => p.get_protein_sequence(accession, start, end),
+        }
+    }
+
+    fn has_protein_data(&self) -> bool {
+        match self {
+            PyProvider::Mock(p) => p.has_protein_data(),
+            PyProvider::MultiFasta(p) => p.has_protein_data(),
+        }
+    }
+}
+
+impl PyProvider {
+    /// Load from a JSON file (delegates to MockProvider::from_json).
+    fn from_json(path: &Path) -> PyResult<Self> {
+        MockProvider::from_json(path)
+            .map(PyProvider::Mock)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))
+    }
+
+    /// Load from a manifest file (delegates to MultiFastaProvider::from_manifest).
+    fn from_manifest(path: &Path) -> PyResult<Self> {
+        MultiFastaProvider::from_manifest(path)
+            .map(|p| PyProvider::MultiFasta(Arc::new(p)))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load manifest: {}", e)))
+    }
+
+    /// Default: built-in test data.
+    fn test_data() -> Self {
+        PyProvider::Mock(MockProvider::with_test_data())
+    }
+}
 
 /// Parse an HGVS variant string
 ///
