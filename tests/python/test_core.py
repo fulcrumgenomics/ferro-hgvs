@@ -103,3 +103,23 @@ class TestVersion:
         assert hasattr(ferro_hgvs, "__version__")
         assert isinstance(ferro_hgvs.__version__, str)
         assert len(ferro_hgvs.__version__) > 0
+
+
+class TestNormalizeMergeConsecutive:
+    """Smoke tests for HGVS-spec consecutive-edit merging via the Python binding."""
+
+    def test_consecutive_subs_collapse_to_delins(self) -> None:
+        # Issue #72: two adjacent SNVs in cis must collapse to one delins.
+        result = ferro_hgvs.normalize("NC_000001.11:g.[1000G>A;1001A>C]")
+        assert result == "NC_000001.11:g.1000_1001delinsAC"
+
+    def test_consecutive_dels_collapse_to_ranged_del(self) -> None:
+        result = ferro_hgvs.normalize("NC_000001.11:g.[1000del;1001del]")
+        assert result == "NC_000001.11:g.1000_1001del"
+
+    def test_non_adjacent_subs_stay_separate(self) -> None:
+        # One unchanged nt between variants -> spec keeps them separate.
+        result = ferro_hgvs.normalize("NC_000001.11:g.[100G>A;102C>T]")
+        assert "100G>A" in result
+        assert "102C>T" in result
+        assert ";" in result
