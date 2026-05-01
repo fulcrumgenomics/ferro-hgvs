@@ -281,6 +281,39 @@ pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(us
     Some((s, e))
 }
 
+/// Check if a delins should be represented as a substitution
+///
+/// Per the HGVS edit-type priority (substitution > deletion > inversion >
+/// duplication > insertion), a delins that replaces a single base with a
+/// *different* single base must be expressed as a substitution.
+///
+/// Example: g.1000delinsA where ref[1000] is G → g.1000G>A
+///
+/// Returns `None` for the same-base case (e.g. `g.1000delinsG` where ref=G),
+/// which is identity rather than substitution; that rewrite is tracked by a
+/// separate normalization rule.
+pub fn delins_is_substitution(
+    ref_seq: &[u8],
+    start: usize,
+    end: usize,
+    inserted_seq: &[u8],
+) -> Option<(crate::hgvs::edit::Base, crate::hgvs::edit::Base)> {
+    use crate::hgvs::edit::Base;
+
+    if end != start + 1 || end > ref_seq.len() || inserted_seq.len() != 1 {
+        return None;
+    }
+    let ref_byte = ref_seq[start];
+    let alt_byte = inserted_seq[0];
+    if ref_byte == alt_byte {
+        return None;
+    }
+    Some((
+        Base::from_char(ref_byte as char)?,
+        Base::from_char(alt_byte as char)?,
+    ))
+}
+
 /// Check if a delins should be represented as a duplication
 ///
 /// In HGVS, if a delins deletes N bases and inserts 2N bases where the
@@ -715,6 +748,34 @@ mod tests {
             get_canonical_form(&del_edit, ref_seq, 3, 6),
             CanonicalForm::Deletion
         );
+    }
+
+    #[test]
+    fn test_delins_is_substitution() {
+        use crate::hgvs::edit::Base;
+
+        let ref_seq = b"ACGTACGT";
+        // ref[3] = T, insert A → T>A
+        assert_eq!(
+            delins_is_substitution(ref_seq, 3, 4, b"A"),
+            Some((Base::T, Base::A))
+        );
+
+        // Single-base delins where ref == alt → not a substitution
+        // (would be identity, handled separately)
+        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b"T"), None);
+
+        // Multi-base delete → not a single-base substitution
+        assert_eq!(delins_is_substitution(ref_seq, 3, 5, b"A"), None);
+
+        // Single-base delete with multi-base insert → not a substitution
+        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b"AT"), None);
+
+        // Bounds: end past reference → None (no panic)
+        assert_eq!(delins_is_substitution(ref_seq, 8, 9, b"A"), None);
+
+        // Empty insert → None
+        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b""), None);
     }
 
     #[test]
