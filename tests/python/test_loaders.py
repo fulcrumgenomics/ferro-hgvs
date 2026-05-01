@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 import ferro_hgvs
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -61,13 +59,11 @@ class TestObjectFormJson:
 class TestFromManifest:
     """from_manifest constructors backed by MultiFastaProvider."""
 
-    @pytest.mark.skipif(not MANIFEST_TINY.exists(), reason="tiny manifest fixture missing")
     def test_normalizer_from_manifest(self) -> None:
         norm = ferro_hgvs.Normalizer.from_manifest(str(MANIFEST_TINY))
         out = norm.normalize("NM_TEST.1:c.1A>G")
         assert "NM_TEST.1" in out
 
-    @pytest.mark.skipif(not MANIFEST_TINY.exists(), reason="tiny manifest fixture missing")
     def test_equivalence_checker_from_manifest(self) -> None:
         chk = ferro_hgvs.EquivalenceChecker.from_manifest(str(MANIFEST_TINY))
         v1 = ferro_hgvs.parse("NM_TEST.1:c.1A>G")
@@ -75,14 +71,12 @@ class TestFromManifest:
         result = chk.check(v1, v2)
         assert result.is_equivalent()
 
-    @pytest.mark.skipif(not MANIFEST_TINY.exists(), reason="tiny manifest fixture missing")
     def test_batch_processor_from_manifest(self) -> None:
         bp = ferro_hgvs.BatchProcessor.from_manifest(str(MANIFEST_TINY))
         result = bp.parse(["NM_TEST.1:c.1A>G", "INVALID"])
         assert result.success_count() == 1
         assert result.error_count() == 1
 
-    @pytest.mark.skipif(not MANIFEST_TINY.exists(), reason="tiny manifest fixture missing")
     def test_coordinate_mapper_from_manifest(self) -> None:
         cm = ferro_hgvs.CoordinateMapper.from_manifest(str(MANIFEST_TINY))
         assert cm.has_transcript("NM_TEST.1")

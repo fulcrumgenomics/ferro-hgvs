@@ -31,36 +31,28 @@ impl MockProvider {
     /// Accepts either a bare array of `Transcript` records or an object
     /// of the form `{ transcripts, proteins, genomic_sequences }`.
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
-        let content = std::fs::read_to_string(path)?;
-        let value: serde_json::Value = serde_json::from_str(&content)?;
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Array(Vec<Transcript>),
+            Object {
+                #[serde(default)]
+                transcripts: Vec<Transcript>,
+                #[serde(default)]
+                proteins: HashMap<String, String>,
+                #[serde(default)]
+                genomic_sequences: HashMap<String, String>,
+            },
+        }
 
-        let (transcripts, proteins, genomic_sequences) = if value.is_array() {
-            let transcripts: Vec<Transcript> = serde_json::from_value(value)?;
-            (transcripts, HashMap::new(), HashMap::new())
-        } else if value.is_object() {
-            let transcripts: Vec<Transcript> = value
-                .get("transcripts")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()?
-                .unwrap_or_default();
-            let proteins: HashMap<String, String> = value
-                .get("proteins")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()?
-                .unwrap_or_default();
-            let genomic_sequences: HashMap<String, String> = value
-                .get("genomic_sequences")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()?
-                .unwrap_or_default();
-            (transcripts, proteins, genomic_sequences)
-        } else {
-            return Err(FerroError::Json {
-                msg: "MockProvider JSON root must be an array or object".to_string(),
-            });
+        let content = std::fs::read_to_string(path)?;
+        let (transcripts, proteins, genomic_sequences) = match serde_json::from_str(&content)? {
+            Raw::Array(transcripts) => (transcripts, HashMap::new(), HashMap::new()),
+            Raw::Object {
+                transcripts,
+                proteins,
+                genomic_sequences,
+            } => (transcripts, proteins, genomic_sequences),
         };
 
         let map: HashMap<String, Transcript> = transcripts

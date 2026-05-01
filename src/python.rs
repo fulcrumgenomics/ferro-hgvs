@@ -35,13 +35,12 @@ use crate::spdi::{hgvs_to_spdi_simple, parse_spdi as rust_parse_spdi, spdi_to_hg
 use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
 use crate::{parse_hgvs, NormalizeConfig, Normalizer};
 
-// ============================================================================
-// PyProvider — wraps either MockProvider or MultiFastaProvider for the Python
-// surface. Cheap to clone (Arc shares the heavy MultiFasta state).
-// ============================================================================
-
+/// Reference provider used by the Python wrappers.
+///
+/// `MultiFasta` is wrapped in `Arc` because `MultiFastaProvider` is large and
+/// is cloned on every Python call to construct a fresh `Normalizer<P>`.
 #[derive(Clone)]
-pub(crate) enum PyProvider {
+enum PyProvider {
     Mock(MockProvider),
     MultiFasta(Arc<MultiFastaProvider>),
 }
