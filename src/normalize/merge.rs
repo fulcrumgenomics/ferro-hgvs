@@ -28,6 +28,10 @@ struct Anchor {
 /// is possible. Sub-variants that aren't merge-eligible (different accession,
 /// non-NaEdit, uncertain edit, disqualifying position, etc.) act as merge
 /// barriers — they pass through unchanged in their original input order.
+///
+/// The walk caches the head-of-output's anchor so it isn't re-extracted on
+/// every iteration, and uses a cheap position-only adjacency precheck so
+/// non-adjacent delins/ins pairs skip the alt-bases allocation.
 pub(crate) fn merge_consecutive_edits(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
@@ -37,97 +41,129 @@ pub(crate) fn merge_consecutive_edits(
     }
 
     let mut output: Vec<HgvsVariant> = Vec::with_capacity(variants.len());
+    // Cached anchor of `output.last()`. None means either output is empty or
+    // the head isn't merge-eligible — in either case we cannot extend.
+    let mut prev_anchor: Option<Anchor> = None;
+
     for next in variants {
-        if let Some(prev) = output.last() {
-            if let Some(merged) = try_merge_pair(prev, &next) {
-                let last = output.last_mut().unwrap();
-                *last = merged;
-                continue;
+        if let Some(prev_a) = prev_anchor.as_ref() {
+            // Cheap adjacency precheck against next's positions only. This
+            // skips the alt-bases allocation when the pair won't merge.
+            if let Some((next_start, next_end)) = simple_range_for_variant(&next) {
+                if prev_a.end.checked_add(1) == Some(next_start)
+                    && same_accession_and_kind(output.last().unwrap(), &next)
+                {
+                    if let Some(next_anchor) = anchor_for_variant(&next) {
+                        debug_assert_eq!(next_anchor.start, next_start);
+                        debug_assert_eq!(next_anchor.end, next_end);
+                        let prev_a = prev_anchor.take().unwrap();
+                        let merged_anchor = merge_anchors(prev_a, next_anchor);
+                        let merged_v = build_merged(output.last().unwrap(), &merged_anchor);
+                        *output.last_mut().unwrap() = merged_v;
+                        prev_anchor = Some(merged_anchor);
+                        continue;
+                    }
+                }
             }
         }
+        // No merge — recompute prev_anchor for the new head.
+        prev_anchor = anchor_for_variant(&next);
         output.push(next);
     }
     output
 }
 
-fn try_merge_pair(a: &HgvsVariant, b: &HgvsVariant) -> Option<HgvsVariant> {
+/// Same accession and same `HgvsVariant` discriminant.
+fn same_accession_and_kind(a: &HgvsVariant, b: &HgvsVariant) -> bool {
     match (a, b) {
-        (HgvsVariant::Genome(av), HgvsVariant::Genome(bv)) => {
-            try_merge_genome(av, bv).map(HgvsVariant::Genome)
-        }
-        (HgvsVariant::Cds(av), HgvsVariant::Cds(bv)) => try_merge_cds(av, bv).map(HgvsVariant::Cds),
-        (HgvsVariant::Tx(av), HgvsVariant::Tx(bv)) => try_merge_tx(av, bv).map(HgvsVariant::Tx),
-        (HgvsVariant::Rna(av), HgvsVariant::Rna(bv)) => try_merge_rna(av, bv).map(HgvsVariant::Rna),
-        (HgvsVariant::Mt(av), HgvsVariant::Mt(bv)) => try_merge_mt(av, bv).map(HgvsVariant::Mt),
+        (HgvsVariant::Genome(av), HgvsVariant::Genome(bv)) => av.accession == bv.accession,
+        (HgvsVariant::Cds(av), HgvsVariant::Cds(bv)) => av.accession == bv.accession,
+        (HgvsVariant::Tx(av), HgvsVariant::Tx(bv)) => av.accession == bv.accession,
+        (HgvsVariant::Rna(av), HgvsVariant::Rna(bv)) => av.accession == bv.accession,
+        (HgvsVariant::Mt(av), HgvsVariant::Mt(bv)) => av.accession == bv.accession,
+        _ => false,
+    }
+}
+
+/// Position-only extraction for the cheap adjacency precheck. Returns the
+/// anchor's `(start, end)` tuple if the variant is merge-eligible by type
+/// and position, without allocating alt bases.
+fn simple_range_for_variant(v: &HgvsVariant) -> Option<(u64, u64)> {
+    match v {
+        HgvsVariant::Genome(g) => simple_range_for_loc_edit(&g.loc_edit, simple_genome_range),
+        HgvsVariant::Cds(c) => simple_range_for_loc_edit(&c.loc_edit, simple_cds_range),
+        HgvsVariant::Tx(t) => simple_range_for_loc_edit(&t.loc_edit, simple_tx_range),
+        HgvsVariant::Rna(r) => simple_range_for_loc_edit(&r.loc_edit, simple_rna_range),
+        HgvsVariant::Mt(m) => simple_range_for_loc_edit(&m.loc_edit, simple_genome_range),
         _ => None,
     }
 }
 
-fn try_merge_genome(a: &GenomeVariant, b: &GenomeVariant) -> Option<GenomeVariant> {
-    if a.accession != b.accession {
-        return None;
+/// Per-coordinate-system dispatch for full anchor extraction.
+fn anchor_for_variant(v: &HgvsVariant) -> Option<Anchor> {
+    match v {
+        HgvsVariant::Genome(g) => anchor_from_loc_edit(&g.loc_edit, simple_genome_range),
+        HgvsVariant::Cds(c) => anchor_from_loc_edit(&c.loc_edit, simple_cds_range),
+        HgvsVariant::Tx(t) => anchor_from_loc_edit(&t.loc_edit, simple_tx_range),
+        HgvsVariant::Rna(r) => anchor_from_loc_edit(&r.loc_edit, simple_rna_range),
+        HgvsVariant::Mt(m) => anchor_from_loc_edit(&m.loc_edit, simple_genome_range),
+        _ => None,
     }
-    let aa = anchor_from_loc_edit(&a.loc_edit, simple_genome_range)?;
-    let ba = anchor_from_loc_edit(&b.loc_edit, simple_genome_range)?;
-    let merged = merge_anchors(aa, ba)?;
-    Some(build_genome_merged(a, merged))
 }
 
-fn try_merge_cds(a: &CdsVariant, b: &CdsVariant) -> Option<CdsVariant> {
-    if a.accession != b.accession {
+/// Position-only counterpart of `anchor_from_loc_edit`. Mirrors its
+/// edit-kind and edit-certainty filters but does not touch alt bases.
+fn simple_range_for_loc_edit<L>(
+    loc_edit: &LocEdit<Interval<L>, NaEdit>,
+    range_fn: impl Fn(&Interval<L>) -> Option<(u64, u64)>,
+) -> Option<(u64, u64)> {
+    if !loc_edit.edit.is_certain() {
         return None;
     }
-    let aa = anchor_from_loc_edit(&a.loc_edit, simple_cds_range)?;
-    let ba = anchor_from_loc_edit(&b.loc_edit, simple_cds_range)?;
-    let merged = merge_anchors(aa, ba)?;
-    Some(build_cds_merged(a, merged))
+    let edit = loc_edit.edit.inner()?;
+    let (start, end) = range_fn(&loc_edit.location)?;
+    match edit {
+        NaEdit::Substitution { .. }
+        | NaEdit::SubstitutionNoRef { .. }
+        | NaEdit::Deletion { .. } => Some((start, end)),
+        NaEdit::Delins { sequence } => {
+            sequence.bases()?;
+            Some((start, end))
+        }
+        NaEdit::Insertion { sequence } => {
+            sequence.bases()?;
+            // Anchor for an insertion is [end, start] — empty range at boundary.
+            (end == start.checked_add(1)?).then_some((end, start))
+        }
+        _ => None,
+    }
 }
 
-fn try_merge_tx(a: &TxVariant, b: &TxVariant) -> Option<TxVariant> {
-    if a.accession != b.accession {
-        return None;
+/// Build the merged variant from the head of output and the merged anchor.
+/// Caller has already established that `head` and the partner are the same
+/// kind via `same_accession_and_kind`.
+fn build_merged(head: &HgvsVariant, merged: &Anchor) -> HgvsVariant {
+    match head {
+        HgvsVariant::Genome(g) => HgvsVariant::Genome(build_genome_merged(g, merged.clone())),
+        HgvsVariant::Cds(c) => HgvsVariant::Cds(build_cds_merged(c, merged.clone())),
+        HgvsVariant::Tx(t) => HgvsVariant::Tx(build_tx_merged(t, merged.clone())),
+        HgvsVariant::Rna(r) => HgvsVariant::Rna(build_rna_merged(r, merged.clone())),
+        HgvsVariant::Mt(m) => HgvsVariant::Mt(build_mt_merged(m, merged.clone())),
+        _ => unreachable!("build_merged called with non-NaEdit variant kind"),
     }
-    let aa = anchor_from_loc_edit(&a.loc_edit, simple_tx_range)?;
-    let ba = anchor_from_loc_edit(&b.loc_edit, simple_tx_range)?;
-    let merged = merge_anchors(aa, ba)?;
-    Some(build_tx_merged(a, merged))
-}
-
-fn try_merge_rna(a: &RnaVariant, b: &RnaVariant) -> Option<RnaVariant> {
-    if a.accession != b.accession {
-        return None;
-    }
-    let aa = anchor_from_loc_edit(&a.loc_edit, simple_rna_range)?;
-    let ba = anchor_from_loc_edit(&b.loc_edit, simple_rna_range)?;
-    let merged = merge_anchors(aa, ba)?;
-    Some(build_rna_merged(a, merged))
-}
-
-fn try_merge_mt(a: &MtVariant, b: &MtVariant) -> Option<MtVariant> {
-    if a.accession != b.accession {
-        return None;
-    }
-    let aa = anchor_from_loc_edit(&a.loc_edit, simple_genome_range)?;
-    let ba = anchor_from_loc_edit(&b.loc_edit, simple_genome_range)?;
-    let merged = merge_anchors(aa, ba)?;
-    Some(build_mt_merged(a, merged))
 }
 
 /// Combine two adjacency-checked anchors into one merged anchor.
-/// Returns None if the pair is not strictly adjacent (`a.end + 1 == b.start`).
-/// For two `Insertion` anchors at the same boundary `p|p+1` (both `start=p+1, end=p`),
-/// `a.end + 1 = p + 1 == b.start = p + 1`, so adjacency holds.
-fn merge_anchors(a: Anchor, b: Anchor) -> Option<Anchor> {
-    if a.end.checked_add(1)? != b.start {
-        return None;
-    }
+/// Caller has already verified `a.end + 1 == b.start`.
+fn merge_anchors(a: Anchor, b: Anchor) -> Anchor {
+    debug_assert_eq!(a.end.checked_add(1), Some(b.start));
     let mut alt = a.alt;
     alt.extend(b.alt);
-    Some(Anchor {
+    Anchor {
         start: a.start.min(b.start),
         end: a.end.max(b.end),
         alt,
-    })
+    }
 }
 
 /// Extract an anchor from a sub-variant's location+edit. The `range_fn`
