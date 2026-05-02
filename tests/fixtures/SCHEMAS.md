@@ -89,6 +89,13 @@ All three top-level keys are optional. `transcripts` follows the same schema
 as the bare-array form. The bare-array form continues to be accepted for
 backward compatibility.
 
+`from_json` validates the JSON shape strictly: the root must be either a JSON
+array (bare-array form) or a JSON object (extended form). Scalar, null, or
+boolean roots are rejected with a `FerroError::Json` rather than silently
+producing an empty provider. Within the object form, unknown top-level keys
+(e.g. a typo like `transripts`) are also rejected via `deny_unknown_fields`.
+See `MockProvider::from_json` in `src/reference/mock.rs`.
+
 ---
 
 ## Parsing Test Schema
