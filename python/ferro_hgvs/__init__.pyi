@@ -421,6 +421,23 @@ class Normalizer:
         """
         ...
 
+    @staticmethod
+    def from_manifest(manifest_path: str, direction: str = "3prime") -> Normalizer:
+        """Create a normalizer from a reference manifest written by ``ferro prepare``.
+
+        Args:
+            manifest_path: Path to a manifest.json file (typically inside a
+                directory produced by ``ferro prepare``).
+            direction: Shuffle direction - "3prime" (default) or "5prime".
+
+        Returns:
+            A Normalizer backed by a MultiFastaProvider.
+
+        Raises:
+            RuntimeError: If the manifest cannot be loaded.
+        """
+        ...
+
     def parse(self, hgvs_string: str) -> HgvsVariant:
         """Parse an HGVS string."""
         ...
@@ -629,6 +646,21 @@ class EquivalenceChecker:
 
         Args:
             reference_json: Optional path to a transcripts.json file
+        """
+        ...
+
+    @staticmethod
+    def from_manifest(manifest_path: str) -> EquivalenceChecker:
+        """Create an equivalence checker from a reference manifest.
+
+        Args:
+            manifest_path: Path to a manifest.json file produced by ``ferro prepare``.
+
+        Returns:
+            An EquivalenceChecker backed by a MultiFastaProvider.
+
+        Raises:
+            RuntimeError: If the manifest cannot be loaded.
         """
         ...
 
@@ -851,6 +883,21 @@ class BatchProcessor:
 
         Args:
             reference_json: Optional path to a transcripts.json file
+        """
+        ...
+
+    @staticmethod
+    def from_manifest(manifest_path: str) -> BatchProcessor:
+        """Create a batch processor from a reference manifest.
+
+        Args:
+            manifest_path: Path to a manifest.json file produced by ``ferro prepare``.
+
+        Returns:
+            A BatchProcessor backed by a MultiFastaProvider.
+
+        Raises:
+            RuntimeError: If the manifest cannot be loaded.
         """
         ...
 
@@ -1225,6 +1272,21 @@ class CoordinateMapper:
         Args:
             reference_json: Optional path to a transcripts.json file for reference data.
                 If not provided, uses built-in test data.
+        """
+        ...
+
+    @staticmethod
+    def from_manifest(manifest_path: str) -> CoordinateMapper:
+        """Create a coordinate mapper from a reference manifest.
+
+        Args:
+            manifest_path: Path to a manifest.json file produced by ``ferro prepare``.
+
+        Returns:
+            A CoordinateMapper backed by a MultiFastaProvider.
+
+        Raises:
+            RuntimeError: If the manifest cannot be loaded.
         """
         ...
 

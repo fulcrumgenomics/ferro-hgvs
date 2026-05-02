@@ -1,0 +1,8 @@
+{
+  "prepared_at": "2026-04-30T00:00:00Z",
+  "transcript_fastas": ["transcripts/test.fna"],
+  "genome_fasta": null,
+  "cdot_json": null,
+  "transcript_count": 1,
+  "available_prefixes": ["NM_"]
+}
