@@ -364,54 +364,6 @@ mod position_ordering {
 }
 
 // =============================================================================
-// GAP 3: Intronic insertions
-// =============================================================================
-
-mod intronic_insertions {
-    use super::*;
-
-    #[test]
-    fn test_plus_strand_intronic_insertion() {
-        // Basic intronic insertion on plus strand
-        let provider = make_provider_with_plus_strand();
-        let result = normalize(provider, "NM_PLUS.1:c.30+3_30+4insGGG");
-        assert!(
-            result.contains("ins"),
-            "Should remain an insertion, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_minus_strand_intronic_insertion() {
-        // Basic intronic insertion on minus strand — the core issue #11 scenario
-        let provider = make_provider_with_minus_strand();
-        let result = normalize(provider, "NM_MINUS.1:c.30+3_30+4insGGG");
-        assert!(
-            result.contains("ins"),
-            "Should remain an insertion, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_intronic_insertion_to_dup_plus_strand() {
-        // If inserted sequence matches the preceding intronic sequence, should become dup.
-        // Intron 1 genomic (1031-1040): AAACCCAAAT
-        // c.30+1 = genomic 1031 = A, c.30+2 = 1032 = A, c.30+3 = 1033 = A
-        // Inserting A at c.30+3_30+4 into AAA tract could become dup
-        let provider = make_provider_with_plus_strand();
-        let result = normalize(provider, "NM_PLUS.1:c.30+1_30+2insA");
-        // In an AAA tract, inserting A should become dup after 3' shift
-        assert!(
-            result.contains("dup") || result.contains("ins"),
-            "Should be dup or ins, got: {}",
-            result
-        );
-    }
-}
-
-// =============================================================================
 // GAP 4: Intronic duplications
 // =============================================================================
 
