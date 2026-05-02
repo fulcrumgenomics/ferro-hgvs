@@ -489,6 +489,26 @@ fn test_merged_allele_changes_variant_kind() {
 }
 
 #[test]
+fn test_singleton_cis_allele_preserves_wrapper() {
+    // The unwrap in normalize_allele must only fire when a merge actually
+    // collapsed multiple sub-variants — not for pre-existing singletons.
+    // Parsing `[1000G>A]` yields an AlleleVariant with one sub-variant; with
+    // no merge happening, the wrapper must round-trip so programmatic callers
+    // still see HgvsVariant::Allele. (Display already renders the bracket-free
+    // form via AlleleVariant::Display, so user-visible output is unchanged.)
+    use ferro_hgvs::HgvsVariant;
+    let normalizer = Normalizer::new(MockProvider::new());
+    let parsed = parse_hgvs("NC_000001.11:g.[1000G>A]").expect("parse failed");
+    assert!(matches!(parsed, HgvsVariant::Allele(_)));
+    let normalized = normalizer.normalize(&parsed).expect("normalize failed");
+    assert!(
+        matches!(normalized, HgvsVariant::Allele(_)),
+        "expected Allele preserved (no merge happened), got {:?}",
+        normalized
+    );
+}
+
+#[test]
 fn test_merged_delins_spdi_needs_reference() {
     // Documents that hgvs_to_spdi_simple cannot encode a merged delins
     // without reference data: the merged form drops per-base ref info from
