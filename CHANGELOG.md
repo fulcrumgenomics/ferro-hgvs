@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 3'-shift coverage matrix for insertion variants
+  (`tests/ins_shift_matrix.rs`): 84 rstest cases across all 7 nucleotide
+  coord-system / strand combinations × 8 shuffle scenarios, with a
+  shared `SyntheticBuilder` fixture helper at `tests/common/synthetic.rs`
+  (reusable by future del / dup / repeat-notation matrices). Issue #81
+  item A7.
 - *(normalize)* Merge consecutive sub-variants in cis alleles into a single delins per HGVS spec. `g.[1000G>A;1001A>C]` now normalizes to `g.1000_1001delinsAC`; `g.[1000del;1001del]` to `g.1000_1001del`. Covers `g./c./n./r./m.` coordinate systems, sub/del/delins/ins edit combinations, chains, and same-boundary insertion pairs. Non-adjacent variants, intronic/UTR boundaries, uncertain edits, and non-`Literal` insertion payloads are barriers and pass through unchanged. The codon-frame exception (one-nt gap within a codon) is tracked separately in [#79](https://github.com/fulcrumgenomics/ferro-hgvs/issues/79). ([#80](https://github.com/fulcrumgenomics/ferro-hgvs/pull/80))
+
+### Fixed
+
+- Insertions that add ≥2 copies of a multi-base tandem repeat unit now
+  emit repeat notation (`unit[N+k]`) instead of a duplication of the
+  inserted sequence, per HGVS spec ("when more than one additional copies
+  are inserted directly 3' of the original copy, the change is indicated
+  using the format for Repeated sequences"). Single-unit additions remain
+  `dup`. Issue #81 item A7.
+- `MockProvider::get_sequence` now falls through to genomic contig
+  lookup when the id is not a transcript, matching `FastaProvider`'s
+  behavior. This unblocks 3'-shift normalization for genomic test
+  fixtures that register only `add_genomic_sequence`. Issue #81 item A7.
 
 ## [0.4.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.3.0...v0.4.0) - 2026-04-30
 
