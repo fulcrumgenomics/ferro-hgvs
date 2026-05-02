@@ -269,14 +269,20 @@ impl ReferenceProvider for MockProvider {
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
-        let transcript = self.get_transcript(id)?;
+        // Try as transcript ID first (matches FastaProvider behavior).
+        if let Ok(transcript) = self.get_transcript(id) {
+            return transcript
+                .get_sequence(start, end)
+                .map(|s| s.to_string())
+                .ok_or_else(|| FerroError::InvalidCoordinates {
+                    msg: format!("Position {}-{} out of range for {}", start, end, id),
+                });
+        }
 
-        transcript
-            .get_sequence(start, end)
-            .map(|s| s.to_string())
-            .ok_or_else(|| FerroError::InvalidCoordinates {
-                msg: format!("Position {}-{} out of range for {}", start, end, id),
-            })
+        // Fall through to contig/chromosome lookup so genomic accessions
+        // resolve against `genomic_sequences` instead of returning
+        // ReferenceNotFound.
+        self.get_genomic_sequence(id, start, end)
     }
 
     fn get_protein_sequence(
@@ -394,6 +400,16 @@ mod tests {
         let provider = MockProvider::with_test_data();
         let seq = provider.get_sequence("NM_000088.3", 0, 3).unwrap();
         assert_eq!(seq, "ATG");
+    }
+
+    #[test]
+    fn test_get_sequence_falls_through_to_contig() {
+        // Regression: get_sequence should fall through to contig lookup
+        // when the id is not a transcript, matching FastaProvider behavior.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("chr1", "ACGTACGT");
+        let seq = provider.get_sequence("chr1", 0, 4).unwrap();
+        assert_eq!(seq, "ACGT");
     }
 
     #[test]
