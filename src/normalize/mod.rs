@@ -25,6 +25,7 @@
 
 pub mod boundary;
 pub mod config;
+pub(crate) mod merge;
 pub mod rules;
 pub mod shuffle;
 pub mod validate;
@@ -221,13 +222,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
             normalized = self.resolve_overlaps(normalized)?;
         }
 
-        Ok((
+        // HGVS requires consecutive edits in cis to render as a single delins.
+        // Track input length so we only unwrap when a merge actually collapsed
+        // multiple sub-variants — not for pre-existing singleton alleles, which
+        // must round-trip with the Allele wrapper intact for programmatic callers
+        // (Display already renders singletons in bare form regardless).
+        let original_len = normalized.len();
+        let mut merged = merge::merge_consecutive_edits(normalized, allele.phase);
+
+        let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
+            && original_len > 1
+            && merged.len() == 1
+        {
+            merged.pop().unwrap()
+        } else {
             HgvsVariant::Allele(crate::hgvs::variant::AlleleVariant::new(
-                normalized,
+                merged,
                 allele.phase,
-            )),
-            all_warnings,
-        ))
+            ))
+        };
+
+        Ok((result, all_warnings))
     }
 
     /// Resolve overlaps between normalized variants in a compound allele.
