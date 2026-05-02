@@ -147,88 +147,139 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
     })
 }
 
-/// Check if an insertion in a homopolymer should become repeat notation
+/// Check if an insertion in a tandem repeat should become repeat notation.
 ///
-/// When inserting bases that are identical to an existing homopolymer repeat,
-/// the result should be expressed as repeat notation (e.g., A[9]).
+/// Per HGVS spec: when an insertion adds 2 or more copies of a tandem
+/// repeat unit already present adjacent to the insertion point, the
+/// variant is expressed as repeat notation `unit[N+k]`. A single-copy
+/// addition is left as a duplication (handled by `insertion_is_duplication`).
 ///
-/// Returns the total count if this should be repeat notation, None otherwise.
+/// Returns `Some((first_byte, total_count, ref_start_1based,
+/// ref_end_1based, unit_bytes))` when repeat notation applies, `None`
+/// otherwise. `first_byte` is preserved for backwards-compat with the
+/// homopolymer caller; `unit_bytes` is the full tandem unit.
 pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
     inserted_seq: &[u8],
-) -> Option<(u8, u64, u64, u64)> {
-    // Only handle single-base insertions for now
-    // (multi-base tandem repeats are more complex)
+) -> Option<(u8, u64, u64, u64, Vec<u8>)> {
     if inserted_seq.is_empty() {
         return None;
     }
 
-    // Check if all inserted bases are the same
-    let first = inserted_seq[0];
-    if !inserted_seq.iter().all(|&b| b == first) {
+    let base_unit = smallest_repeat_unit(inserted_seq);
+    let added_copies = (inserted_seq.len() / base_unit.len()) as u64;
+    if added_copies < 2 {
+        // Single-copy addition is a duplication, not repeat notation.
         return None;
     }
 
-    let pos_idx = pos as usize;
-
-    // Find the homopolymer at or near this insertion position
-    // For an insertion between positions X and X+1, we need to find any adjacent
-    // homopolymer of the same base and pick the largest one.
-    // Check multiple positions and pick the best (largest) homopolymer
-    let mut best_analysis: Option<RepeatAnalysis> = None;
-
-    // Check position before insertion (X-1)
-    if pos_idx > 0 && ref_seq.get(pos_idx - 1) == Some(&first) {
-        if let Some(analysis) = find_homopolymer_at(ref_seq, pos_idx - 1) {
-            if analysis.base == Some(first) {
-                best_analysis = Some(analysis);
+    // The inserted sequence may be written as any cyclic rotation of the
+    // reference repeat unit (e.g. `insCAGCAG` against a `GCA` tract). Try
+    // every rotation of `base_unit` and pick the one that yields the
+    // largest contiguous tandem run anchored at the insertion point.
+    let u_len = base_unit.len();
+    let mut best: Option<(Vec<u8>, usize, u64)> = None;
+    for r in 0..u_len {
+        let mut rotated = Vec::with_capacity(u_len);
+        rotated.extend_from_slice(&base_unit[r..]);
+        rotated.extend_from_slice(&base_unit[..r]);
+        if let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated) {
+            if ref_count > 0 && best.as_ref().is_none_or(|(_, _, bc)| ref_count > *bc) {
+                best = Some((rotated, ref_start, ref_count));
             }
         }
     }
 
-    // Check position at insertion (X)
-    if ref_seq.get(pos_idx) == Some(&first) {
-        if let Some(analysis) = find_homopolymer_at(ref_seq, pos_idx) {
-            if analysis.base == Some(first)
-                && (best_analysis.is_none()
-                    || analysis.ref_count > best_analysis.as_ref().unwrap().ref_count)
-            {
-                best_analysis = Some(analysis);
-            }
+    let (unit, ref_start, ref_count) = best?;
+    let total_count = ref_count + added_copies;
+    let ref_end = ref_start + ref_count as usize * unit.len() - 1;
+    Some((
+        unit[0],
+        total_count,
+        index_to_hgvs_pos(ref_start),
+        index_to_hgvs_pos(ref_end),
+        unit,
+    ))
+}
+
+/// Smallest unit `U` such that `seq = U * k` for some integer k ≥ 1.
+fn smallest_repeat_unit(seq: &[u8]) -> &[u8] {
+    let n = seq.len();
+    for u in 1..=n {
+        if !n.is_multiple_of(u) {
+            continue;
+        }
+        let unit = &seq[..u];
+        if seq.chunks_exact(u).all(|c| c == unit) {
+            return unit;
+        }
+    }
+    seq // fallback (unreachable for n>0)
+}
+
+/// Find the maximal tandem run of `unit` near position `pos` in
+/// `ref_seq`. `pos` is the 0-based index of the base immediately 5' of
+/// the insertion point — i.e., the insertion is between `pos` and
+/// `pos+1`. The tract may not be unit-aligned with `pos`, so we probe
+/// anchor offsets in a window around `pos` and pick the run that
+/// abuts/contains the insertion point.
+///
+/// Returns `(ref_start_0based, count)` of the chosen tandem run.
+fn find_tandem_extent(ref_seq: &[u8], pos: usize, unit: &[u8]) -> Option<(usize, u64)> {
+    let u = unit.len();
+    if u == 0 {
+        return None;
+    }
+
+    // Insertion point in "between-bases" coords: between pos and pos+1.
+    let ins_point = pos + 1;
+
+    // Probe candidate anchor offsets within [ins_point - u, ins_point].
+    // For each anchor `a`, compute the maximal tandem run that includes
+    // anchor `a` (walk left and right in steps of `u`). Accept runs that
+    // abut or span the insertion point. Among accepted runs, pick the
+    // largest count.
+    let lo = ins_point.saturating_sub(u);
+    let hi = ins_point.min(ref_seq.len());
+
+    let mut best: Option<(usize, u64)> = None;
+
+    for anchor in lo..=hi {
+        if anchor + u > ref_seq.len() {
+            continue;
+        }
+        if &ref_seq[anchor..anchor + u] != unit {
+            continue;
+        }
+
+        // Walk left from anchor in steps of u.
+        let mut start = anchor;
+        while start >= u && &ref_seq[start - u..start] == unit {
+            start -= u;
+        }
+        // Walk right from anchor in steps of u.
+        let mut end = anchor + u;
+        while end + u <= ref_seq.len() && &ref_seq[end..end + u] == unit {
+            end += u;
+        }
+
+        let count = ((end - start) / u) as u64;
+
+        // Require the run [start, end) to abut/span ins_point: the
+        // insertion point must lie within [start, end].
+        if ins_point < start || ins_point > end {
+            continue;
+        }
+
+        match best {
+            None => best = Some((start, count)),
+            Some((_, bc)) if count > bc => best = Some((start, count)),
+            _ => {}
         }
     }
 
-    // Check position after insertion (X+1) - for cases where insertion extends a following tract
-    if ref_seq.get(pos_idx + 1) == Some(&first) {
-        if let Some(analysis) = find_homopolymer_at(ref_seq, pos_idx + 1) {
-            if analysis.base == Some(first)
-                && (best_analysis.is_none()
-                    || analysis.ref_count > best_analysis.as_ref().unwrap().ref_count)
-            {
-                best_analysis = Some(analysis);
-            }
-        }
-    }
-
-    let analysis = best_analysis;
-
-    if let Some(analysis) = analysis {
-        if analysis.base == Some(first) {
-            // Total count = reference count + inserted count
-            let total_count = analysis.ref_count + inserted_seq.len() as u64;
-            // Return (base, count, start, end) where start/end are 1-based
-            // Per HGVS, positions refer to the reference repeat tract, not expanded
-            return Some((
-                first,
-                total_count,
-                index_to_hgvs_pos(analysis.ref_start),
-                index_to_hgvs_pos(analysis.ref_start + analysis.ref_count as usize - 1),
-            ));
-        }
-    }
-
-    None
+    best
 }
 
 /// Get the complement of a DNA base
@@ -891,26 +942,46 @@ mod tests {
 
     #[test]
     fn test_insertion_to_repeat() {
-        // Sequence: GGGAAAAAGGG (5 A's at positions 3-7, 0-indexed)
+        // Sequence: GGGAAAAAGGG (5 A's at positions 3-7, 0-indexed inclusive)
         let ref_seq = b"GGGAAAAAGGG";
 
-        // Inserting AA at position 8 (after the A's) should become A[7]
-        // Position 8 is 0-indexed, which is after the last A
-        let result = insertion_to_repeat(ref_seq, 8, b"AA");
+        // `pos` is the 0-based index of the base immediately 5' of the
+        // insertion point. pos=7 means insert between index 7 and 8 — i.e.,
+        // immediately after the last A in the homopolymer. Inserting AA here
+        // should become A[7] (5 ref + 2 inserted).
+        let result = insertion_to_repeat(ref_seq, 7, b"AA");
         assert!(result.is_some());
-        let (base, count, start, end) = result.unwrap();
+        let (base, count, start, end, _unit) = result.unwrap();
         assert_eq!(base, b'A');
         assert_eq!(count, 7); // 5 original + 2 inserted
         assert_eq!(start, 4); // 1-indexed start of A region in reference
         assert_eq!(end, 8); // 1-indexed end of A region in reference (per HGVS, positions refer to reference tract)
 
+        // Single-copy inserts (added_copies < 2) are duplications, not repeats.
+        let result = insertion_to_repeat(ref_seq, 7, b"A");
+        assert!(result.is_none());
+
         // Inserting T (non-matching) should return None
-        let result = insertion_to_repeat(ref_seq, 8, b"T");
+        let result = insertion_to_repeat(ref_seq, 7, b"T");
         assert!(result.is_none());
 
         // Inserting mixed bases should return None
-        let result = insertion_to_repeat(ref_seq, 8, b"AT");
+        let result = insertion_to_repeat(ref_seq, 7, b"AT");
         assert!(result.is_none());
+
+        // Multi-base tandem unit: insert ACAC into ACAC tract → AC[4].
+        // ref_seq has ACAC at indices 0-3. Insert ACAC just before index 4
+        // (pos=3, between A at index 3 and base at index 4). Expected:
+        // 2 ref AC units + 2 inserted AC units = AC[4] at ref indices 0..3.
+        let ref_ac = b"ACACGGG";
+        let result = insertion_to_repeat(ref_ac, 3, b"ACAC");
+        assert!(result.is_some());
+        let (base, count, start, end, unit) = result.unwrap();
+        assert_eq!(base, b'A');
+        assert_eq!(count, 4);
+        assert_eq!(start, 1); // 1-indexed
+        assert_eq!(end, 4); // 1-indexed
+        assert_eq!(unit, b"AC");
     }
 
     #[test]
