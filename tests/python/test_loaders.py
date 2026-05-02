@@ -28,6 +28,7 @@ class TestObjectFormJson:
                 }
             ],
             "proteins": {"NP_TEST.1": "MPKVLP"},
+            "genomic_sequences": {"NC_TEST.1": "ACGTACGT"},
         }
         ref_file = tmp_path / "ref.json"
         ref_file.write_text(json.dumps(ref))
