@@ -178,6 +178,12 @@ criterion = "0.5"
 flate2 = "1.0"
 tempfile = "3.14"
 rstest = "0.23"
+# Used by examples/generate_spec_fixture.rs to extract HGVS strings from the
+# vendored v21.0 spec. Examples (unlike binaries under src/bin) have access to
+# dev-dependencies, so these stay out of the runtime dependency tree.
+pulldown-cmark = { version = "0.13", default-features = false }
+serde_yaml = "0.9"
+anyhow = "1"
 
 [[bin]]
 name = "ferro"
