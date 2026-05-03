@@ -49,6 +49,9 @@ results/
 # Local configuration (generated via `ferro-web config`)
 config/service.toml
 
+# Local design specs and implementation plans (not tracked)
+docs/superpowers/
+
 # Python
 __pycache__/
 *.pyc

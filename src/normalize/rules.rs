@@ -204,7 +204,7 @@ pub fn insertion_to_repeat(
 }
 
 /// Smallest unit `U` such that `seq = U * k` for some integer k ≥ 1.
-fn smallest_repeat_unit(seq: &[u8]) -> &[u8] {
+pub(crate) fn smallest_repeat_unit(seq: &[u8]) -> &[u8] {
     let n = seq.len();
     for u in 1..=n {
         if !n.is_multiple_of(u) {
@@ -253,18 +253,17 @@ fn find_tandem_extent(ref_seq: &[u8], pos: usize, unit: &[u8]) -> Option<(usize,
             continue;
         }
 
-        // Walk left from anchor in steps of u.
-        let mut start = anchor;
-        while start >= u && &ref_seq[start - u..start] == unit {
-            start -= u;
-        }
-        // Walk right from anchor in steps of u.
-        let mut end = anchor + u;
-        while end + u <= ref_seq.len() && &ref_seq[end..end + u] == unit {
-            end += u;
-        }
-
-        let count = ((end - start) / u) as u64;
+        // Anchor identifies one unit-aligned occurrence; extend to the full tract.
+        // The `?`-via-let-else is defensive: we just verified the anchor matches,
+        // so `extend_tandem_tract` shouldn't return None here.
+        let Some(TandemTract {
+            start,
+            end,
+            ref_count: count,
+        }) = extend_tandem_tract(ref_seq, anchor..anchor + u, unit)
+        else {
+            continue;
+        };
 
         // Require the run [start, end) to abut/span ins_point: the
         // insertion point must lie within [start, end].
@@ -280,6 +279,144 @@ fn find_tandem_extent(ref_seq: &[u8], pos: usize, unit: &[u8]) -> Option<(usize,
     }
 
     best
+}
+
+/// Information about a maximal tandem repeat tract in a reference sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TandemTract {
+    /// 0-based, inclusive start of the tract.
+    pub start: usize,
+    /// 0-based, exclusive end of the tract.
+    pub end: usize,
+    /// Number of full `unit`-length copies in the tract.
+    pub ref_count: u64,
+}
+
+/// Walk left from `anchor.start` and right from `anchor.end` extending
+/// unit-by-unit while `ref_seq` matches `unit`. The anchor span must lie on
+/// `unit`-length boundaries — i.e., `anchor.len() % unit.len() == 0` — and
+/// `ref_seq[anchor]` must be `unit` repeated some non-negative number of times.
+///
+/// Returns the maximal tract enclosing the anchor, or `None` if the anchor
+/// itself isn't unit-periodic (defensive — `deletion_to_repeat` already checks
+/// before calling, but we don't trust future callers).
+pub(crate) fn extend_tandem_tract(
+    ref_seq: &[u8],
+    anchor: std::ops::Range<usize>,
+    unit: &[u8],
+) -> Option<TandemTract> {
+    let u = unit.len();
+    if u == 0 || anchor.start > anchor.end || anchor.end > ref_seq.len() {
+        return None;
+    }
+    if !(anchor.end - anchor.start).is_multiple_of(u) {
+        return None;
+    }
+    // Defensive: verify the anchor itself is unit-periodic.
+    if !ref_seq[anchor.start..anchor.end]
+        .chunks_exact(u)
+        .all(|chunk| chunk == unit)
+    {
+        return None;
+    }
+
+    // Walk left in steps of u.
+    let mut start = anchor.start;
+    while start >= u && &ref_seq[start - u..start] == unit {
+        start -= u;
+    }
+    // Walk right in steps of u.
+    let mut end = anchor.end;
+    while end + u <= ref_seq.len() && &ref_seq[end..end + u] == unit {
+        end += u;
+    }
+
+    let ref_count = ((end - start) / u) as u64;
+    Some(TandemTract {
+        start,
+        end,
+        ref_count,
+    })
+}
+
+/// Description of how a deletion can be re-expressed as repeat notation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DelToRepeatResult {
+    /// The phase-aligned tandem unit (length 1 for homopolymer, longer for
+    /// multi-base tandem).
+    pub unit: Vec<u8>,
+    /// Post-deletion unit count (`N - k`).
+    pub count: u64,
+    /// 1-based HGVS start of the canonical reference tract (inclusive).
+    pub start: u64,
+    /// 1-based HGVS end of the canonical reference tract (inclusive).
+    pub end: u64,
+}
+
+/// Compute the canonical `unit[N-k]` description for a post-3'-shift deletion,
+/// or return `None` if the deletion does not meet B2 trigger conditions.
+///
+/// # Shuffle phase-alignment lemma (why no rotation iteration)
+///
+/// The 3' shuffle (`shuffle.rs`) extends `del_end` while
+/// `ref[del_start] == ref[del_end]`, terminating exactly when the period
+/// breaks. For a deletion sitting inside a tandem tract with period `p`, the
+/// post-shift `del_slice = ref_seq[del_start..del_end]` is therefore
+/// unit-aligned with the surrounding tract, and `smallest_repeat_unit(del_slice)`
+/// equals the tract's natural unit. So `extend_tandem_tract` walking from the
+/// post-shift `del_start` finds the full tract on the r=0 phase — no rotation
+/// iteration is required here.
+///
+/// # Trigger conditions
+///
+/// All five must hold; otherwise returns `None` (caller emits plain `del`):
+///
+/// 1. `del_len % unit_len == 0` (length is a multiple of the unit's period).
+/// 2. The reference tract enclosing the deletion has `ref_count >= 2`.
+/// 3. `k = del_len / unit_len >= 2` (single-unit removal stays as `del`).
+/// 4. `post_count = ref_count - k >= 1` (full tract removal stays as `del`).
+/// 5. The deletion lies entirely within the tract (handled by `extend_tandem_tract`'s
+///    defensive periodicity check on the anchor).
+///
+/// The bounds check rejects 0-length deletions (`del_start == del_end`).
+/// Callers passing insertion-point-shaped zero-width ranges should use
+/// `extend_tandem_tract` directly instead.
+pub(crate) fn deletion_to_repeat(
+    ref_seq: &[u8],
+    del_start: usize,
+    del_end: usize,
+) -> Option<DelToRepeatResult> {
+    if del_start >= del_end || del_end > ref_seq.len() {
+        return None;
+    }
+    let del_slice = &ref_seq[del_start..del_end];
+    let unit_slice = smallest_repeat_unit(del_slice);
+    let p = unit_slice.len();
+    if p == 0 || !(del_end - del_start).is_multiple_of(p) {
+        return None;
+    }
+
+    let tract = extend_tandem_tract(ref_seq, del_start..del_end, unit_slice)?;
+    if tract.ref_count < 2 {
+        return None;
+    }
+
+    let k = ((del_end - del_start) / p) as u64;
+    if k < 2 {
+        return None;
+    }
+
+    let post_count = tract.ref_count - k;
+    if post_count == 0 {
+        return None;
+    }
+
+    Some(DelToRepeatResult {
+        unit: unit_slice.to_vec(),
+        count: post_count,
+        start: index_to_hgvs_pos(tract.start),
+        end: index_to_hgvs_pos(tract.end - 1),
+    })
 }
 
 /// Get the complement of a DNA base
@@ -631,36 +768,62 @@ pub fn normalize_repeat(
     repeat_unit: &[u8],
     specified_count: u64,
 ) -> RepeatNormResult {
-    // Count how many times the repeat unit appears in the reference
-    let Some((ref_count, ref_start, ref_end)) = count_tandem_repeats(ref_seq, pos, repeat_unit)
+    // Match `count_tandem_repeats`'s pre-refactor contract: an empty unit
+    // is meaningless and falls through to `Unchanged`. Without this guard,
+    // `smallest_repeat_unit(b"")` returns `b""` and the period division below
+    // panics.
+    if repeat_unit.is_empty() {
+        return RepeatNormResult::Unchanged;
+    }
+
+    // Canonicalize to the smallest period so callers spelling a non-minimal
+    // unit (e.g. `ATAT[1]` over an `AT[4]` tract) reach the right branch.
+    // Without this, a contraction misses B2 because k is computed in the
+    // caller-spelled unit (1 ATAT removed) instead of the canonical unit
+    // (2 ATs removed).
+    let canonical_unit = smallest_repeat_unit(repeat_unit);
+    let copies_per_input_unit = (repeat_unit.len() / canonical_unit.len()) as u64;
+    let specified_count = specified_count * copies_per_input_unit;
+
+    // Count how many times the canonical unit appears in the reference
+    let Some((ref_count, ref_start, ref_end)) = count_tandem_repeats(ref_seq, pos, canonical_unit)
     else {
         return RepeatNormResult::Unchanged;
     };
 
-    let unit_len = repeat_unit.len() as u64;
+    let unit_len = canonical_unit.len() as u64;
 
     if specified_count < ref_count {
-        // Convert to deletion - we're removing (ref_count - specified_count) copies
-        let del_count = ref_count - specified_count;
-        // Delete from 3' end (HGVS convention)
-        let del_len = del_count * unit_len;
-        // ref_end is exclusive (0-based), so last position is ref_end - 1
-        let del_end_idx = ref_end - 1;
-        let del_start_idx = ref_end - del_len as usize;
-        RepeatNormResult::Deletion {
-            start: index_to_hgvs_pos(del_start_idx),
-            end: index_to_hgvs_pos(del_end_idx),
+        let k = ref_count - specified_count;
+        if k >= 2 && specified_count >= 1 {
+            // B2 (symmetric with A7): >=2 unit reduction with surviving units → repeat
+            RepeatNormResult::Repeat {
+                start: index_to_hgvs_pos(ref_start),
+                end: index_to_hgvs_pos(ref_end - 1),
+                sequence: canonical_unit.to_vec(),
+                count: specified_count,
+            }
+        } else {
+            // 1-unit reduction or full tract removal → deletion
+            // (HGVS prioritization: deletion outranks unranked repeat[0])
+            let del_len = (k as usize) * unit_len as usize;
+            let del_end_idx = ref_end - 1;
+            let del_start_idx = ref_end - del_len;
+            RepeatNormResult::Deletion {
+                start: index_to_hgvs_pos(del_start_idx),
+                end: index_to_hgvs_pos(del_end_idx),
+            }
         }
     } else if specified_count == ref_count + 1 {
         // Convert to duplication - we're adding exactly one copy
         // The duplicated region is the last copy in the reference
         // ref_end is exclusive, so last position is ref_end - 1
         let dup_end_idx = ref_end - 1;
-        let dup_start_idx = ref_end - repeat_unit.len();
+        let dup_start_idx = ref_end - canonical_unit.len();
         RepeatNormResult::Duplication {
             start: index_to_hgvs_pos(dup_start_idx),
             end: index_to_hgvs_pos(dup_end_idx),
-            sequence: repeat_unit.to_vec(),
+            sequence: canonical_unit.to_vec(),
         }
     } else if specified_count == ref_count {
         // Same as reference - this is identity (no change)
@@ -672,7 +835,7 @@ pub fn normalize_repeat(
         RepeatNormResult::Repeat {
             start: index_to_hgvs_pos(ref_start),
             end: index_to_hgvs_pos(ref_end - 1),
-            sequence: repeat_unit.to_vec(),
+            sequence: canonical_unit.to_vec(),
             count: specified_count,
         }
     }
@@ -1094,17 +1257,19 @@ mod tests {
 
     #[test]
     fn test_normalize_repeat_to_deletion() {
-        // Sequence: GGGCATCATCATCATGGG (4 CAT repeats at positions 3-14)
-        // Specifying CAT[1] should become deletion of 3 CATs (9 bases)
+        // Sequence: GGGCATCATCATCATGGG (4 CAT repeats at positions 3-14, 0-indexed)
+        // Specifying CAT[1]: ref_count=4, specified=1, k=3 >= 2, post=1 >= 1 → B2 → Repeat
         let ref_seq = b"GGGCATCATCATCATGGG";
 
         let result = normalize_repeat(ref_seq, 3, b"CAT", 1);
         match result {
-            RepeatNormResult::Deletion { start, end } => {
-                // Should delete positions 7-15 (1-indexed), which is 3 CATs
-                assert_eq!(end - start + 1, 9, "Should delete 9 bases (3 CATs)");
+            RepeatNormResult::Repeat {
+                sequence, count, ..
+            } => {
+                assert_eq!(sequence, b"CAT");
+                assert_eq!(count, 1, "Should reflect specified count of 1");
             }
-            _ => panic!("Expected Deletion, got {:?}", result),
+            _ => panic!("Expected Repeat (B2), got {:?}", result),
         }
     }
 
@@ -1154,6 +1319,45 @@ mod tests {
 
         let result = normalize_repeat(ref_seq, 3, b"CAT", 2);
         assert!(matches!(result, RepeatNormResult::Unchanged));
+    }
+
+    #[test]
+    fn test_normalize_repeat_empty_unit_is_unchanged() {
+        // Pre-refactor, `normalize_repeat` delegated emptiness handling to
+        // `count_tandem_repeats`, which returns `None` on an empty unit, yielding
+        // `Unchanged`. The B2 canonicalization step now calls
+        // `smallest_repeat_unit` first, which returns the empty slice unchanged
+        // for an empty input — leaving a divide-by-zero on `repeat_unit.len() /
+        // canonical_unit.len()` unless we guard up front. This test pins the
+        // pre-refactor contract.
+        let ref_seq = b"GGGCATCATGGG";
+        let result = normalize_repeat(ref_seq, 3, b"", 1);
+        assert!(matches!(result, RepeatNormResult::Unchanged));
+    }
+
+    #[test]
+    fn test_normalize_repeat_canonicalizes_non_minimal_unit() {
+        // Caller-spelled `ATAT[1]` over an `AT[4]` tract is a contraction:
+        // canonical unit AT, ref_count=4, specified_canonical=2, k=2 → B2
+        // emits `AT[2]` at the canonical tract span. Without canonicalization
+        // this would fall to a 1-unit (ATAT) reduction → deletion (k<2).
+        let ref_seq = b"GGGATATATATGGG"; // AT-tract at indices 3..11 (4 AT)
+
+        let result = normalize_repeat(ref_seq, 3, b"ATAT", 1);
+        match result {
+            RepeatNormResult::Repeat {
+                start,
+                end,
+                sequence,
+                count,
+            } => {
+                assert_eq!(sequence, b"AT", "Should emit canonical (smallest) unit");
+                assert_eq!(count, 2, "Specified ATAT[1] = 2 canonical AT copies");
+                assert_eq!(start, 4, "Canonical tract starts at HGVS pos 4");
+                assert_eq!(end, 11, "Canonical tract ends at HGVS pos 11");
+            }
+            _ => panic!("Expected canonical AT[2] Repeat, got {:?}", result),
+        }
     }
 
     // =========================================================================
@@ -1217,6 +1421,143 @@ mod tests {
         let (s, e) = result2.unwrap();
         assert_eq!(s, 0);
         assert_eq!(e, 4);
+    }
+
+    // =========================================================================
+    // EXTEND_TANDEM_TRACT TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_extend_tandem_tract_homopolymer() {
+        // ref: "TTAAAATT", anchor [2,4) (the first AA), unit "A"
+        let ref_seq = b"TTAAAATT";
+        let tract = extend_tandem_tract(ref_seq, 2..4, b"A").unwrap();
+        assert_eq!(tract.start, 2);
+        assert_eq!(tract.end, 6);
+        assert_eq!(tract.ref_count, 4);
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_multi_base_unit() {
+        // ref: "TTGCAGCAGCATT", anchor [5,8) (middle GCA), unit "GCA"
+        let ref_seq = b"TTGCAGCAGCATT";
+        let tract = extend_tandem_tract(ref_seq, 5..8, b"GCA").unwrap();
+        assert_eq!(tract.start, 2);
+        assert_eq!(tract.end, 11);
+        assert_eq!(tract.ref_count, 3);
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_anchor_at_5prime_edge() {
+        // ref: "AAAATT", anchor [0,2), unit "A"
+        let ref_seq = b"AAAATT";
+        let tract = extend_tandem_tract(ref_seq, 0..2, b"A").unwrap();
+        assert_eq!(tract.start, 0);
+        assert_eq!(tract.end, 4);
+        assert_eq!(tract.ref_count, 4);
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_anchor_at_3prime_edge() {
+        // ref: "TTAAAA", anchor [4,6), unit "A"
+        let ref_seq = b"TTAAAA";
+        let tract = extend_tandem_tract(ref_seq, 4..6, b"A").unwrap();
+        assert_eq!(tract.start, 2);
+        assert_eq!(tract.end, 6);
+        assert_eq!(tract.ref_count, 4);
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_zero_width_anchor() {
+        // Zero-width anchor (insertion-point semantics): the anchor itself is
+        // trivially unit-periodic; the helper just walks left/right.
+        // ref: "TTAAAATT", anchor [4,4), unit "A"
+        let ref_seq = b"TTAAAATT";
+        let tract = extend_tandem_tract(ref_seq, 4..4, b"A").unwrap();
+        assert_eq!(tract.start, 2);
+        assert_eq!(tract.end, 6);
+        assert_eq!(tract.ref_count, 4);
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_anchor_not_unit_periodic() {
+        // ref: "TTAGAATT", anchor [2,4) is "AG" — not "A"-periodic.
+        let ref_seq = b"TTAGAATT";
+        assert!(extend_tandem_tract(ref_seq, 2..4, b"A").is_none());
+    }
+
+    #[test]
+    fn test_extend_tandem_tract_anchor_length_not_multiple_of_unit() {
+        // ref: "AAA", anchor [0,3), unit "AA" — len 3 % 2 == 1.
+        let ref_seq = b"AAA";
+        assert!(extend_tandem_tract(ref_seq, 0..3, b"AA").is_none());
+    }
+
+    // =========================================================================
+    // DELETION_TO_REPEAT TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_deletion_to_repeat_homopolymer_two_removed() {
+        // ref "TTAAAAATT" (5 A's at indices 2..7). Delete 2 A's at [4..6).
+        // After 3' shift, del lands at [5..7). post-shift slice "AA", unit "A", k=2.
+        // Tract [2..7), ref_count=5, post_count=3 → A[3] at HGVS [3..7] (1-based).
+        let ref_seq = b"TTAAAAATT";
+        let r = deletion_to_repeat(ref_seq, 5, 7).expect("should fire");
+        assert_eq!(r.unit, b"A");
+        assert_eq!(r.count, 3);
+        assert_eq!(r.start, 3); // 1-based HGVS
+        assert_eq!(r.end, 7);
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_multi_base_tandem_two_removed() {
+        // ref "TTGCAGCAGCATT" (3 GCAs at [2..11)). Delete 2 GCAs at [5..11).
+        // post-shift slice "GCAGCA", unit "GCA", k=2. Tract [2..11), ref_count=3,
+        // post_count=1 → GCA[1] at HGVS [3..11] (1-based).
+        let ref_seq = b"TTGCAGCAGCATT";
+        let r = deletion_to_repeat(ref_seq, 5, 11).expect("should fire");
+        assert_eq!(r.unit, b"GCA");
+        assert_eq!(r.count, 1);
+        assert_eq!(r.start, 3);
+        assert_eq!(r.end, 11);
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_one_unit_removed_returns_none() {
+        // k=1 → stays as del.
+        // ref "TTAAAAATT", delete 1 A at [6..7).
+        let ref_seq = b"TTAAAAATT";
+        assert!(deletion_to_repeat(ref_seq, 6, 7).is_none());
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_full_tract_removal_returns_none() {
+        // post_count == 0 → stays as del.
+        // ref "TTAATT", delete both A's at [2..4). ref_count=2, k=2, post_count=0.
+        let ref_seq = b"TTAATT";
+        assert!(deletion_to_repeat(ref_seq, 2, 4).is_none());
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_non_tandem_returns_none() {
+        // Single isolated unit, ref_count < 2.
+        // ref "TTGCATT", delete "GCA" at [2..5). smallest_repeat_unit("GCA")="GCA",
+        // ref_count=1, returns None.
+        let ref_seq = b"TTGCATT";
+        assert!(deletion_to_repeat(ref_seq, 2, 5).is_none());
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_finer_periodicity() {
+        // ref "TTATATATATATT" (5 ATs at [2..12)). Delete "ATAT" at [8..12).
+        // smallest_repeat_unit("ATAT")="AT", k=2, ref_count=5, post_count=3 → AT[3].
+        let ref_seq = b"TTATATATATATT";
+        let r = deletion_to_repeat(ref_seq, 8, 12).expect("should fire");
+        assert_eq!(r.unit, b"AT");
+        assert_eq!(r.count, 3);
+        assert_eq!(r.start, 3); // 1-based HGVS [3..12]
+        assert_eq!(r.end, 12);
     }
 
     // =========================================================================
