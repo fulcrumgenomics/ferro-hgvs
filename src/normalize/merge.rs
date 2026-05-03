@@ -10,15 +10,49 @@ use crate::hgvs::variant::{
     AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
 };
 
+/// Coordinate-system region used as the merge-eligibility key.
+///
+/// Adjacency in the merge pass requires both ends to share a region.
+/// HGVS forbids ranges that span the 5'UTR↔CDS, CDS↔3'UTR (for `c.`/`r.`)
+/// or upstream↔transcript / transcript↔downstream (for `n.`) boundaries
+/// — `c.-1_1`, `c.40_*1`, etc. do not exist as valid range syntax — so
+/// we tag each position with its region and refuse to merge across.
+/// The integer `start`/`end` axis is region-local: positive for `Cds` /
+/// `ThreePrimeUtr` / `Tx` / `TxDownstream`, negative for `FivePrimeUtr`
+/// / `TxUpstream`. Adjacency `prev.end + 1 == next.start` works
+/// naturally for all six because the axis is monotonic 5'→3' within
+/// each region (`c.-3 → c.-2 → c.-1` maps to `-3 → -2 → -1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Region {
+    /// `g.` (genomic) and `m.` (mitochondrial) — single axis, no
+    /// sub-regions.
+    Genome,
+    /// `c.` / `r.` CDS proper (positive non-UTR base).
+    Cds,
+    /// `c.` / `r.` 5'UTR (negative base, e.g. `c.-3`).
+    FivePrimeUtr,
+    /// `c.` / `r.` 3'UTR (`utr3` flag, e.g. `c.*1`).
+    ThreePrimeUtr,
+    /// `n.` transcript body (positive non-downstream base).
+    Tx,
+    /// `n.` upstream of transcript (negative base, e.g. `n.-3`).
+    TxUpstream,
+    /// `n.` downstream of transcript (`downstream` flag, e.g. `n.*1`).
+    TxDownstream,
+}
+
 /// Anchor for a single sub-variant.
 ///
-/// `start` and `end` are 1-based inclusive position bounds. For an `Insertion`
-/// between positions `p` and `p+1`, `start = p+1` and `end = p` (empty range
-/// at a boundary).
+/// `start` and `end` are 1-based inclusive position bounds on the
+/// `region` axis. For an `Insertion` between positions `p` and `p+1`,
+/// `start = p+1` and `end = p` (empty range at a boundary). The
+/// integer axis is signed because 5'UTR / upstream regions use
+/// negative values.
 #[derive(Debug, Clone)]
 struct Anchor {
-    start: u64,
-    end: u64,
+    region: Region,
+    start: i64,
+    end: i64,
     alt: Vec<Base>,
 }
 
@@ -57,9 +91,16 @@ pub(crate) fn merge_consecutive_edits(
             let Some(prev_a) = head_anchor.as_mut() else {
                 break 'try_merge false;
             };
-            let Some((next_start, _)) = simple_range_for_variant(&next) else {
+            let Some((next_region, next_start, _)) = simple_range_for_variant(&next) else {
                 break 'try_merge false;
             };
+            // Same-region adjacency: regions must match (no merge across
+            // the 5'UTR/CDS, CDS/3'UTR, upstream/transcript, or
+            // transcript/downstream boundaries) AND the integer axis
+            // must satisfy `prev.end + 1 == next.start`.
+            if prev_a.region != next_region {
+                break 'try_merge false;
+            }
             if prev_a.end.checked_add(1) != Some(next_start) {
                 break 'try_merge false;
             }
@@ -115,9 +156,9 @@ fn same_accession_and_kind(a: &HgvsVariant, b: &HgvsVariant) -> bool {
 }
 
 /// Position-only extraction for the cheap adjacency precheck. Returns the
-/// anchor's `(start, end)` tuple if the variant is merge-eligible by type
-/// and position, without allocating alt bases.
-fn simple_range_for_variant(v: &HgvsVariant) -> Option<(u64, u64)> {
+/// anchor's `(region, start, end)` tuple if the variant is merge-eligible by
+/// type and position, without allocating alt bases.
+fn simple_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
     match v {
         HgvsVariant::Genome(g) => simple_range_for_loc_edit(&g.loc_edit, simple_genome_range),
         HgvsVariant::Cds(c) => simple_range_for_loc_edit(&c.loc_edit, simple_cds_range),
@@ -144,25 +185,25 @@ fn anchor_for_variant(v: &HgvsVariant) -> Option<Anchor> {
 /// edit-kind and edit-certainty filters but does not touch alt bases.
 fn simple_range_for_loc_edit<L>(
     loc_edit: &LocEdit<Interval<L>, NaEdit>,
-    range_fn: impl Fn(&Interval<L>) -> Option<(u64, u64)>,
-) -> Option<(u64, u64)> {
+    range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
+) -> Option<(Region, i64, i64)> {
     if !loc_edit.edit.is_certain() {
         return None;
     }
     let edit = loc_edit.edit.inner()?;
-    let (start, end) = range_fn(&loc_edit.location)?;
+    let (region, start, end) = range_fn(&loc_edit.location)?;
     match edit {
         NaEdit::Substitution { .. }
         | NaEdit::SubstitutionNoRef { .. }
-        | NaEdit::Deletion { .. } => Some((start, end)),
+        | NaEdit::Deletion { .. } => Some((region, start, end)),
         NaEdit::Delins { sequence } => {
             sequence.bases()?;
-            Some((start, end))
+            Some((region, start, end))
         }
         NaEdit::Insertion { sequence } => {
             sequence.bases()?;
             // Anchor for an insertion is [end, start] — empty range at boundary.
-            (end == start.checked_add(1)?).then_some((end, start))
+            (end == start.checked_add(1)?).then_some((region, end, start))
         }
         _ => None,
     }
@@ -184,27 +225,33 @@ fn build_merged(head: &HgvsVariant, merged: Anchor) -> HgvsVariant {
 }
 
 /// Extract an anchor from a sub-variant's location+edit. The `range_fn`
-/// callback returns `(start, end)` for the location only when it is "simple"
-/// (no offsets, no UTR markers, certain). Returns None when the edit is
-/// uncertain, unknown, or not a merge-eligible NaEdit variant.
+/// callback returns `(region, start, end)` for the location only when it
+/// is "simple" (no intronic offsets, certain edit). Returns None when
+/// the edit is uncertain, unknown, or not a merge-eligible NaEdit
+/// variant. The `region` is propagated through to the merged anchor so
+/// `build_*_merged` can reconstruct the right `CdsPos` / `TxPos` /
+/// `RnaPos` shape (negative base for 5'UTR / upstream, `utr3` /
+/// `downstream` flag for 3'UTR / downstream).
 fn anchor_from_loc_edit<L>(
     loc_edit: &LocEdit<Interval<L>, NaEdit>,
-    range_fn: impl Fn(&Interval<L>) -> Option<(u64, u64)>,
+    range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
 ) -> Option<Anchor> {
     if !loc_edit.edit.is_certain() {
         return None;
     }
     let edit = loc_edit.edit.inner()?;
-    let (start, end) = range_fn(&loc_edit.location)?;
+    let (region, start, end) = range_fn(&loc_edit.location)?;
     match edit {
         NaEdit::Substitution { alternative, .. } | NaEdit::SubstitutionNoRef { alternative } => {
             Some(Anchor {
+                region,
                 start,
                 end,
                 alt: vec![*alternative],
             })
         }
         NaEdit::Deletion { .. } => Some(Anchor {
+            region,
             start,
             end,
             alt: Vec::new(),
@@ -212,6 +259,7 @@ fn anchor_from_loc_edit<L>(
         NaEdit::Delins { sequence } => {
             let bases = sequence.bases()?.to_vec();
             Some(Anchor {
+                region,
                 start,
                 end,
                 alt: bases,
@@ -223,6 +271,7 @@ fn anchor_from_loc_edit<L>(
             }
             let bases = sequence.bases()?.to_vec();
             Some(Anchor {
+                region,
                 start: end,
                 end: start,
                 alt: bases,
@@ -232,14 +281,31 @@ fn anchor_from_loc_edit<L>(
     }
 }
 
-fn simple_genome_range(interval: &Interval<GenomePos>) -> Option<(u64, u64)> {
-    Some((
-        simple_genome_pos(&interval.start)?,
-        simple_genome_pos(&interval.end)?,
-    ))
+/// Both endpoints of an interval must share the same `Region` for the
+/// interval to be merge-eligible. Cross-region ranges (`c.-1_1`, etc.)
+/// have no valid HGVS syntax, so failing this check on a parsed
+/// `Interval` indicates upstream malformedness rather than a normal
+/// merge barrier; we treat it as ineligible just in case.
+fn join_pos(
+    start: Option<(Region, i64)>,
+    end: Option<(Region, i64)>,
+) -> Option<(Region, i64, i64)> {
+    let (rs, s) = start?;
+    let (re, e) = end?;
+    if rs != re {
+        return None;
+    }
+    Some((rs, s, e))
 }
 
-fn simple_genome_pos(boundary: &UncertainBoundary<GenomePos>) -> Option<u64> {
+fn simple_genome_range(interval: &Interval<GenomePos>) -> Option<(Region, i64, i64)> {
+    join_pos(
+        simple_genome_pos(&interval.start),
+        simple_genome_pos(&interval.end),
+    )
+}
+
+fn simple_genome_pos(boundary: &UncertainBoundary<GenomePos>) -> Option<(Region, i64)> {
     let pos = boundary.as_single().and_then(|mu| match mu {
         Mu::Certain(p) => Some(p),
         _ => None,
@@ -247,65 +313,106 @@ fn simple_genome_pos(boundary: &UncertainBoundary<GenomePos>) -> Option<u64> {
     if pos.is_special() || pos.offset.is_some() {
         return None;
     }
-    Some(pos.base)
+    // Genomic coordinates fit comfortably within i64 (positive only).
+    let v = i64::try_from(pos.base).ok()?;
+    Some((Region::Genome, v))
 }
 
-fn simple_cds_range(interval: &Interval<CdsPos>) -> Option<(u64, u64)> {
-    Some((
-        simple_cds_pos(&interval.start)?,
-        simple_cds_pos(&interval.end)?,
-    ))
+fn simple_cds_range(interval: &Interval<CdsPos>) -> Option<(Region, i64, i64)> {
+    join_pos(
+        simple_cds_pos(&interval.start),
+        simple_cds_pos(&interval.end),
+    )
 }
 
-fn simple_cds_pos(boundary: &UncertainBoundary<CdsPos>) -> Option<u64> {
+fn simple_cds_pos(boundary: &UncertainBoundary<CdsPos>) -> Option<(Region, i64)> {
     let pos = boundary.as_single().and_then(|mu| match mu {
         Mu::Certain(p) => Some(p),
         _ => None,
     })?;
-    if pos.is_unknown() || pos.is_intronic() || pos.is_5utr() || pos.is_3utr() || pos.base < 1 {
+    if pos.is_unknown() || pos.is_intronic() {
         return None;
     }
-    Some(pos.base as u64)
+    if pos.is_3utr() {
+        // 3'UTR axis is the `*N` count (positive).
+        if pos.base < 1 {
+            return None;
+        }
+        return Some((Region::ThreePrimeUtr, pos.base));
+    }
+    if pos.base < 0 {
+        // 5'UTR axis is the signed CDS coord (negative).
+        return Some((Region::FivePrimeUtr, pos.base));
+    }
+    if pos.base > 0 {
+        return Some((Region::Cds, pos.base));
+    }
+    // pos.base == 0 — invalid c. position (HGVS skips c.0).
+    None
 }
 
-fn simple_tx_range(interval: &Interval<TxPos>) -> Option<(u64, u64)> {
-    Some((
-        simple_tx_pos(&interval.start)?,
-        simple_tx_pos(&interval.end)?,
-    ))
+fn simple_tx_range(interval: &Interval<TxPos>) -> Option<(Region, i64, i64)> {
+    join_pos(simple_tx_pos(&interval.start), simple_tx_pos(&interval.end))
 }
 
-fn simple_tx_pos(boundary: &UncertainBoundary<TxPos>) -> Option<u64> {
+fn simple_tx_pos(boundary: &UncertainBoundary<TxPos>) -> Option<(Region, i64)> {
     let pos = boundary.as_single().and_then(|mu| match mu {
         Mu::Certain(p) => Some(p),
         _ => None,
     })?;
-    if pos.is_intronic() || pos.is_upstream() || pos.is_downstream() || pos.base < 1 {
+    if pos.is_intronic() {
         return None;
     }
-    Some(pos.base as u64)
+    if pos.is_downstream() {
+        if pos.base < 1 {
+            return None;
+        }
+        return Some((Region::TxDownstream, pos.base));
+    }
+    if pos.base < 0 {
+        return Some((Region::TxUpstream, pos.base));
+    }
+    if pos.base > 0 {
+        return Some((Region::Tx, pos.base));
+    }
+    None
 }
 
-fn simple_rna_range(interval: &Interval<RnaPos>) -> Option<(u64, u64)> {
-    Some((
-        simple_rna_pos(&interval.start)?,
-        simple_rna_pos(&interval.end)?,
-    ))
+fn simple_rna_range(interval: &Interval<RnaPos>) -> Option<(Region, i64, i64)> {
+    join_pos(
+        simple_rna_pos(&interval.start),
+        simple_rna_pos(&interval.end),
+    )
 }
 
-fn simple_rna_pos(boundary: &UncertainBoundary<RnaPos>) -> Option<u64> {
+fn simple_rna_pos(boundary: &UncertainBoundary<RnaPos>) -> Option<(Region, i64)> {
     let pos = boundary.as_single().and_then(|mu| match mu {
         Mu::Certain(p) => Some(p),
         _ => None,
     })?;
-    if pos.is_intronic() || pos.is_3utr() || pos.is_5utr() || pos.base < 1 {
+    if pos.is_intronic() {
         return None;
     }
-    Some(pos.base as u64)
+    if pos.is_3utr() {
+        if pos.base < 1 {
+            return None;
+        }
+        return Some((Region::ThreePrimeUtr, pos.base));
+    }
+    if pos.base < 0 {
+        return Some((Region::FivePrimeUtr, pos.base));
+    }
+    if pos.base > 0 {
+        return Some((Region::Cds, pos.base));
+    }
+    None
 }
 
 fn build_genome_merged(template: &GenomeVariant, merged: Anchor) -> GenomeVariant {
-    let (location, edit) = build_naedit(merged, GenomePos::new);
+    debug_assert_eq!(merged.region, Region::Genome);
+    let (location, edit) = build_naedit(merged, |_, b| {
+        GenomePos::new(u64::try_from(b).expect("genome anchor base must be non-negative"))
+    });
     GenomeVariant {
         accession: template.accession.clone(),
         gene_symbol: template.gene_symbol.clone(),
@@ -314,7 +421,15 @@ fn build_genome_merged(template: &GenomeVariant, merged: Anchor) -> GenomeVarian
 }
 
 fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
-    let (location, edit) = build_naedit(merged, |b| CdsPos::new(b as i64));
+    let (location, edit) = build_naedit(merged, |region, b| match region {
+        Region::Cds | Region::FivePrimeUtr => CdsPos::new(b),
+        Region::ThreePrimeUtr => CdsPos {
+            base: b,
+            offset: None,
+            utr3: true,
+        },
+        _ => unreachable!("non-c. region {:?} on CdsVariant", region),
+    });
     CdsVariant {
         accession: template.accession.clone(),
         gene_symbol: template.gene_symbol.clone(),
@@ -323,7 +438,11 @@ fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
 }
 
 fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
-    let (location, edit) = build_naedit(merged, |b| TxPos::new(b as i64));
+    let (location, edit) = build_naedit(merged, |region, b| match region {
+        Region::Tx | Region::TxUpstream => TxPos::new(b),
+        Region::TxDownstream => TxPos::downstream(b),
+        _ => unreachable!("non-n. region {:?} on TxVariant", region),
+    });
     TxVariant {
         accession: template.accession.clone(),
         gene_symbol: template.gene_symbol.clone(),
@@ -332,7 +451,11 @@ fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
 }
 
 fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
-    let (location, edit) = build_naedit(merged, |b| RnaPos::new(b as i64));
+    let (location, edit) = build_naedit(merged, |region, b| match region {
+        Region::Cds | Region::FivePrimeUtr => RnaPos::new(b),
+        Region::ThreePrimeUtr => RnaPos::utr3(b),
+        _ => unreachable!("non-r. region {:?} on RnaVariant", region),
+    });
     RnaVariant {
         accession: template.accession.clone(),
         gene_symbol: template.gene_symbol.clone(),
@@ -341,7 +464,10 @@ fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
 }
 
 fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
-    let (location, edit) = build_naedit(merged, GenomePos::new);
+    debug_assert_eq!(merged.region, Region::Genome);
+    let (location, edit) = build_naedit(merged, |_, b| {
+        GenomePos::new(u64::try_from(b).expect("mitochondrial anchor base must be non-negative"))
+    });
     MtVariant {
         accession: template.accession.clone(),
         gene_symbol: template.gene_symbol.clone(),
@@ -349,7 +475,10 @@ fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
     }
 }
 
-fn build_naedit<P>(merged: Anchor, mut to_pos: impl FnMut(u64) -> P) -> (Interval<P>, NaEdit) {
+fn build_naedit<P>(
+    merged: Anchor,
+    mut to_pos: impl FnMut(Region, i64) -> P,
+) -> (Interval<P>, NaEdit) {
     let edit = if merged.start > merged.end {
         debug_assert_eq!(
             merged.start,
@@ -374,7 +503,10 @@ fn build_naedit<P>(merged: Anchor, mut to_pos: impl FnMut(u64) -> P) -> (Interva
     } else {
         (merged.start, merged.end)
     };
-    (Interval::new(to_pos(lo), to_pos(hi)), edit)
+    (
+        Interval::new(to_pos(merged.region, lo), to_pos(merged.region, hi)),
+        edit,
+    )
 }
 
 #[cfg(test)]

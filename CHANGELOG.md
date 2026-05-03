@@ -35,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(normalize)* Cis-allele consecutive-edit merging now collapses
+  adjacent sub-variants *within* a UTR / upstream / downstream region,
+  not only within the CDS / transcript body. The PR #80 implementation
+  rejected every `is_5utr() / is_3utr() / is_upstream() / is_downstream()`
+  position outright, so inputs like `c.[-2A>G;-1C>T]` (both 5'UTR) and
+  `c.[*1A>G;*2C>T]` (both 3'UTR) round-tripped unchanged even though
+  HGVS allows ranges within those regions (`c.-2_-1`, `c.*1_*2`). The
+  fix replaces the `Option<u64>` position keys with a `Region`-tagged
+  `(Region, i64)` axis (covering CDS, 5'UTR, 3'UTR, transcript-body,
+  upstream, downstream, and genomic / mitochondrial); merge eligibility
+  becomes "same region + integer adjacency on the region's axis".
+  `build_cds_merged` / `build_tx_merged` / `build_rna_merged` consume
+  the region tag to reconstruct the right `CdsPos` / `TxPos` / `RnaPos`
+  shape (negative base for 5'UTR / upstream, `utr3` / `downstream` flag
+  for 3'UTR / downstream). Cross-region pairs (`c.[-1A>G;1A>T]` 5'UTR↔CDS,
+  `c.[40C>T;*1A>G]` CDS↔3'UTR, …) still correctly do not merge.
+  Issue #89.
 - *(normalize)* Minus-strand intronic normalization now reads the
   reference window in transcript-view orientation. `normalize_intronic_cds`
   and `normalize_intronic_tx` previously passed the genomic-strand bytes
