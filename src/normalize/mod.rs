@@ -38,6 +38,7 @@ use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, LocEdit, TxVariant};
 use crate::hgvs::HgvsVariant as HV;
+use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
@@ -1015,10 +1016,39 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let intron_rel_end = intron_g_end.saturating_sub(seq_start) + 1;
         let boundaries = Boundaries::new(intron_rel_start, intron_rel_end);
 
-        // Perform normalization in genomic space
-        let seq_bytes = genomic_seq.as_bytes();
-        let (new_rel_start, new_rel_end, new_edit, warnings) =
-            self.normalize_na_edit(seq_bytes, edit, rel_start, rel_end, &boundaries)?;
+        // On minus-strand transcripts the genomic-strand sequence is the
+        // reverse complement of the transcript view, but the variant's
+        // edit alt is in transcript view. Running `normalize_na_edit` on
+        // the genomic-strand bytes therefore defeats every rule that
+        // compares the alt against the local reference window. Flip the
+        // sequence and the relative positions / boundaries to transcript
+        // view here, run normalization, then map the result positions
+        // back to the genomic frame. (Issue #98.)
+        let (work_seq, work_rel_start, work_rel_end, work_boundaries) = flip_intronic_for_strand(
+            transcript.strand,
+            &genomic_seq,
+            rel_start,
+            rel_end,
+            &boundaries,
+        );
+
+        // Perform normalization in transcript-view space
+        let seq_bytes = work_seq.as_bytes();
+        let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            seq_bytes,
+            edit,
+            work_rel_start,
+            work_rel_end,
+            &work_boundaries,
+        )?;
+
+        // Map the result positions back to the genomic-strand frame
+        let (new_rel_start, new_rel_end) = unflip_intronic_positions(
+            transcript.strand,
+            work_seq.len() as u64,
+            work_new_rel_start,
+            work_new_rel_end,
+        );
 
         // Convert the normalized genomic position back to absolute genomic
         let new_g_start = seq_start + new_rel_start - 1;
@@ -1134,10 +1164,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let intron_rel_end = intron_g_end.saturating_sub(seq_start) + 1;
         let boundaries = Boundaries::new(intron_rel_start, intron_rel_end);
 
-        // Perform normalization in genomic space
-        let seq_bytes = genomic_seq.as_bytes();
-        let (new_rel_start, new_rel_end, new_edit, warnings) =
-            self.normalize_na_edit(seq_bytes, edit, rel_start, rel_end, &boundaries)?;
+        // See `normalize_intronic_cds`: same orientation fix for #98.
+        let (work_seq, work_rel_start, work_rel_end, work_boundaries) = flip_intronic_for_strand(
+            transcript.strand,
+            &genomic_seq,
+            rel_start,
+            rel_end,
+            &boundaries,
+        );
+
+        // Perform normalization in transcript-view space
+        let seq_bytes = work_seq.as_bytes();
+        let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            seq_bytes,
+            edit,
+            work_rel_start,
+            work_rel_end,
+            &work_boundaries,
+        )?;
+
+        // Map the result positions back to the genomic-strand frame
+        let (new_rel_start, new_rel_end) = unflip_intronic_positions(
+            transcript.strand,
+            work_seq.len() as u64,
+            work_new_rel_start,
+            work_new_rel_end,
+        );
 
         // Convert the normalized genomic position back to absolute genomic
         let new_g_start = seq_start + new_rel_start - 1;
@@ -1970,6 +2022,54 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 variant.loc_edit.edit.map_ref(|_| canonical_edit),
             ),
         }
+    }
+}
+
+/// Flip a fetched intronic genomic-strand window into transcript-view
+/// orientation when the host transcript is on the minus strand. Returns
+/// the input unchanged on plus strand. The relative positions and the
+/// shuffle boundaries are flipped so they index into the returned
+/// sequence consistently. Companion to [`unflip_intronic_positions`].
+fn flip_intronic_for_strand(
+    strand: Strand,
+    genomic_seq: &str,
+    rel_start: u64,
+    rel_end: u64,
+    boundaries: &Boundaries,
+) -> (String, u64, u64, Boundaries) {
+    if strand != Strand::Minus {
+        return (
+            genomic_seq.to_string(),
+            rel_start,
+            rel_end,
+            boundaries.clone(),
+        );
+    }
+    let seq_len = genomic_seq.len() as u64;
+    let rc = crate::cli::reverse_complement(genomic_seq);
+    let new_rel_start = seq_len - rel_end + 1;
+    let new_rel_end = seq_len - rel_start + 1;
+    let new_boundaries = Boundaries::new(
+        seq_len - boundaries.right + 1,
+        seq_len - boundaries.left + 1,
+    );
+    (rc, new_rel_start, new_rel_end, new_boundaries)
+}
+
+/// Inverse of [`flip_intronic_for_strand`] for the result positions
+/// emitted by `normalize_na_edit`. On plus strand returns the input
+/// unchanged; on minus strand maps from transcript-view back to the
+/// genomic-strand frame.
+fn unflip_intronic_positions(
+    strand: Strand,
+    seq_len: u64,
+    rel_start: u64,
+    rel_end: u64,
+) -> (u64, u64) {
+    if strand == Strand::Minus {
+        (seq_len - rel_end + 1, seq_len - rel_start + 1)
+    } else {
+        (rel_start, rel_end)
     }
 }
 

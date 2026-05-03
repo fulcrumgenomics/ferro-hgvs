@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(normalize)* Minus-strand intronic normalization now reads the
+  reference window in transcript-view orientation. `normalize_intronic_cds`
+  and `normalize_intronic_tx` previously passed the genomic-strand bytes
+  fetched from `get_genomic_sequence` directly into `normalize_na_edit`
+  alongside the variant's transcript-view edit alt; on minus-strand
+  transcripts the two were mis-oriented, defeating every rule that
+  compared the alt against the local reference window. The fix
+  reverse-complements the genomic window and flips the relative
+  positions / shuffle boundaries on minus strand before normalization,
+  then maps the resulting positions back to the genomic frame for the
+  CDS / tx coordinate conversion. As a single root-cause fix this
+  resurfaces #81 A1 / A5 / A6 canonicalization, the PR #78 delins-as-
+  identity rewrite, and the transcript-view repeat-unit letter on
+  minus-strand intronic positions — all of which had been observed to
+  misfire in #94's locking pass. Issue #98.
 - Insertions that add ≥2 copies of a multi-base tandem repeat unit now
   emit repeat notation (`unit[N+k]`) instead of a duplication of the
   inserted sequence, per HGVS spec ("when more than one additional copies
