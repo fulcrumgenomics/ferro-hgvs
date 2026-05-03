@@ -79,6 +79,59 @@ cargo bench                              # Benchmarks
 - Lint with `cargo clippy --features dev -- -D warnings`
 - Document all public APIs with doc comments
 
+## Updating the v21.0 Normalization Fixture
+
+`tests/fixtures/grammar/hgvs_spec_normalization.json` pins ferro's current
+`normalize()` output for every variant string in the HGVS v21.0 spec
+(vendored at `assets/hgvs-nomenclature/`). The companion test
+`tests/hgvs_spec_normalization_tests.rs` fails any time a row's observed
+output drifts from the recorded `current`.
+
+If your PR changes any normalization output:
+
+1. Make sure the vendored spec submodule is checked out, then regenerate
+   the fixture:
+
+   ```bash
+   git submodule update --init assets/hgvs-nomenclature
+   cargo run --features dev --example generate_spec_fixture
+   ```
+
+2. Inspect the diff. For each changed row, verify the new `current` against
+   the v21.0 spec text under `assets/hgvs-nomenclature/docs/recommendations/`.
+   When ferro's new output now matches the spec's canonical form, that row
+   should also have `current == spec_expected` after regen.
+
+3. If a row's spec-canonical form differs from the input string (a "pair" — e.g.
+   spec input `c.79GC>TT` is canonicalized to `c.79_80delinsTT`), record the
+   divergence in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`
+   keyed on the input. Override entry shape:
+
+   ```jsonc
+   {
+     "by_input": {
+       "<exact input string>": {
+         "status": "pair",                          // optional: compliant | pair | reject | needs-reference
+         "spec_expected": "<spec's canonical form>", // optional: defaults to input
+         "todo": "<https://… link>"                 // optional: defaults to a #83 link when current != spec_expected
+       }
+     }
+   }
+   ```
+
+   Override keys must match a real fixture input — typos are caught by the
+   generator.
+
+4. CI verifies byte-identical regeneration via:
+
+   ```bash
+   cargo run --features dev --example generate_spec_fixture -- --check
+   ```
+
+5. To bump the spec to a newer upstream version, update the submodule pointer
+   under `assets/hgvs-nomenclature/` (e.g., `git -C assets/hgvs-nomenclature
+   checkout <new-tag>`) and regenerate the fixture.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
