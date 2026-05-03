@@ -504,9 +504,29 @@ mod runner {
             let status = ov
                 .and_then(|o| o.status.clone())
                 .unwrap_or_else(|| auto_status.to_string());
-            let spec_expected = ov
-                .and_then(|o| o.spec_expected.clone())
-                .unwrap_or_else(|| input.clone());
+            // spec_expected default depends on status:
+            //   - reject:    default = current. Reject rows are dominated by
+            //                spec-conformant rejections (malformed prose
+            //                fragments, unsupported syntax that the spec also
+            //                rejects). Defaulting spec_expected to ferro's
+            //                current rejection means "by default, assume ferro
+            //                is doing the right thing per spec." Reviewers
+            //                override (e.g. set spec_expected to input) for
+            //                the rejects ferro is genuinely wrong about (e.g.
+            //                #83 A.3 chr1: aliases).
+            //   - other:     default = input. The spec offered the input as
+            //                a canonical form; if ferro rewrites it (current
+            //                != input), that's a candidate pair row.
+            let spec_expected = ov.and_then(|o| o.spec_expected.clone()).unwrap_or_else(|| {
+                if status == "reject" {
+                    current.clone()
+                } else {
+                    input.clone()
+                }
+            });
+            // Auto-attach a #83 todo whenever current diverges from
+            // spec_expected. With the per-status default above, this
+            // attaches todos only to genuine audit items.
             const ISSUE_83: &str = "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83";
             let todo = ov.and_then(|o| o.todo.clone()).or_else(|| {
                 if current != spec_expected {
