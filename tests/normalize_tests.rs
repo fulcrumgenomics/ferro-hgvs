@@ -992,9 +992,13 @@ mod clinvar_normalization {
     #[case("NM_000059.4:c.6275_6276del", "NM_000059.4:c.6275_6276del")]
     #[case("NM_001414398.1:c.*160_*163del", "NM_001414398.1:c.*160_*163del")]
     // Duplications
-    // 5'UTR dup shifts 3' (toward CDS) per HGVS normalization rules
-    // Mutalyzer: c.-56_-47dup (differs - we apply 3' shift in UTR, Mutalyzer doesn't)
-    #[case("NM_001394148.2:c.-56_-47dup", "NM_001394148.2:c.-55_-46dup")]
+    // 5'UTR dup — Mutalyzer: agrees. The duplicated 10-base region is
+    // already in its 3'-most equivalent representation in the local
+    // tract, so 3' shift is a no-op and the canonical form matches the
+    // input. (Pre-#97 ferro emitted a spurious 1-base shift to
+    // `c.-55_-46dup` as a side effect of the 5'UTR off-by-one in the
+    // CDS↔tx mapping; once that's fixed, ferro and Mutalyzer agree.)
+    #[case("NM_001394148.2:c.-56_-47dup", "NM_001394148.2:c.-56_-47dup")]
     // Mutalyzer: agrees
     #[case("NR_153405.1:n.3908_3910dup", "NR_153405.1:n.3908_3910dup")]
     // Delins - Mutalyzer: agrees

@@ -1904,14 +1904,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 msg: format!("Negative base {} in 3' UTR position", pos.base),
             })?;
             Ok(end + base)
-        } else if pos.base < 1 {
-            let tx_pos = cds_start as i64 + pos.base - 1;
+        } else if pos.base < 0 {
+            // 5'UTR: HGVS numbering skips c.0 (c.-1 is the base immediately
+            // upstream of c.1), so c.-N maps to tx position cds_start - N.
+            // Issue #97 — the previous formula `cds_start + base - 1`
+            // double-counted the gap and emitted the wrong tx position.
+            let tx_pos = cds_start as i64 + pos.base;
             u64::try_from(tx_pos).map_err(|_| FerroError::ConversionError {
                 msg: format!(
                     "CDS position c.{} maps before transcript start (cds_start={})",
                     pos.base, cds_start
                 ),
             })
+        } else if pos.base == 0 {
+            // c.0 is not a valid HGVS position, but historical inputs
+            // can land here. Preserve the legacy mapping (treat as the
+            // last 5'UTR base, equivalent to c.-1) rather than failing.
+            Ok(cds_start.saturating_sub(1))
         } else {
             Ok(cds_start + pos.base as u64 - 1)
         }
@@ -1929,10 +1938,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         })?;
 
         if pos < cds_start {
-            // For 5'UTR: cds_to_tx_pos formula is tx = cds_start + base - 1
-            // So inverse is: base = tx - cds_start + 1
+            // 5'UTR: HGVS numbering skips c.0, so a tx position one
+            // base 5' of cds_start is c.-1 (not c.0). Inverse of the
+            // forward formula `tx = cds_start + base` for negative
+            // base: `base = tx - cds_start`. Issue #97 — the previous
+            // formula `tx - cds_start + 1` would emit base = 0 for
+            // tx = cds_start - 1, rendered by `CdsPos::Display` as
+            // `c.?` (`CDS_BASE_UNKNOWN`).
             Ok(CdsPos {
-                base: pos as i64 - cds_start as i64 + 1,
+                base: pos as i64 - cds_start as i64,
                 offset: None,
                 utr3: false,
             })
@@ -3419,7 +3433,10 @@ mod tests {
 
     #[test]
     fn test_cds_to_tx_pos_utr5_valid() {
-        // cds_start=5, base=-3 → 5 + (-3) - 1 = 1, valid position
+        // HGVS numbering skips c.0, so c.-N maps to tx position
+        // cds_start - N. For cds_start=5, c.-3 → tx = 5 + (-3) = 2.
+        // Issue #97 — the previous formula `cds_start + base - 1`
+        // double-counted the gap and returned tx 1 (the c.-4 base).
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
         let pos = CdsPos {
@@ -3428,7 +3445,7 @@ mod tests {
             utr3: false,
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
-        assert_eq!(result.unwrap(), 1);
+        assert_eq!(result.unwrap(), 2);
     }
 
     #[test]
