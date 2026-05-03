@@ -364,6 +364,45 @@ mod position_ordering {
 }
 
 // =============================================================================
+// GAP 3: Intronic insertions
+// =============================================================================
+
+mod intronic_insertions {
+    use super::*;
+
+    #[test]
+    fn test_plus_strand_intronic_insertion() {
+        // Plus-strand intron 1 genomic sequence is AAACCCAAAT at c.30+1..c.30+10.
+        // Inserting GGG at c.30+3_30+4 sits between c.30+3=A and c.30+4=C; ins[0]=G
+        // matches neither side, so no 3'-shift and no dup canonicalization.
+        let provider = make_provider_with_plus_strand();
+        let result = normalize(provider, "NM_PLUS.1:c.30+3_30+4insGGG");
+        assert_eq!(result, "NM_PLUS.1:c.30+3_30+4insGGG");
+    }
+
+    #[test]
+    fn test_minus_strand_intronic_insertion() {
+        // Issue #11 scenario. Minus-strand intron 1 reads as CAAAGGGCCC in transcript
+        // orientation at c.30+1..c.30+10 (RC of genomic GGGCCCTTTG). Inserting GGG
+        // at c.30+3_30+4 sits between c.30+3=A and c.30+4=A; ins[0]=G doesn't match,
+        // so the variant stays put and positions remain in coding (5'→3') order.
+        let provider = make_provider_with_minus_strand();
+        let result = normalize(provider, "NM_MINUS.1:c.30+3_30+4insGGG");
+        assert_eq!(result, "NM_MINUS.1:c.30+3_30+4insGGG");
+    }
+
+    #[test]
+    fn test_intronic_insertion_to_dup_plus_strand() {
+        // Plus-strand intron 1: AAACCCAAAT. Inserting A at c.30+1_30+2 falls inside
+        // the leading AAA tract; 3'-shift walks the insertion through positions
+        // 30+2_30+3 → 30+3_30+4, then canonicalizes to a dup of the preceding base.
+        let provider = make_provider_with_plus_strand();
+        let result = normalize(provider, "NM_PLUS.1:c.30+1_30+2insA");
+        assert_eq!(result, "NM_PLUS.1:c.30+3dup");
+    }
+}
+
+// =============================================================================
 // GAP 4: Intronic duplications
 // =============================================================================
 
