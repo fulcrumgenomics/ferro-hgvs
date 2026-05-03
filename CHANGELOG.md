@@ -52,6 +52,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for 3'UTR / downstream). Cross-region pairs (`c.[-1A>G;1A>T]` 5'UTR↔CDS,
   `c.[40C>T;*1A>G]` CDS↔3'UTR, …) still correctly do not merge.
   Issue #89.
+- *(normalize)* CDS ↔ transcript coordinate mappings now respect the
+  HGVS no-c.0 numbering rule for 5'UTR positions. The forward mapping
+  (`Normalizer::cds_to_tx_pos`, `convert::coding::cds_to_transcript_pos`)
+  previously computed `tx = cds_start + base - 1` for negative `base`,
+  which double-counted the gap between c.-1 and c.1 and emitted a tx
+  position one base 5' of the true location. The inverse mapping
+  (`Normalizer::tx_to_cds_pos`) had the mirror bug: tx positions one
+  base before `cds_start` mapped to `base = 0`, which `CdsPos::Display`
+  renders as `c.?` (`CDS_BASE_UNKNOWN`). The most visible symptom was a
+  5'UTR single-base deletion on a minus-strand transcript collapsing
+  to `c.?del` instead of resolving to a real position (e.g. `c.-1del`
+  after 3'-shifting within a UTR homopolymer). Forward and inverse are
+  now `tx = cds_start + base` and `base = tx - cds_start` for negative
+  / pre-cds_start positions, matching the spec's "c.-1 is one base 5'
+  of c.1" rule and the existing exon-aware mapper at
+  `convert::mapper::cds_to_tx` / `tx_to_cds`. Issue #97.
 - *(normalize)* Minus-strand intronic normalization now reads the
   reference window in transcript-view orientation. `normalize_intronic_cds`
   and `normalize_intronic_tx` previously passed the genomic-strand bytes

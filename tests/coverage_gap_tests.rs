@@ -16,13 +16,14 @@
 //!
 //! Issue #94: every gap test that previously asserted only `contains(...)`
 //! or `is_ok() || is_err()` is locked with `assert_eq!` against the
-//! exact normalizer output. Issue #98 (minus-strand intronic ref-base
-//! orientation) was identified as a common root cause behind several
-//! initially suspected-buggy lock points and has since been fixed; the
+//! exact normalizer output. Two root causes have since been fixed:
+//! #98 (minus-strand intronic ref-base orientation) and #97 (5'UTR
+//! CDS↔tx off-by-one that collapsed UTR del positions to `c.?`); the
 //! affected tests now lock spec-correct outputs (full-tract position
 //! with the transcript-view repeat unit, per the HGVS DNA repeat
-//! spec). Boundary-spanning panic-canary tests are intentionally left
-//! as `is_ok() || is_err()` per #94 scope.
+//! spec; UTR positions resolved per the HGVS no-c.0 numbering rule).
+//! Boundary-spanning panic-canary tests are intentionally left as
+//! `is_ok() || is_err()` per #94 scope.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
@@ -564,14 +565,15 @@ mod utr_minus_strand {
 
     #[test]
     fn test_5prime_utr_deletion_minus_strand() {
-        // Single-base 5'UTR del on minus strand. The position is fully
-        // resolved on input and the local tract is unambiguous, but ferro
-        // collapses to `c.?del`, discarding positional information.
+        // Single-base 5'UTR del on minus strand. The 5'UTR is the
+        // homopolymer `AAAAA` at c.-5..c.-1 (transcript view); a
+        // single-A del at c.-3 3'-shifts to the rightmost A in the
+        // run, c.-1. Issue #97 closed the off-by-one in the CDS↔tx
+        // 5'UTR coordinate mapping that had previously caused the
+        // result to collapse to `c.?del`.
         let provider = make_provider_with_minus_utr();
         let result = normalize(provider, "NM_MUTR.1:c.-3del");
-        // FIXME(#97): expected canonical form preserves the position
-        // (and 3'-shifts within the 5'UTR run if applicable).
-        assert_eq!(result, "NM_MUTR.1:c.?del");
+        assert_eq!(result, "NM_MUTR.1:c.-1del");
     }
 
     #[test]
