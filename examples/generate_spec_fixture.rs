@@ -217,12 +217,21 @@ mod sources {
     }
 
     /// Decide whether a candidate code-span text is a plausible HGVS string.
+    /// Filtering is liberal — anything that looks shaped like HGVS is kept and
+    /// fed to ferro for the real parse decision. We do reject obvious template
+    /// placeholders and tokens with unbalanced brackets/parens so the fixture
+    /// isn't cluttered with prose-template fragments.
+    ///
+    /// We deliberately do NOT strip outer parentheses: predicted variants like
+    /// `c.(75_77)` and `p.(Trp24Cys)` carry semantically meaningful parens, so
+    /// rewriting raw spec tokens would collapse distinct inputs and lose
+    /// coverage. Bracket/paren balance below catches genuine prose splits
+    /// (e.g. `g.[variant1` from a sentence that wraps across spans).
     fn canonicalize(s: &str) -> Option<String> {
         let s = s.trim();
         if s.is_empty() {
             return None;
         }
-        let s = s.trim_start_matches('(').trim_end_matches(')');
         if s.contains(char::is_whitespace) {
             return None;
         }
@@ -233,6 +242,20 @@ mod sources {
             return None;
         }
         if s.contains('\\') || s.contains('`') {
+            return None;
+        }
+        // Drop placeholder template fragments the spec uses in prose
+        // (e.g. `g.[variant1;variant2]`, `p.[`, etc.).
+        if s.contains("variant1") || s.contains("variant2") || s.contains("variantN") {
+            return None;
+        }
+        // Drop tokens with unbalanced brackets or parens — these are always
+        // prose fragments captured because the spec splits an example across
+        // multiple backtick spans. (Brackets/parens balance only across the
+        // single span.)
+        if s.matches('[').count() != s.matches(']').count()
+            || s.matches('(').count() != s.matches(')').count()
+        {
             return None;
         }
         Some(s.to_string())

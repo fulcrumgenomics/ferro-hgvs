@@ -8,24 +8,24 @@
   "ferro_version": "0.4.0",
   "generated_utc": "fixture-byte-stable",
   "summary": {
-    "total": 802,
+    "total": 798,
     "by_status": {
       "compliant": 276,
-      "reject": 526
+      "reject": 522
     },
     "by_coordinate_system": {
       "c": 291,
-      "g": 179,
+      "g": 177,
       "m": 4,
       "n": 2,
-      "p": 193,
+      "p": 191,
       "r": 133
     },
     "by_source_kind": {
       "background": 51,
       "consultation": 6,
       "ported_legacy_probe": 2,
-      "recommendation": 700,
+      "recommendation": 696,
       "syntax_yaml": 43
     }
   },
@@ -5510,30 +5510,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "g.[variant1",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"g.[variant1\", code: Tag })",
-      "spec_expected": "g.[variant1",
-      "status": "reject",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "g.[variant1]",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"g.[variant1]\", code: Tag })",
-      "spec_expected": "g.[variant1]",
-      "status": "reject",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "g.pter",
       "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"g.pter\", code: Tag })",
       "spec_expected": "g.pter",
@@ -7839,18 +7815,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "p.[",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"p.[\", code: Tag })",
-      "spec_expected": "p.[",
-      "status": "reject",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "p.[(Ser868Argfs*2,Ser868=)]",
       "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"p.[(Ser868Argfs*2,Ser868=)]\", code: Tag })",
       "spec_expected": "p.[(Ser868Argfs*2,Ser868=)]",
@@ -7928,18 +7892,6 @@
       "input": "p.[Ser73Arg];[]",
       "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"p.[Ser73Arg];[]\", code: Tag })",
       "spec_expected": "p.[Ser73Arg];[]",
-      "status": "reject",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.[variant1",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"p.[variant1\", code: Tag })",
-      "spec_expected": "p.[variant1",
       "status": "reject",
       "coordinate_system": "p",
       "source_kind": "recommendation",
