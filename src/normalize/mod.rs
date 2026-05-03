@@ -1642,13 +1642,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     // because repeat notation refers to the reference tract position
                     if seq_bytes.len() > 1 {
                         let original_pos_idx = hgvs_pos_to_index(start) as u64; // 0-based original position
-                        if let Some((base, count, rep_start, rep_end)) =
+                        if let Some((_first, count, rep_start, rep_end, unit_bytes)) =
                             rules::insertion_to_repeat(ref_seq, original_pos_idx, &seq_bytes)
                         {
-                            // Convert to repeat notation: BASE[count]
                             use crate::hgvs::edit::Base;
-                            if let Some(base_enum) = Base::from_char(base as char) {
-                                let repeat_seq = Sequence::new(vec![base_enum]);
+                            let bases: Vec<Base> = unit_bytes
+                                .iter()
+                                .filter_map(|&b| Base::from_char(b as char))
+                                .collect();
+                            if bases.len() == unit_bytes.len() {
+                                let repeat_seq = Sequence::new(bases);
                                 let repeat_edit = NaEdit::Repeat {
                                     sequence: Some(repeat_seq),
                                     count: RepeatCount::Exact(count),

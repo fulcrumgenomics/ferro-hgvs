@@ -423,94 +423,6 @@ mod output_tests {
     }
 
     // =========================================================================
-    // INSERTION TESTS - Insertions shift 3' and may become duplications
-    // =========================================================================
-
-    #[test]
-    fn test_insertion_becomes_dup_when_matches_preceding() {
-        // Sequence: GGGGGAAAAAGGGGG
-        // Inserting A after the A repeat should become a dup
-        // Position 10 is the last A, inserting A at 10_11 matches preceding A
-        let seq = "GGGGGAAAAAGGGGG"; // A's at pos 6-10
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insA");
-
-        // Should shift 3' and become dup
-        assert!(
-            result.contains("dup"),
-            "Insertion of A in A-repeat should become dup, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_insertion_stays_insertion_when_no_match() {
-        // Sequence: GGGGGAAAAAGGGGG
-        // Inserting T (which doesn't match A's or G's adjacent) stays as insertion
-        let seq = "GGGGGAAAAAGGGGG";
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insT");
-
-        // T doesn't match adjacent sequence, should stay as insertion
-        assert!(
-            result.contains("ins"),
-            "Insertion of non-matching base should stay ins, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_insertion_no_shift_when_first_base_differs() {
-        // This tests the fix for the insertion 3' shift bug.
-        // Sequence: ATGCGATGAGATGAGAT (positions 1-17)
-        //                ^pos5=G
-        //                  ^pos6=A
-        //                    ^pos7=T
-        // Inserting CAG between positions 5 and 6 should NOT shift because:
-        // - First base after insertion (pos 6 = 'A') != first base of insertion ('C')
-        // Before the fix, ferro would incorrectly shift because it checked
-        // the SECOND base of the insertion against the first reference base.
-        let seq = "ATGCGATGAGATGAGAT";
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.5_6insCAG");
-
-        // Should NOT shift - stays at c.5_6insCAG
-        assert_eq!(
-            result, "NM_TEST.1:c.5_6insCAG",
-            "Insertion should NOT shift when first base doesn't match, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_insertion_shifts_when_all_bases_match() {
-        // Sequence: ...AGAGAGAG...
-        // Inserting AG at the start of the repeat should shift 3'
-        // Positions: GGGAGAGAGAGGGG
-        //               ^4=A
-        //                ^5=G
-        //                 ^6=A
-        // Inserting AG between 3 and 4:
-        // - ref[4] = 'A' matches ins[0] = 'A' -> can shift
-        // - ref[5] = 'G' matches ins[1] = 'G' -> can shift again
-        // ... continues until end of repeat
-        let seq = "GGGAGAGAGAGGGG"; // AG repeat from pos 4-11
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.3_4insAG");
-
-        // Should shift 3' and become a dup at the end of the repeat
-        assert!(
-            result.contains("dup"),
-            "Insertion matching repeat should become dup after 3' shift, got: {}",
-            result
-        );
-    }
-
-    // =========================================================================
     // DUPLICATION TESTS - Duplications should shift 3'
     // =========================================================================
 
@@ -1754,6 +1666,7 @@ mod normalization_transformations {
     // Mutalyzer: agrees
     // =========================================================================
 
+    // Real-accession smoke; matrix-level coverage in tests/ins_shift_matrix.rs.
     #[rstest]
     // Single T inserted after T becomes dup - Mutalyzer: agrees
     #[case("NM_001089.2:c.3057_3058insT", "NM_001089.2:c.3057dup")]
@@ -1772,6 +1685,7 @@ mod normalization_transformations {
     // All cases: Mutalyzer agrees
     // =========================================================================
 
+    // Real-accession smoke; matrix-level coverage in tests/ins_shift_matrix.rs.
     #[rstest]
     // polyA expansion: inserting AAAA into A-tract becomes A[n] - Mutalyzer: agrees
     #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.401_403A[7]")]
@@ -2877,29 +2791,6 @@ mod equivalence_derived_normalize {
     }
 
     // =========================================================================
-    // PATTERN 2: Insertion → Duplication
-    // =========================================================================
-    // When inserted sequence matches the preceding sequence, it becomes dup.
-    // From check_dup_vs_ins_equivalence.
-
-    #[rstest]
-    // Single base insertion matching preceding base
-    #[case("NM_001089.2:c.3057_3058insT", "NM_001089.2:c.3057dup")]
-    #[ignore]
-    fn test_insertion_to_dup_normalization(#[case] input: &str, #[case] expected: &str) {
-        let result = normalize_to_string(input)
-            .expect("Normalization failed - is benchmark-output present?");
-        assert_eq!(
-            result, expected,
-            "Insertion matching preceding sequence should become dup.\n\
-             Input: {}\n\
-             Expected: {}\n\
-             Got: {}",
-            input, expected, result
-        );
-    }
-
-    // =========================================================================
     // PATTERN 3: Duplication → Repeat Notation
     // =========================================================================
     // Tandem duplications in existing repeat regions become repeat notation.
@@ -2963,33 +2854,6 @@ mod equivalence_derived_normalize {
         assert_eq!(
             result, expected,
             "Explicit bases in dup notation should be removed.\n\
-             Input: {}\n\
-             Expected: {}\n\
-             Got: {}",
-            input, expected, result
-        );
-    }
-
-    // =========================================================================
-    // PATTERN 6: Insertion → Repeat
-    // =========================================================================
-    // Homopolymer insertions become repeat notation when in existing repeat tract.
-    // From check_ins_vs_repeat_equivalence.
-    // Note: Only works when insertion position is in an existing repeat tract.
-
-    #[rstest]
-    // polyA expansion: inserting AAAA into A-tract becomes A[n]
-    #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.401_403A[7]")]
-    // polyT expansion
-    #[case("NM_000382.3:c.399_400insTTTT", "NM_000382.3:c.398_399T[6]")]
-    // Note: Some insertions don't become repeats if not in existing tract
-    #[ignore]
-    fn test_homopolymer_insertion_to_repeat(#[case] input: &str, #[case] expected: &str) {
-        let result = normalize_to_string(input)
-            .expect("Normalization failed - is benchmark-output present?");
-        assert_eq!(
-            result, expected,
-            "Homopolymer insertion should become repeat notation.\n\
              Input: {}\n\
              Expected: {}\n\
              Got: {}",
@@ -3208,75 +3072,6 @@ mod comprehensive_normalization_tests {
             let provider = provider_with_transcript("NM_TEST.1", seq);
             // Inserting GC at start of repeat - should shift and possibly become dup
             assert_normalizes_to("NM_TEST.1:c.3_4insGC", "NM_TEST.1:c.10_11dup", provider);
-        }
-
-        #[test]
-        fn test_insertion_at_homopolymer_end_becomes_dup() {
-            // Sequence: GGGAAAGGG (A's at 4-6)
-            // Inserting A at end of A-tract (c.6_7insA) becomes duplication
-            let seq = "GGGAAAGGG";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            assert_normalizes_to("NM_TEST.1:c.6_7insA", "NM_TEST.1:c.6dup", provider);
-        }
-    }
-
-    // =========================================================================
-    // RULE 3: Insertion → Duplication
-    // =========================================================================
-    // When inserted sequence matches preceding sequence, it becomes duplication.
-    // Function: insertion_is_duplication() in src/normalize/rules.rs
-
-    mod insertion_to_dup_tests {
-        use super::*;
-
-        #[test]
-        fn test_single_base_insertion_matches_preceding_becomes_dup() {
-            // Sequence: ATGCATGCAT
-            //           1234567890
-            // Inserting A after position 5 (A) becomes dup
-            let seq = "ATGCATGCAT";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            // c.5_6insA where ref[5]=A → c.5dup
-            assert_normalizes_to("NM_TEST.1:c.5_6insA", "NM_TEST.1:c.5dup", provider);
-        }
-
-        #[test]
-        fn test_multi_base_insertion_matches_preceding_becomes_dup() {
-            // Sequence: NNATGCNNNNN (ATG at positions 3-5)
-            //           12345678901
-            // Inserting ATG after position 5 becomes dup
-            let seq = "NNATGCNNNNN";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            // c.5_6insATG where ref[3-5]=ATG → c.3_5dup
-            assert_normalizes_to("NM_TEST.1:c.5_6insATG", "NM_TEST.1:c.3_5dup", provider);
-        }
-
-        #[test]
-        fn test_insertion_no_match_stays_insertion() {
-            // Sequence: ATGCATGCAT
-            // Inserting GGG doesn't match anything
-            let seq = "ATGCATGCAT";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            assert_normalizes_to("NM_TEST.1:c.5_6insGGG", "NM_TEST.1:c.5_6insGGG", provider);
-        }
-
-        #[test]
-        fn test_insertion_partial_match_stays_insertion() {
-            // Sequence: ATGCATGCAT
-            // Inserting ATT where preceding is ATG - partial match, stays insertion
-            let seq = "NNATGCNNNNN";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            assert_normalizes_to("NM_TEST.1:c.5_6insATT", "NM_TEST.1:c.5_6insATT", provider);
-        }
-
-        #[test]
-        fn test_insertion_in_repeat_becomes_dup_at_3prime_position() {
-            // Sequence with repeat: AAACCCAAAA
-            // Inserting CCC in C-tract should become dup at 3' position
-            let seq = "AAACCCAAAA";
-            let provider = provider_with_transcript("NM_TEST.1", seq);
-            // Inserting C in CCC tract
-            assert_normalizes_to("NM_TEST.1:c.4_5insC", "NM_TEST.1:c.6dup", provider);
         }
     }
 
