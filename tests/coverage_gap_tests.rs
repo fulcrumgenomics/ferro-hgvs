@@ -16,12 +16,11 @@
 //!
 //! Issue #94: every gap test that previously asserted only `contains(...)`
 //! or `is_ok() || is_err()` is locked with `assert_eq!` against the
-//! exact normalizer output. Issue #98 (minus-strand intronic ref-base
-//! orientation) was identified as a common root cause behind several
-//! initially suspected-buggy lock points and has since been fixed; the
-//! affected tests now lock spec-correct outputs. The one remaining
-//! `FIXME` in this file points at #96 (multi-base dup repeat-unit
-//! position not yet consistent with the unit length, on minus strand).
+//! exact normalizer output. Issues #96 (repeat-unit position not
+//! consistent with unit length) and #98 (minus-strand intronic
+//! ref-base orientation) were identified as common root causes behind
+//! several initially suspected-buggy lock points and have since been
+//! fixed; the affected tests now lock spec-correct outputs.
 //! Boundary-spanning panic-canary tests are intentionally left as
 //! `is_ok() || is_err()` per #94 scope.
 
@@ -444,18 +443,14 @@ mod intronic_duplications {
     #[test]
     fn test_minus_strand_intronic_multi_base_dup() {
         // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to
-        // AAAAAA. The repeat unit is now correctly emitted as the
-        // transcript-view letter `A` (the genomic-strand `T` was the
-        // surface symptom of #98, fixed). The first-unit position
-        // range, however, is still the original 3-base span of the
-        // duplicated region rather than a single base consistent with
-        // the 1-base unit — that residual is tracked separately as
-        // #96.
+        // AAAAAA. The repeat unit is the transcript-view letter `A`
+        // (the genomic-strand `T` was the surface symptom of #98).
+        // The first-unit position is a single base (`c.30+2`) per HGVS
+        // spec — the position-range length must equal the unit length
+        // (issue #96).
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
-        // FIXME(#96): expected first-unit position is consistent with
-        // the unit length (1-base unit `A` → 1-base position).
-        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4A[6]");
+        assert_eq!(result, "NM_MINUS.1:c.30+2A[6]");
     }
 }
 

@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(normalize)* Repeat notation now emits the position of the FIRST
+  repeat unit per HGVS spec, not the entire reference tract. The three
+  repeat-emission paths in `src/normalize/rules.rs`
+  (`duplication_to_repeat`, `insertion_to_repeat`, `normalize_repeat`)
+  previously set the position end to `ref_start + ref_count * unit_len
+  - 1`, producing forms like `c.342_362GCA[9]` for a 9-unit GCA tract
+  (21-base position) where the spec requires `c.342_344GCA[9]` (3-base
+  position matching the 3-base unit length). The fix sets `end =
+  ref_start + unit_len - 1` everywhere repeat notation is emitted, so
+  the position-range length always equals the unit length.
+  Mechanically updates the locked outputs of every multi-base
+  ins/dup→repeat case in `tests/ins_shift_matrix.rs` (29 cells across
+  all 7 nucleotide coord-system / strand modules), three real-accession
+  smoke tests in `tests/normalize_tests.rs`, and the residual #96 lock
+  in `tests/coverage_gap_tests.rs`. Issue #96.
 - *(normalize)* Minus-strand intronic normalization now reads the
   reference window in transcript-view orientation. `normalize_intronic_cds`
   and `normalize_intronic_tx` previously passed the genomic-strand bytes

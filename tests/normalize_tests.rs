@@ -1686,13 +1686,15 @@ mod normalization_transformations {
     // =========================================================================
 
     // Real-accession smoke; matrix-level coverage in tests/ins_shift_matrix.rs.
+    // Output position locates the FIRST repeat unit per HGVS spec — for a
+    // 1-base unit that is a single position (issue #96).
     #[rstest]
-    // polyA expansion: inserting AAAA into A-tract becomes A[n] - Mutalyzer: agrees
-    #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.401_403A[7]")]
-    // polyT expansion - Mutalyzer: agrees
-    #[case("NM_000382.3:c.399_400insTTTT", "NM_000382.3:c.398_399T[6]")]
-    // polyG expansion - Mutalyzer: agrees
-    #[case("NM_015120.4:c.46_47insGGG", "NM_015120.4:c.45_46G[5]")]
+    // polyA expansion: inserting AAAA into A-tract becomes A[n].
+    #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.401A[7]")]
+    // polyT expansion.
+    #[case("NM_000382.3:c.399_400insTTTT", "NM_000382.3:c.398T[6]")]
+    // polyG expansion.
+    #[case("NM_015120.4:c.46_47insGGG", "NM_015120.4:c.45G[5]")]
     fn test_insertion_becomes_repeat(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input);
         assert_eq!(
@@ -1708,9 +1710,11 @@ mod normalization_transformations {
     // Mutalyzer: agrees
     // =========================================================================
 
+    // Output position locates the FIRST repeat unit per HGVS spec — for a
+    // 3-base unit that is a 3-base range (issue #96).
     #[rstest]
-    // Triplet repeat expansion: dupGCAGCA in GCA-tract becomes GCA[n] - Mutalyzer: agrees
-    #[case("NM_020732.3:c.357_362dupGCAGCA", "NM_020732.3:c.342_362GCA[9]")]
+    // Triplet repeat expansion: dupGCAGCA in GCA-tract becomes GCA[n].
+    #[case("NM_020732.3:c.357_362dupGCAGCA", "NM_020732.3:c.342_344GCA[9]")]
     fn test_dup_becomes_repeat(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input);
         assert_eq!(
@@ -2797,8 +2801,9 @@ mod equivalence_derived_normalize {
     // From check_dup_repeat_equivalence and check_dup_vs_expanded_repeat_equivalence.
 
     #[rstest]
-    // Triplet repeat expansion: dupGCAGCA in GCA-tract becomes GCA[n]
-    #[case("NM_020732.3:c.357_362dupGCAGCA", "NM_020732.3:c.342_362GCA[9]")]
+    // Triplet repeat expansion: dupGCAGCA in GCA-tract becomes GCA[n].
+    // Position locates the first GCA unit per HGVS spec (issue #96).
+    #[case("NM_020732.3:c.357_362dupGCAGCA", "NM_020732.3:c.342_344GCA[9]")]
     #[ignore]
     fn test_dup_to_repeat_normalization(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input)

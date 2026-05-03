@@ -73,26 +73,28 @@ mod genomic {
     }
 
     #[rstest]
-    // 2+ units added → repeat notation per HGVS spec.
-    // Case 1: 2 A's added to AAA tract → A[5].
-    //   Core: ACAAACG. ref core[3..6]=AAA. Insert AA at core 2_3.
+    // 2+ units added → repeat notation per HGVS spec. Output position
+    // locates the FIRST repeat unit (issue #96), so its length matches
+    // the unit length: 1-base unit → single position, 2-base unit →
+    // 2-base range, 3-base unit → 3-base range.
+    // Case 1: 2 A's added to AAA tract → A[5] at core pos 3 (single base).
+    //   Core: ACAAACG. ref core[3..5]=AAA (3 A's). Insert AA at core 2_3.
     //   Shifts to end of A-tract; 3+2=5 As → A[5].
-    //   Repeat tract: core[3..5] (1-based, 3 A's at HGVS pos 3..5).
-    #[case("ACAAACG", "g.{0}_{1}insAA", &[2u64, 3u64], "g.{0}_{1}A[5]", &[3u64, 5u64])]
-    // Case 2: 4 A's added to AAA tract → A[7].
-    #[case("ACAAACG", "g.{0}_{1}insAAAA", &[2u64, 3u64], "g.{0}_{1}A[7]", &[3u64, 5u64])]
+    #[case("ACAAACG", "g.{0}_{1}insAA", &[2u64, 3u64], "g.{0}A[5]", &[3u64])]
+    // Case 2: 4 A's added to AAA tract → A[7] at core pos 3 (single base).
+    #[case("ACAAACG", "g.{0}_{1}insAAAA", &[2u64, 3u64], "g.{0}A[7]", &[3u64])]
     // Case 3: 2 GCA units added to GCAGCAGCA tract → GCA[5].
     //   Core: ACGCAGCAGCATG. ref core[3..11]=GCAGCAGCA (3 GCA units).
     //   Insert GCAGCA at core 2_3. Shifts; 3+2=5 GCA → GCA[5].
-    //   Repeat tract: core[3..11] (1-based, 9 bases = 3 units).
-    #[case("ACGCAGCAGCATG", "g.{0}_{1}insGCAGCA", &[2u64, 3u64], "g.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    //   Position: first GCA unit at core 3..5 (3-base range).
+    #[case("ACGCAGCAGCATG", "g.{0}_{1}insGCAGCA", &[2u64, 3u64], "g.{0}_{1}GCA[5]", &[3u64, 5u64])]
     // Case 4: 2 AC units added to ACACAC tract → AC[5].
     //   Core: GCACACACG. Pairs (3-4)=AC, (5-6)=AC, (7-8)=AC; 3 AC units at core 3..8.
     //   Trailing G at core 9 prevents the AC tract from leaking into padding
     //   (padding starts with 'A', which would otherwise extend the tract).
     //   Insert ACAC at core 2_3 (between C and A). alt[0]=A, ref[3]=A → match → shifts.
-    //   3+2=5 AC → AC[5]. Tract: core 3..8 (1-based, 6 bases = 3 units).
-    #[case("GCACACACG", "g.{0}_{1}insACAC", &[2u64, 3u64], "g.{0}_{1}AC[5]", &[3u64, 8u64])]
+    //   3+2=5 AC → AC[5]. Position: first AC unit at core 3..4 (2-base range).
+    #[case("GCACACACG", "g.{0}_{1}insACAC", &[2u64, 3u64], "g.{0}_{1}AC[5]", &[3u64, 4u64])]
     // Case 5: alt is a cyclic rotation of the ref unit.
     //   Core: TTGCAGCAGCATT. Ref tract (GCA)x3 at core 3..11; flanking T's
     //   at core 1-2 and 12-13 prevent the tract from extending into PAD.
@@ -100,8 +102,8 @@ mod genomic {
     //   smallest_repeat_unit returns CAG, but the ref tract is GCA — the
     //   algorithm must try all cyclic rotations of the unit to find the
     //   reference-aligned tract.
-    //   Expected: GCA[5] at core 3..11.
-    #[case("TTGCAGCAGCATT", "g.{0}_{1}insCAGCAG", &[2u64, 3u64], "g.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    //   Expected: GCA[5]. Position: first GCA unit at core 3..5 (3-base range).
+    #[case("TTGCAGCAGCATT", "g.{0}_{1}insCAGCAG", &[2u64, 3u64], "g.{0}_{1}GCA[5]", &[3u64, 5u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -234,13 +236,13 @@ mod cds_plus {
 
     #[rstest]
     // Case 1: 2 A's added to AAA tract → A[5]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}A[5]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}A[5]", &[3u64])]
     // Case 2: 4 A's added to AAA tract → A[7]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}A[7]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}A[7]", &[3u64])]
     // Case 3: 2 GCA units added → GCA[5]. Tract: c.3..11.
-    #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 5u64])]
     // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: c.3..8.
-    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 8u64])]
+    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -362,13 +364,13 @@ mod cds_minus {
 
     #[rstest]
     // Case 1: 2 A's added to AAA tract → A[5]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}A[5]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}A[5]", &[3u64])]
     // Case 2: 4 A's added to AAA tract → A[7]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}A[7]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}A[7]", &[3u64])]
     // Case 3: 2 GCA units added → GCA[5]. Tract: c.3..11.
-    #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 5u64])]
     // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: c.3..8.
-    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 8u64])]
+    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -491,13 +493,13 @@ mod noncoding_plus {
 
     #[rstest]
     // Case 1: 2 A's added to AAA tract → A[5]. Tract: n.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAA", &[2u64, 3u64], "n.{0}_{1}A[5]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAA", &[2u64, 3u64], "n.{0}A[5]", &[3u64])]
     // Case 2: 4 A's added to AAA tract → A[7]. Tract: n.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAAAA", &[2u64, 3u64], "n.{0}_{1}A[7]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAAAA", &[2u64, 3u64], "n.{0}A[7]", &[3u64])]
     // Case 3: 2 GCA units added → GCA[5]. Tract: n.3..11.
-    #[case("ACGCAGCAGCATGACGTACG", "n.{0}_{1}insGCAGCA", &[2u64, 3u64], "n.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    #[case("ACGCAGCAGCATGACGTACG", "n.{0}_{1}insGCAGCA", &[2u64, 3u64], "n.{0}_{1}GCA[5]", &[3u64, 5u64])]
     // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: n.3..8.
-    #[case("GCACACACGTACGTACGTAC", "n.{0}_{1}insACAC", &[2u64, 3u64], "n.{0}_{1}AC[5]", &[3u64, 8u64])]
+    #[case("GCACACACGTACGTACGTAC", "n.{0}_{1}insACAC", &[2u64, 3u64], "n.{0}_{1}AC[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -620,13 +622,13 @@ mod noncoding_minus {
 
     #[rstest]
     // Case 1: 2 A's added to AAA tract → A[5]. Tract: n.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAA", &[2u64, 3u64], "n.{0}_{1}A[5]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAA", &[2u64, 3u64], "n.{0}A[5]", &[3u64])]
     // Case 2: 4 A's added to AAA tract → A[7]. Tract: n.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAAAA", &[2u64, 3u64], "n.{0}_{1}A[7]", &[3u64, 5u64])]
+    #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAAAA", &[2u64, 3u64], "n.{0}A[7]", &[3u64])]
     // Case 3: 2 GCA units added → GCA[5]. Tract: n.3..11.
-    #[case("ACGCAGCAGCATGACGTACG", "n.{0}_{1}insGCAGCA", &[2u64, 3u64], "n.{0}_{1}GCA[5]", &[3u64, 11u64])]
+    #[case("ACGCAGCAGCATGACGTACG", "n.{0}_{1}insGCAGCA", &[2u64, 3u64], "n.{0}_{1}GCA[5]", &[3u64, 5u64])]
     // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: n.3..8.
-    #[case("GCACACACGTACGTACGTAC", "n.{0}_{1}insACAC", &[2u64, 3u64], "n.{0}_{1}AC[5]", &[3u64, 8u64])]
+    #[case("GCACACACGTACGTACGTAC", "n.{0}_{1}insACAC", &[2u64, 3u64], "n.{0}_{1}AC[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -746,13 +748,13 @@ mod rna_plus {
 
     #[rstest]
     // Case 1: 2 a's added to aaa tract → a[5]. Tract: r.3..5.
-    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaa", &[2u64, 3u64], "r.{0}_{1}a[5]", &[3u64, 5u64])]
+    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaa", &[2u64, 3u64], "r.{0}a[5]", &[3u64])]
     // Case 2: 4 a's added to aaa tract → a[7]. Tract: r.3..5.
-    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaaaa", &[2u64, 3u64], "r.{0}_{1}a[7]", &[3u64, 5u64])]
+    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaaaa", &[2u64, 3u64], "r.{0}a[7]", &[3u64])]
     // Case 3: 2 gca units added → gca[5]. Tract: r.3..11.
-    #[case("acgcagcagcaugacguacg", "r.{0}_{1}insgcagca", &[2u64, 3u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
+    #[case("acgcagcagcaugacguacg", "r.{0}_{1}insgcagca", &[2u64, 3u64], "r.{0}_{1}gca[5]", &[3u64, 5u64])]
     // Case 4: 2 ac units added to acacac tract → ac[5]. Tract: r.3..8.
-    #[case("gcacacacguacguacguac", "r.{0}_{1}insacac", &[2u64, 3u64], "r.{0}_{1}ac[5]", &[3u64, 8u64])]
+    #[case("gcacacacguacguacguac", "r.{0}_{1}insacac", &[2u64, 3u64], "r.{0}_{1}ac[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -872,13 +874,13 @@ mod rna_minus {
 
     #[rstest]
     // Case 1: 2 a's added to aaa tract → a[5]. Tract: r.3..5.
-    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaa", &[2u64, 3u64], "r.{0}_{1}a[5]", &[3u64, 5u64])]
+    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaa", &[2u64, 3u64], "r.{0}a[5]", &[3u64])]
     // Case 2: 4 a's added to aaa tract → a[7]. Tract: r.3..5.
-    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaaaa", &[2u64, 3u64], "r.{0}_{1}a[7]", &[3u64, 5u64])]
+    #[case("acaaacguacguacguacgu", "r.{0}_{1}insaaaa", &[2u64, 3u64], "r.{0}a[7]", &[3u64])]
     // Case 3: 2 gca units added → gca[5]. Tract: r.3..11.
-    #[case("acgcagcagcaugacguacg", "r.{0}_{1}insgcagca", &[2u64, 3u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
+    #[case("acgcagcagcaugacguacg", "r.{0}_{1}insgcagca", &[2u64, 3u64], "r.{0}_{1}gca[5]", &[3u64, 5u64])]
     // Case 4: 2 ac units added to acacac tract → ac[5]. Tract: r.3..8.
-    #[case("gcacacacguacguacguac", "r.{0}_{1}insacac", &[2u64, 3u64], "r.{0}_{1}ac[5]", &[3u64, 8u64])]
+    #[case("gcacacacguacguacguac", "r.{0}_{1}insacac", &[2u64, 3u64], "r.{0}_{1}ac[5]", &[3u64, 4u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,

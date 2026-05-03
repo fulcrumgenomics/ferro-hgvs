@@ -193,12 +193,16 @@ pub fn insertion_to_repeat(
 
     let (unit, ref_start, ref_count) = best?;
     let total_count = ref_count + added_copies;
-    let ref_end = ref_start + ref_count as usize * unit.len() - 1;
+    // Per HGVS spec, the position in `prefix:position_or_range unit[N]`
+    // must locate the FIRST repeat unit, not the entire tract. The
+    // first-unit end position is `ref_start + unit_len - 1` (inclusive,
+    // 0-based), not `ref_start + ref_count * unit_len - 1`. Issue #96.
+    let unit_first_end = ref_start + unit.len() - 1;
     Some((
         unit[0],
         total_count,
         index_to_hgvs_pos(ref_start),
-        index_to_hgvs_pos(ref_end),
+        index_to_hgvs_pos(unit_first_end),
         unit,
     ))
 }
@@ -472,11 +476,14 @@ pub fn duplication_to_repeat(ref_seq: &[u8], start: u64, end: u64) -> Option<Dup
         if let Some(analysis) = find_homopolymer_at(ref_seq, start_idx) {
             if analysis.base == Some(first) {
                 let total_count = analysis.ref_count + dup_len as u64;
+                // Per HGVS spec the position must locate the FIRST
+                // repeat unit, not the full ref-tract extent. For a
+                // single-base unit that is a 1-base position. Issue #96.
                 return Some(DupToRepeatResult::Homopolymer {
                     base: first,
                     count: total_count,
                     start: index_to_hgvs_pos(analysis.ref_start),
-                    end: index_to_hgvs_pos(analysis.ref_start + analysis.ref_count as usize - 1),
+                    end: index_to_hgvs_pos(analysis.ref_start),
                 });
             }
         }
@@ -511,17 +518,20 @@ pub fn duplication_to_repeat(ref_seq: &[u8], start: u64, end: u64) -> Option<Dup
         }
 
         // Found a repeat unit. Now find the full extent in the reference.
-        if let Some((ref_count, rep_start, rep_end)) =
+        if let Some((ref_count, rep_start, _rep_end)) =
             count_tandem_repeats(ref_seq, start_idx, unit)
         {
             // Total count = reference count + duplicated copies
             let total_count = ref_count + copies_in_dup as u64;
-            // rep_end is exclusive (0-based), so last position is rep_end - 1
+            // Per HGVS spec the position must locate the FIRST repeat
+            // unit, not the full ref-tract extent. For a unit of length
+            // U the first-unit end position (inclusive, 0-based) is
+            // `rep_start + U - 1`. Issue #96.
             return Some(DupToRepeatResult::TandemRepeat {
                 unit: unit.to_vec(),
                 count: total_count,
                 start: index_to_hgvs_pos(rep_start),
-                end: index_to_hgvs_pos(rep_end - 1),
+                end: index_to_hgvs_pos(rep_start + unit_len - 1),
             });
         }
     }
@@ -666,12 +676,14 @@ pub fn normalize_repeat(
         // Same as reference - this is identity (no change)
         RepeatNormResult::Unchanged
     } else {
-        // Keep as repeat notation with canonical position
-        // The repeat region describes the REFERENCE tract (per HGVS spec)
-        // ref_end is exclusive, so last position is ref_end - 1
+        // Keep as repeat notation with canonical position. Per HGVS spec
+        // the position must locate the FIRST repeat unit, not the entire
+        // tract — i.e. the position-range length must equal the unit
+        // length. Issue #96.
+        let _ = ref_end; // ref_end is the exclusive end of the full tract; not needed here
         RepeatNormResult::Repeat {
             start: index_to_hgvs_pos(ref_start),
-            end: index_to_hgvs_pos(ref_end - 1),
+            end: index_to_hgvs_pos(ref_start + repeat_unit.len() - 1),
             sequence: repeat_unit.to_vec(),
             count: specified_count,
         }
@@ -948,14 +960,16 @@ mod tests {
         // `pos` is the 0-based index of the base immediately 5' of the
         // insertion point. pos=7 means insert between index 7 and 8 — i.e.,
         // immediately after the last A in the homopolymer. Inserting AA here
-        // should become A[7] (5 ref + 2 inserted).
+        // should become A[7] (5 ref + 2 inserted). Per HGVS spec the
+        // returned position locates the FIRST repeat unit; for a 1-base
+        // unit that is a single position, so end == start (issue #96).
         let result = insertion_to_repeat(ref_seq, 7, b"AA");
         assert!(result.is_some());
         let (base, count, start, end, _unit) = result.unwrap();
         assert_eq!(base, b'A');
         assert_eq!(count, 7); // 5 original + 2 inserted
-        assert_eq!(start, 4); // 1-indexed start of A region in reference
-        assert_eq!(end, 8); // 1-indexed end of A region in reference (per HGVS, positions refer to reference tract)
+        assert_eq!(start, 4); // 1-indexed start of the first A repeat unit
+        assert_eq!(end, 4); // first-unit end == start (single-base unit)
 
         // Single-copy inserts (added_copies < 2) are duplications, not repeats.
         let result = insertion_to_repeat(ref_seq, 7, b"A");
@@ -972,15 +986,17 @@ mod tests {
         // Multi-base tandem unit: insert ACAC into ACAC tract → AC[4].
         // ref_seq has ACAC at indices 0-3. Insert ACAC just before index 4
         // (pos=3, between A at index 3 and base at index 4). Expected:
-        // 2 ref AC units + 2 inserted AC units = AC[4] at ref indices 0..3.
+        // 2 ref AC units + 2 inserted AC units = AC[4]. The returned
+        // position locates the first AC unit at indices 0..1
+        // (1-indexed 1..2) — a 2-base range matching the 2-base unit.
         let ref_ac = b"ACACGGG";
         let result = insertion_to_repeat(ref_ac, 3, b"ACAC");
         assert!(result.is_some());
         let (base, count, start, end, unit) = result.unwrap();
         assert_eq!(base, b'A');
         assert_eq!(count, 4);
-        assert_eq!(start, 1); // 1-indexed
-        assert_eq!(end, 4); // 1-indexed
+        assert_eq!(start, 1); // 1-indexed start of first AC unit
+        assert_eq!(end, 2); // 1-indexed end of first AC unit (start + 2 - 1)
         assert_eq!(unit, b"AC");
     }
 
@@ -1023,7 +1039,9 @@ mod tests {
         let result = duplication_to_repeat(ref_seq, 5, 8);
         assert!(result.is_none(), "Single-copy dup should not become repeat");
 
-        // Duplicating GCAGCA (2 copies) SHOULD become repeat notation
+        // Duplicating GCAGCA (2 copies) SHOULD become repeat notation.
+        // Per HGVS spec the returned position locates the FIRST GCA unit;
+        // for a 3-base unit that is a 3-base range (issue #96).
         let result = duplication_to_repeat(ref_seq, 5, 11);
         assert!(result.is_some());
         match result.unwrap() {
@@ -1035,8 +1053,8 @@ mod tests {
             } => {
                 assert_eq!(unit, b"GCA");
                 assert_eq!(count, 10); // 8 original + 2 duplicated
-                assert_eq!(start, 6); // 1-indexed
-                assert_eq!(end, 29); // 1-indexed end of 8 GCAs (0-indexed 28 + 1)
+                assert_eq!(start, 6); // 1-indexed start of first GCA unit
+                assert_eq!(end, 8); // 1-indexed end of first GCA unit (start + 3 - 1)
             }
             _ => panic!("Expected TandemRepeat result"),
         }
