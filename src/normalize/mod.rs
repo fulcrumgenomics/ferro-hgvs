@@ -1873,15 +1873,50 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     (new_start, new_end, edit.clone())
                 }
             }
-            // Deletions - strip explicit length for minimal notation
-            NaEdit::Deletion { .. } => (
-                new_start,
-                new_end,
-                NaEdit::Deletion {
-                    sequence: None,
-                    length: None,
-                },
-            ),
+            // Deletions: post-shift, check for B2 canonical-form rule
+            // (deletion of >=2 tandem-repeat units → unit[N-k]); otherwise
+            // strip explicit length for minimal `del` notation. The
+            // collect-into-Option short-circuits if any byte in the unit isn't
+            // a valid `Base` (e.g. `N`), in which case we fall through to del.
+            //
+            // B2 is defined for a *post-3'-shift* deletion (the shuffle phase-
+            // alignment lemma justifies emitting `unit[N-k]` without rotation).
+            // Under FivePrime shuffle, applying it would re-anchor the
+            // 5'-normalized deletion to the canonical tract position, defeating
+            // the user's choice of direction — so gate it on ThreePrime.
+            NaEdit::Deletion { .. } => {
+                use crate::hgvs::edit::{Base, RepeatCount, Sequence};
+                if self.config.shuffle_direction == ShuffleDirection::ThreePrime {
+                    if let Some(rep) = rules::deletion_to_repeat(
+                        ref_seq,
+                        result.start as usize,
+                        result.end as usize,
+                    ) {
+                        let bases: Option<Vec<Base>> = rep
+                            .unit
+                            .iter()
+                            .map(|&b| Base::from_char(b as char))
+                            .collect();
+                        if let Some(bases) = bases {
+                            let repeat_edit = NaEdit::Repeat {
+                                sequence: Some(Sequence::new(bases)),
+                                count: RepeatCount::Exact(rep.count),
+                                additional_counts: vec![],
+                                trailing: None,
+                            };
+                            return Ok((rep.start, rep.end, repeat_edit, warnings));
+                        }
+                    }
+                }
+                (
+                    new_start,
+                    new_end,
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                )
+            }
             // All other edit types stay unchanged
             _ => (new_start, new_end, edit.clone()),
         };

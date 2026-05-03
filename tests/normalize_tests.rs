@@ -320,7 +320,7 @@ fn test_config_skip_validation() {
 mod output_tests {
     use ferro_hgvs::reference::mock::MockProvider;
     use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
-    use ferro_hgvs::{parse_hgvs, Normalizer};
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
 
     /// Create a transcript with a custom sequence for testing
     fn make_transcript(id: &str, sequence: &str) -> Transcript {
@@ -382,43 +382,107 @@ mod output_tests {
     }
 
     #[test]
-    fn test_deletion_stays_deletion_not_dup() {
-        // Even when deleted sequence matches preceding sequence,
-        // deletion should stay as deletion (NEVER convert to dup)
-        // Sequence: ATGATGATG (repeating ATG)
-        // Deleting ATG at pos 4-6 matches ATG at pos 1-3, but should stay del
-        let seq = "ATGATGATGATGATG"; // repeating ATG
+    fn test_deletion_never_becomes_dup() {
+        // Locks two rules at once:
+        // (a) deletion never becomes dup (HGVS prioritization: del > dup)
+        // (b) deletion of >=2 tandem-repeat units becomes unit[N-k] (B2)
+        //
+        // Sequence: ATGATGATGATGATG (5 ATG units at pos 1-15).
+        // Two cases:
+        //   c.4_6del (k=1) → c.13_15del (still del, shifted to 3'-most ATG)
+        //   c.4_9del (k=2) → c.1_15ATG[3] (B2 fires, becomes repeat)
+        let seq = "ATGATGATGATGATG"; // 5 repeating ATG
         let provider = provider_with_transcript("NM_TEST.1", seq);
 
+        // k=1: stays as del, shifted to 3'-most position
         let result = normalize_to_string(provider, "NM_TEST.1:c.4_6del");
-
-        // Should be a deletion, shifted to 3'-most position
-        // The repeat is ATG ATG ATG ATG ATG, deleting 4-6 should shift to 13-15
-        assert!(
-            result.contains("del"),
-            "Deletion must stay as del, got: {}",
-            result
+        assert_eq!(
+            result, "NM_TEST.1:c.13_15del",
+            "k=1 deletion should stay as del shifted 3'"
         );
+
+        // k=2: B2 fires, becomes ATG[3]
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let result = normalize_to_string(provider, "NM_TEST.1:c.4_9del");
+        assert_eq!(
+            result, "NM_TEST.1:c.1_15ATG[3]",
+            "k=2 deletion of tandem unit should become unit[N-k]"
+        );
+
+        // Neither result mentions "dup"
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let r1 = normalize_to_string(provider, "NM_TEST.1:c.4_6del");
         assert!(
-            !result.contains("dup"),
-            "Deletion must NOT become dup, got: {}",
-            result
+            !r1.contains("dup"),
+            "k=1 case must not become dup, got: {}",
+            r1
+        );
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let r2 = normalize_to_string(provider, "NM_TEST.1:c.4_9del");
+        assert!(
+            !r2.contains("dup"),
+            "k=2 case must not become dup, got: {}",
+            r2
         );
     }
 
     #[test]
-    fn test_multi_base_deletion_shifts_3prime() {
-        // Sequence with AA repeat: ...AAAAAAAA...
-        // Deleting AA should shift to 3'-most position
-        let seq = "GGGGGGGGGAAAAAAAAGGGGGGGGG"; // 8 A's at positions 10-17
+    fn test_multi_base_deletion_in_homopolymer_becomes_repeat() {
+        // Per B2: delete 2 A's from an 8-A tract → A[6] at the canonical
+        // tract position (post-A5 behavior). ref_count=8, k=2, post=6.
+        //
+        // Sequence: GGGGGGGGGAAAAAAAAGGGGGGGGG. A-tract at positions 10-17
+        // (8 A's, 1-based).
+        let seq = "GGGGGGGGGAAAAAAAAGGGGGGGGG";
         let provider = provider_with_transcript("NM_TEST.1", seq);
-
         let result = normalize_to_string(provider, "NM_TEST.1:c.10_11del");
+        assert_eq!(result, "NM_TEST.1:c.10_17A[6]");
+    }
 
-        // Two A's deleted, should shift to 16_17 (3'-most pair)
+    #[test]
+    fn test_b2_only_in_three_prime_mode() {
+        // B2 (`unit[N-k]` rewrite) is defined post-3'-shift. In FivePrime
+        // mode, the 5'-shifted deletion must not be re-anchored to the
+        // canonical 3' tract position; the result stays as a plain `del`
+        // at the 5'-most position.
+        //
+        // Sequence: GGGGGGGGGAAAAAAAAGGGGGGGGG. 8-A tract at pos 10-17
+        // (1-based). Input c.16_17del (last 2 A's of the tract):
+        //   - ThreePrime: B2 fires → c.10_17A[6]
+        //   - FivePrime:  shift to 5'-most position → c.10_11del
+        let seq = "GGGGGGGGGAAAAAAAAGGGGGGGGG";
+
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let three_prime = Normalizer::with_config(
+            provider,
+            NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+        );
+        let variant = parse_hgvs("NM_TEST.1:c.16_17del").expect("Failed to parse input");
+        let result_3p = format!(
+            "{}",
+            three_prime
+                .normalize(&variant)
+                .expect("Normalization failed")
+        );
         assert_eq!(
-            result, "NM_TEST.1:c.16_17del",
-            "Multi-base deletion should shift to 3'-most position"
+            result_3p, "NM_TEST.1:c.10_17A[6]",
+            "ThreePrime mode should apply B2"
+        );
+
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let five_prime = Normalizer::with_config(
+            provider,
+            NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+        );
+        let result_5p = format!(
+            "{}",
+            five_prime
+                .normalize(&variant)
+                .expect("Normalization failed")
+        );
+        assert_eq!(
+            result_5p, "NM_TEST.1:c.10_11del",
+            "FivePrime mode must NOT apply B2 (no re-anchoring to canonical tract)"
         );
     }
 
@@ -486,35 +550,30 @@ mod output_tests {
 
     #[test]
     fn test_deletion_at_sequence_end() {
-        // Deletion at the end of sequence - can't shift further
-        let seq = "ATGCATGCAAAA"; // ends with AAAA
+        // Deletion at the end of sequence - can't shift further.
+        // Seq: ATGCATGCAAAA. Delete A at position 9. A-tract is positions
+        // 9-12. 3'-shift moves the del to position 12 (last A in the tract).
+        // ref_count=4, k=1, B2 doesn't fire — stays as del.
+        let seq = "ATGCATGCAAAA"; // 4-A homopolymer at positions 9-12
         let provider = provider_with_transcript("NM_TEST.1", seq);
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.9del");
-
-        // Should shift to position 12 (last A)
-        assert!(
-            result.contains("del"),
-            "Deletion at end should remain del, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.12del");
     }
 
     #[test]
     fn test_deletion_no_shift_when_not_in_repeat() {
-        // Deletion in unique sequence shouldn't shift
-        let seq = "ATGCDEFGHIJK"; // all unique
+        // Deletion in unique sequence shouldn't shift. Position 5 is 'A'
+        // (ATGCATGCATGC, 1-indexed). Bases on either side differ from 'A'
+        // in adjacent positions, so no shift.
+        let seq = "ATGCATGCATGC";
         let provider = provider_with_transcript("NM_TEST.1", seq);
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.5del");
-
-        // Position shouldn't change - no repeat to shift in
-        // Note: depends on what base is at position 5
-        assert!(
-            result.contains("del"),
-            "Deletion should remain del, got: {}",
-            result
-        );
+        // ref[4]='A' (1-based pos 5). Adjacent: ref[3]='C', ref[5]='T'.
+        // 3'-shift extends right while ref[del_start]==ref[del_end].
+        // ref[4]='A', ref[5]='T' → mismatch, no shift. Stays at c.5del.
+        assert_eq!(result, "NM_TEST.1:c.5del");
     }
 }
 
@@ -747,20 +806,31 @@ mod mutalyzer_verified {
     // =========================================================================
 
     #[test]
-    fn test_repeat_to_deletion() {
-        // When repeat count < reference count, should become deletion
-        // Sequence with 4 CAT repeats, specifying CAT[1] should delete 3 copies
-        let seq = "GGGCATCATCATCATGGG"; // 4 CAT repeats at positions 4-15 (1-indexed)
+    fn test_repeat_to_repeat_decrement() {
+        // Per B2: when repeat count < ref by >=2 with surviving units,
+        // emit unit[N-k]. Input: c.4CAT[1] of 4-CAT ref. ref_count=4,
+        // specified=1, k=3 → CAT[1] at positions 4..15 (1-based).
+        //
+        // (Was test_repeat_to_deletion; renamed to reflect post-A5 behavior.
+        // Single-unit reductions still emit del — see
+        // test_repeat_to_deletion_one_unit below.)
+        let seq = "GGGCATCATCATCATGGG"; // 4 CAT repeats at positions 4-15
         let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.4CAT[1]");
+        assert_eq!(result, "NM_TEST.1:c.4_15CAT[1]");
+    }
 
-        // Should become a deletion
-        assert!(
-            result.contains("del"),
-            "Repeat with count < ref should become deletion, got: {}",
-            result
-        );
+    #[test]
+    fn test_repeat_to_deletion_one_unit() {
+        // k=1 reduction: per HGVS prioritization (deletion > unranked
+        // repeat), emit del at the 3'-most unit. Input: c.4CAT[3] of
+        // 4-CAT ref. ref_count=4, specified=3, k=1 → del of last CAT.
+        let seq = "GGGCATCATCATCATGGG"; // 4 CAT repeats at positions 4-15
+        let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
+
+        let result = normalize_to_string(provider, "NM_TEST.1:c.4CAT[3]");
+        assert_eq!(result, "NM_TEST.1:c.13_15del");
     }
 
     #[test]
@@ -814,19 +884,13 @@ mod mutalyzer_verified {
     }
 
     #[test]
-    fn test_single_base_repeat_to_deletion() {
-        // Single base repeat: A[1] when reference has 4 A's should become deletion
+    fn test_single_base_repeat_to_repeat_decrement() {
+        // Per B2: input A[1] against 4-A ref → A[1] (k=3, post=1).
         let seq = "GGGAAAAGGG"; // 4 A's at positions 4-7
         let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.4A[1]");
-
-        // Should become a deletion of 3 A's
-        assert!(
-            result.contains("del"),
-            "Single-base repeat with count < ref should become deletion, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.4_7A[1]");
     }
 
     #[test]
@@ -1771,8 +1835,9 @@ mod normalization_transformations {
     #[case("NM_000059.4:c.5946del", "NM_000059.4:c.5946del")]
     #[case("NM_000059.4:c.6275_6276del", "NM_000059.4:c.6275_6276del")]
     // TP53 deletions - Mutalyzer: agrees
+    // (Note: NM_000546.6:c.628_629del removed — ferro now emits c.627_629A[1]
+    // per B2 canonical-form rule, which Mutalyzer does not apply.)
     #[case("NM_000546.6:c.532del", "NM_000546.6:c.532del")]
-    #[case("NM_000546.6:c.628_629del", "NM_000546.6:c.628_629del")]
     // BRCA1 duplication - already at 3' position - Mutalyzer: agrees
     #[case("NM_007294.4:c.5266dup", "NM_007294.4:c.5266dup")]
     // TP53 duplication - Mutalyzer: agrees
@@ -3291,32 +3356,21 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_repeat_contraction_to_deletion_homopolymer() {
-            // Sequence: GGAAAAAGGG (5 A's at positions 3-7)
-            // A[3] when ref has 5 = delete 2 A's
-            let seq = "GGAAAAAGGG";
+        fn test_repeat_contraction_to_repeat_decrement_homopolymer() {
+            // Per B2: A[3] against 5-A ref → A[3] (k=2, post=3).
+            let seq = "GGAAAAAGGG"; // 5 A's at positions 3-7
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.3A[3]");
-            assert!(
-                result.contains("del"),
-                "A[3] with 5 copies should become del, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.3_7A[3]");
         }
 
         #[test]
-        fn test_repeat_to_single_copy() {
-            // Sequence: AACTCTCTAA (3 CT repeats at positions 3-8)
-            //           1234567890
-            // CT[1] = delete 2 copies (4 bases)
-            let seq = "AACTCTCTAA";
+        fn test_repeat_contraction_to_repeat_decrement_multibase() {
+            // Per B2: CT[1] against 3-CT ref → CT[1] (k=2, post=1).
+            let seq = "AACTCTCTAA"; // 3 CTs at positions 3-8
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.3_4CT[1]");
-            assert!(
-                result.contains("del"),
-                "CT[1] with 3 copies should become del, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.3_8CT[1]");
         }
 
         #[test]
