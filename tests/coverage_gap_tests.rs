@@ -15,12 +15,14 @@
 //! Issue #11: NM_004119.3:c.1837+2_1837+3ins... position ordering bug
 //!
 //! Issue #94: every gap test that previously asserted only `contains(...)`
-//! or `is_ok() || is_err()` is now locked with `assert_eq!` against the
-//! exact normalizer output. Several locked outputs are suspected-buggy
-//! and carry `FIXME(#NN)` comments pointing to the tracking issue (most
-//! converge on #98 — minus-strand intronic ref-base orientation as a
-//! likely common root cause). Boundary-spanning panic-canary tests are
-//! intentionally left as `is_ok() || is_err()` per #94 scope.
+//! or `is_ok() || is_err()` is locked with `assert_eq!` against the
+//! exact normalizer output. Issue #98 (minus-strand intronic ref-base
+//! orientation) was identified as a common root cause behind several
+//! initially suspected-buggy lock points and has since been fixed; the
+//! affected tests now lock spec-correct outputs (full-tract position
+//! with the transcript-view repeat unit, per the HGVS DNA repeat
+//! spec). Boundary-spanning panic-canary tests are intentionally left
+//! as `is_ok() || is_err()` per #94 scope.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
@@ -337,16 +339,17 @@ mod position_ordering {
 
     #[test]
     fn test_minus_strand_intronic_insertion_position_order() {
-        // Issue #11: positions must stay in 5'-to-3' coding order (no swap).
-        // Transcript-view bases at c.30+1..c.30+4 are C, A, A, A — analogous
-        // to the plus-strand AAA tract — so ins A *should* canonicalize to
-        // c.30+4dup. It does not today: see #98 (minus-strand intronic
-        // ref-base orientation defeats #81 A1). This locks the no-swap
-        // invariant that issue #11 was originally about.
+        // Issue #11: positions must stay in 5'-to-3' coding order (no
+        // swap). Transcript-view bases at c.30+1..c.30+4 are C, A, A, A
+        // — analogous to the plus-strand AAA tract — so ins A
+        // canonicalizes to dup at the 3'-most A in the run (c.30+4) per
+        // #81 A1, with the issue-#11 no-swap invariant preserved.
+        // Issue #98 closed the minus-strand intronic ref-base
+        // orientation gap that had prevented this canonicalization
+        // from firing.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+3insA");
-        // FIXME(#98, #81 A1): expected canonical form is c.30+4dup.
-        assert_eq!(result, "NM_MINUS.1:c.30+2_30+3insA");
+        assert_eq!(result, "NM_MINUS.1:c.30+4dup");
     }
 
     #[test]
@@ -429,26 +432,26 @@ mod intronic_duplications {
     #[test]
     fn test_minus_strand_intronic_dup() {
         // Transcript-view AAA tract at c.30+2..c.30+4; dup of A at +2
-        // *should* shift to c.30+4dup. It does not today.
+        // shifts to c.30+4dup per #81 A6. Issue #98 closed the
+        // minus-strand intronic ref-base orientation gap that had
+        // prevented this shift from firing.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2dup");
-        // FIXME(#98, #81 A6): expected canonical form is c.30+4dup.
-        assert_eq!(result, "NM_MINUS.1:c.30+2dup");
+        assert_eq!(result, "NM_MINUS.1:c.30+4dup");
     }
 
     #[test]
     fn test_minus_strand_intronic_multi_base_dup() {
-        // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to AAAAAA.
-        // Spec-canonical form is repeat notation with the transcript-view
-        // unit (`c.30+2_30+4A[6]` — full-tract position, post-edit count
-        // per the HGVS DNA repeat spec). Today ferro emits `T[6]` —
-        // the genomic-strand letter — instead of the transcript-view
-        // letter `A`.
+        // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to
+        // AAAAAA. Spec-canonical form per the HGVS DNA repeat page is
+        // `c.30+2_30+4A[6]` — full-tract position, transcript-view
+        // unit, post-edit unit count. Issue #98 closed the
+        // minus-strand intronic ref-base orientation gap that had
+        // previously caused ferro to emit `T[6]` (the genomic-strand
+        // letter) instead of `A[6]`.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
-        // FIXME(#98, #81 A6): expected canonical form uses the
-        // transcript-view repeat unit (`A`).
-        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4T[6]");
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4A[6]");
     }
 }
 
@@ -461,12 +464,13 @@ mod intronic_deletions_minus {
 
     #[test]
     fn test_minus_strand_intronic_single_del() {
-        // Transcript-view AAA tract at c.30+2..c.30+4; single-A del at +2
-        // *should* shift to c.30+4del. It does not today.
+        // Transcript-view AAA tract at c.30+2..c.30+4; single-A del at
+        // +2 shifts to the 3'-most A (c.30+4) per #81 A5. Issue #98
+        // closed the minus-strand intronic ref-base orientation gap
+        // that had prevented this shift from firing.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2del");
-        // FIXME(#98, #81 A5): expected canonical form is c.30+4del.
-        assert_eq!(result, "NM_MINUS.1:c.30+2del");
+        assert_eq!(result, "NM_MINUS.1:c.30+4del");
     }
 
     #[test]
@@ -481,13 +485,17 @@ mod intronic_deletions_minus {
 
     #[test]
     fn test_minus_strand_intronic_del_3prime_shift() {
-        // Transcript-view GGG tract at c.30+5..c.30+7 (RC of genomic CCC at
-        // PAD+73..PAD+75); single-G del at +5 *should* shift to c.30+7del.
-        // It does not today.
+        // Transcript-view GGG tract at c.30+5..c.30+7 (RC of genomic
+        // CCC at PAD+73..PAD+75); single-G del at +5 shifts to the
+        // 3'-most G in the run per #81 A5. For this 10-base intron
+        // ferro renders the resulting position with acceptor-relative
+        // notation (positions past the midpoint use `c.31-N`); c.30+7
+        // and c.31-4 designate the same intronic base. Issue #98
+        // closed the orientation gap that had prevented this shift
+        // from firing.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+5del");
-        // FIXME(#98, #81 A5): expected canonical form is c.30+7del.
-        assert_eq!(result, "NM_MINUS.1:c.30+5del");
+        assert_eq!(result, "NM_MINUS.1:c.31-4del");
     }
 }
 
@@ -610,15 +618,13 @@ mod delins_boundary {
     #[test]
     fn test_intronic_delins_minus() {
         // Transcript-view bases at c.30+2..c.30+4 are A, A, A; insertion
-        // is also AAA — this is an identity delins and PR #78 *should*
-        // rewrite it to identity (`c.30+2_30+4=`). It does not today
-        // because the engine's reference lookup at minus-strand intronic
-        // positions returns the genomic-strand bases (TTT), so the
-        // identity check fails (see #98).
+        // is also AAA — this is an identity delins and PR #78 rewrites
+        // it to identity (`c.30+2_30+4=`). Issue #98 closed the
+        // minus-strand intronic ref-base orientation gap that had
+        // prevented PR #78's identity check from succeeding.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4delinsAAA");
-        // FIXME(#98, PR #78): expected rewrite to identity form.
-        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4delinsAAA");
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4=");
     }
 
     #[test]
