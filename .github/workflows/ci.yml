@@ -101,6 +101,8 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Run Rust tests
         run: cargo nextest run --features dev
+      - name: Verify HGVS v21.0 fixture is up to date
+        run: cargo run --features dev --example generate_spec_fixture -- --check
       - name: Install dev dependencies
         run: uv sync --group dev --locked --no-install-project
       - name: Run Python tests
