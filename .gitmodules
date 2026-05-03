@@ -1,0 +1,3 @@
+[submodule "assets/hgvs-nomenclature"]
+	path = assets/hgvs-nomenclature
+	url = https://github.com/HGVSnomenclature/hgvs-nomenclature.git

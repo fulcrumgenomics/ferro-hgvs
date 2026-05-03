@@ -19,6 +19,7 @@ exclude = [
     "/python/",
     "/docs/",
     "/data/",
+    "/assets/",
     "/.github/",
     "/.githooks/",
     "/acgt-landing/",
