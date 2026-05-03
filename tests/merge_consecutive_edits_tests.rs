@@ -594,3 +594,115 @@ fn test_codon_frame_exception_deferred() {
         "NM_TEST.1:c.10_12delinsGAC",
     );
 }
+
+// =====================================================================
+// Same-region UTR adjacency (issue #89).
+//
+// PR #80 (issue #72) implements consecutive-edit merging in cis alleles
+// but rejects every UTR position outright. Per the design doc and the
+// HGVS spec, same-region adjacency *within* a UTR is valid and should
+// merge — only crossings (5'UTR↔CDS, CDS↔3'UTR) remain barriers, since
+// no HGVS range syntax spans those (e.g., `c.-1_1` does not exist).
+// The corresponding crossing tests above (`test_no_merge_utr_boundary`)
+// must continue to pass after this change.
+// =====================================================================
+
+/// 60-base transcript with 5'UTR (10 bases) + CDS (40 bases) + 3'UTR (10
+/// bases). Sequence chosen so that the substitution ref-bases used in
+/// the tests below match: `c.-2 = A`, `c.-1 = C`, `c.*1 = A`, `c.*2 = C`.
+fn provider_with_utr_transcript() -> MockProvider {
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+    let mut provider = MockProvider::new();
+    // 5'UTR (positions 1-10):     A A A A A A A A A C   → c.-10..c.-1
+    // CDS    (positions 11-50):   ATG + 12 × ATGC      → c.1..c.40
+    // 3'UTR  (positions 51-60):   A C T T T T T T T T   → c.*1..c.*10
+    let sequence: String =
+        "AAAAAAAAACATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCACTTTTTTTT".to_string();
+    assert_eq!(sequence.len(), 60, "fixture length must be 60");
+    let len = sequence.len() as u64;
+    let exons = vec![Exon::new(1, 1, len)];
+    let transcript = Transcript::new(
+        "NM_TESTUTR.1".to_string(),
+        Some("UTR_TEST".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(11),
+        Some(50),
+        exons,
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+#[test]
+fn test_merge_5utr_consecutive_subs_cds() {
+    // `c.-2A>G;c.-1C>T` are physically adjacent within the 5'UTR.
+    // No HGVS range crosses the 5'UTR/CDS boundary, but a range *within*
+    // the 5'UTR is valid (`c.-2_-1`); the merged form is a single delins.
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_utr_transcript(),
+            "NM_TESTUTR.1:c.[-2A>G;-1C>T]",
+        ),
+        "NM_TESTUTR.1:c.-2_-1delinsGT",
+    );
+}
+
+#[test]
+fn test_merge_3utr_consecutive_subs_cds() {
+    // `c.*1A>G;c.*2C>T` are physically adjacent within the 3'UTR.
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_utr_transcript(),
+            "NM_TESTUTR.1:c.[*1A>G;*2C>T]",
+        ),
+        "NM_TESTUTR.1:c.*1_*2delinsGT",
+    );
+}
+
+#[test]
+fn test_merge_5utr_consecutive_subs_rna() {
+    // r. mirrors c. for 5'UTR; lowercase nucleotides preserved in the
+    // merged delins per the existing case-handling rule.
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_utr_transcript(),
+            "NM_TESTUTR.1:r.[-2a>g;-1c>u]",
+        ),
+        "NM_TESTUTR.1:r.-2_-1delinsgu",
+    );
+}
+
+#[test]
+fn test_merge_3utr_consecutive_subs_rna() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_utr_transcript(),
+            "NM_TESTUTR.1:r.[*1a>g;*2c>u]",
+        ),
+        "NM_TESTUTR.1:r.*1_*2delinsgu",
+    );
+}
+
+#[test]
+fn test_no_merge_3utr_cds_boundary() {
+    // The c.40 (last CDS base) ↔ c.*1 (first 3'UTR base) crossing must
+    // NOT merge — there is no HGVS range syntax spanning the CDS/3'UTR
+    // boundary (`c.40_*1` does not exist), even though the positions are
+    // physically adjacent in the transcript. Companion to the existing
+    // `test_no_merge_utr_boundary` (5'UTR↔CDS).
+    let result = normalize_with_provider(
+        provider_with_utr_transcript(),
+        "NM_TESTUTR.1:c.[40C>T;*1A>G]",
+    );
+    assert!(result.contains("40C>T"), "got {}", result);
+    assert!(result.contains("*1A>G"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
