@@ -13,6 +13,14 @@
 //! 10. Inversion normalization
 //!
 //! Issue #11: NM_004119.3:c.1837+2_1837+3ins... position ordering bug
+//!
+//! Issue #94: every gap test that previously asserted only `contains(...)`
+//! or `is_ok() || is_err()` is now locked with `assert_eq!` against the
+//! exact normalizer output. Several locked outputs are suspected-buggy
+//! and carry `FIXME(#NN)` comments pointing to the tracking issue (most
+//! converge on #98 — minus-strand intronic ref-base orientation as a
+//! likely common root cause). Boundary-spanning panic-canary tests are
+//! intentionally left as `is_ok() || is_err()` per #94 scope.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
@@ -298,18 +306,13 @@ mod minus_strand_exonic {
 
     #[test]
     fn test_minus_strand_deletion_3prime_shift() {
-        // Deletion in ATGC repeat region should shift 3' in coding direction.
-        // On minus strand, 3' in coding = 5' in genomic (toward lower genomic coords).
-        // Transcript seq: ATGCATGCATGCATGC... (30bp exon 1)
-        // Deleting c.1del (A) should shift 3' through the ATGC repeat.
+        // Single-A deletion in transcript-view ATGC tandem repeat.
+        // The deleted A is not part of an A homopolymer (it sits between
+        // C and T), so no equivalent representation exists; canonical form
+        // is c.1del.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.1del");
-        // The exact shifted position depends on the repeat boundary
-        assert!(
-            result.contains("del"),
-            "Should still be a deletion, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MINUS.1:c.1del");
     }
 }
 
@@ -325,56 +328,56 @@ mod position_ordering {
 
     #[test]
     fn test_plus_strand_intronic_insertion_position_order() {
-        // On plus strand, c.30+2_30+3 should remain in order after normalization
+        // Plus-strand intron 1 has an AAA tract at c.30+1..c.30+3.
+        // ins A canonicalizes to dup at the 3'-most A in the run (#81 A1).
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.30+2_30+3insA");
-        // Positions must be in 5'-to-3' coding order: +2 before +3
-        assert!(
-            result.contains("30+") && !result.contains("+3_") || result.contains("+2_"),
-            "Insertion positions should be 5'-to-3' in coding order, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_PLUS.1:c.30+3dup");
     }
 
     #[test]
     fn test_minus_strand_intronic_insertion_position_order() {
-        // Issue #11: On minus strand, c.30+2_30+3 positions must stay in coding
-        // order (5' to 3'), NOT get swapped to genomic order.
+        // Issue #11: positions must stay in 5'-to-3' coding order (no swap).
+        // Transcript-view bases at c.30+1..c.30+4 are C, A, A, A — analogous
+        // to the plus-strand AAA tract — so ins A *should* canonicalize to
+        // c.30+4dup. It does not today: see #98 (minus-strand intronic
+        // ref-base orientation defeats #81 A1). This locks the no-swap
+        // invariant that issue #11 was originally about.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+3insA");
-        // c.30+2 is 5' of c.30+3 in coding direction — must come first
-        assert!(
-            !result.contains("+3_30+2"),
-            "Positions must not be swapped to genomic order (issue #11), got: {}",
-            result
-        );
+        // FIXME(#98, #81 A1): expected canonical form is c.30+4dup.
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+3insA");
     }
 
     #[test]
     fn test_minus_strand_intronic_insertion_negative_offset_order() {
-        // c.31-3_31-2 should maintain order: -3 is further from exon (5' in coding)
+        // Transcript-view bases at c.31-3..c.31-1 are C, C, C; inserted T
+        // does not match the flank, so no equivalent shift exists. Locks
+        // both the no-swap invariant and the no-shift behavior.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.31-3_31-2insT");
-        assert!(
-            !result.contains("-2_31-3") && !result.contains("-2_"),
-            "Negative offset positions must maintain 5'-to-3' coding order, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MINUS.1:c.31-3_31-2insT");
     }
 }
 
 // =============================================================================
 // GAP 3: Intronic insertions
 // =============================================================================
+// Restored from PR #93 / issue #94: the ins-shift matrix in
+// `tests/ins_shift_matrix.rs` has zero intronic cells (its synthetic
+// builder places the CDS over the whole transcript, no intron offsets),
+// so these gap tests are still the only intronic-ins coverage we have.
 
 mod intronic_insertions {
     use super::*;
 
     #[test]
     fn test_plus_strand_intronic_insertion() {
-        // Plus-strand intron 1 genomic sequence is AAACCCAAAT at c.30+1..c.30+10.
-        // Inserting GGG at c.30+3_30+4 sits between c.30+3=A and c.30+4=C; ins[0]=G
-        // matches neither side, so no 3'-shift and no dup canonicalization.
+        // Plus-strand intron 1 genomic sequence is AAACCCAAAT at
+        // c.30+1..c.30+10. Inserting GGG at c.30+3_30+4 sits between
+        // c.30+3=A and c.30+4=C; ins[0]=G matches neither flank, so no
+        // 3'-shift and no dup canonicalization — canonical form is the
+        // unchanged input.
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.30+3_30+4insGGG");
         assert_eq!(result, "NM_PLUS.1:c.30+3_30+4insGGG");
@@ -382,10 +385,13 @@ mod intronic_insertions {
 
     #[test]
     fn test_minus_strand_intronic_insertion() {
-        // Issue #11 scenario. Minus-strand intron 1 reads as CAAAGGGCCC in transcript
-        // orientation at c.30+1..c.30+10 (RC of genomic GGGCCCTTTG). Inserting GGG
-        // at c.30+3_30+4 sits between c.30+3=A and c.30+4=A; ins[0]=G doesn't match,
-        // so the variant stays put and positions remain in coding (5'→3') order.
+        // Issue #11 core scenario. Minus-strand intron 1 reads as
+        // CAAAGGGCCC in transcript orientation at c.30+1..c.30+10 (RC
+        // of genomic GGGCCCTTTG). Inserting GGG at c.30+3_30+4 sits
+        // between c.30+3=A and c.30+4=A; the would-be alternative
+        // representation at c.30+4_30+5 yields a different sequence
+        // (AAA|GGG|GGG vs AA|GGG|AGGG), so no equivalent shift exists.
+        // Positions also remain in coding (5'→3') order per #11.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+3_30+4insGGG");
         assert_eq!(result, "NM_MINUS.1:c.30+3_30+4insGGG");
@@ -393,9 +399,11 @@ mod intronic_insertions {
 
     #[test]
     fn test_intronic_insertion_to_dup_plus_strand() {
-        // Plus-strand intron 1: AAACCCAAAT. Inserting A at c.30+1_30+2 falls inside
-        // the leading AAA tract; 3'-shift walks the insertion through positions
-        // 30+2_30+3 → 30+3_30+4, then canonicalizes to a dup of the preceding base.
+        // Plus-strand intron 1: AAACCCAAAT. Inserting A at c.30+1_30+2
+        // falls inside the leading AAA tract; ins A in a homopolymer
+        // canonicalizes to dup at the 3'-most A in the run per #81 A1
+        // (3'-shift walks 30+1_30+2 → 30+2_30+3 → 30+3_30+4, then
+        // collapses to dup of the preceding base, c.30+3dup).
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.30+1_30+2insA");
         assert_eq!(result, "NM_PLUS.1:c.30+3dup");
@@ -411,43 +419,35 @@ mod intronic_duplications {
 
     #[test]
     fn test_plus_strand_intronic_dup() {
+        // Plus-strand intron AAA tract at c.30+1..c.30+3; dup of A at +2
+        // shifts 3' to the rightmost A in the run.
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.30+2dup");
-        assert!(
-            result.contains("dup"),
-            "Intronic dup should remain dup, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_PLUS.1:c.30+3dup");
     }
 
     #[test]
     fn test_minus_strand_intronic_dup() {
-        // Intronic duplication on minus strand — tests that position is correct
+        // Transcript-view AAA tract at c.30+2..c.30+4; dup of A at +2
+        // *should* shift to c.30+4dup. It does not today.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2dup");
-        assert!(
-            result.contains("dup"),
-            "Minus-strand intronic dup should remain dup, got: {}",
-            result
-        );
+        // FIXME(#98, #81 A6): expected canonical form is c.30+4dup.
+        assert_eq!(result, "NM_MINUS.1:c.30+2dup");
     }
 
     #[test]
     fn test_minus_strand_intronic_multi_base_dup() {
+        // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to AAAAAA.
+        // Spec-canonical form is repeat notation with the transcript-view
+        // unit (e.g. `c.30+?A[6]` or `c.30+2_30+4AAA[2]`). Today ferro
+        // emits `T[6]` — the genomic-strand letter — and keeps the 3-base
+        // first-unit position with a 1-base unit, both spec violations.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
-        // Normalizer may convert multi-base dup into a repeat if the region is repetitive
-        assert!(
-            result.contains("dup") || result.contains('['),
-            "Minus-strand multi-base intronic dup should normalize to dup or repeat, got: {}",
-            result
-        );
-        // Verify position ordering is correct (coding order: 30+2 before 30+4)
-        assert!(
-            result.contains("30+2_30+4"),
-            "Positions should be in coding order (30+2_30+4), got: {}",
-            result
-        );
+        // FIXME(#96, #98, #81 A6): expected canonical form uses transcript-
+        // view repeat unit (A) and a unit-length-consistent position.
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4T[6]");
     }
 }
 
@@ -460,42 +460,33 @@ mod intronic_deletions_minus {
 
     #[test]
     fn test_minus_strand_intronic_single_del() {
+        // Transcript-view AAA tract at c.30+2..c.30+4; single-A del at +2
+        // *should* shift to c.30+4del. It does not today.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2del");
-        assert!(
-            result.contains("del"),
-            "Minus-strand intronic del should remain del, got: {}",
-            result
-        );
+        // FIXME(#98, #81 A5): expected canonical form is c.30+4del.
+        assert_eq!(result, "NM_MINUS.1:c.30+2del");
     }
 
     #[test]
     fn test_minus_strand_intronic_range_del() {
+        // Transcript-view bases c.30+1..c.30+5 are C, A, A, A, G. Deleting
+        // the entire AAA run (c.30+2..c.30+4) leaves C-G with no equivalent
+        // representation; canonical form is unchanged.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4del");
-        assert!(
-            result.contains("del"),
-            "Minus-strand intronic range del should remain del, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4del");
     }
 
     #[test]
     fn test_minus_strand_intronic_del_3prime_shift() {
-        // Deletion in intronic repeat region on minus strand should shift 3' in
-        // coding direction (which is 5' in genomic direction for minus strand).
-        // Intron 1 genomic (1031-1040): GGGCCCTTTG
-        // On minus strand, coding direction is right-to-left in genomic space.
-        // c.30+1 maps to genomic 1040 (G), c.30+2 maps to 1039 (T), etc.
-        // So the CCC tract at genomic 1034-1036 maps to c.30+5 through c.30+7
-        // (GGG in RC = CCC). Deleting one should shift 3' in coding direction.
+        // Transcript-view GGG tract at c.30+5..c.30+7 (RC of genomic CCC at
+        // PAD+73..PAD+75); single-G del at +5 *should* shift to c.30+7del.
+        // It does not today.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+5del");
-        assert!(
-            result.contains("del") && result.contains("30+"),
-            "Should be intronic deletion after shift, got: {}",
-            result
-        );
+        // FIXME(#98, #81 A5): expected canonical form is c.30+7del.
+        assert_eq!(result, "NM_MINUS.1:c.30+5del");
     }
 }
 
@@ -549,47 +540,40 @@ mod utr_minus_strand {
 
     #[test]
     fn test_5prime_utr_substitution_minus_strand() {
-        // 5'UTR variant on minus strand should pass through
+        // Substitutions never shift; round-trip through normalize.
         let provider = make_provider_with_minus_utr();
         let result = normalize(provider, "NM_MUTR.1:c.-3A>G");
-        assert!(
-            result.contains("c.-3"),
-            "5'UTR substitution should pass through, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MUTR.1:c.-3A>G");
     }
 
     #[test]
     fn test_3prime_utr_substitution_minus_strand() {
         let provider = make_provider_with_minus_utr();
         let result = normalize(provider, "NM_MUTR.1:c.*3A>G");
-        assert!(
-            result.contains("c.*3"),
-            "3'UTR substitution should pass through, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MUTR.1:c.*3A>G");
     }
 
     #[test]
     fn test_5prime_utr_deletion_minus_strand() {
+        // Single-base 5'UTR del on minus strand. The position is fully
+        // resolved on input and the local tract is unambiguous, but ferro
+        // collapses to `c.?del`, discarding positional information.
         let provider = make_provider_with_minus_utr();
         let result = normalize(provider, "NM_MUTR.1:c.-3del");
-        assert!(
-            result.contains("del"),
-            "5'UTR deletion on minus strand should normalize, got: {}",
-            result
-        );
+        // FIXME(#97): expected canonical form preserves the position
+        // (and 3'-shifts within the 5'UTR run if applicable).
+        assert_eq!(result, "NM_MUTR.1:c.?del");
     }
 
     #[test]
     fn test_3prime_utr_deletion_minus_strand() {
+        // Single-base 3'UTR del on minus strand. Locks current behavior;
+        // whether further shift is expected depends on the UTR tract
+        // shape — the fixture's 3'UTR is short and not a clean
+        // homopolymer at this offset.
         let provider = make_provider_with_minus_utr();
         let result = normalize(provider, "NM_MUTR.1:c.*2del");
-        assert!(
-            result.contains("del"),
-            "3'UTR deletion on minus strand should normalize, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MUTR.1:c.*2del");
     }
 }
 
@@ -602,39 +586,46 @@ mod delins_boundary {
 
     #[test]
     fn test_exonic_delins_near_boundary_plus() {
-        // Delins at the last exonic position, near intron boundary
+        // Delins at the last two exonic bases of exon 1 (c.29=A, c.30=T).
+        // delinsAA replaces AT with AA — the leading A matches reference,
+        // which would arguably collapse to a single sub at c.30 under #81
+        // A9, but the spec is non-prescriptive for that collapse and ferro
+        // does not perform it today.
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.29_30delinsAA");
-        assert!(
-            result.contains("delins") || result.contains("del") || result.contains(">"),
-            "Delins near boundary should normalize, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_PLUS.1:c.29_30delinsAA");
     }
 
     #[test]
     fn test_intronic_delins_plus() {
+        // Plus-strand intronic bases at c.30+2..c.30+4 are A, A, C.
+        // delinsTTT shares no leading/trailing match with AAC, so the
+        // canonical form is unchanged.
         let provider = make_provider_with_plus_strand();
-        let result = try_normalize(provider, "NM_PLUS.1:c.30+2_30+4delinsTTT");
-        assert!(
-            result.is_ok() || result.is_err(),
-            "Intronic delins should not panic"
-        );
+        let result = normalize(provider, "NM_PLUS.1:c.30+2_30+4delinsTTT");
+        assert_eq!(result, "NM_PLUS.1:c.30+2_30+4delinsTTT");
     }
 
     #[test]
     fn test_intronic_delins_minus() {
+        // Transcript-view bases at c.30+2..c.30+4 are A, A, A; insertion
+        // is also AAA — this is an identity delins and PR #78 *should*
+        // rewrite it to identity (`c.30+2_30+4=`). It does not today
+        // because the engine's reference lookup at minus-strand intronic
+        // positions returns the genomic-strand bases (TTT), so the
+        // identity check fails (see #98).
         let provider = make_provider_with_minus_strand();
-        let result = try_normalize(provider, "NM_MINUS.1:c.30+2_30+4delinsAAA");
-        assert!(
-            result.is_ok() || result.is_err(),
-            "Minus-strand intronic delins should not panic"
-        );
+        let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4delinsAAA");
+        // FIXME(#98, PR #78): expected rewrite to identity form.
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4delinsAAA");
     }
 
     #[test]
     fn test_boundary_spanning_delins() {
-        // Delins spanning exon-intron boundary
+        // Delins spanning exon-intron boundary (c.30 is last exonic base,
+        // c.30+1, +2 are intronic). True boundary-spanning case where
+        // either canonical form or an explicit error is acceptable —
+        // panic-canary only, per #94 scope.
         let provider = make_provider_with_plus_strand();
         let result = try_normalize(provider, "NM_PLUS.1:c.30_30+2delinsGGG");
         assert!(
@@ -653,45 +644,25 @@ mod multi_allele {
 
     #[test]
     fn test_allele_notation_parses_and_normalizes() {
-        // Compound heterozygous / allele notation: [var1;var2]
-        // Each component should be individually normalized
+        // Compound allele notation [var1;var2]. Both components are
+        // simple substitutions at separated positions, which never shift,
+        // so the round-trip is identity.
         let provider = MockProvider::with_test_data();
-        let normalizer = Normalizer::new(provider);
-        let input = "NM_000088.3:c.[10A>G;20T>C]";
-        let variant = parse_hgvs(input);
-        assert!(
-            variant.is_ok(),
-            "Allele notation should parse, got: {:?}",
-            variant.err()
-        );
-        if let Ok(v) = variant {
-            let result = normalizer.normalize(&v);
-            // Should either normalize components or pass through
-            assert!(
-                result.is_ok(),
-                "Allele normalization should not error, got: {:?}",
-                result.err()
-            );
-        }
+        let result = normalize(provider, "NM_000088.3:c.[10A>G;20T>C]");
+        assert_eq!(result, "NM_000088.3:c.[10A>G;20T>C]");
     }
 
     #[test]
     fn test_allele_components_individually_normalized() {
-        // Each variant within an allele should be independently normalized
+        // Each variant within an allele is independently normalized.
+        // With non-shifting substitutions, the locked output is the same
+        // as `test_allele_notation_parses_and_normalizes`; the two tests
+        // remain distinct as concerns. A shifting-component variant of
+        // this scenario would belong under #81 C5 (3+ variants in one
+        // bracket) and is out of scope for this hardening pass.
         let provider = MockProvider::with_test_data();
-        let normalizer = Normalizer::new(provider);
-        let input = "NM_000088.3:c.[10A>G;20T>C]";
-        if let Ok(variant) = parse_hgvs(input) {
-            if let Ok(normalized) = normalizer.normalize(&variant) {
-                let output = format!("{}", normalized);
-                // Output should still contain both variants
-                assert!(
-                    output.contains("A>G") && output.contains("T>C"),
-                    "Both allele components should be present, got: {}",
-                    output
-                );
-            }
-        }
+        let result = normalize(provider, "NM_000088.3:c.[10A>G;20T>C]");
+        assert_eq!(result, "NM_000088.3:c.[10A>G;20T>C]");
     }
 }
 
@@ -726,49 +697,33 @@ mod inversions {
 
     #[test]
     fn test_inversion_passthrough() {
-        // Simple inversion should pass through normalization unchanged
+        // Inversions are not subject to 3'-shifting per HGVS spec; round-trip.
         let provider = provider_with_single_exon("NM_TEST.1", "ATGCCCGGGAAATTTCCCGGG");
         let result = normalize(provider, "NM_TEST.1:c.4_6inv");
-        assert!(
-            result.contains("inv"),
-            "Inversion should remain as inv, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.4_6inv");
     }
 
     #[test]
     fn test_inversion_maintains_position() {
-        // Inversion positions should not shift during normalization
         let provider = provider_with_single_exon("NM_TEST.1", "ATGCCCGGGAAATTTCCCGGG");
         let result = normalize(provider, "NM_TEST.1:c.7_9inv");
-        assert!(
-            result.contains("c.7_9inv"),
-            "Inversion positions should be preserved, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.7_9inv");
     }
 
     #[test]
     fn test_inversion_in_repeat_region() {
-        // Inversion in a repeat region — should inversions shift? Spec says no.
+        // Inversion in a repeat region — spec says inversions don't shift,
+        // even when the surrounding sequence is repetitive.
         let provider = provider_with_single_exon("NM_TEST.1", "ATGAAAAAAGGGAAATTTCCC");
         let result = normalize(provider, "NM_TEST.1:c.4_6inv");
-        assert!(
-            result.contains("inv"),
-            "Inversion in repeat should remain inv, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.4_6inv");
     }
 
     #[test]
     fn test_minus_strand_inversion() {
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.10_12inv");
-        assert!(
-            result.contains("inv"),
-            "Minus-strand inversion should remain inv, got: {}",
-            result
-        );
+        assert_eq!(result, "NM_MINUS.1:c.10_12inv");
     }
 }
 
