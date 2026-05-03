@@ -68,6 +68,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / pre-cds_start positions, matching the spec's "c.-1 is one base 5'
   of c.1" rule and the existing exon-aware mapper at
   `convert::mapper::cds_to_tx` / `tx_to_cds`. Issue #97.
+- *(normalize)* Cis-allele consecutive-edit merging now also collapses
+  the codon-frame exception case: two `c.` exonic SNVs in the CDS
+  proper, separated by exactly one nucleotide, that fall within the
+  same codon merge into a single delins with the unchanged middle
+  reference base preserved verbatim — per HGVS spec
+  (`c.[145C>T;147C>G]` → `c.145_147delinsTGG`, where the middle base
+  is the reference at `c.146`). Eligibility is narrow: same accession,
+  both endpoints in `Region::Cds`, gap-of-one on the axis, both prev
+  and next are single-base SUB anchors, and `(prev-1)/3 == (next-1)/3`
+  (same codon). The unchanged middle base is fetched via the
+  `ReferenceProvider` threaded into `merge_consecutive_edits`; if no
+  transcript is registered or the position is out of range, the merge
+  is silently declined and the variants pass through unchanged.
+  Codon-frame–merged delins continue to participate in the
+  strictly-consecutive walk, so a third SNV one base 3' of the pair
+  (`c.[10A>G;12A>C;13A>T]`) still folds into the running delins.
+  Cross-codon (`c.[3G>T;5A>C]`), gap-of-two (`c.[10A>G;13A>C]`), and
+  non-CDS pairs (`g.`, UTR, `n.`, `r.`) all correctly do not merge.
+  Issue #79.
 - *(normalize)* Minus-strand intronic normalization now reads the
   reference window in transcript-view orientation. `normalize_intronic_cds`
   and `normalize_intronic_tx` previously passed the genomic-strand bytes

@@ -581,18 +581,98 @@ fn test_overlap_pair_does_not_merge_with_prevent_overlap_disabled() {
     assert!(!result.contains("delins"), "got {}", result);
 }
 
+// =====================================================================
+// Codon-frame exception (issue #79).
+//
+// HGVS spec carves out a single exception to the strictly-consecutive
+// rule: two `c.` exonic SNVs separated by exactly one nucleotide that
+// fall within the same codon must merge into a single delins, with
+// the unchanged middle nucleotide preserved verbatim. Spec example:
+//
+//   `c.[145C>T;147C>G]`  →  `c.145_147delinsTGG`
+//
+// Applies only to the CDS proper. UTR / `n.` / `r.` / `g.` have no
+// codon frame and continue to round-trip unchanged for gap-of-1 inputs.
+// =====================================================================
+
 #[test]
-#[ignore = "Codon-frame exception for c. — tracked in issue #79"]
-fn test_codon_frame_exception_deferred() {
-    // Per HGVS spec: c.[145C>T;147C>G] (positions 145-147 share codon 49)
-    // must be expressed as c.145_147delinsTGG. Implementing this needs
-    // reference-provider access for the unchanged middle nucleotide and
-    // codon-frame logic; deferred to issue #79.
-    let provider = provider_with_simple_transcript();
+fn test_codon_frame_two_subs_one_codon() {
+    // Tx sequence: ATGCAAAAACCCCCGGGGG... (cds_start = 1).
+    //   c.10 = C, c.11 = C, c.12 = C.
+    // Codon for c.10 is `(10-1)/3 = 3`; codon for c.12 is `(12-1)/3 = 3`.
+    // Same codon. The unchanged middle base is the actual reference at
+    // c.11 = C, so the merged delins alt is
+    // `G(c.10) + C(ref c.11) + C(c.12) = "GCC"`.
     assert_eq!(
-        normalize_with_provider(provider, "NM_TEST.1:c.[10A>G;12A>C]"),
-        "NM_TEST.1:c.10_12delinsGAC",
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:c.[10A>G;12A>C]",
+        ),
+        "NM_TEST.1:c.10_12delinsGCC",
     );
+}
+
+#[test]
+fn test_no_codon_frame_pair_straddles_codon_boundary() {
+    // c.3 sits in codon 0 (positions 1-3); c.5 sits in codon 1
+    // (positions 4-6). Different codons → no merge.
+    let result =
+        normalize_with_provider(provider_with_simple_transcript(), "NM_TEST.1:c.[3G>T;5A>C]");
+    assert!(result.contains("3G>T"), "got {}", result);
+    assert!(result.contains("5A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_codon_frame_gap_of_two() {
+    // Gap of 2 nt is beyond the spec carve-out, which is exactly one.
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:c.[10A>G;13A>C]",
+    );
+    assert!(result.contains("10A>G"), "got {}", result);
+    assert!(result.contains("13A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_no_codon_frame_genomic() {
+    // `g.` has no codon frame — gap-of-1 must round-trip unchanged.
+    let result = normalize_to_string("NC_000001.11:g.[145G>A;147C>T]");
+    assert!(result.contains("145G>A"), "got {}", result);
+    assert!(result.contains("147C>T"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
+}
+
+#[test]
+fn test_codon_frame_then_strict_chain() {
+    // Issue #79 specifies that the codon-frame merge feeds back into
+    // the strictly-consecutive walk so a third SNV one base 3' of the
+    // pair still merges. Here: c.10 + c.12 codon-frame-merge into a
+    // delins at [10, 12], then c.13 is strictly-adjacent and folds
+    // into it.
+    //   Sequence: ATGCAAAAACCCCC... → c.10=C, c.11=C, c.12=C, c.13=C.
+    //   First merge alt = G + ref(c.11)=C + C = "GCC" at [10, 12].
+    //   Strict-merge with c.13A>T extends end to 13 and appends T →
+    //   "GCCT" at [10, 13].
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:c.[10A>G;12A>C;13A>T]",
+        ),
+        "NM_TEST.1:c.10_13delinsGCCT",
+    );
+}
+
+#[test]
+fn test_no_codon_frame_without_provider_transcript() {
+    // Without a transcript registered on the provider, the middle-base
+    // reference lookup fails and the merge passes through unchanged
+    // (no error). Demonstrates the graceful-fallback contract.
+    let result = normalize_to_string("NM_NOSEQ.99:c.[10A>G;12A>C]");
+    assert!(result.contains("10A>G"), "got {}", result);
+    assert!(result.contains("12A>C"), "got {}", result);
+    assert!(!result.contains("delins"), "got {}", result);
 }
 
 // =====================================================================

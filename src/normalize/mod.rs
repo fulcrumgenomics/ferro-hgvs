@@ -229,7 +229,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // must round-trip with the Allele wrapper intact for programmatic callers
         // (Display already renders singletons in bare form regardless).
         let original_len = normalized.len();
-        let mut merged = merge::merge_consecutive_edits(normalized, allele.phase);
+        let mut merged = merge::merge_consecutive_edits(normalized, allele.phase, &self.provider);
 
         let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
             && original_len > 1
