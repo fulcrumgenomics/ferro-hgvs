@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `SyntheticBuilder` fixture helper at `tests/common/synthetic.rs`
   (reusable by future del / dup / repeat-notation matrices). Issue #81
   item A7.
+- Tightened `tests/coverage_gap_tests.rs` from canary-shaped
+  (`contains(...)`, `is_ok() || is_err()`) assertions to strict
+  `assert_eq!` against the exact normalizer output. Builds on PR #95
+  (intronic-insertion restoration) by extending the same tightening
+  pass to the remaining gap-test buckets, and adds cross-references
+  and procedural detail to the restored intronic-insertion comments.
+  Several locked outputs are suspected-buggy and carry `FIXME(#NN)`
+  comments pointing to follow-up tracking issues — most converge on
+  #98 (minus-strand intronic reference-base orientation, identified
+  as a likely common root cause behind A1 / A5 / A6 misfires on
+  minus-strand intronic positions and the PR #78 identity-rewrite
+  missing on minus strand), with #96 (wrong-strand repeat unit
+  emission on minus-strand multi-base dup) and #97 (`c.?del` collapse
+  on minus-strand 5'UTR del) as separate sub-symptoms. True
+  boundary-spanning panic-canary tests are intentionally left as
+  `is_ok() || is_err()` per the issue's scope. Issue #94.
 - *(normalize)* Merge consecutive sub-variants in cis alleles into a single delins per HGVS spec. `g.[1000G>A;1001A>C]` now normalizes to `g.1000_1001delinsAC`; `g.[1000del;1001del]` to `g.1000_1001del`. Covers `g./c./n./r./m.` coordinate systems, sub/del/delins/ins edit combinations, chains, and same-boundary insertion pairs. Non-adjacent variants, intronic/UTR boundaries, uncertain edits, and non-`Literal` insertion payloads are barriers and pass through unchanged. The codon-frame exception (one-nt gap within a codon) is tracked separately in [#79](https://github.com/fulcrumgenomics/ferro-hgvs/issues/79). ([#80](https://github.com/fulcrumgenomics/ferro-hgvs/pull/80))
 
 ### Fixed
