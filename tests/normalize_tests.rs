@@ -1785,6 +1785,49 @@ mod normalization_transformations {
     }
 
     // =========================================================================
+    // DELETION → SHIFTED DEL TESTS (real RefSeq data)
+    // 1-base del in a real homopolymer; canonical 3'-shifted position; k=1
+    // so B2 doesn't fire and the canonical form stays as `del`.
+    // Real-accession smoke; matrix-level coverage in tests/del_shift_matrix.rs.
+    // =========================================================================
+
+    #[rstest]
+    // CFTR ΔF508 context. c.1520_1522del is the F508del shorthand; the local
+    // CFTR context has a CTT tandem at c.1521_1523, so the 1-codon deletion
+    // shifts one base to the canonical c.1521_1523del. k=1 → stays as del.
+    #[case("NM_000492.4:c.1520_1522del", "NM_000492.4:c.1521_1523del")]
+    fn test_deletion_shifts_in_real_homopolymer(#[case] input: &str, #[case] expected: &str) {
+        let result = normalize_to_string(input);
+        assert_eq!(
+            result, expected,
+            "Deletion shift failed for '{}': got '{}', expected '{}'",
+            input, result, expected
+        );
+    }
+
+    // =========================================================================
+    // DELETION → REPEAT NOTATION TESTS (B2; real RefSeq data)
+    // Multi-unit del of a real tandem reduces to unit[N-k] notation.
+    // Real-accession smoke; matrix-level coverage in tests/del_shift_matrix.rs.
+    // Note: these cases diverge from Mutalyzer (which doesn't apply B2).
+    // =========================================================================
+
+    #[rstest]
+    // TP53 c.627-629 is an AAA tract; deleting 2 As (c.628_629del) leaves 1 A,
+    // emitted as A[1] per B2. (This case was previously locked as "no change"
+    // in test_no_change_verified — that lock was removed in the A5 PR since
+    // ferro now diverges from Mutalyzer here.)
+    #[case("NM_000546.6:c.628_629del", "NM_000546.6:c.627_629A[1]")]
+    fn test_deletion_becomes_repeat(#[case] input: &str, #[case] expected: &str) {
+        let result = normalize_to_string(input);
+        assert_eq!(
+            result, expected,
+            "Deletion→repeat failed for '{}': got '{}', expected '{}'",
+            input, result, expected
+        );
+    }
+
+    // =========================================================================
     // EXPLICIT BASE REMOVAL TESTS
     // Redundant sequence info in dup notation is stripped
     // All cases: Mutalyzer agrees
