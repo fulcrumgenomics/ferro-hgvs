@@ -4080,7 +4080,7 @@ mod cigar_cds_mapping {
     #[ignore] // Until CIGAR-aware CDS mapping is implemented
     fn test_cds_to_tx_with_cigar_insertion() {
         let tx = transcript_with_cigar_insertion();
-        let _cigar = vec![
+        let _cigar = [
             CigarOp::Match(185),
             CigarOp::Insertion(3),
             CigarOp::Match(250),
@@ -4113,7 +4113,7 @@ mod cigar_cds_mapping {
     #[ignore] // Until CIGAR-aware CDS mapping is implemented
     fn test_cds_to_tx_with_cigar_deletion() {
         let tx = transcript_with_cigar_deletion();
-        let _cigar = vec![
+        let _cigar = [
             CigarOp::Match(504),
             CigarOp::Deletion(2),
             CigarOp::Match(123),

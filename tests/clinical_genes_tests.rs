@@ -155,7 +155,7 @@ fn test_clinical_genes_by_gene() {
 
     eprintln!("\nClinical Genes - By Gene:");
     let mut genes: Vec<_> = by_gene.iter().collect();
-    genes.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+    genes.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
 
     for (gene, (passed, failed)) in genes.iter().take(15) {
         let total = passed + failed;

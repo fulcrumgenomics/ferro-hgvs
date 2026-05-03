@@ -66,7 +66,7 @@ fn test_civic_validation() {
     if !failure_categories.is_empty() {
         println!("\nTop failure categories:");
         let mut sorted: Vec<_> = failure_categories.iter().collect();
-        sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
         for (category, examples) in sorted.iter().take(15) {
             println!("  [{}x] {}", examples.len(), category);

@@ -321,10 +321,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let ref_path = temp_dir.path().to_path_buf();
 
-        let mut manifest = ReferenceManifest::default();
-        manifest.reference_dir = ref_path.clone();
-        manifest.transcript_fastas = vec![ref_path.join("transcripts.fa")];
-        manifest.cdot_json = Some(ref_path.join("cdot.json"));
+        let mut manifest = ReferenceManifest {
+            reference_dir: ref_path.clone(),
+            transcript_fastas: vec![ref_path.join("transcripts.fa")],
+            cdot_json: Some(ref_path.join("cdot.json")),
+            ..Default::default()
+        };
 
         manifest.make_paths_relative();
 
@@ -342,10 +344,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let ref_path = temp_dir.path().to_path_buf();
 
-        let mut manifest = ReferenceManifest::default();
-        manifest.reference_dir = ref_path.clone();
-        manifest.transcript_fastas = vec![PathBuf::from("transcripts.fa")];
-        manifest.cdot_json = Some(PathBuf::from("cdot.json"));
+        let mut manifest = ReferenceManifest {
+            reference_dir: ref_path.clone(),
+            transcript_fastas: vec![PathBuf::from("transcripts.fa")],
+            cdot_json: Some(PathBuf::from("cdot.json")),
+            ..Default::default()
+        };
 
         manifest.make_paths_absolute();
 
@@ -358,13 +362,15 @@ mod tests {
 
     #[test]
     fn test_deduplicate_paths() {
-        let mut manifest = ReferenceManifest::default();
-        manifest.transcript_fastas = vec![
-            PathBuf::from("b.fa"),
-            PathBuf::from("a.fa"),
-            PathBuf::from("b.fa"),
-        ];
-        manifest.lrg_fastas = vec![PathBuf::from("lrg.fa"), PathBuf::from("lrg.fa")];
+        let mut manifest = ReferenceManifest {
+            transcript_fastas: vec![
+                PathBuf::from("b.fa"),
+                PathBuf::from("a.fa"),
+                PathBuf::from("b.fa"),
+            ],
+            lrg_fastas: vec![PathBuf::from("lrg.fa"), PathBuf::from("lrg.fa")],
+            ..Default::default()
+        };
 
         manifest.deduplicate_paths();
 

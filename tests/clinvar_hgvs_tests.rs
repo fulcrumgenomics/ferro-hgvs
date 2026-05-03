@@ -153,7 +153,7 @@ fn test_clinvar_hgvs_500k_by_hgvs_type() {
 
     eprintln!("\nClinVar HGVS 500K - By HGVS Type:");
     let mut types: Vec<_> = by_hgvs_type.iter().collect();
-    types.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+    types.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
 
     for (hgvs_type, (passed, failed)) in types.iter() {
         let total = passed + failed;

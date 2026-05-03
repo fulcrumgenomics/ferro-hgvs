@@ -3677,7 +3677,7 @@ fn print_multiway_overlap_tables(
     }
 
     // Sort by count descending
-    upset_success.sort_by(|a, b| b.1.cmp(&a.1));
+    upset_success.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     for (combo, count) in &upset_success {
         let label = if combo.is_empty() {
@@ -3730,7 +3730,7 @@ fn print_multiway_overlap_tables(
         upset_fail.push((vec![], none_failed.len()));
     }
 
-    upset_fail.sort_by(|a, b| b.1.cmp(&a.1));
+    upset_fail.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     for (combo, count) in &upset_fail {
         let label = if combo.is_empty() {

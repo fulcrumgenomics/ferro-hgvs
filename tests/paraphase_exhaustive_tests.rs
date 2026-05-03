@@ -116,7 +116,7 @@ fn test_paraphase_exhaustive_benchmark() {
 
     eprintln!("\nBy coordinate type:");
     let mut types: Vec<_> = by_type.iter().collect();
-    types.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+    types.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
     for (t, (p, f)) in types.iter() {
         let tot = p + f;
         let r = (*p as f64 / tot as f64) * 100.0;
@@ -125,7 +125,7 @@ fn test_paraphase_exhaustive_benchmark() {
 
     eprintln!("\nTop 10 genes by variant count:");
     let mut genes: Vec<_> = by_gene.iter().collect();
-    genes.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+    genes.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
     for (gene, (p, f)) in genes.iter().take(10) {
         let tot = p + f;
         let r = (*p as f64 / tot as f64) * 100.0;

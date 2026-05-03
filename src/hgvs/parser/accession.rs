@@ -781,7 +781,7 @@ mod tests {
         let (remaining, acc) = parse_accession("NC_000013.11(NP_004110.2):p.Val600Glu").unwrap();
         assert_eq!(remaining, ":p.Val600Glu");
         assert_eq!(&*acc.prefix, "NP");
-        assert_eq!(acc.genomic_context.is_some(), true);
+        assert!(acc.genomic_context.is_some());
     }
 
     #[test]
