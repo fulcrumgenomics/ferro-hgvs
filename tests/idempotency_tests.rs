@@ -46,16 +46,17 @@ struct EdgeCase {
 
 #[derive(Debug, Deserialize)]
 struct HgvsSpecFixture {
-    examples: Vec<SpecExample>,
+    rows: Vec<SpecExample>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct SpecExample {
-    hgvs: String,
-    variant_type: String,
-    level: String,
-    coordinate_system: String,
+    input: String,
+    /// Default-prefixed form for bare illustrative fragments (#84). When
+    /// `Some`, this is what we feed the round-trip; otherwise we fall back
+    /// to the verbatim spec text in `input`.
+    #[serde(default)]
+    input_prefixed: Option<String>,
 }
 
 #[allow(clippy::unnecessary_lazy_evaluations)]
@@ -98,12 +99,16 @@ fn load_edge_cases() -> Vec<String> {
 }
 
 fn load_spec_examples() -> Vec<String> {
-    let content = fs::read_to_string("tests/fixtures/grammar/hgvs_spec_examples.json")
-        .unwrap_or_else(|_| r#"{"examples":[]}"#.to_string());
+    let content = fs::read_to_string("tests/fixtures/grammar/hgvs_spec_normalization.json")
+        .expect("failed to read hgvs_spec_normalization.json");
     let fixture: HgvsSpecFixture =
-        serde_json::from_str(&content).unwrap_or_else(|_| HgvsSpecFixture { examples: vec![] });
+        serde_json::from_str(&content).expect("failed to parse hgvs_spec_normalization.json");
 
-    fixture.examples.into_iter().map(|e| e.hgvs).collect()
+    fixture
+        .rows
+        .into_iter()
+        .map(|e| e.input_prefixed.unwrap_or(e.input))
+        .collect()
 }
 
 // =============================================================================
