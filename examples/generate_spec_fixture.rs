@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Parser, Debug)]
 #[command(about = "Generate the HGVS v21.0 spec normalization fixture")]
@@ -93,6 +93,7 @@ mod sources {
         pub source_kind: SourceKind,
         pub source_path: String,
         pub working_group: Option<String>,
+        pub intent: SpanIntent,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +103,15 @@ mod sources {
         Consultation,
         SyntaxYaml,
         PortedLegacyProbe,
+    }
+
+    /// Whether the spec marks this codespan as a rejection example.
+    /// `<code class="invalid">…</code>` → `SpecRejects`; backticked codespans,
+    /// fenced blocks, syntax.yaml entries, and ported probes → `Plain`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SpanIntent {
+        Plain,
+        SpecRejects,
     }
 
     pub fn discover(spec_dir: &Path) -> anyhow::Result<Vec<Candidate>> {
@@ -120,6 +130,18 @@ mod sources {
                         source_kind: kind,
                         source_path: rel.clone(),
                         working_group: wg.clone(),
+                        intent: SpanIntent::Plain,
+                    });
+                }
+            }
+            for cand_text in extract_class_invalid_codespans(&text) {
+                if let Some(input) = canonicalize(&cand_text) {
+                    all.push(Candidate {
+                        input,
+                        source_kind: kind,
+                        source_path: rel.clone(),
+                        working_group: wg.clone(),
+                        intent: SpanIntent::SpecRejects,
                     });
                 }
             }
@@ -185,6 +207,18 @@ mod sources {
         }
         out.sort();
         out
+    }
+
+    /// Return every variant string the spec explicitly marks as invalid via
+    /// `<code class="invalid">…</code>`. The marker is the spec's own
+    /// typographic convention for "this string is wrong" — used 35 times
+    /// across `recommendations/` in v21.0. Captures only flat content (no
+    /// nested HTML); nested cases would need bespoke parsing and don't occur
+    /// in v21.0.
+    fn extract_class_invalid_codespans(md: &str) -> Vec<String> {
+        use regex::Regex;
+        let re = Regex::new(r#"<code\s+class="invalid">([^<]*)</code>"#).unwrap();
+        re.captures_iter(md).map(|c| c[1].to_string()).collect()
     }
 
     /// Return every code span (inline `…` and fenced ``` …``` block) text in the markdown.
@@ -279,6 +313,7 @@ mod sources {
                     source_kind: SourceKind::SyntaxYaml,
                     source_path: rel.clone(),
                     working_group: None,
+                    intent: SpanIntent::Plain,
                 })
             })
             .collect())
@@ -356,6 +391,7 @@ mod sources {
                 source_kind: SourceKind::PortedLegacyProbe,
                 source_path: "tests/hgvs_spec_compliance_tests.rs (legacy)".to_string(),
                 working_group: None,
+                intent: SpanIntent::Plain,
             })
             .collect()
     }
@@ -364,11 +400,30 @@ mod sources {
 // ---------- classify ----------
 
 mod classify {
-    pub fn classify_from_run(parse_ok: bool, normalize_ok: bool) -> &'static str {
-        match (parse_ok, normalize_ok) {
-            (false, _) => "reject",
-            (true, false) => "needs-reference",
-            (true, true) => "compliant",
+    /// Status taxonomy is a function of (parse_ok, normalize_ok, spec_expected,
+    /// current == spec_expected). `spec_expected: None` is the spec-rejects-this
+    /// sentinel (set by override or by `<code class="invalid">` extraction).
+    ///
+    /// | spec_expected | parse | normalize | match | status              |
+    /// |---------------|-------|-----------|-------|---------------------|
+    /// | `None`        | err   | —         | —     | `correctly-rejected`|
+    /// | `None`        | ok    | —         | —     | `false-acceptance`  |
+    /// | `Some`        | err   | —         | —     | `parse-error`       |
+    /// | `Some`        | ok    | err       | —     | `needs-reference`   |
+    /// | `Some`        | ok    | ok        | —     | `compliant`         |
+    pub fn classify(
+        parse_ok: bool,
+        normalize_ok: bool,
+        spec_expected: Option<&str>,
+    ) -> &'static str {
+        match (parse_ok, normalize_ok, spec_expected) {
+            (false, _, None) => "correctly-rejected",
+            (false, _, Some(_)) => "parse-error",
+            // Spec rejects the input: any successful parse is a false-acceptance,
+            // regardless of whether ferro's normalize() then errored.
+            (true, _, None) => "false-acceptance",
+            (true, false, Some(_)) => "needs-reference",
+            (true, true, Some(_)) => "compliant",
         }
     }
 }
@@ -385,15 +440,28 @@ mod overrides {
         pub by_input: BTreeMap<String, OverrideEntry>,
     }
 
+    /// `spec_expected` uses the doubly-optional pattern so the override file
+    /// can distinguish three states:
+    ///   * field absent     → `None`             (use the auto-default)
+    ///   * field set to null → `Some(None)`       (force "spec rejects this")
+    ///   * field set to "X" → `Some(Some("X"))`  (force a canonical output)
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OverrideEntry {
         #[serde(default)]
         pub status: Option<String>,
-        #[serde(default)]
-        pub spec_expected: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_some")]
+        pub spec_expected: Option<Option<String>>,
         #[serde(default)]
         pub todo: Option<String>,
+    }
+
+    fn deserialize_some<'de, T, D>(d: D) -> Result<Option<T>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        T::deserialize(d).map(Some)
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Overrides> {
@@ -418,7 +486,10 @@ mod runner {
     pub struct Row {
         pub input: String,
         pub current: String,
-        pub spec_expected: String,
+        /// `None` (serialized as JSON `null`) means the spec rejects this input
+        /// — either via an explicit `<code class="invalid">…</code>` marker in
+        /// the spec text or via an override entry with `spec_expected: null`.
+        pub spec_expected: Option<String>,
         pub status: String,
         pub coordinate_system: String,
         pub source_kind: String,
@@ -472,6 +543,7 @@ mod runner {
             kinds: Vec<sources::SourceKind>,
             paths: Vec<String>,
             wg: Option<String>,
+            spec_rejects: bool,
         }
         let mut by_input: BTreeMap<String, Agg> = BTreeMap::new();
         for c in candidates {
@@ -481,6 +553,9 @@ mod runner {
             if c.working_group.is_some() {
                 a.wg = c.working_group.clone();
             }
+            if c.intent == sources::SpanIntent::SpecRejects {
+                a.spec_rejects = true;
+            }
         }
 
         let normalizer = Normalizer::new(MockProvider::new());
@@ -488,7 +563,6 @@ mod runner {
         let mut rows = Vec::with_capacity(by_input.len());
         for (input, agg) in by_input {
             let (current, parse_ok, normalize_ok) = run_ferro(&normalizer, &input);
-            let auto_status = classify::classify_from_run(parse_ok, normalize_ok);
 
             let kind = agg
                 .kinds
@@ -501,35 +575,48 @@ mod runner {
             paths.dedup();
 
             let ov = overrides.by_input.get(&input);
+
+            // spec_expected resolution. Source order: override > structural
+            // extraction > default-to-input.
+            //   * override.spec_expected = Some(value) → use value verbatim
+            //     (Some(None) forces "spec rejects"; Some(Some(s)) forces a
+            //     canonical output)
+            //   * spec marks the input via `<code class="invalid">…</code>`
+            //     → None (spec rejects)
+            //   * otherwise → Some(input.clone()) (spec offered the input as
+            //     a canonical form; ferro is expected to round-trip it)
+            let spec_expected: Option<String> = match ov.and_then(|o| o.spec_expected.clone()) {
+                Some(value) => value,
+                None => {
+                    if agg.spec_rejects {
+                        None
+                    } else {
+                        Some(input.clone())
+                    }
+                }
+            };
+
+            // Status is derived from the four-axis taxonomy. Overrides may
+            // pin a non-default status (e.g. for rows the auditor has
+            // hand-classified into a sub-bucket).
+            let auto_status = classify::classify(parse_ok, normalize_ok, spec_expected.as_deref());
             let status = ov
                 .and_then(|o| o.status.clone())
                 .unwrap_or_else(|| auto_status.to_string());
-            // spec_expected default depends on status:
-            //   - reject:    default = current. Reject rows are dominated by
-            //                spec-conformant rejections (malformed prose
-            //                fragments, unsupported syntax that the spec also
-            //                rejects). Defaulting spec_expected to ferro's
-            //                current rejection means "by default, assume ferro
-            //                is doing the right thing per spec." Reviewers
-            //                override (e.g. set spec_expected to input) for
-            //                the rejects ferro is genuinely wrong about (e.g.
-            //                #83 A.3 chr1: aliases).
-            //   - other:     default = input. The spec offered the input as
-            //                a canonical form; if ferro rewrites it (current
-            //                != input), that's a candidate pair row.
-            let spec_expected = ov.and_then(|o| o.spec_expected.clone()).unwrap_or_else(|| {
-                if status == "reject" {
-                    current.clone()
-                } else {
-                    input.clone()
-                }
-            });
-            // Auto-attach a #83 todo whenever current diverges from
-            // spec_expected. With the per-status default above, this
-            // attaches todos only to genuine audit items.
+
+            // Audit todo attaches whenever status flags a row as needing
+            // review: ferro accepts a string the spec rejects, ferro rejects
+            // a string the spec accepts, ferro rewrites a canonical form, or
+            // normalization needs reference data we can't run yet. Override
+            // wins.
             const ISSUE_83: &str = "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83";
+            let needs_todo = matches!(
+                status.as_str(),
+                "false-acceptance" | "parse-error" | "needs-reference"
+            ) || (status == "compliant"
+                && spec_expected.as_deref() != Some(current.as_str()));
             let todo = ov.and_then(|o| o.todo.clone()).or_else(|| {
-                if current != spec_expected {
+                if needs_todo {
                     Some(ISSUE_83.to_string())
                 } else {
                     None

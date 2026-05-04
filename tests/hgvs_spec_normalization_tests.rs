@@ -22,7 +22,8 @@ struct Fixture {
 struct Row {
     input: String,
     current: String,
-    spec_expected: String,
+    /// `None` means the spec rejects this input (sentinel for #2).
+    spec_expected: Option<String>,
     status: String,
     coordinate_system: String,
     source_kind: String,
