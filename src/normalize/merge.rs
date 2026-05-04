@@ -9,6 +9,7 @@ use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
     AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
 };
+use crate::reference::ReferenceProvider;
 
 /// Coordinate-system region used as the merge-eligibility key.
 ///
@@ -68,9 +69,10 @@ struct Anchor {
 /// chain end the head of `output` is rebuilt once from the merged anchor.
 /// This keeps non-merging iterations as cheap as the no-merge baseline and
 /// makes a chain of N consecutive merges O(N) total instead of O(N^2).
-pub(crate) fn merge_consecutive_edits(
+pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
+    provider: &P,
 ) -> Vec<HgvsVariant> {
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return variants;
@@ -94,14 +96,34 @@ pub(crate) fn merge_consecutive_edits(
             let Some((next_region, next_start, _)) = simple_range_for_variant(&next) else {
                 break 'try_merge false;
             };
-            // Same-region adjacency: regions must match (no merge across
-            // the 5'UTR/CDS, CDS/3'UTR, upstream/transcript, or
-            // transcript/downstream boundaries) AND the integer axis
-            // must satisfy `prev.end + 1 == next.start`.
+            // Region match is required for both adjacency rules below.
             if prev_a.region != next_region {
                 break 'try_merge false;
             }
-            if prev_a.end.checked_add(1) != Some(next_start) {
+
+            // Strictly-consecutive adjacency: `prev.end + 1 == next.start`
+            // on the region's signed integer axis. Works uniformly for
+            // every region (5'UTR / upstream use negative axis values, so
+            // `c.-3 + 1 == c.-2` is `-3 + 1 == -2`).
+            let strict_adjacent = prev_a.end.checked_add(1) == Some(next_start);
+
+            // Codon-frame exception (issue #79): two `c.` exonic SNVs in
+            // the CDS proper, separated by exactly one nucleotide, that
+            // fall within the same codon merge into a delins with the
+            // unchanged middle reference base preserved. Eligibility is
+            // narrow: same accession+region (`Cds`), gap of exactly 1 on
+            // the axis, both endpoints in the same codon, and a
+            // `prev_a` that is still a single-base SUB anchor (so this
+            // doesn't fire on a delins that's already grown via an
+            // earlier merge).
+            let codon_frame_eligible = !strict_adjacent
+                && prev_a.region == Region::Cds
+                && prev_a.end.checked_add(2) == Some(next_start)
+                && prev_a.alt.len() == 1
+                && prev_a.start == prev_a.end
+                && same_codon(prev_a.end, next_start);
+
+            if !strict_adjacent && !codon_frame_eligible {
                 break 'try_merge false;
             }
             if !same_accession_and_kind(output.last().unwrap(), &next) {
@@ -110,6 +132,22 @@ pub(crate) fn merge_consecutive_edits(
             let Some(next_anchor) = anchor_for_variant(&next) else {
                 break 'try_merge false;
             };
+            if codon_frame_eligible {
+                // Next must also be a single-base SUB anchor.
+                if next_anchor.alt.len() != 1 || next_anchor.start != next_anchor.end {
+                    break 'try_merge false;
+                }
+                // Look up the unchanged middle reference base. If the
+                // provider has no transcript or no sequence covering the
+                // gap position, gracefully decline the codon-frame merge
+                // rather than erroring.
+                let Some(middle_ref) =
+                    lookup_cds_middle_ref(provider, output.last().unwrap(), prev_a.end + 1)
+                else {
+                    break 'try_merge false;
+                };
+                prev_a.alt.push(middle_ref);
+            }
             // Extend in place — amortized O(1) per base added.
             prev_a.alt.extend(next_anchor.alt);
             prev_a.start = prev_a.start.min(next_anchor.start);
@@ -475,6 +513,48 @@ fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
     }
 }
 
+/// Two CDS positions share a codon if they fall in the same 1-indexed
+/// triplet: `c.1..3` is codon 1, `c.4..6` is codon 2, etc. The standard
+/// codon-number formula is `(base - 1) / 3` (integer division).
+fn same_codon(a: i64, b: i64) -> bool {
+    if a < 1 || b < 1 {
+        return false;
+    }
+    (a - 1) / 3 == (b - 1) / 3
+}
+
+/// Look up the reference base at a CDS position on the head variant's
+/// transcript. Returns `None` if the head is not a `CdsVariant`, the
+/// provider has no transcript for the accession, the transcript has no
+/// `cds_start`, or the indexed position falls outside the transcript
+/// sequence. Used by the codon-frame merge to insert the unchanged
+/// middle nucleotide between two SUBs separated by one base; failure
+/// to look it up means the codon-frame merge is silently declined and
+/// the variants pass through unmerged.
+fn lookup_cds_middle_ref<P: ReferenceProvider>(
+    provider: &P,
+    head: &HgvsVariant,
+    cds_axis: i64,
+) -> Option<Base> {
+    let cds_var = match head {
+        HgvsVariant::Cds(v) => v,
+        _ => return None,
+    };
+    if cds_axis < 1 {
+        return None;
+    }
+    let tx = provider
+        .get_transcript(&cds_var.accession.transcript_accession())
+        .ok()?;
+    let cds_start = tx.cds_start?;
+    let tx_idx_1based = cds_start.checked_add(cds_axis as u64)?.checked_sub(1)?;
+    let byte = *tx
+        .sequence
+        .as_bytes()
+        .get(tx_idx_1based.checked_sub(1)? as usize)?;
+    Base::from_char(byte as char)
+}
+
 fn build_naedit<P>(
     merged: Anchor,
     mut to_pos: impl FnMut(Region, i64) -> P,
@@ -513,10 +593,11 @@ fn build_naedit<P>(
 mod tests {
     use super::*;
     use crate::hgvs::variant::Accession;
+    use crate::reference::MockProvider;
 
     #[test]
     fn empty_input_returns_empty() {
-        assert!(merge_consecutive_edits(vec![], AllelePhase::Cis).is_empty());
+        assert!(merge_consecutive_edits(vec![], AllelePhase::Cis, &MockProvider::new()).is_empty());
     }
 
     #[test]
@@ -533,7 +614,17 @@ mod tests {
                 },
             ),
         });
-        let out = merge_consecutive_edits(vec![v], AllelePhase::Cis);
+        let out = merge_consecutive_edits(vec![v], AllelePhase::Cis, &MockProvider::new());
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn same_codon_classifies_correctly() {
+        assert!(same_codon(1, 3));
+        assert!(same_codon(4, 6));
+        assert!(same_codon(145, 147));
+        assert!(!same_codon(3, 5)); // codon 1 vs codon 2
+        assert!(!same_codon(0, 2)); // 0 invalid
+        assert!(!same_codon(-3, -1));
     }
 }
