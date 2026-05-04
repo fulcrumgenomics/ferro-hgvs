@@ -47,7 +47,7 @@ fn test_gnomad_validation() {
 
     println!("\nTop failure categories:");
     let mut sorted_failures: Vec<_> = failures.iter().collect();
-    sorted_failures.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    sorted_failures.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     for (error, examples) in sorted_failures.iter().take(15) {
         println!("  [{}x] {}", examples.len(), error);

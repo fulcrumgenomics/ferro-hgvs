@@ -434,5 +434,8 @@ async fn test_response_includes_processing_time() {
 
     assert!(result.is_ok());
     let response = result.unwrap().0;
-    assert!(response.processing_time_ms > 0 || response.processing_time_ms == 0);
+    // `processing_time_ms` is `u64` and structurally always present, so no
+    // range assertion is meaningful — touching the field is enough to make
+    // any rename/removal a compile error.
+    let _ = response.processing_time_ms;
 }

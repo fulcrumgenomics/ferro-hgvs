@@ -282,44 +282,35 @@ pub mod rules {
             NaEdit::Substitution {
                 reference,
                 alternative,
-            } => {
-                if reference == alternative {
-                    result = result.with_warning(ValidationWarning::new(
-                        "W001",
-                        format!(
-                            "Reference and alternative are the same: {} = {}",
-                            reference, alternative
-                        ),
-                    ));
-                }
+            } if reference == alternative => {
+                result = result.with_warning(ValidationWarning::new(
+                    "W001",
+                    format!(
+                        "Reference and alternative are the same: {} = {}",
+                        reference, alternative
+                    ),
+                ));
             }
             NaEdit::Deletion {
                 sequence: Some(seq),
                 ..
-            } => {
-                if seq.is_empty() {
-                    result = result.with_warning(ValidationWarning::new(
-                        "W002",
-                        "Deletion has empty sequence specified",
-                    ));
-                }
+            } if seq.is_empty() => {
+                result = result.with_warning(ValidationWarning::new(
+                    "W002",
+                    "Deletion has empty sequence specified",
+                ));
             }
-            NaEdit::Deletion { sequence: None, .. } => {}
-            NaEdit::Insertion { sequence } => {
-                if sequence.is_empty() {
-                    result = result.with_error(ValidationError::new(
-                        "E002",
-                        "Insertion must have at least one base",
-                    ));
-                }
+            NaEdit::Insertion { sequence } if sequence.is_empty() => {
+                result = result.with_error(ValidationError::new(
+                    "E002",
+                    "Insertion must have at least one base",
+                ));
             }
-            NaEdit::Delins { sequence } => {
-                if sequence.is_empty() {
-                    result = result.with_error(ValidationError::new(
-                        "E003",
-                        "Deletion-insertion must have at least one inserted base",
-                    ));
-                }
+            NaEdit::Delins { sequence } if sequence.is_empty() => {
+                result = result.with_error(ValidationError::new(
+                    "E003",
+                    "Deletion-insertion must have at least one inserted base",
+                ));
             }
             _ => {}
         }

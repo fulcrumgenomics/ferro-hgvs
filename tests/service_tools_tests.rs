@@ -316,32 +316,6 @@ fn test_tool_filtering_empty_request_returns_empty() {
     assert!(filtered.is_empty());
 }
 
-#[test]
-fn test_timeout_duration_calculation() {
-    // Test default timeout
-    let timeout_seconds: Option<u32> = None;
-    let timeout_duration = Duration::from_secs(timeout_seconds.unwrap_or(30) as u64);
-    assert_eq!(timeout_duration.as_secs(), 30);
-
-    // Test custom timeout
-    let timeout_seconds: Option<u32> = Some(60);
-    let timeout_duration = Duration::from_secs(timeout_seconds.unwrap_or(30) as u64);
-    assert_eq!(timeout_duration.as_secs(), 60);
-}
-
-#[test]
-fn test_concurrent_limit_configuration() {
-    // Test default concurrent limit
-    let config_limit: Option<usize> = None;
-    let concurrent_limit = config_limit.unwrap_or(10);
-    assert_eq!(concurrent_limit, 10);
-
-    // Test custom limit
-    let config_limit: Option<usize> = Some(5);
-    let concurrent_limit = config_limit.unwrap_or(10);
-    assert_eq!(concurrent_limit, 5);
-}
-
 // ==================== Tool Mode Tests ====================
 
 #[test]
@@ -443,10 +417,8 @@ fn test_tool_initialization_fails_when_all_fail() {
         Err("Biocommons failed"),
     ];
 
-    for result in init_results {
-        if let Ok(tool) = result {
-            tools_initialized.push(tool);
-        }
+    for tool in init_results.into_iter().flatten() {
+        tools_initialized.push(tool);
     }
 
     // Should fail when no tools initialized
@@ -478,7 +450,7 @@ fn test_processing_time_calculation() {
 
 #[test]
 fn test_agreement_calculation_all_agree() {
-    let results = vec![
+    let results = [
         ("ferro", Some("NM_000249.4:c.350C>T")),
         ("mutalyzer", Some("NM_000249.4:c.350C>T")),
         ("biocommons", Some("NM_000249.4:c.350C>T")),
@@ -494,7 +466,7 @@ fn test_agreement_calculation_all_agree() {
 
 #[test]
 fn test_agreement_calculation_some_disagree() {
-    let results = vec![
+    let results = [
         ("ferro", Some("NM_000249.4:c.350C>T")),
         ("mutalyzer", Some("NM_000249.4:c.350C>T")),
         ("biocommons", Some("NM_000249.4:c.351C>T")), // Different!

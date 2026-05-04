@@ -217,15 +217,12 @@ impl GenomeInterval {
     /// Get the length of this interval (returns 0 if either position is unknown)
     pub fn len(&self) -> u64 {
         match (self.start.inner(), self.end.inner()) {
-            (Some(start), Some(end)) => {
-                if end.base >= start.base {
-                    // Use saturating_add to prevent overflow at u64::MAX
-                    (end.base - start.base).saturating_add(1)
-                } else {
-                    0
-                }
+            // Use saturating_add to prevent overflow at u64::MAX
+            (Some(start), Some(end)) if end.base >= start.base => {
+                (end.base - start.base).saturating_add(1)
             }
-            _ => 0, // Unknown positions result in length 0
+            // Unknown positions or end < start result in length 0
+            _ => 0,
         }
     }
 

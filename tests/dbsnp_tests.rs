@@ -169,7 +169,7 @@ fn test_dbsnp_rsid_parsing() {
     // By gene
     println!("\nBy gene (top 10):");
     let mut genes: Vec<_> = report.by_gene.iter().collect();
-    genes.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    genes.sort_by_key(|b| std::cmp::Reverse(b.1 .1));
     for (gene, (parsed, total)) in genes.iter().take(10) {
         println!("  {}: {}/{}", gene, parsed, total);
     }
@@ -463,7 +463,7 @@ fn test_coverage_statistics() {
 
     println!("\nTop genes:");
     let mut gene_list: Vec<_> = genes.iter().collect();
-    gene_list.sort_by(|a, b| b.1.cmp(a.1));
+    gene_list.sort_by_key(|b| std::cmp::Reverse(*b.1));
     for (gene, count) in gene_list.iter().take(10) {
         println!("  {}: {}", gene, count);
     }

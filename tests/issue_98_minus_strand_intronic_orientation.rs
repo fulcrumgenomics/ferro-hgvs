@@ -42,7 +42,7 @@ fn make_minus_strand_fixture() -> MockProvider {
         vec![
             Exon::with_genomic(1, 1, 30, p + 80, p + 109),
             Exon::with_genomic(2, 31, 60, p + 40, p + 69),
-            Exon::with_genomic(3, 61, 90, p + 0, p + 29),
+            Exon::with_genomic(3, 61, 90, p, p + 29),
         ],
         Some("chr_minus".to_string()),
         Some(p),

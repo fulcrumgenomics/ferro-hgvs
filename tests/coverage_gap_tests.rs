@@ -85,7 +85,7 @@ fn make_minus_strand_transcript() -> (Transcript, String) {
         vec![
             Exon::with_genomic(1, 1, 30, p + 80, p + 109),
             Exon::with_genomic(2, 31, 60, p + 40, p + 69),
-            Exon::with_genomic(3, 61, 90, p + 0, p + 29),
+            Exon::with_genomic(3, 61, 90, p, p + 29),
         ],
         Some("chr_minus".to_string()),
         Some(p),
@@ -128,59 +128,13 @@ fn make_plus_strand_transcript() -> (Transcript, String) {
         Some(1),
         Some(90),
         vec![
-            Exon::with_genomic(1, 1, 30, p + 0, p + 29),
+            Exon::with_genomic(1, 1, 30, p, p + 29),
             Exon::with_genomic(2, 31, 60, p + 40, p + 69),
             Exon::with_genomic(3, 61, 90, p + 80, p + 109),
         ],
         Some("chr_plus".to_string()),
         Some(p),
         Some(p + 109),
-        GenomeBuild::GRCh38,
-        ManeStatus::None,
-        None,
-        None,
-    );
-
-    (transcript, genomic_seq)
-}
-
-/// Build a plus-strand transcript with UTR regions and genomic mapping.
-///
-/// Layout: 5'UTR (5bp) + CDS (60bp) + 3'UTR (5bp) = 70bp total transcript
-///   Exon 1: tx 1-25   genomic (PAD+0)–(PAD+24)
-///   Intron 1:          genomic (PAD+25)–(PAD+34)  AAAAAAAAAA
-///   Exon 2: tx 26-50  genomic (PAD+35)–(PAD+59)
-///   Intron 2:          genomic (PAD+60)–(PAD+69)  CCCCCCCCCC
-///   Exon 3: tx 51-70  genomic (PAD+70)–(PAD+89)
-///   CDS: tx 6-65
-fn make_plus_strand_utr_transcript() -> (Transcript, String) {
-    let core = "AAAAATGCATGCATGCATGCATGCAT\
-                AAAAAAAAAA\
-                GCATGCATGCATGCATGCATGCATGC\
-                CCCCCCCCCC\
-                ATGCATGCATGCATGCATGCAAAAA";
-    let genomic_seq = padded_genomic(core);
-
-    let tx_seq = "AAAAATGCATGCATGCATGCATGCAT\
-                   GCATGCATGCATGCATGCATGCATGC\
-                   ATGCATGCATGCATGCATGCAAAAA";
-
-    let p = PAD_OFFSET;
-    let transcript = Transcript::new(
-        "NM_UTR.1".to_string(),
-        Some("UTRGENE".to_string()),
-        Strand::Plus,
-        tx_seq.to_string(),
-        Some(6),
-        Some(65),
-        vec![
-            Exon::with_genomic(1, 1, 25, p + 0, p + 24),
-            Exon::with_genomic(2, 26, 50, p + 35, p + 59),
-            Exon::with_genomic(3, 51, 70, p + 70, p + 89),
-        ],
-        Some("chr_utr".to_string()),
-        Some(p),
-        Some(p + 89),
         GenomeBuild::GRCh38,
         ManeStatus::None,
         None,
@@ -223,7 +177,7 @@ fn make_minus_strand_utr_transcript() -> (Transcript, String) {
         vec![
             Exon::with_genomic(1, 1, 25, p + 65, p + 89),
             Exon::with_genomic(2, 26, 50, p + 30, p + 54),
-            Exon::with_genomic(3, 51, 70, p + 0, p + 19),
+            Exon::with_genomic(3, 51, 70, p, p + 19),
         ],
         Some("chr_mutr".to_string()),
         Some(p),
@@ -249,14 +203,6 @@ fn make_provider_with_plus_strand() -> MockProvider {
     let mut provider = MockProvider::new();
     let (tx, genomic) = make_plus_strand_transcript();
     provider.add_genomic_sequence("chr_plus", genomic);
-    provider.add_transcript(tx);
-    provider
-}
-
-fn make_provider_with_plus_utr() -> MockProvider {
-    let mut provider = MockProvider::new();
-    let (tx, genomic) = make_plus_strand_utr_transcript();
-    provider.add_genomic_sequence("chr_utr", genomic);
     provider.add_transcript(tx);
     provider
 }

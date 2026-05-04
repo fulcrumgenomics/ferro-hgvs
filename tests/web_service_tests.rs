@@ -680,11 +680,9 @@ fn test_validate_na_edit_info_deletion() {
     if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
         if let Some(edit) = v.loc_edit.edit.inner() {
             match edit {
-                NaEdit::Deletion { sequence, length } => {
-                    // Verify deletion info is extractable
-                    // (may have sequence, length, or both)
-                    assert!(sequence.is_some() || length.is_some() || true);
-                }
+                // Deletion info may have sequence, length, or both — the
+                // test exists to lock in that we land in this arm.
+                NaEdit::Deletion { .. } => {}
                 _ => panic!("Expected deletion"),
             }
         }
@@ -829,15 +827,18 @@ fn test_effect_frameshift_detection_single_base_del() {
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
     if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Deletion { length, .. } => {
-                    // Default length for unspecified deletion is 1
-                    let len = length.unwrap_or(1) as usize;
-                    assert!(len % 3 != 0, "Single base deletion should cause frameshift");
-                }
-                _ => {}
-            }
+        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { length, .. }) =
+            v.loc_edit.edit.inner()
+        {
+            // `c.350del` is a point-position deletion, so the parsed `length`
+            // is None and 1 is the correct default. Range deletions (e.g.
+            // `c.350_352del`) also yield None but their length must instead
+            // be derived from the position range — do not copy this default.
+            let len = length.unwrap_or(1) as usize;
+            assert!(
+                !len.is_multiple_of(3),
+                "Single base deletion should cause frameshift"
+            );
         }
     }
 }
@@ -845,8 +846,21 @@ fn test_effect_frameshift_detection_single_base_del() {
 #[test]
 fn test_effect_inframe_deletion_three_bases() {
     // Three base deletion is in-frame (3 % 3 == 0)
-    let len = 3;
-    assert!(len % 3 == 0, "Three base deletion should be in-frame");
+    let input = "NM_000249.4:c.350_352del";
+    let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
+
+    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
+        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { .. }) = v.loc_edit.edit.inner() {
+            let start = v.loc_edit.location.start.inner().expect("start position");
+            let end = v.loc_edit.location.end.inner().expect("end position");
+            let len = (end.base - start.base + 1) as usize;
+            assert_eq!(len, 3);
+            assert!(
+                len.is_multiple_of(3),
+                "Three base deletion should be in-frame"
+            );
+        }
+    }
 }
 
 #[test]
@@ -856,15 +870,15 @@ fn test_effect_frameshift_insertion() {
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
     if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence } => {
-                    let len = sequence.to_string().len();
-                    assert_eq!(len, 2);
-                    assert!(len % 3 != 0, "Two base insertion should cause frameshift");
-                }
-                _ => {}
-            }
+        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) =
+            v.loc_edit.edit.inner()
+        {
+            let len = sequence.to_string().len();
+            assert_eq!(len, 2);
+            assert!(
+                !len.is_multiple_of(3),
+                "Two base insertion should cause frameshift"
+            );
         }
     }
 }
@@ -875,15 +889,15 @@ fn test_effect_inframe_insertion_three_bases() {
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
     if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence } => {
-                    let len = sequence.to_string().len();
-                    assert_eq!(len, 3);
-                    assert!(len % 3 == 0, "Three base insertion should be in-frame");
-                }
-                _ => {}
-            }
+        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) =
+            v.loc_edit.edit.inner()
+        {
+            let len = sequence.to_string().len();
+            assert_eq!(len, 3);
+            assert!(
+                len.is_multiple_of(3),
+                "Three base insertion should be in-frame"
+            );
         }
     }
 }
@@ -915,10 +929,13 @@ fn test_effect_codon_phase_calculation() {
     // Phase 1 = second position
     // Phase 2 = third position
 
-    assert_eq!((1 - 1) % 3, 0, "Position 1 is first in codon");
-    assert_eq!((2 - 1) % 3, 1, "Position 2 is second in codon");
-    assert_eq!((3 - 1) % 3, 2, "Position 3 is third in codon");
-    assert_eq!((4 - 1) % 3, 0, "Position 4 is first in codon");
+    for (cds_pos, expected_phase) in [(1i32, 0), (2, 1), (3, 2), (4, 0)] {
+        assert_eq!(
+            (cds_pos - 1) % 3,
+            expected_phase,
+            "Position {cds_pos} should have phase {expected_phase}"
+        );
+    }
 }
 
 // ==================== Convert Handler Error Path Tests ====================
