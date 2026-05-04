@@ -111,9 +111,18 @@ If your PR changes any normalization output:
    {
      "by_input": {
        "<exact input string>": {
-         "status": "pair",                          // optional: compliant | pair | reject | needs-reference
-         "spec_expected": "<spec's canonical form>", // optional: defaults to input
-         "todo": "<https://… link>"                 // optional: defaults to a #83 link when current != spec_expected
+         "status": "diverges",                       // optional: preserved | diverges | parse-error |
+                                                     //           correctly-rejected | false-acceptance |
+                                                     //           needs-reference
+         "spec_expected": "<spec's canonical form>", // optional: string for canonical output, null for
+                                                     //           "spec rejects this", absent for default
+         "input_prefixed": "<accession:c.…>",        // optional: force a specific accession for bare
+                                                     //           fragments (overrides default-prefix)
+         "requires_reference": true,                 // optional: skip this row at test time until #82
+                                                     //           lands (3'-rule shifting examples)
+         "todo": "<https://… link>"                  // optional: defaults to a #83 link for any row that
+                                                     //           lands as diverges / parse-error /
+                                                     //           false-acceptance / needs-reference
        }
      }
    }
@@ -122,15 +131,54 @@ If your PR changes any normalization output:
    Override keys must match a real fixture input — typos are caught by the
    generator.
 
+### Status taxonomy
+
+| status               | meaning                                                                             |
+|----------------------|-------------------------------------------------------------------------------------|
+| `preserved`          | ferro accepts the input and round-trips it (`current == spec_expected`)             |
+| `diverges`           | ferro accepts the input but rewrites it (`current != spec_expected`)                |
+| `correctly-rejected` | spec marks invalid (via `<code class="invalid">…</code>`), ferro also rejects       |
+| `false-acceptance`   | spec marks invalid, **ferro accepts** — these are bug candidates                    |
+| `parse-error`        | spec mentions the input as a canonical form, ferro can't parse it                   |
+| `needs-reference`    | parse succeeds, normalization needs reference data ferro can't run today (see #82)  |
+
+`spec_expected: null` carries the spec's "this string is invalid" intent. It
+is set automatically for inputs the spec marks via `<code class="invalid">…</code>`
+and can be set manually via the override file.
+
+### Default-prefix table
+
+The spec routinely writes bare fragments like `c.1083A>C` whose accession is
+implied by the surrounding paragraph. The generator prepends a default
+accession per coord system before feeding the input to ferro, recording the
+result in `input_prefixed`:
+
+| coord | default accession |
+|-------|-------------------|
+| `c`   | `NM_004006.2`     |
+| `n`   | `NR_002196.1`     |
+| `r`   | `NM_004006.3`     |
+| `g`   | `NC_000023.11`    |
+| `p`   | `NP_003997.1`     |
+| `m`   | `NC_012920.1`     |
+| `o`   | `NC_000023.11`    |
+
+These are load-bearing constants that match the most-cited accessions in the
+v21.0 spec. Re-validate them whenever bumping the spec submodule (see step 5).
+For a row that needs a different accession, set `input_prefixed` in the
+override file.
+
 4. CI verifies byte-identical regeneration via:
 
    ```bash
    cargo run --features dev --example generate_spec_fixture -- --check
    ```
 
-5. To bump the spec to a newer upstream version, update the submodule pointer
-   under `assets/hgvs-nomenclature/` (e.g., `git -C assets/hgvs-nomenclature
-   checkout <new-tag>`) and regenerate the fixture.
+5. To bump the spec to a newer upstream version:
+   - update the submodule pointer under `assets/hgvs-nomenclature/`
+     (`git -C assets/hgvs-nomenclature checkout <new-tag>`)
+   - re-validate the default-prefix table above against the new spec corpus
+   - regenerate the fixture and review the diff
 
 ## License
 
