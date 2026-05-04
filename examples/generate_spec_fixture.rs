@@ -404,16 +404,18 @@ mod classify {
     /// current == spec_expected). `spec_expected: None` is the spec-rejects-this
     /// sentinel (set by override or by `<code class="invalid">` extraction).
     ///
-    /// | spec_expected | parse | normalize | match | status              |
-    /// |---------------|-------|-----------|-------|---------------------|
-    /// | `None`        | err   | —         | —     | `correctly-rejected`|
-    /// | `None`        | ok    | —         | —     | `false-acceptance`  |
-    /// | `Some`        | err   | —         | —     | `parse-error`       |
-    /// | `Some`        | ok    | err       | —     | `needs-reference`   |
-    /// | `Some`        | ok    | ok        | —     | `compliant`         |
+    /// | spec_expected | parse | normalize | current == spec_expected | status              |
+    /// |---------------|-------|-----------|--------------------------|---------------------|
+    /// | `None`        | err   | —         | —                        | `correctly-rejected`|
+    /// | `None`        | ok    | —         | —                        | `false-acceptance`  |
+    /// | `Some`        | err   | —         | —                        | `parse-error`       |
+    /// | `Some`        | ok    | err       | —                        | `needs-reference`   |
+    /// | `Some`        | ok    | ok        | true                     | `preserved`         |
+    /// | `Some`        | ok    | ok        | false                    | `diverges`          |
     pub fn classify(
         parse_ok: bool,
         normalize_ok: bool,
+        current: &str,
         spec_expected: Option<&str>,
     ) -> &'static str {
         match (parse_ok, normalize_ok, spec_expected) {
@@ -423,7 +425,8 @@ mod classify {
             // regardless of whether ferro's normalize() then errored.
             (true, _, None) => "false-acceptance",
             (true, false, Some(_)) => "needs-reference",
-            (true, true, Some(_)) => "compliant",
+            (true, true, Some(expected)) if current == expected => "preserved",
+            (true, true, Some(_)) => "diverges",
         }
     }
 }
@@ -596,25 +599,25 @@ mod runner {
                 }
             };
 
-            // Status is derived from the four-axis taxonomy. Overrides may
-            // pin a non-default status (e.g. for rows the auditor has
-            // hand-classified into a sub-bucket).
-            let auto_status = classify::classify(parse_ok, normalize_ok, spec_expected.as_deref());
+            // Status is derived from the taxonomy table in `classify::classify`.
+            // Overrides may pin a non-default status (e.g. for rows the
+            // auditor has hand-classified into a sub-bucket).
+            let auto_status =
+                classify::classify(parse_ok, normalize_ok, &current, spec_expected.as_deref());
             let status = ov
                 .and_then(|o| o.status.clone())
                 .unwrap_or_else(|| auto_status.to_string());
 
             // Audit todo attaches whenever status flags a row as needing
-            // review: ferro accepts a string the spec rejects, ferro rejects
-            // a string the spec accepts, ferro rewrites a canonical form, or
-            // normalization needs reference data we can't run yet. Override
-            // wins.
+            // review: ferro accepts a string the spec rejects (false-acceptance),
+            // ferro rejects a string the spec accepts (parse-error), ferro
+            // rewrites a canonical form (diverges), or normalization needs
+            // reference data we can't run yet (needs-reference). Override wins.
             const ISSUE_83: &str = "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83";
             let needs_todo = matches!(
                 status.as_str(),
-                "false-acceptance" | "parse-error" | "needs-reference"
-            ) || (status == "compliant"
-                && spec_expected.as_deref() != Some(current.as_str()));
+                "false-acceptance" | "parse-error" | "needs-reference" | "diverges"
+            );
             let todo = ov.and_then(|o| o.todo.clone()).or_else(|| {
                 if needs_todo {
                     Some(ISSUE_83.to_string())
