@@ -397,6 +397,70 @@ mod sources {
     }
 }
 
+// ---------- prefix ----------
+
+mod prefix {
+    /// Default reference accessions for bare illustrative fragments
+    /// (e.g. `c.1083A>C` with no accession). The spec routinely omits the
+    /// accession when the surrounding paragraph implies one; ferro requires a
+    /// full accession to parse, so we prepend a sensible default before
+    /// feeding the input to the normalizer.
+    ///
+    /// The choices match the most-cited accessions in the v21.0 spec corpus.
+    /// They are load-bearing constants — re-validate when bumping the spec
+    /// submodule (see CONTRIBUTING.md).
+    pub const DEFAULTS: &[(char, &str)] = &[
+        ('c', "NM_004006.2"),
+        ('n', "NR_002196.1"),
+        ('r', "NM_004006.3"),
+        ('g', "NC_000023.11"),
+        ('p', "NP_003997.1"),
+        ('m', "NC_012920.1"),
+        ('o', "NC_000023.11"),
+    ];
+
+    /// Compute the default-prefixed form for an input. Returns `None` when
+    /// the input already carries an accession (`<acc>:<sys>.…`), uses an
+    /// allele-list shape we can't unambiguously rewrite, or has an unknown
+    /// coord system.
+    pub fn default_prefixed(input: &str) -> Option<String> {
+        // Allele lists like `[c.X;c.Y]` are wrapped; we don't auto-prefix
+        // because the right form is `<acc>:c.[X;Y]`, not `[<acc>:c.X;c.Y]`.
+        // Auditors can force a value via overrides.input_prefixed if needed.
+        if input.starts_with('[') {
+            return None;
+        }
+        let coord = coord_system_char(input)?;
+        // Already prefixed: any colon before the coord-system letter implies
+        // a `<accession>:<sys>.` form already in place.
+        let needle = format!(":{coord}.");
+        if input.contains(&needle) {
+            return None;
+        }
+        // Bare form: must start with `<sys>.`.
+        let bare = format!("{coord}.");
+        if !input.starts_with(&bare) {
+            return None;
+        }
+        let prefix = DEFAULTS
+            .iter()
+            .find(|(c, _)| *c == coord)
+            .map(|(_, p)| *p)?;
+        Some(format!("{prefix}:{input}"))
+    }
+
+    fn coord_system_char(input: &str) -> Option<char> {
+        for (c, _) in DEFAULTS {
+            let starts = format!("{c}.");
+            let mid = format!(":{c}.");
+            if input.starts_with(&starts) || input.contains(&mid) {
+                return Some(*c);
+            }
+        }
+        None
+    }
+}
+
 // ---------- classify ----------
 
 mod classify {
@@ -457,6 +521,10 @@ mod overrides {
         pub spec_expected: Option<Option<String>>,
         #[serde(default)]
         pub todo: Option<String>,
+        /// Force a specific prefixed form for bare fragments. Wins over the
+        /// auto-default in `prefix::default_prefixed`.
+        #[serde(default)]
+        pub input_prefixed: Option<String>,
     }
 
     fn deserialize_some<'de, T, D>(d: D) -> Result<Option<T>, D::Error>
@@ -488,6 +556,12 @@ mod runner {
     #[derive(Debug, Serialize)]
     pub struct Row {
         pub input: String,
+        /// Default-prefixed form for bare illustrative fragments
+        /// (e.g. `c.1083A>C` → `NM_004006.2:c.1083A>C`). When `Some`, this is
+        /// the string ferro was actually run against, and the test consumer
+        /// asserts against this form. Verbatim spec text stays in `input`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_prefixed: Option<String>,
         pub current: String,
         /// `None` (serialized as JSON `null`) means the spec rejects this input
         /// — either via an explicit `<code class="invalid">…</code>` marker in
@@ -565,8 +639,6 @@ mod runner {
 
         let mut rows = Vec::with_capacity(by_input.len());
         for (input, agg) in by_input {
-            let (current, parse_ok, normalize_ok) = run_ferro(&normalizer, &input);
-
             let kind = agg
                 .kinds
                 .iter()
@@ -579,14 +651,30 @@ mod runner {
 
             let ov = overrides.by_input.get(&input);
 
+            // input_prefixed resolution. The spec routinely writes bare
+            // illustrative fragments like `c.1083A>C` whose accession is
+            // implied by the surrounding paragraph. Pin a default accession
+            // per coord system so ferro can actually parse them. Override
+            // wins for rows that need a non-default prefix.
+            let input_prefixed: Option<String> = ov
+                .and_then(|o| o.input_prefixed.clone())
+                .or_else(|| prefix::default_prefixed(&input));
+
+            // What ferro is run against: the prefixed form when present,
+            // else the raw input. This is also the anchor for the
+            // spec_expected default (the spec wrote the bare form as
+            // shorthand for the prefixed form).
+            let target = input_prefixed.as_deref().unwrap_or(&input);
+            let (current, parse_ok, normalize_ok) = run_ferro(&normalizer, target);
+
             // spec_expected resolution. Source order: override > structural
-            // extraction > default-to-input.
+            // extraction > default-to-target.
             //   * override.spec_expected = Some(value) → use value verbatim
             //     (Some(None) forces "spec rejects"; Some(Some(s)) forces a
             //     canonical output)
             //   * spec marks the input via `<code class="invalid">…</code>`
             //     → None (spec rejects)
-            //   * otherwise → Some(input.clone()) (spec offered the input as
+            //   * otherwise → Some(target) (spec offered the target as
             //     a canonical form; ferro is expected to round-trip it)
             let spec_expected: Option<String> = match ov.and_then(|o| o.spec_expected.clone()) {
                 Some(value) => value,
@@ -594,7 +682,7 @@ mod runner {
                     if agg.spec_rejects {
                         None
                     } else {
-                        Some(input.clone())
+                        Some(target.to_string())
                     }
                 }
             };
@@ -629,6 +717,7 @@ mod runner {
             rows.push(Row {
                 coordinate_system: coord_system(&input),
                 input: input.clone(),
+                input_prefixed,
                 current,
                 spec_expected,
                 status,

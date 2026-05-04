@@ -21,6 +21,10 @@ struct Fixture {
 #[derive(Debug, Deserialize)]
 struct Row {
     input: String,
+    /// Default-prefixed form for bare fragments (#4). When `Some`, this is
+    /// what ferro is run against — `input` stays as the verbatim spec text.
+    #[serde(default)]
+    input_prefixed: Option<String>,
     current: String,
     /// `None` means the spec rejects this input (sentinel for #2).
     spec_expected: Option<String>,
@@ -65,11 +69,12 @@ fn pinned_v21_normalization_behavior() {
             skipped_needs_ref += 1;
             continue;
         }
-        let observed = observe(&normalizer, &row.input);
+        let target = row.input_prefixed.as_deref().unwrap_or(&row.input);
+        let observed = observe(&normalizer, target);
         if observed != row.current {
             diffs.push(format!(
-                "  input        : {}\n    expected   : {}\n    observed   : {}\n    status     : {}",
-                row.input, row.current, observed, row.status,
+                "  input        : {}\n    target     : {}\n    expected   : {}\n    observed   : {}\n    status     : {}",
+                row.input, target, row.current, observed, row.status,
             ));
         }
         tested += 1;
