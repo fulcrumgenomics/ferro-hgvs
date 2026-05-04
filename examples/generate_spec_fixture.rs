@@ -525,6 +525,14 @@ mod overrides {
         /// auto-default in `prefix::default_prefixed`.
         #[serde(default)]
         pub input_prefixed: Option<String>,
+        /// Mark this row as requiring a real reference sequence to evaluate
+        /// (e.g. §2.1 3'-rule shifting examples). The test consumer skips
+        /// `Some(true)` rows until #82's `from_manifest` loader lands. There
+        /// is no auto-detection — auditors flip this field by hand during
+        /// the #83 sweep when they see a row whose correctness depends on
+        /// reference data.
+        #[serde(default)]
+        pub requires_reference: Option<bool>,
     }
 
     fn deserialize_some<'de, T, D>(d: D) -> Result<Option<T>, D::Error>
@@ -575,6 +583,12 @@ mod runner {
         pub working_group: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub todo: Option<String>,
+        /// Mirrors the override flag — `Some(true)` means the row needs a
+        /// real reference sequence to evaluate and is skipped by the test
+        /// consumer. Surfaced on the row so consumers don't have to read
+        /// the override file.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub requires_reference: Option<bool>,
     }
 
     fn source_kind_priority(k: sources::SourceKind) -> u8 {
@@ -725,6 +739,7 @@ mod runner {
                 source_paths: paths,
                 working_group: agg.wg,
                 todo,
+                requires_reference: ov.and_then(|o| o.requires_reference),
             });
         }
 

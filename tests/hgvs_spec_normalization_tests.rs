@@ -36,6 +36,10 @@ struct Row {
     working_group: Option<String>,
     #[serde(default)]
     todo: Option<String>,
+    /// `Some(true)` means the row needs a real reference sequence to
+    /// evaluate (e.g. §2.1 3'-rule shifting). Skipped until #82 lands.
+    #[serde(default)]
+    requires_reference: Option<bool>,
 }
 
 fn fixture_path() -> PathBuf {
@@ -62,11 +66,16 @@ fn pinned_v21_normalization_behavior() {
     let normalizer = Normalizer::new(MockProvider::new());
     let mut diffs: Vec<String> = Vec::new();
     let mut skipped_needs_ref = 0usize;
+    let mut skipped_requires_ref = 0usize;
     let mut tested = 0usize;
 
     for row in &fx.rows {
         if row.status == "needs-reference" {
             skipped_needs_ref += 1;
+            continue;
+        }
+        if row.requires_reference == Some(true) {
+            skipped_requires_ref += 1;
             continue;
         }
         let target = row.input_prefixed.as_deref().unwrap_or(&row.input);
@@ -81,7 +90,7 @@ fn pinned_v21_normalization_behavior() {
     }
 
     eprintln!(
-        "hgvs_spec_normalization: tested {tested}, skipped(needs-reference) {skipped_needs_ref}"
+        "hgvs_spec_normalization: tested {tested}, skipped(needs-reference) {skipped_needs_ref}, skipped(requires-reference) {skipped_requires_ref}"
     );
 
     assert!(
