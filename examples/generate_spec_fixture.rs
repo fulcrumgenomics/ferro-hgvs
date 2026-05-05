@@ -7,7 +7,7 @@
 //! Two modes:
 //!   - default:  regenerate the fixture in-place
 //!   - --check:  regenerate in-memory and exit non-zero if the on-disk fixture
-//!               differs (used in CI to catch drift)
+//!     differs (used in CI to catch drift)
 //!
 //! Run: `cargo run --features dev --example generate_spec_fixture`
 //! Check: `cargo run --features dev --example generate_spec_fixture -- --check`
