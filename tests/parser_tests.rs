@@ -1137,12 +1137,12 @@ mod compound_reference {
 
     #[test]
     fn test_compound_ref_with_gene_symbol() {
-        // NC_000013.11(FLT3):g.… — (FLT3) is a gene symbol, not a compound ref
-        // Gene symbols are parsed but not included in Display for genomic variants,
-        // so just verify it parses successfully and the accession is correct
+        // NC_000013.11(FLT3):g.… — (FLT3) is a gene-symbol selector, not a
+        // compound-ref wrapper. Per #121, Display preserves the selector when
+        // it was present in the input; the parsed accession itself stays bare.
         let v = parse_hgvs("NC_000013.11(FLT3):g.12345A>G").unwrap();
 
-        // Assert gene_symbol is captured in the parsed variant
+        // Assert gene_symbol is captured in the parsed variant.
         match &v {
             HgvsVariant::Genome(genome) => {
                 assert_eq!(
@@ -1150,27 +1150,18 @@ mod compound_reference {
                     Some("FLT3"),
                     "gene_symbol should be Some(\"FLT3\")"
                 );
+                // The accession must not carry a genomic_context wrapper —
+                // (FLT3) is a gene selector parsed into gene_symbol.
+                assert!(
+                    genome.accession.genomic_context.is_none(),
+                    "gene-symbol selector must not be folded into accession.genomic_context"
+                );
             }
             other => panic!("expected Genome variant, got: {:?}", other),
         }
 
-        let s = v.to_string();
-        assert!(
-            s.contains("NC_000013.11"),
-            "accession should be NC, got: {}",
-            s
-        );
-        assert!(
-            s.contains(":g.12345A>G"),
-            "variant should parse correctly, got: {}",
-            s
-        );
-        // The accession should NOT have genomic_context (FLT3 is a gene symbol)
-        assert!(
-            !s.contains("(FLT3)"),
-            "gene symbol should not appear in accession, got: {}",
-            s
-        );
+        // Per #121, the displayed form preserves the selector verbatim.
+        assert_eq!(v.to_string(), "NC_000013.11(FLT3):g.12345A>G");
     }
 
     #[test]
