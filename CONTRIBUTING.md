@@ -79,6 +79,107 @@ cargo bench                              # Benchmarks
 - Lint with `cargo clippy --features dev -- -D warnings`
 - Document all public APIs with doc comments
 
+## Updating the v21.0 Normalization Fixture
+
+`tests/fixtures/grammar/hgvs_spec_normalization.json` pins ferro's current
+`normalize()` output for every variant string in the HGVS v21.0 spec
+(vendored at `assets/hgvs-nomenclature/`). The companion test
+`tests/hgvs_spec_normalization_tests.rs` fails any time a row's observed
+output drifts from the recorded `current`.
+
+If your PR changes any normalization output:
+
+1. Make sure the vendored spec submodule is checked out, then regenerate
+   the fixture:
+
+   ```bash
+   git submodule update --init assets/hgvs-nomenclature
+   cargo run --features dev --example generate_spec_fixture
+   ```
+
+2. Inspect the diff. For each changed row, verify the new `current` against
+   the v21.0 spec text under `assets/hgvs-nomenclature/docs/recommendations/`.
+   When ferro's new output now matches the spec's canonical form, that row
+   should also have `current == spec_expected` after regen.
+
+3. If a row's spec-canonical form differs from the input string (a "pair" — e.g.
+   spec input `c.79GC>TT` is canonicalized to `c.79_80delinsTT`), record the
+   divergence in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`
+   keyed on the input. Override entry shape:
+
+   ```jsonc
+   {
+     "by_input": {
+       "<exact input string>": {
+         "status": "diverges",                       // optional: preserved | diverges | parse-error |
+                                                     //           correctly-rejected | false-acceptance |
+                                                     //           needs-reference
+         "spec_expected": "<spec's canonical form>", // optional: string for canonical output, null for
+                                                     //           "spec rejects this", absent for default
+         "input_prefixed": "<accession:c.…>",        // optional: force a specific accession for bare
+                                                     //           fragments (overrides default-prefix)
+         "requires_reference": true,                 // optional: skip this row at test time until #82
+                                                     //           lands (3'-rule shifting examples)
+         "todo": "<https://… link>"                  // optional: defaults to a #83 link for any row that
+                                                     //           lands as diverges / parse-error /
+                                                     //           false-acceptance / needs-reference
+       }
+     }
+   }
+   ```
+
+   Override keys must match a real fixture input — typos are caught by the
+   generator.
+
+### Status taxonomy
+
+| status               | meaning                                                                             |
+|----------------------|-------------------------------------------------------------------------------------|
+| `preserved`          | ferro accepts the input and round-trips it (`current == spec_expected`)             |
+| `diverges`           | ferro accepts the input but rewrites it (`current != spec_expected`)                |
+| `correctly-rejected` | spec marks invalid (via `<code class="invalid">…</code>`), ferro also rejects       |
+| `false-acceptance`   | spec marks invalid, **ferro accepts** — these are bug candidates                    |
+| `parse-error`        | spec mentions the input as a canonical form, ferro can't parse it                   |
+| `needs-reference`    | parse succeeds, normalization needs reference data ferro can't run today (see #82)  |
+
+`spec_expected: null` carries the spec's "this string is invalid" intent. It
+is set automatically for inputs the spec marks via `<code class="invalid">…</code>`
+and can be set manually via the override file.
+
+### Default-prefix table
+
+The spec routinely writes bare fragments like `c.1083A>C` whose accession is
+implied by the surrounding paragraph. The generator prepends a default
+accession per coord system before feeding the input to ferro, recording the
+result in `input_prefixed`:
+
+| coord | default accession |
+|-------|-------------------|
+| `c`   | `NM_004006.2`     |
+| `n`   | `NR_002196.1`     |
+| `r`   | `NM_004006.3`     |
+| `g`   | `NC_000023.11`    |
+| `p`   | `NP_003997.1`     |
+| `m`   | `NC_012920.1`     |
+| `o`   | `NC_000023.11`    |
+
+These are load-bearing constants that match the most-cited accessions in the
+v21.0 spec. Re-validate them whenever bumping the spec submodule (see step 5).
+For a row that needs a different accession, set `input_prefixed` in the
+override file.
+
+4. CI verifies byte-identical regeneration via:
+
+   ```bash
+   cargo run --features dev --example generate_spec_fixture -- --check
+   ```
+
+5. To bump the spec to a newer upstream version:
+   - update the submodule pointer under `assets/hgvs-nomenclature/`
+     (`git -C assets/hgvs-nomenclature checkout <new-tag>`)
+   - re-validate the default-prefix table above against the new spec corpus
+   - regenerate the fixture and review the diff
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
