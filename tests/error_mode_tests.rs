@@ -1015,3 +1015,236 @@ mod w3001_missing_version_emission {
         assert_eq!(count, 2);
     }
 }
+
+// ============================================================================
+// Deprecated stop-codon and frameshift forms (issue #125, #81 L2 SVA-003..006)
+//
+// HGVS spec rationale:
+//   - recommendations/checklist.md: "'Ter' or '*' should be used to indicate a
+//     translation stop codon; the X should not be used"
+//   - recommendations/protein/substitution.md: 'X' is reserved for the "any
+//     amino acid" symbol Xaa, so 'X' as stop is ambiguous.
+//   - recommendations/protein/frameshift.md: canonical form is 'fsTerN'
+//     (e.g. p.Arg123LysfsTer34); 'fs*N' is permitted but 'fsTerN' preferred.
+// ============================================================================
+
+mod deprecated_stop_codon_and_frameshift_forms {
+    use super::*;
+    use ferro_hgvs::parse_hgvs;
+
+    /// Helper: assert that a deprecated input parses to the expected canonical
+    /// HGVS string in lenient mode, with exactly one warning of the given type.
+    fn assert_corrects_with_warning(input: &str, expected: &str, expected_error_type: ErrorType) {
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+
+        let result = preprocessor.preprocess(input);
+        assert!(
+            result.success,
+            "lenient should accept {}: {:?}",
+            input, result.error
+        );
+        assert_eq!(
+            result.preprocessed, expected,
+            "preprocessed mismatch for {}",
+            input
+        );
+        assert_eq!(result.warnings.len(), 1, "expected 1 warning for {}", input);
+        assert_eq!(result.warnings[0].error_type, expected_error_type);
+
+        // The corrected form must round-trip through the full parser.
+        let parsed = parse_hgvs(&result.preprocessed)
+            .unwrap_or_else(|e| panic!("corrected {} should parse: {:?}", expected, e));
+        assert_eq!(parsed.to_string(), expected);
+    }
+
+    // --- W3007: deprecated `*` for stop in protein substitution (SVA-003) ---
+
+    #[test]
+    fn lenient_corrects_w3007_star_for_stop() {
+        assert_corrects_with_warning(
+            "NP_000079.2:p.Arg97*",
+            "NP_000079.2:p.Arg97Ter",
+            ErrorType::DeprecatedStopCodonStar,
+        );
+    }
+
+    #[test]
+    fn strict_rejects_w3007_star_for_stop() {
+        let config = ErrorConfig::strict();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn silent_corrects_w3007_no_warning() {
+        let config = ErrorConfig::silent();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
+        assert!(result.warnings.is_empty());
+    }
+
+    // --- W3008: deprecated `X` for stop in protein substitution (SVA-004) ---
+
+    #[test]
+    fn lenient_corrects_w3008_x_for_stop() {
+        assert_corrects_with_warning(
+            "NP_000079.2:p.Arg97X",
+            "NP_000079.2:p.Arg97Ter",
+            ErrorType::DeprecatedStopCodonX,
+        );
+    }
+
+    #[test]
+    fn strict_rejects_w3008_x_for_stop() {
+        let config = ErrorConfig::strict();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97X");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn silent_corrects_w3008_no_warning() {
+        let config = ErrorConfig::silent();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97X");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn lenient_does_not_flag_xaa_any_amino_acid() {
+        // 'Xaa' (the 'any amino acid' symbol) is canonical and must not warn.
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg782Xaa");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg782Xaa");
+        assert!(result.warnings.is_empty());
+    }
+
+    // --- W3009: deprecated `fs*N` frameshift termination (SVA-006) ---
+
+    #[test]
+    fn lenient_corrects_w3009_fs_star_n() {
+        assert_corrects_with_warning(
+            "NP_000079.2:p.Arg97fs*23",
+            "NP_000079.2:p.Arg97fsTer23",
+            ErrorType::DeprecatedFrameshiftStar,
+        );
+    }
+
+    #[test]
+    fn lenient_corrects_w3009_with_new_aa() {
+        assert_corrects_with_warning(
+            "NP_000079.2:p.Arg97Profs*23",
+            "NP_000079.2:p.Arg97ProfsTer23",
+            ErrorType::DeprecatedFrameshiftStar,
+        );
+    }
+
+    #[test]
+    fn strict_rejects_w3009_fs_star_n() {
+        let config = ErrorConfig::strict();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        assert!(!result.success);
+    }
+
+    // --- W3010: deprecated `fsXN` frameshift termination (SVA-005) ---
+
+    #[test]
+    fn lenient_corrects_w3010_fs_x_n() {
+        // Without this PR, ferro hard-rejects this with a generic
+        // "unexpected trailing characters" parse error. With the soft-warn
+        // wired in, lenient mode rewrites to canonical fsTer23 + parses.
+        assert_corrects_with_warning(
+            "NP_000079.2:p.Arg97fsX23",
+            "NP_000079.2:p.Arg97fsTer23",
+            ErrorType::DeprecatedFrameshiftX,
+        );
+    }
+
+    #[test]
+    fn strict_rejects_w3010_fs_x_n() {
+        let config = ErrorConfig::strict();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
+        assert!(!result.success);
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn lenient_canonical_protein_no_warnings() {
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        for input in [
+            "NP_000079.2:p.Arg97Ter",
+            "NP_000079.2:p.Arg97ProfsTer23",
+            "NP_000079.2:p.Tyr180fs",
+            "NP_000079.2:p.Val600Glu",
+            "NP_000079.2:p.Arg782Xaa",
+        ] {
+            let result = preprocessor.preprocess(input);
+            assert!(result.success, "expected success for {}", input);
+            assert_eq!(result.preprocessed, input);
+            assert!(
+                result.warnings.is_empty(),
+                "expected no warnings for canonical {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn lenient_compound_protein_allele_emits_two_warnings() {
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97Ter;Arg100Ter]");
+        assert_eq!(result.warnings.len(), 2);
+    }
+
+    #[test]
+    fn lenient_idempotent_on_corrected_output() {
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        let first = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
+        assert!(first.success);
+        let second = preprocessor.preprocess(&first.preprocessed);
+        assert!(second.success);
+        assert_eq!(second.preprocessed, first.preprocessed);
+        assert!(
+            second.warnings.is_empty(),
+            "second-pass warnings: {:?}",
+            second.warnings
+        );
+    }
+
+    #[test]
+    fn lenient_does_not_affect_cds_utr_position() {
+        // c.*5A>G is a 3'UTR position offset, not a deprecated stop codon.
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NM_000088.3:c.*5A>G");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.*5A>G");
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn registry_has_all_four_codes() {
+        for code in ["W3007", "W3008", "W3009", "W3010"] {
+            let info = get_code_info(code).unwrap_or_else(|| panic!("missing {}", code));
+            assert_eq!(info.code, code);
+            assert!(info.category == CodeCategory::Format);
+            assert!(info.mode_behavior.is_some());
+        }
+    }
+}

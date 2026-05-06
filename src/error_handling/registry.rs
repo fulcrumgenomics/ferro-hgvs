@@ -689,6 +689,89 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3007",
+        CodeInfo {
+            code: "W3007",
+            name: "DeprecatedStopCodonStar",
+            summary: "Deprecated '*' for stop codon in protein substitution.",
+            explanation: "The HGVS checklist permits both 'Ter' and '*' to indicate a \
+                translation stop codon, but the three-letter 'Ter' is the preferred form. \
+                In lenient/silent modes 'p.Arg97*' is rewritten to 'p.Arg97Ter'.",
+            category: CodeCategory::Format,
+            bad_examples: &["NP_000079.2:p.Arg97*", "NP_000079.2:p.Trp10*"],
+            good_examples: &["NP_000079.2:p.Arg97Ter", "NP_000079.2:p.Trp10Ter"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/checklist/"),
+            related_codes: &["W3008", "W3009", "W3010"],
+        },
+    );
+
+    map.insert(
+        "W3008",
+        CodeInfo {
+            code: "W3008",
+            name: "DeprecatedStopCodonX",
+            summary: "Deprecated 'X' for stop codon in protein substitution.",
+            explanation: "Per the HGVS checklist, 'the X should not be used' to indicate a \
+                translation stop codon. The single-letter 'X' is also reserved for the \
+                'any amino acid' symbol Xaa, making 'p.Arg97X' ambiguous. In lenient/silent \
+                modes the input is rewritten to 'p.Arg97Ter'.",
+            category: CodeCategory::Format,
+            bad_examples: &["NP_000079.2:p.Arg97X", "NP_000079.2:p.Trp10X"],
+            good_examples: &["NP_000079.2:p.Arg97Ter", "NP_000079.2:p.Trp10Ter"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/substitution/",
+            ),
+            related_codes: &["W3007", "W3009", "W3010"],
+        },
+    );
+
+    map.insert(
+        "W3009",
+        CodeInfo {
+            code: "W3009",
+            name: "DeprecatedFrameshiftStar",
+            summary: "Deprecated 'fs*N' frameshift termination notation.",
+            explanation: "The canonical HGVS frameshift form uses 'fsTerN', e.g. \
+                'p.Arg123LysfsTer34'. The 'fs*N' alternative is permitted but discouraged. \
+                In lenient/silent modes 'p.Arg97fs*23' is rewritten to 'p.Arg97fsTer23'.",
+            category: CodeCategory::Format,
+            bad_examples: &["NP_000079.2:p.Arg97fs*23", "NP_000079.2:p.Ser539Alafs*110"],
+            good_examples: &[
+                "NP_000079.2:p.Arg97fsTer23",
+                "NP_000079.2:p.Ser539AlafsTer110",
+            ],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
+            ),
+            related_codes: &["W3007", "W3008", "W3010"],
+        },
+    );
+
+    map.insert(
+        "W3010",
+        CodeInfo {
+            code: "W3010",
+            name: "DeprecatedFrameshiftX",
+            summary: "Deprecated 'fsXN' frameshift termination notation.",
+            explanation: "Neither 'X' nor 'Xaa' is used in HGVS frameshift termination; the \
+                canonical form is 'fsTerN'. The strict parser rejects 'fsXN' outright; in \
+                lenient/silent modes the preprocessor rewrites 'p.Arg97fsX23' to \
+                'p.Arg97fsTer23' and emits this warning.",
+            category: CodeCategory::Format,
+            bad_examples: &["NP_000079.2:p.Arg97fsX23"],
+            good_examples: &["NP_000079.2:p.Arg97fsTer23"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
+            ),
+            related_codes: &["W3007", "W3008", "W3009"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
