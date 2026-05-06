@@ -26,7 +26,7 @@
 pub mod boundary;
 pub mod config;
 pub(crate) mod merge;
-pub mod overlap;
+mod overlap;
 pub mod rules;
 pub mod shuffle;
 pub mod validate;
@@ -296,6 +296,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if self.config.prevent_overlap {
             normalized = self.resolve_overlaps(normalized)?;
         }
+
+        // Detect coincident-bounds conflicts (issue #81 A8). Runs after per-variant
+        // normalization so post-shift collisions are caught the same as input-time
+        // ones; emits OVERLAP_CONFLICTING_EDITS warnings, leaves output unchanged.
+        all_warnings.extend(crate::normalize::overlap::detect_overlap_conflicts(
+            &normalized,
+            allele.phase,
+        ));
 
         // HGVS requires consecutive edits in cis to render as a single delins.
         // Track input length so we only unwrap when a merge actually collapsed

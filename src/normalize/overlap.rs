@@ -34,7 +34,7 @@ use crate::normalize::NormalizationWarning;
 /// or reorder its input. Warnings are emitted in deterministic key order
 /// (BTreeMap iteration), so two equivalent inputs yield identical warning
 /// sequences regardless of source-line ordering of the conflicting edits.
-pub fn detect_overlap_conflicts(
+pub(crate) fn detect_overlap_conflicts(
     variants: &[HgvsVariant],
     phase: AllelePhase,
 ) -> Vec<NormalizationWarning> {
@@ -481,5 +481,28 @@ mod tests {
         // Insertions anchor at p_p+1 — no single-base location to coincide.
         let (variants, phase) = parse_allele("NC_000001.11:g.[100A>C;100_101insT]");
         assert!(detect_overlap_conflicts(&variants, phase).is_empty());
+    }
+
+    #[test]
+    fn end_to_end_normalize_emits_warning() {
+        use crate::normalize::Normalizer;
+        use crate::reference::mock::MockProvider;
+
+        let normalizer = Normalizer::new(MockProvider::new());
+        let v = parse_hgvs("NC_000001.11:g.[100G>A;100A>C]").expect("parse");
+        let result = normalizer.normalize_with_warnings(&v).expect("normalize");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.code() == "OVERLAP_CONFLICTING_EDITS"),
+            "expected OVERLAP_CONFLICTING_EDITS in warnings, got {:?}",
+            result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
+        );
+        let out = result.result.to_string();
+        assert!(
+            out.contains("100G>A") && out.contains("100A>C"),
+            "expected pass-through, got {out}"
+        );
     }
 }
