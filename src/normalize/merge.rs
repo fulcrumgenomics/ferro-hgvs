@@ -23,8 +23,8 @@ use crate::reference::ReferenceProvider;
 /// / `TxUpstream`. Adjacency `prev.end + 1 == next.start` works
 /// naturally for all six because the axis is monotonic 5'→3' within
 /// each region (`c.-3 → c.-2 → c.-1` maps to `-3 → -2 → -1`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Region {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum Region {
     /// `g.` (genomic) and `m.` (mitochondrial) — single axis, no
     /// sub-regions.
     Genome,

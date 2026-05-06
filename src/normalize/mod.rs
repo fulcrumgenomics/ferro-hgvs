@@ -26,6 +26,7 @@
 pub mod boundary;
 pub mod config;
 pub(crate) mod merge;
+pub mod overlap;
 pub mod rules;
 pub mod shuffle;
 pub mod validate;
