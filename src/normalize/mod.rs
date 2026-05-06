@@ -84,21 +84,42 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     )
 }
 
-/// Warning generated during normalization
+/// Warning generated during normalization.
+///
+/// This enum is open-ended: each variant owns the fields its code needs.
+/// Future warning codes add new variants without touching existing emit sites.
 #[derive(Debug, Clone)]
-pub struct NormalizationWarning {
-    /// Warning code (e.g., "REFSEQ_MISMATCH")
-    pub code: String,
-    /// Human-readable description
-    pub message: String,
-    /// What the input claimed as reference
-    pub stated_ref: String,
-    /// What the actual reference sequence has
-    pub actual_ref: String,
-    /// Position info
-    pub position: String,
-    /// Whether the mismatch was auto-corrected
-    pub corrected: bool,
+pub enum NormalizationWarning {
+    /// Reference sequence mismatch. Stated ref bases in the HGVS expression
+    /// do not match the actual reference sequence. Code: `REFSEQ_MISMATCH`.
+    RefSeqMismatch {
+        /// Human-readable description
+        message: String,
+        /// What the input claimed as reference
+        stated_ref: String,
+        /// What the actual reference sequence has
+        actual_ref: String,
+        /// Position info
+        position: String,
+        /// Whether the mismatch was auto-corrected
+        corrected: bool,
+    },
+}
+
+impl NormalizationWarning {
+    /// The warning's user-facing code string.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
+        }
+    }
+
+    /// Human-readable message for the warning.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::RefSeqMismatch { message, .. } => message,
+        }
+    }
 }
 
 /// Result of normalization with optional warnings
@@ -136,7 +157,9 @@ impl NormalizeResultWithWarnings {
 
     /// Check if there's a reference mismatch warning
     pub fn has_ref_mismatch(&self) -> bool {
-        self.warnings.iter().any(|w| w.code == "REFSEQ_MISMATCH")
+        self.warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::RefSeqMismatch { .. }))
     }
 }
 
@@ -172,14 +195,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         let result = self.normalize_with_warnings(variant)?;
 
-        // In strict mode, reject if there were reference mismatches
-        if self.config.should_reject_ref_mismatch() && result.has_ref_mismatch() {
-            if let Some(warning) = result.warnings.iter().find(|w| w.code == "REFSEQ_MISMATCH") {
-                return Err(FerroError::ReferenceMismatch {
-                    location: warning.position.clone(),
-                    expected: warning.stated_ref.clone(),
-                    found: warning.actual_ref.clone(),
-                });
+        // In strict mode, reject if there were reference mismatches.
+        // The `_ => None` arm is unreachable today (one variant) but becomes
+        // live as soon as Task 3 adds `OverlapConflict`. Drop the `#[allow]` then.
+        if self.config.should_reject_ref_mismatch() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::RefSeqMismatch {
+                    position,
+                    stated_ref,
+                    actual_ref,
+                    ..
+                } => Some(FerroError::ReferenceMismatch {
+                    location: position.clone(),
+                    expected: stated_ref.clone(),
+                    found: actual_ref.clone(),
+                }),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            }) {
+                return Err(err);
             }
         }
 
@@ -1710,8 +1744,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Validate reference allele before normalization
         let validation = validate::validate_reference(edit, ref_seq, start, end);
         if !validation.valid {
-            warnings.push(NormalizationWarning {
-                code: "REFSEQ_MISMATCH".to_string(),
+            warnings.push(NormalizationWarning::RefSeqMismatch {
                 message: validation.warning.unwrap_or_default(),
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),
