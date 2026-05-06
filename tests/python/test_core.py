@@ -138,3 +138,49 @@ class TestNormalizeEmptyInsertDelinsToDel:
         # 3'-rule shifts to c.11_12 because ref[10]=G == ref[12]=G.
         result = ferro_hgvs.normalize("NM_000088.3:c.10_11delins")
         assert result == "NM_000088.3:c.11_12del"
+
+
+class TestNormalizeDelinsToInversion:
+    """Issue #81 item A2: delins whose insert is the revcomp of the deleted ref -> inv."""
+
+    def test_simple_delins_to_inv(self) -> None:
+        # NM_000088.3 c.7_9 = AAG; revcomp(AAG) = CTT; outer A/G not complement
+        # so no shortening — result is c.7_9inv.
+        result = ferro_hgvs.normalize("NM_000088.3:c.7_9delinsCTT")
+        assert result == "NM_000088.3:c.7_9inv"
+
+    def test_delins_to_inv_with_outer_shortening(self) -> None:
+        # NM_000088.3 c.3_6 = GCCC; revcomp(GCCC) = GGGC; outer G/C are
+        # complement so the inversion shortens to the inner CC at c.4_5.
+        result = ferro_hgvs.normalize("NM_000088.3:c.3_6delinsGGGC")
+        assert result == "NM_000088.3:c.4_5inv"
+
+    def test_delins_one_base_complement_is_substitution(self) -> None:
+        # NM_000088.3 c.1 = A; insert T. A 1-base complement is a substitution
+        # per HGVS spec, NEVER an inversion.
+        result = ferro_hgvs.normalize("NM_000088.3:c.1delinsT")
+        assert result == "NM_000088.3:c.1A>T"
+
+
+class TestNormalizeDelinsSharedAffixTrimming:
+    """Issue #81 item A2 (extension): shared-affix trimming reduces a delins
+    to its minimal HGVS form (sub / del / ins / smaller delins) per the
+    sub > del > inv > dup > ins priority."""
+
+    def test_delins_shared_suffix_becomes_substitution(self) -> None:
+        # NM_000088.3 c.1_4 = ATGC; insert AAGC shares the AGC suffix and
+        # the leading A, leaving T -> A at c.2.
+        result = ferro_hgvs.normalize("NM_000088.3:c.1_4delinsAAGC")
+        assert result == "NM_000088.3:c.2T>A"
+
+    def test_delins_shared_affix_pure_deletion(self) -> None:
+        # NM_000088.3 c.1_4 = ATGC; insert AC shares prefix A and suffix C,
+        # leaving TG deleted at c.2_3.
+        result = ferro_hgvs.normalize("NM_000088.3:c.1_4delinsAC")
+        assert result == "NM_000088.3:c.2_3del"
+
+    def test_delins_shared_affix_pure_insertion(self) -> None:
+        # NM_000088.3 c.1_3 = ATG; insert ATCG shares prefix AT and suffix G,
+        # leaving C inserted between c.2 and c.3.
+        result = ferro_hgvs.normalize("NM_000088.3:c.1_3delinsATCG")
+        assert result == "NM_000088.3:c.2_3insC"
