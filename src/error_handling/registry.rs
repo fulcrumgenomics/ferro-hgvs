@@ -748,6 +748,31 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W5002",
+        CodeInfo {
+            code: "W5002",
+            name: "OverlapConflictingEdits",
+            summary: "Two or more cis-allele edits share identical reference bounds.",
+            explanation: "Two or more edits in a cis allele point at the same single \
+                base or range with identical (start, end) bounds. The HGVS spec does \
+                not define a canonical form for this case; ferro preserves the input \
+                verbatim and emits this warning so callers can decide whether to flag \
+                or reject. If the HGVS Variant Working Group rules these inputs invalid, \
+                change the mode_behavior here to promote this code to an error in Strict.",
+            category: CodeCategory::Semantic,
+            bad_examples: &[
+                "g.[100G>A;100A>C]",
+                "g.[100del;100A>C]",
+                "c.[100_103del;100_103inv]",
+            ],
+            good_examples: &["g.[100A>C;101A>C]", "c.[762_768del;767_774dup]"],
+            mode_behavior: Some(ModeBehavior::always_warn_if_not_rejected()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["W5001"],
+        },
+    );
+
     map
 }
 
