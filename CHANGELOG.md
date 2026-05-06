@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(normalize)* rewrite degenerate substitutions (ref == alt, e.g. `c.100A>A`) to identity (`=`) per HGVS v21 spec, which marks `c.X>X` as "not allowed" (`docs/recommendations/DNA/other.md`). The rule is purely syntactic on the edit's stated bases, so it fires in both the full-normalization path and the no-reference canonicalization path — `c.123C>C` rewrites to `c.123=` regardless of provider availability. ([#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) A4)
+
 ## [0.4.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.4.0...v0.4.1) - 2026-05-04
 
 ### Added

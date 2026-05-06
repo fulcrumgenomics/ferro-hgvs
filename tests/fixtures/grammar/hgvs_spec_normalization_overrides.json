@@ -1,3 +1,7 @@
 {
-  "by_input": {}
+  "by_input": {
+    "c.123C>C": {
+      "spec_expected": "NM_004006.2:c.123="
+    }
+  }
 }
