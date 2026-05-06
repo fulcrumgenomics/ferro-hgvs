@@ -13,8 +13,8 @@
       "correctly-rejected": 12,
       "diverges": 147,
       "false-acceptance": 22,
-      "parse-error": 215,
-      "preserved": 427
+      "parse-error": 214,
+      "preserved": 428
     },
     "by_coordinate_system": {
       "c": 298,
@@ -9158,19 +9158,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "r.spl?",
-      "input_prefixed": "NM_004006.3:r.spl?",
-      "current": "parse error: Parse error at position 17: Unexpected trailing characters: '?'",
-      "spec_expected": "NM_004006.3:r.spl?",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:r.10del",
       "current": "LRG_199t1:r.10del",
       "spec_expected": "LRG_199t1:r.10del",
@@ -10020,6 +10007,18 @@
       "input_prefixed": "NM_004006.3:r.spl",
       "current": "NM_004006.3:r.spl",
       "spec_expected": "NM_004006.3:r.spl",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "r.spl?",
+      "input_prefixed": "NM_004006.3:r.spl?",
+      "current": "NM_004006.3:r.spl?",
+      "spec_expected": "NM_004006.3:r.spl?",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",

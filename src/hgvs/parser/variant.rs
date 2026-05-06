@@ -1919,6 +1919,31 @@ fn parse_rna_variant(
             ));
         }
 
+        // Try whole-RNA predicted splice (r.(spl) / r.(spl?)) — must come before the
+        // generic predicted-variant parser, which requires an interval. The whole-entity
+        // splicing marker has no positional content, so we attach a dummy interval and
+        // wrap the edit in `Mu::Uncertain` so that `RnaVariant::fmt_loc_edit` emits the
+        // surrounding parens.
+        if let Ok((remaining, edit)) = parse_whole_rna_predicted_splice(input) {
+            let dummy_pos = crate::hgvs::location::RnaPos {
+                base: 1,
+                offset: None,
+                utr3: false,
+            };
+            let dummy_interval = RnaInterval::point(dummy_pos);
+            return Ok((
+                remaining,
+                HgvsVariant::Rna(RnaVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit {
+                        location: dummy_interval,
+                        edit: Mu::Uncertain(edit),
+                    },
+                }),
+            ));
+        }
+
         // Try predicted RNA variant format: r.(interval edit)
         if let Ok((remaining, variant)) =
             parse_predicted_rna_variant(input, accession.clone(), gene_symbol.clone())
@@ -1961,9 +1986,36 @@ fn parse_whole_rna_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEd
     Ok((remaining, crate::hgvs::edit::NaEdit::whole_entity_unknown()))
 }
 
-/// Parse RNA splice pattern: r.spl
+/// Parse RNA splice pattern: `spl` (very-likely-affected) or `spl?` (might-be-affected).
+///
+/// Per HGVS v21.0 (`assets/hgvs-nomenclature/docs/recommendations/RNA/splicing.md` and
+/// `docs/recommendations/uncertain.md`):
+/// - `r.spl`  — RNA not analysed; splicing very likely affected.
+/// - `r.spl?` — RNA not analysed; splicing might be affected.
 fn parse_rna_splice(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
-    map(tag("spl"), |_| crate::hgvs::edit::NaEdit::Splice).parse(input)
+    let (input, _) = tag("spl").parse(input)?;
+    let (input, marker) =
+        nom::combinator::opt(tag::<_, _, nom::error::Error<&str>>("?")).parse(input)?;
+    Ok((
+        input,
+        crate::hgvs::edit::NaEdit::Splice {
+            unknown: marker.is_some(),
+        },
+    ))
+}
+
+/// Parse whole-RNA predicted splice pattern: `(spl)` or `(spl?)`.
+///
+/// Per HGVS v21.0, `r.(spl?)` is the canonical predicted-uncertain splicing marker;
+/// `r.(spl)` is the symmetric predicted-but-certain form. Both are whole-entity edits
+/// (no positional content), so we wrap the result in `Mu::Uncertain` rather than
+/// dispatching through the generic `parse_predicted_rna_variant`, which requires an
+/// interval. See `RnaVariant::fmt_loc_edit` for the matching Display path.
+fn parse_whole_rna_predicted_splice(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+    let (input, _) = tag("(").parse(input)?;
+    let (input, edit) = parse_rna_splice(input)?;
+    let (input, _) = tag(")").parse(input)?;
+    Ok((input, edit))
 }
 
 /// Parse RNA no product pattern: r.0
