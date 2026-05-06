@@ -1538,48 +1538,138 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // we may need to rewrite it as a higher-priority form: identity
                 // (insert == ref), substitution (1->1 ref!=alt), or duplication.
                 if let InsertedSequence::Literal(seq) = sequence {
+                    use crate::hgvs::edit::{Base, Sequence};
+                    use rules::DelinsCanonical;
                     let seq_bytes: Vec<u8> = seq.bases().iter().map(|b| *b as u8).collect();
                     let start_idx = hgvs_pos_to_index(start);
                     let end_idx = end as usize;
 
-                    // Identity (highest priority): insert == deleted reference.
-                    // Example: c.10delinsG where ref[10]=G → c.10=.
-                    if rules::delins_is_identity(ref_seq, start_idx, end_idx, &seq_bytes) {
-                        return Ok((start, end, NaEdit::position_identity(), warnings.clone()));
-                    }
+                    // Reconstruct an InsertedSequence from a Vec<u8> produced by
+                    // shared-affix trimming. The bytes round-trip through `Base`
+                    // because they originated from a typed `Sequence` (the input
+                    // `seq` above), so `from_char` cannot fail; expect-on-None
+                    // makes the invariant explicit if a future refactor breaks
+                    // the pipeline.
+                    let bytes_to_inserted_seq = |bytes: &[u8]| -> InsertedSequence {
+                        let bases: Vec<Base> = bytes
+                            .iter()
+                            .map(|b| {
+                                Base::from_char(*b as char).expect(
+                                    "trimmed delins byte must be a valid IUPAC base \
+                                     because the input sequence was already a typed Sequence",
+                                )
+                            })
+                            .collect();
+                        InsertedSequence::Literal(Sequence::new(bases))
+                    };
 
-                    // Substitution: 1-base delins with a different alt base.
-                    // Example: g.1000delinsA where ref[1000]=G → g.1000G>A.
-                    if let Some((reference, alternative)) =
-                        rules::delins_is_substitution(ref_seq, start_idx, end_idx, &seq_bytes)
-                    {
-                        return Ok((
-                            start,
-                            start,
-                            NaEdit::Substitution {
-                                reference,
-                                alternative,
-                            },
-                            warnings.clone(),
-                        ));
-                    }
-
-                    // Duplication: c.5delinsGG where position 5 is G → dup.
-                    if rules::delins_is_duplication(ref_seq, start_idx, end_idx, &seq_bytes) {
-                        // Convert to duplication with minimal notation
-                        return Ok((
-                            start,
-                            end,
-                            NaEdit::Duplication {
-                                sequence: None,
-                                length: None,
-                                uncertain_extent: None,
-                            },
-                            warnings.clone(),
-                        ));
+                    match rules::canonicalize_delins(ref_seq, start_idx, end_idx, &seq_bytes) {
+                        DelinsCanonical::Identity => {
+                            // c.10delinsG where ref[10]=G  ->  c.10=
+                            return Ok((start, end, NaEdit::position_identity(), warnings.clone()));
+                        }
+                        DelinsCanonical::Substitution {
+                            position,
+                            reference,
+                            alternative,
+                        } => {
+                            // g.1000delinsA where ref[1000]=G  ->  g.1000G>A.
+                            // After shared-affix trimming `position` is a
+                            // 0-indexed offset into ref_seq, not necessarily
+                            // the input `start`.
+                            let pos = index_to_hgvs_pos(position);
+                            return Ok((
+                                pos,
+                                pos,
+                                NaEdit::Substitution {
+                                    reference,
+                                    alternative,
+                                },
+                                warnings.clone(),
+                            ));
+                        }
+                        DelinsCanonical::Deletion { start: s0, end: e0 } => {
+                            // c.2_5delinsAT (ref ACGT) -> c.3_4del. Range fields
+                            // are the trimmed half-open 0-indexed interval.
+                            return Ok((
+                                index_to_hgvs_pos(s0),
+                                e0 as u64,
+                                NaEdit::Deletion {
+                                    sequence: None,
+                                    length: None,
+                                },
+                                warnings.clone(),
+                            ));
+                        }
+                        DelinsCanonical::Insertion {
+                            after_index,
+                            sequence: ins_bytes,
+                        } => {
+                            // c.2_4delinsACGT (ref ACT) -> c.3_4insG. `after_index`
+                            // is the 0-indexed position of the base AFTER the
+                            // insertion, which is also the 1-based HGVS position
+                            // of the base BEFORE — so HGVS X = after_index,
+                            // Y = after_index + 1.
+                            return Ok((
+                                after_index as u64,
+                                (after_index + 1) as u64,
+                                NaEdit::Insertion {
+                                    sequence: bytes_to_inserted_seq(&ins_bytes),
+                                },
+                                warnings.clone(),
+                            ));
+                        }
+                        DelinsCanonical::Inversion { start: s0, end: e0 } => {
+                            // A2 (#81): g.100_102delinsTAG where ref=CTA  ->  g.100_102inv.
+                            // Position interval is already shortened. e0 is the
+                            // exclusive 0-based end; the HGVS 1-based inclusive
+                            // end takes the same numeric value.
+                            return Ok((
+                                index_to_hgvs_pos(s0),
+                                e0 as u64,
+                                NaEdit::Inversion {
+                                    sequence: None,
+                                    length: None,
+                                },
+                                warnings.clone(),
+                            ));
+                        }
+                        DelinsCanonical::Duplication { start: s0, end: e0 } => {
+                            // c.5delinsGG where ref[5]=G  ->  c.5dup. Duplication
+                            // is detected before trimming, so the range matches
+                            // the input.
+                            return Ok((
+                                index_to_hgvs_pos(s0),
+                                e0 as u64,
+                                NaEdit::Duplication {
+                                    sequence: None,
+                                    length: None,
+                                    uncertain_extent: None,
+                                },
+                                warnings.clone(),
+                            ));
+                        }
+                        DelinsCanonical::KeepAsDelins {
+                            start: s0,
+                            end: e0,
+                            sequence: trimmed_bytes,
+                        } => {
+                            // Either no trimming was possible (range == input)
+                            // or trimming reduced the delins to a smaller delins
+                            // that still doesn't fit a higher-priority form.
+                            return Ok((
+                                index_to_hgvs_pos(s0),
+                                e0 as u64,
+                                NaEdit::Delins {
+                                    sequence: bytes_to_inserted_seq(&trimmed_bytes),
+                                },
+                                warnings.clone(),
+                            ));
+                        }
                     }
                 }
-                // Return unchanged (only apply minimal representation rules, not shuffling)
+                // Non-literal insert (Count, Range, etc.): cannot trim or
+                // classify without the actual bases; return unchanged.
                 return Ok((start, end, edit.clone(), warnings.clone()));
             }
             NaEdit::Inversion { sequence, length } => {
@@ -1984,49 +2074,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         uncertain_extent: None,
                     },
                 )
-            }
-            NaEdit::Delins { sequence } => {
-                use crate::hgvs::edit::{InsertedSequence, Sequence};
-
-                // Check if delins should become a duplication
-                // Example: c.5delinsGG where position 5 is G → dup
-                if let InsertedSequence::Literal(seq) = sequence {
-                    let seq_bytes: Vec<u8> = seq.bases().iter().map(|b| *b as u8).collect();
-                    let start_0 = result.start as usize;
-                    let end_0 = result.end as usize;
-
-                    if rules::delins_is_duplication(ref_seq, start_0, end_0, &seq_bytes) {
-                        // Convert to duplication - the duplicated sequence is the deleted region
-                        let dup_len = end_0 - start_0;
-                        let dup_seq_bytes = &ref_seq[start_0..end_0];
-                        let dup_bases: Vec<crate::hgvs::edit::Base> = dup_seq_bytes
-                            .iter()
-                            .filter_map(|&b| crate::hgvs::edit::Base::from_char(b as char))
-                            .collect();
-                        if dup_bases.len() == dup_seq_bytes.len() {
-                            let dup_seq = Sequence::new(dup_bases);
-                            (
-                                new_start,
-                                new_end,
-                                NaEdit::Duplication {
-                                    sequence: Some(dup_seq),
-                                    length: Some(dup_len as u64),
-                                    uncertain_extent: None,
-                                },
-                            )
-                        } else {
-                            // Defensive fallback: ref slice contains a byte
-                            // outside the Base alphabet. Keep the original
-                            // delins rather than emitting a duplication with
-                            // a truncated sequence.
-                            (new_start, new_end, edit.clone())
-                        }
-                    } else {
-                        (new_start, new_end, edit.clone())
-                    }
-                } else {
-                    (new_start, new_end, edit.clone())
-                }
             }
             // Deletions: post-shift, check for B2 canonical-form rule
             // (deletion of >=2 tandem-repeat units → unit[N-k]); otherwise
@@ -2448,25 +2495,17 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_multi_base_delete_delins_unchanged() {
-        // 2→1 delins is not a single-base substitution and must not be rewritten.
-        // c.10_11delinsT (deletes GG, inserts T) stays as delins.
+    fn test_normalize_multi_base_delete_delins_to_pure_deletion() {
+        // c.10_11delinsT against NM_000088.3 (c.10_11 = GT). The shared `T`
+        // suffix consumes the inserted base entirely, leaving a single-base
+        // deletion at c.10. Per HGVS minimal-form rules (sub > del > inv >
+        // dup > ins) the canonical output is a pure deletion, not a delins.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
         let variant = parse_hgvs("NM_000088.3:c.10_11delinsT").unwrap();
         let result = normalizer.normalize(&variant).unwrap();
-        let output = format!("{}", result);
-        assert!(
-            output.contains("delinsT"),
-            "Multi-base delete delins should remain delins, got: {}",
-            output
-        );
-        assert!(
-            !output.contains(">"),
-            "Multi-base delete delins must not become a substitution, got: {}",
-            output
-        );
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10del");
     }
 
     #[test]
@@ -2521,15 +2560,16 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_delins_different_bases_unchanged() {
-        // c.1_3delinsACG (ref=ATG) differs at the middle base — not identity,
-        // not a dup pattern, so it stays as delins.
+    fn test_normalize_delins_different_bases_becomes_substitution() {
+        // c.1_3delinsACG against NM_000088.3 (c.1_3 = ATG). The shared `A`
+        // prefix and `G` suffix collapse the delins to T -> C at c.2 per the
+        // HGVS minimal-form rule (sub > del > inv > dup > ins).
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
         let variant = parse_hgvs("NM_000088.3:c.1_3delinsACG").unwrap();
         let result = normalizer.normalize(&variant).unwrap();
-        assert_eq!(format!("{}", result), "NM_000088.3:c.1_3delinsACG");
+        assert_eq!(format!("{}", result), "NM_000088.3:c.2T>C");
     }
 
     #[test]

@@ -241,14 +241,16 @@ fn test_normalize_duplication_type_preserved() {
 
 #[test]
 fn test_normalize_delins_type_preserved() {
-    // Test delins normalization - should remain delins when not simplifiable
+    // Test delins normalization - should remain delins when not simplifiable.
+    // ref NM_000088.3 c.10_11 = GT. delete GT, insert CA: no shared affix,
+    // revcomp(GT) = AC != CA so not an inversion, length doesn't fit dup, so
+    // the minimal form is still a 2->2 delins.
     let provider = MockProvider::with_test_data();
     let normalizer = Normalizer::new(provider);
 
-    let variant = parse_hgvs("NM_000088.3:c.10_12delinsATG").unwrap();
+    let variant = parse_hgvs("NM_000088.3:c.10_11delinsCA").unwrap();
     let result = normalizer.normalize(&variant).unwrap();
 
-    // Delins that doesn't simplify should remain delins
     let output = format!("{}", result);
     assert!(
         output.contains("delins"),
@@ -3610,16 +3612,18 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_delins_partial_match_stays_delins() {
+        fn test_delins_partial_match_becomes_pure_insertion() {
             // Sequence: NNATGCNNNNN
-            // c.3_5delinsATGTTT → first half matches but not a double
+            // c.3_5 = ATG. Insert ATGTTT: shared ATG prefix consumes the
+            // entire deleted reference, leaving TTT inserted between c.5
+            // and c.6 per HGVS minimal-form rules. Not a duplication
+            // (insert second half TTT != ATG).
             let seq = "NNATGCNNNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5delinsATGTTT");
-            assert!(
-                result.contains("delins"),
-                "delinsATGTTT should stay delins, got: {}",
-                result
+            assert_normalizes_to(
+                "NM_TEST.1:c.3_5delinsATGTTT",
+                "NM_TEST.1:c.5_6insTTT",
+                provider,
             );
         }
 

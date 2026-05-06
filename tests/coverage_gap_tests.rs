@@ -561,15 +561,16 @@ mod delins_boundary {
     use super::*;
 
     #[test]
-    fn test_exonic_delins_near_boundary_plus() {
+    fn test_exonic_delins_near_boundary_plus_collapses_to_substitution() {
         // Delins at the last two exonic bases of exon 1 (c.29=A, c.30=T).
-        // delinsAA replaces AT with AA — the leading A matches reference,
-        // which would arguably collapse to a single sub at c.30 under #81
-        // A9, but the spec is non-prescriptive for that collapse and ferro
-        // does not perform it today.
+        // delinsAA shares the leading `A` with the reference, so under the
+        // HGVS minimal-form rules (sub > del > inv > dup > ins) the canonical
+        // form is the single-base substitution c.30T>A. The shared-affix
+        // trimming added in #81 A2 makes this collapse fire on plus-strand
+        // exonic boundaries the same way it fires elsewhere.
         let provider = make_provider_with_plus_strand();
         let result = normalize(provider, "NM_PLUS.1:c.29_30delinsAA");
-        assert_eq!(result, "NM_PLUS.1:c.29_30delinsAA");
+        assert_eq!(result, "NM_PLUS.1:c.30T>A");
     }
 
     #[test]
