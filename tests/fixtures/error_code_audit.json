@@ -176,18 +176,14 @@
       "description": "LowercaseAminoAcid — 'val' instead of 'Val'.",
       "spec_section": "recommendations/protein/substitution.md; background/standards.md (3-letter code preferred); recommendations/general.md lines 41-43",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/substitution/",
-      "status": "registered",
-      "spec_section_notes": "correct_amino_acid_case in src/error_handling/corrections.rs returns ErrorType::LowercaseAminoAcid but is never invoked from the preprocessor or parser. Empirically, NP_003997.1:p.val600glu is auto-normalized to NP_003997.1:p.Val600Glu in lenient mode with an empty corrections list. Tracked in #124 (#81 L2 SVA-001).",
-      "follow_up_issues": [124]
+      "status": "enforced"
     },
     {
       "code": "W1002",
       "description": "SingleLetterAminoAcid — 'V600E' instead of 'Val600Glu'.",
       "spec_section": "recommendations/general.md lines 41-43: 'three-letter amino acid code is preferred'; recommendations/protein/substitution.md",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
-      "status": "registered",
-      "spec_section_notes": "Empirically, NP_003997.1:p.V600E is auto-expanded to NP_003997.1:p.Val600Glu in lenient mode with no W1002 in the corrections list (the preprocessor does not invoke a single-to-three-letter corrector). Tracked in #124 (#81 L2 SVA-002).",
-      "follow_up_issues": [124]
+      "status": "enforced"
     },
     {
       "code": "W1003",
@@ -239,9 +235,7 @@
       "description": "MissingVersion — accession without '.N' version.",
       "spec_section": "background/refseq.md line 20: 'variant descriptions lacking a version number are not valid'",
       "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
-      "status": "registered",
-      "spec_section_notes": "Empirically, NM_000088:c.100A>G (no .N version) parses successfully in lenient mode with an empty corrections list — no W3001 is emitted. Tracked in #124 (#81 L2 SVA-017).",
-      "follow_up_issues": [124]
+      "status": "enforced"
     },
     {
       "code": "W3002",

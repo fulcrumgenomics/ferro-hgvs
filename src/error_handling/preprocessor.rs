@@ -4,9 +4,10 @@
 //! parsing, based on the configured error handling mode.
 
 use super::corrections::{
-    correct_accession_prefix_case, correct_dash_characters, correct_missing_coordinate_prefix,
-    correct_old_allele_format, correct_protein_arrow, correct_quote_characters, correct_whitespace,
-    detect_position_zero, strip_trailing_annotation, DetectedCorrection,
+    correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
+    correct_missing_coordinate_prefix, correct_old_allele_format, correct_protein_arrow,
+    correct_quote_characters, correct_single_letter_aa_in_protein, correct_whitespace,
+    detect_missing_versions, detect_position_zero, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -320,6 +321,46 @@ impl InputPreprocessor {
             }
         }
 
+        // Phase 5a: Flag accessions that lack a `.<version>` suffix (W3001).
+        // This is `warn_accept` per the registry — there is no canonical
+        // version to inject, so lenient mode warns without mutating
+        // `current`, silent mode accepts silently, and strict mode rejects.
+        let missing_versions = detect_missing_versions(&current);
+        if !missing_versions.is_empty() {
+            let action = self.action_for(ErrorType::MissingVersion);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &missing_versions[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Accession '{}' is missing a version suffix",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidAccession)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(
+                                    "RefSeq accessions require a `.<version>` suffix (e.g. NM_000088.3, NC_000023.11)",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    // No correction is possible (we don't know the intended
+                    // version); emit one warning per occurrence and leave
+                    // `current` unchanged.
+                    for c in &missing_versions {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                }
+                ResolvedAction::SilentCorrect | ResolvedAction::Accept => {}
+            }
+        }
+
         // Phase 6: Correct protein arrow syntax
         let (corrected, corrections) = correct_protein_arrow(&current);
         if !corrections.is_empty() {
@@ -338,6 +379,86 @@ impl InputPreprocessor {
                                 .with_source(input)
                                 .with_suggestion(corrected.clone())
                                 .with_hint("Use p.Val600Glu instead of p.Val600>Glu"),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 6a: Correct lowercase / mis-cased three-letter amino-acid
+        // tokens within the protein description (W1001).
+        let (corrected, corrections) = correct_amino_acid_case_in_protein(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::LowercaseAminoAcid);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Lowercase or mis-cased amino-acid code '{}', expected '{}'",
+                                first.original, first.corrected
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidAminoAcid)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS prefers three-letter amino-acid codes with a leading capital (e.g. Val, Glu, Ala)",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 6b: Expand single-letter amino-acid codes to canonical
+        // three-letter form within the protein description (W1002).
+        let (corrected, corrections) = correct_single_letter_aa_in_protein(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::SingleLetterAminoAcid);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Single-letter amino-acid code '{}', expected three-letter '{}'",
+                                first.original, first.corrected
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidAminoAcid)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS recommends three-letter amino-acid codes (e.g. Val, Glu, Ala) over one-letter abbreviations",
+                                ),
                         ),
                     );
                 }
