@@ -11,12 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(normalize)* rewrite degenerate substitutions (ref == alt, e.g. `c.100A>A`) to identity (`=`) per HGVS v21 spec, which marks `c.X>X` as "not allowed" (`docs/recommendations/DNA/other.md`). The rule is purely syntactic on the edit's stated bases, so it fires in both the full-normalization path and the no-reference canonicalization path — `c.123C>C` rewrites to `c.123=` regardless of provider availability. ([#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) A4)
 - *(normalize)* rewrite a `delins` whose inserted sequence is empty as a deletion, per the HGVS spec requirement that an empty insert is semantically a deletion and must be rendered as `del`. The rewritten deletion is then 3'-shifted under the standard del rule. Issue [#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) item A3.
+- *(normalize)* rewrite a `delins` whose inserted sequence is the reverse complement of the deleted reference as an inversion, per the HGVS spec definition of `inv`. The complementary-outer-bases shortening rule applies to the result so that a `delins`-encoded inversion produces the same canonical output as a directly-encoded `inv`. Issue [#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) item A2.
+- *(normalize)* canonicalize `delins` to the minimal HGVS form by trimming any shared prefix/suffix between the inserted sequence and the deleted reference, then reclassifying the residual edit as substitution / deletion / insertion / inversion / smaller `delins` per the sub > del > inv > dup > ins priority. For example, `c.1_4delinsAAGC` against ref `ATGC` collapses to `c.2T>A`; `c.1_4delinsAC` against ref `ATGC` collapses to `c.2_3del`; `c.1_3delinsATCG` against ref `ATG` collapses to `c.2_3insC`. Extension to issue [#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) item A2.
+- *(normalize)* apply inversion shortening to direct `inv` inputs. `NaEdit::Inversion` was missing from `needs_normalization()`, so direct inversions bypassed `normalize_na_edit` entirely and the `shorten_inversion()` / identity-collapse logic was never exercised. Direct `inv` variants now also emit minimal notation after shortening (no stale explicit `sequence`/`length` from the input).
 - *(normalize)* HGVS spec compliance ([#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) B1): repeat-notation rewrites in `c.` (coding DNA) context now enforce the spec's codon-frame exception — repeat notation requires `unit_len % 3 == 0`. Previously `insertion_to_repeat`, `deletion_to_repeat`, `duplication_to_repeat`, and `normalize_repeat` could emit `c.X_YA[N]`, `c.X_YAT[N]`, etc. for non-codon-aligned units, violating the spec (`docs/recommendations/DNA/repeated.md`). Variants in `c.` with non-codon-aligned units now retain the spec-prescribed alternative form: `dup` for 1 added copy, `ins<literal>` for ≥2 added copies, and plain `del` for contractions of ≥2 unit copies.
 
 ### Changed (public API)
 
 - `insertion_to_repeat`, `duplication_to_repeat`, and `normalize_repeat` in `ferro_hgvs::normalize::rules` gain an `is_coding: bool` parameter to drive the codon-frame gate. (`deletion_to_repeat` is `pub(crate)` and gains the same parameter as an internal change.)
 - `RepeatNormResult::Insertion { start, end, sequence }` and `DupToRepeatResult::GatedInsertion { start, end, sequence }` variants added so the rule layer can route gated rewrites to the spec-canonical literal `ins` form.
+
+### Changed
+
+- Internal: the four `delins_is_*` boolean helpers in `normalize::rules` are unified into one `canonicalize_delins()` function returning a `DelinsCanonical` enum, expressing HGVS edit-priority (sub > del > inv > dup > ins) in a single decision tree. The unreachable second delins arm in `normalize_na_edit` has been removed.
 
 ## [0.4.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.4.0...v0.4.1) - 2026-05-04
 
