@@ -732,68 +732,122 @@ fn protein_unknown_trans_compound_with_whole_protein_unknown_arm_round_trips() {
 
 // =====================================================================
 // Trans-allele compound: when an arm is a POSITION-SPECIFIC unknown
-// (`p.Met1?` or `p.(Met1?)`), `is_whole_protein_unknown()` returns
-// false, so compact-form suppression does NOT trigger — Display
-// produces the compact form `ACC:p.[X];[Met1?]`, which today's parser
-// cannot re-parse (matches the same-accession trans compact-form drift
-// pinned by D5 against issue #83).
+// (`p.Met1?`), `is_whole_protein_unknown()` returns false, so
+// compact-form suppression does NOT trigger — Display produces the
+// compact form `ACC:p.[Arg97Trp];[Met1?]`.
 //
-// We pin this as CURRENT behavior with `is_err()`. Flip to a clean
-// round-trip when #83 lands.
+// PR #146 (sibling C1) added the compact-prefix protein trans-allele
+// shorthand parser, so the compact form now round-trips structurally
+// (previously this was tracked under issue #83 as a parse-error drift).
 // =====================================================================
 
 #[test]
-fn protein_unknown_trans_compound_with_position_unknown_arm_drifts() {
-    let inputs = [
-        "[NP_000079.2:p.Arg97Trp];[NP_000079.2:p.Met1?]",
-        "[NP_000079.2:p.Arg97Trp];[NP_000079.2:p.(Met1?)]",
-    ];
-    for input in inputs {
-        let parsed = parse_hgvs(input).unwrap();
+fn protein_unknown_trans_compound_with_position_unknown_arm_round_trips() {
+    let input = "[NP_000079.2:p.Arg97Trp];[NP_000079.2:p.Met1?]";
+    let parsed = parse_hgvs(input).unwrap();
 
-        // Phase = Trans, arm 1 is position-specific Unknown.
-        let allele = match &parsed {
-            HgvsVariant::Allele(a) => a,
-            other => panic!("{input:?}: expected HgvsVariant::Allele, got {other:?}"),
-        };
-        assert_eq!(
-            allele.phase,
-            AllelePhase::Trans,
-            "{input:?}: phase mismatch"
-        );
+    // Phase = Trans, arm 1 is position-specific Unknown.
+    let allele = match &parsed {
+        HgvsVariant::Allele(a) => a,
+        other => panic!("{input:?}: expected HgvsVariant::Allele, got {other:?}"),
+    };
+    assert_eq!(
+        allele.phase,
+        AllelePhase::Trans,
+        "{input:?}: phase mismatch"
+    );
 
-        let arm1 = match &allele.variants[1] {
-            HgvsVariant::Protein(v) => v,
-            other => panic!("{input:?}: arm 1 expected Protein, got {other:?}"),
-        };
-        match arm1.loc_edit.edit.inner() {
-            Some(ProteinEdit::Unknown {
-                whole_protein: false,
-                ..
-            }) => {} // expected
-            other => panic!(
-                "{input:?}: arm 1 inner edit expected Unknown(whole_protein=false), got {other:?}"
-            ),
-        }
-
-        // Display compacts to ACC:p.[X];[...].  The parser today cannot
-        // reparse the compact same-accession trans form (issue #83). Pin
-        // current behavior so a future fix that lands #83 fails this
-        // assertion and forces the test to flip to round-trip equality.
-        let displayed = format!("{}", parsed);
-        assert!(
-            displayed.starts_with("NP_000079.2:p.["),
-            "{input:?}: expected compact same-accession Display, got {displayed:?}"
-        );
-
-        let reparsed = parse_hgvs(&displayed);
-        assert!(
-            reparsed.is_err(),
-            "{input:?}: compact-form Display {displayed:?} unexpectedly re-parsed; \
-             this means issue #83 is fixed and this assertion should flip to \
-             `assert_eq!(reparsed.unwrap(), parsed)`. \
-             Got: {:?}",
-            reparsed.ok()
-        );
+    let arm1 = match &allele.variants[1] {
+        HgvsVariant::Protein(v) => v,
+        other => panic!("{input:?}: arm 1 expected Protein, got {other:?}"),
+    };
+    match arm1.loc_edit.edit.inner() {
+        Some(ProteinEdit::Unknown {
+            whole_protein: false,
+            ..
+        }) => {} // expected
+        other => panic!(
+            "{input:?}: arm 1 inner edit expected Unknown(whole_protein=false), got {other:?}"
+        ),
     }
+
+    // Display compacts to ACC:p.[X];[...] and round-trips structurally.
+    let displayed = format!("{}", parsed);
+    assert!(
+        displayed.starts_with("NP_000079.2:p.["),
+        "{input:?}: expected compact same-accession Display, got {displayed:?}"
+    );
+
+    let reparsed = parse_hgvs(&displayed)
+        .unwrap_or_else(|e| panic!("{input:?}: parse({displayed:?}) failed after PR #146: {e}"));
+    assert_eq!(
+        reparsed, parsed,
+        "{input:?}: compact-form Display {displayed:?} did not round-trip"
+    );
+}
+
+// =====================================================================
+// Trans-allele compound, predicted-uncertainty arm `(Met1?)`: the
+// predicted-uncertainty wrapper `(...)` is NOT recognized inside any
+// allele-shorthand bracket today (cis `p.[(Met1?);...]` and trans
+// `p.[X];[(Met1?)]` both fail to re-parse). PR #146 explicitly scoped
+// out predicted-form arms; this gap is independent of the same-accession
+// trans compact-form fix and remains tracked under issue #83 alongside
+// the cis bracket path.
+//
+// We pin the drift here so a future fix (extending the bracket parsers
+// to dispatch on `(`) lights this up and forces a flip to round-trip.
+// =====================================================================
+
+#[test]
+fn protein_unknown_trans_compound_with_predicted_arm_drifts() {
+    let input = "[NP_000079.2:p.Arg97Trp];[NP_000079.2:p.(Met1?)]";
+    let parsed = parse_hgvs(input).unwrap();
+
+    // Phase = Trans, arm 1 is position-specific Unknown (uncertainty
+    // wrapper is preserved on the loc_edit, not the inner edit).
+    let allele = match &parsed {
+        HgvsVariant::Allele(a) => a,
+        other => panic!("{input:?}: expected HgvsVariant::Allele, got {other:?}"),
+    };
+    assert_eq!(
+        allele.phase,
+        AllelePhase::Trans,
+        "{input:?}: phase mismatch"
+    );
+
+    let arm1 = match &allele.variants[1] {
+        HgvsVariant::Protein(v) => v,
+        other => panic!("{input:?}: arm 1 expected Protein, got {other:?}"),
+    };
+    match arm1.loc_edit.edit.inner() {
+        Some(ProteinEdit::Unknown {
+            whole_protein: false,
+            ..
+        }) => {} // expected
+        other => panic!(
+            "{input:?}: arm 1 inner edit expected Unknown(whole_protein=false), got {other:?}"
+        ),
+    }
+
+    // Display compacts to ACC:p.[Arg97Trp];[(Met1?)]. The bracket parsers
+    // don't dispatch on `(` today, so re-parsing the compact form fails.
+    let displayed = format!("{}", parsed);
+    assert!(
+        displayed.starts_with("NP_000079.2:p.["),
+        "{input:?}: expected compact same-accession Display, got {displayed:?}"
+    );
+    assert!(
+        displayed.contains("[(Met1?)]"),
+        "{input:?}: expected predicted-form arm in compact Display, got {displayed:?}"
+    );
+
+    let reparsed = parse_hgvs(&displayed);
+    assert!(
+        reparsed.is_err(),
+        "{input:?}: compact-form Display {displayed:?} unexpectedly re-parsed; \
+         this means the predicted-form bracket gap is fixed and this assertion \
+         should flip to `assert_eq!(reparsed.unwrap(), parsed)`. Got: {:?}",
+        reparsed.ok()
+    );
 }

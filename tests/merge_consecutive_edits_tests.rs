@@ -281,7 +281,6 @@ fn test_no_merge_different_variant_types() {
 #[test]
 fn test_no_merge_trans_phase() {
     // [a];[b] (semicolon between bracket pairs) is trans phase per HGVS.
-    // The compact form g.[a];[b] isn't accepted by the parser; use expanded form.
     let result = normalize_to_string("[NC_000001.11:g.100G>A];[NC_000001.11:g.101A>C]");
     assert!(result.contains("100G>A"), "got {}", result);
     assert!(result.contains("101A>C"), "got {}", result);
