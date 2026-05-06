@@ -32,6 +32,11 @@ pub struct SyntheticBuilder {
     inner: CoordSystem,
 }
 
+// Per-binary dead-code allowance: not every test binary that uses this
+// helper exercises every coord system (e.g., the B1 matrix has no r.
+// modules because r. is not in the spec's accepted reference types for
+// repeats), and clippy --tests evaluates each binary independently.
+#[allow(dead_code)]
 enum CoordSystem {
     Genomic {
         core: String,
@@ -95,6 +100,7 @@ impl SyntheticBuilder {
     /// Build an RNA provider with a transcript named `NR_TEST.1`. The
     /// transcript sequence should be lowercase RNA bases (a/c/g/u). The
     /// underlying genomic mapping is built from the DNA-equivalent.
+    #[allow(dead_code)] // not used by every test binary; see CoordSystem allow above
     pub fn rna(core: &str, strand: Strand) -> Self {
         Self {
             inner: CoordSystem::Rna {
@@ -204,6 +210,22 @@ impl SyntheticBuilder {
         }
         provider
     }
+}
+
+/// Substitute 1-based numeric positions into an HGVS template by index.
+///
+/// Replaces `{0}`, `{1}`, ... in `template` with `args[0]`, `args[1]`, ...
+/// Used by the c./n./r. matrix tests (cds, noncoding, rna) where the
+/// padding offset does NOT shift positions — the transcript itself is the
+/// reference, so positions are literal. The genomic matrix uses a
+/// per-module helper that adds `PAD_OFFSET` to each position.
+#[allow(dead_code)] // not used by every test binary; see CoordSystem allow above
+pub fn hgvs(template: &str, args: &[u64]) -> String {
+    let mut s = template.to_string();
+    for (i, p) in args.iter().enumerate() {
+        s = s.replace(&format!("{{{}}}", i), &p.to_string());
+    }
+    s
 }
 
 /// Normalize an HGVS variant string against a provider and return the

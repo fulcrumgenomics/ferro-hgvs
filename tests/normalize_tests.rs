@@ -427,29 +427,34 @@ mod output_tests {
     }
 
     #[test]
-    fn test_multi_base_deletion_in_homopolymer_becomes_repeat() {
-        // Per B2: delete 2 A's from an 8-A tract → A[6] at the canonical
-        // tract position (post-A5 behavior). ref_count=8, k=2, post=6.
+    fn test_multi_base_deletion_in_homopolymer_in_cds_stays_as_del() {
+        // Delete 2 A's from an 8-A tract in c. context. Per HGVS spec
+        // (repeated.md codon-frame exception), repeat notation requires
+        // unit_len % 3 == 0 in c.; unit_len=1 is gated, so the canonical
+        // form stays as plain `del` at the post-shift 3' position.
         //
-        // Sequence: GGGGGGGGGAAAAAAAAGGGGGGGGG. A-tract at positions 10-17
-        // (8 A's, 1-based).
+        // Sequence: GGGGGGGGGAAAAAAAAGGGGGGGGG. A-tract at positions 10-17.
         let seq = "GGGGGGGGGAAAAAAAAGGGGGGGGG";
         let provider = provider_with_transcript("NM_TEST.1", seq);
         let result = normalize_to_string(provider, "NM_TEST.1:c.10_11del");
-        assert_eq!(result, "NM_TEST.1:c.10_17A[6]");
+        assert_eq!(result, "NM_TEST.1:c.16_17del");
     }
 
     #[test]
-    fn test_b2_only_in_three_prime_mode() {
-        // B2 (`unit[N-k]` rewrite) is defined post-3'-shift. In FivePrime
-        // mode, the 5'-shifted deletion must not be re-anchored to the
-        // canonical 3' tract position; the result stays as a plain `del`
-        // at the 5'-most position.
+    fn test_direction_shift_under_codon_frame_gate() {
+        // In c. context with unit_len=1 the codon-frame gate (repeated.md)
+        // forbids `A[N]` repeat notation regardless of shuffle direction,
+        // so neither branch can rewrite to `unit[N-k]`. What this test
+        // locks is the direction-conditional shift behavior: ThreePrime
+        // shifts the deletion to the 3'-most position in the tract;
+        // FivePrime shifts to the 5'-most position. (For B2 in its native
+        // direction-conditional form — only firing in ThreePrime — see
+        // the matrix tests that use a codon-aligned unit.)
         //
         // Sequence: GGGGGGGGGAAAAAAAAGGGGGGGGG. 8-A tract at pos 10-17
         // (1-based). Input c.16_17del (last 2 A's of the tract):
-        //   - ThreePrime: B2 fires → c.10_17A[6]
-        //   - FivePrime:  shift to 5'-most position → c.10_11del
+        //   - ThreePrime: del shifted to canonical 3' end → c.16_17del.
+        //   - FivePrime:  shift to 5'-most position → c.10_11del.
         let seq = "GGGGGGGGGAAAAAAAAGGGGGGGGG";
 
         let provider = provider_with_transcript("NM_TEST.1", seq);
@@ -465,8 +470,8 @@ mod output_tests {
                 .expect("Normalization failed")
         );
         assert_eq!(
-            result_3p, "NM_TEST.1:c.10_17A[6]",
-            "ThreePrime mode should apply B2"
+            result_3p, "NM_TEST.1:c.16_17del",
+            "ThreePrime mode in c. with unit_len=1 must emit plain del per codon-frame gate"
         );
 
         let provider = provider_with_transcript("NM_TEST.1", seq);
@@ -482,7 +487,7 @@ mod output_tests {
         );
         assert_eq!(
             result_5p, "NM_TEST.1:c.10_11del",
-            "FivePrime mode must NOT apply B2 (no re-anchoring to canonical tract)"
+            "FivePrime mode shifts to 5'-most position"
         );
     }
 
@@ -575,6 +580,41 @@ mod output_tests {
         // ref[4]='A', ref[5]='T' → mismatch, no shift. Stays at c.5del.
         assert_eq!(result, "NM_TEST.1:c.5del");
     }
+
+    // =========================================================================
+    // CODON-FRAME GATE TESTS (B1) — c. context, repeated.md exception
+    // =========================================================================
+
+    #[test]
+    fn test_multi_insertion_in_homopolymer_codon_frame_blocks_repeat_in_cds() {
+        // Per HGVS spec (repeated.md codon-frame exception): in c. context,
+        // repeat notation requires unit_len % 3 == 0. unit_len=1 (A) is
+        // forbidden, so the canonical form stays as `ins<literal>`, not A[N].
+        let seq = "GGGGAAAAAAAGGGG"; // 7 A's
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let result = normalize_to_string(provider, "NM_TEST.1:c.5_6insAA");
+        assert!(
+            result.contains("ins") && !result.contains("A["),
+            "c. + unit_len=1 must not emit A[N], got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_multi_dup_in_homopolymer_codon_frame_blocks_repeat_in_cds() {
+        // 2-base dup in 7-A tract: per spec the structurally-canonical form
+        // is repeat notation A[9], but the c. codon-frame exception forbids
+        // it (unit_len=1). Falls back to literal `ins<dup_seq>` per the
+        // GatedInsertion path in duplication_to_repeat.
+        let seq = "GGGGAAAAAAAGGGG"; // 7 A's at pos 5-11
+        let provider = provider_with_transcript("NM_TEST.1", seq);
+        let result = normalize_to_string(provider, "NM_TEST.1:c.5_6dup");
+        assert!(
+            result.contains("ins") && !result.contains("A["),
+            "c. + unit_len=1 dup must not emit A[N], got: {}",
+            result
+        );
+    }
 }
 
 // =============================================================================
@@ -622,42 +662,6 @@ mod expected_failures {
             .normalize(&variant)
             .expect("Normalization failed");
         format!("{}", normalized)
-    }
-
-    #[test]
-    fn test_multi_insertion_becomes_repeat_notation() {
-        // Mutalyzer: c.5067_5068insAA -> c.5067_5073A[9]
-        // When inserting multiple bases that extend an existing repeat,
-        // should convert to repeat notation
-        let seq = "GGGGAAAAAAAGGGG"; // 7 A's
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.5_6insAA");
-
-        // Should become repeat notation A[9] (7 original + 2 inserted)
-        assert!(
-            result.contains("[9]") || result.contains("A["),
-            "Multi-base insertion in repeat should become repeat notation, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_multi_dup_becomes_repeat_notation() {
-        // Mutalyzer: c.5067_5068dup -> c.5067_5073A[9]
-        // When duplicating multiple bases in a repeat region,
-        // should convert to repeat notation
-        let seq = "GGGGAAAAAAAGGGG"; // 7 A's at pos 5-11
-        let provider = provider_with_transcript("NM_TEST.1", seq);
-
-        let result = normalize_to_string(provider, "NM_TEST.1:c.5_6dup");
-
-        // Should become repeat notation
-        assert!(
-            result.contains("["),
-            "Multi-base dup in repeat should become repeat notation, got: {}",
-            result
-        );
     }
 
     #[test]
@@ -884,13 +888,15 @@ mod mutalyzer_verified {
     }
 
     #[test]
-    fn test_single_base_repeat_to_repeat_decrement() {
-        // Per B2: input A[1] against 4-A ref → A[1] (k=3, post=1).
+    fn test_single_base_repeat_contraction_in_cds_routes_to_del() {
+        // Input A[1] against 4-A ref. In c. context with unit_len=1, the
+        // codon-frame gate forbids `[N]` repeat notation, so the contraction
+        // routes to a plain del of the surplus A's.
         let seq = "GGGAAAAGGG"; // 4 A's at positions 4-7
         let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.4A[1]");
-        assert_eq!(result, "NM_TEST.1:c.4_7A[1]");
+        assert_eq!(result, "NM_TEST.1:c.5_7del");
     }
 
     #[test]
@@ -1754,18 +1760,20 @@ mod normalization_transformations {
     // =========================================================================
 
     // Real-accession smoke; matrix-level coverage in tests/ins_shift_matrix.rs.
+    // Per HGVS spec (repeated.md codon-frame exception): in c. context,
+    // homopolymer expansions (unit_len=1) emit `ins<literal>`, not `[N]`.
     #[rstest]
-    // polyA expansion: inserting AAAA into A-tract becomes A[n] - Mutalyzer: agrees
-    #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.401_403A[7]")]
-    // polyT expansion - Mutalyzer: agrees
-    #[case("NM_000382.3:c.399_400insTTTT", "NM_000382.3:c.398_399T[6]")]
-    // polyG expansion - Mutalyzer: agrees
-    #[case("NM_015120.4:c.46_47insGGG", "NM_015120.4:c.45_46G[5]")]
+    // polyA expansion: inserting AAAA into A-tract → ins (not A[7]).
+    #[case("NM_001127687.1:c.400_401insAAAA", "NM_001127687.1:c.403_404insAAAA")]
+    // polyT expansion: inserting TTTT into T-tract → ins (not T[6]).
+    #[case("NM_000382.3:c.399_400insTTTT", "NM_000382.3:c.399_400insTTTT")]
+    // polyG expansion: inserting GGG into G-tract → ins (not G[5]).
+    #[case("NM_015120.4:c.46_47insGGG", "NM_015120.4:c.46_47insGGG")]
     fn test_insertion_becomes_repeat(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input);
         assert_eq!(
             result, expected,
-            "Insertion→repeat failed for '{}': got '{}', expected '{}'",
+            "Insertion→ins-literal failed for '{}': got '{}', expected '{}'",
             input, result, expected
         );
     }
@@ -1810,23 +1818,24 @@ mod normalization_transformations {
     }
 
     // =========================================================================
-    // DELETION → REPEAT NOTATION TESTS (B2; real RefSeq data)
-    // Multi-unit del of a real tandem reduces to unit[N-k] notation.
-    // Real-accession smoke; matrix-level coverage in tests/del_shift_matrix.rs.
-    // Note: these cases diverge from Mutalyzer (which doesn't apply B2).
+    // DELETION CANONICALIZATION (real RefSeq data; codon-frame gate)
+    // In c. context, the codon-frame gate (repeated.md) suppresses B2
+    // (`unit[N-k]` rewrite) when unit_len % 3 != 0, so multi-unit dels of
+    // non-codon-aligned tandems canonicalize to plain `del` rather than
+    // `unit[N-k]`. Real-accession smoke; matrix-level coverage in
+    // tests/del_shift_matrix.rs.
     // =========================================================================
 
     #[rstest]
-    // TP53 c.627-629 is an AAA tract; deleting 2 As (c.628_629del) leaves 1 A,
-    // emitted as A[1] per B2. (This case was previously locked as "no change"
-    // in test_no_change_verified — that lock was removed in the A5 PR since
-    // ferro now diverges from Mutalyzer here.)
-    #[case("NM_000546.6:c.628_629del", "NM_000546.6:c.627_629A[1]")]
+    // TP53 c.627-629 is an AAA tract; deleting 2 As (c.628_629del) leaves 1 A.
+    // In c. context with unit_len=1, the codon-frame gate (repeated.md) forbids
+    // A[1] repeat notation, so the canonical form is plain del.
+    #[case("NM_000546.6:c.628_629del", "NM_000546.6:c.628_629del")]
     fn test_deletion_becomes_repeat(#[case] input: &str, #[case] expected: &str) {
         let result = normalize_to_string(input);
         assert_eq!(
             result, expected,
-            "Deletion→repeat failed for '{}': got '{}', expected '{}'",
+            "Deletion→canonical-form failed for '{}': got '{}', expected '{}'",
             input, result, expected
         );
     }
@@ -2586,7 +2595,7 @@ mod repeat_position_tests {
         );
 
         // Test normalize_repeat - should return Unchanged
-        let result = normalize_repeat(ref_seq, 6, b"CA", 1);
+        let result = normalize_repeat(ref_seq, 6, b"CA", 1, false);
         assert!(
             matches!(result, RepeatNormResult::Unchanged),
             "Should return Unchanged when repeat unit not found at position. Got {:?}",
@@ -2610,7 +2619,7 @@ mod repeat_position_tests {
         );
 
         // normalize_repeat with count=1 should produce deletion
-        let result = normalize_repeat(ref_seq, 0, b"CA", 1);
+        let result = normalize_repeat(ref_seq, 0, b"CA", 1, false);
         match result {
             RepeatNormResult::Deletion { start, end } => {
                 // Should delete one copy (2 bases) from the 3' end
@@ -3197,47 +3206,47 @@ mod comprehensive_normalization_tests {
         use super::*;
 
         #[test]
-        fn test_single_a_insertion_into_a_tract_becomes_repeat() {
-            // Sequence: GGGAAAGGG (A's at positions 4-6)
-            // Inserting A extends tract from 3 to 4 A's
+        fn test_single_a_insertion_into_a_tract_becomes_dup() {
+            // Sequence: GGGAAAGGG (A's at positions 4-6).
+            // Per HGVS spec: 1 added copy of a unit = dup (never `[N]`).
+            // Plus the c. codon-frame exception explicitly forbids `A[4]`
+            // (unit_len=1, not a multiple of 3). So the only spec-compliant
+            // output here is `dup`.
             let seq = "GGGAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            // Inserting single A - may become dup or repeat depending on implementation
             let result = normalize_to_string(provider, "NM_TEST.1:c.4_5insA");
-            // Should be either A[4] repeat or dup
             assert!(
-                result.contains("A[4]") || result.contains("dup"),
-                "Expected repeat A[4] or dup, got: {}",
+                result.contains("dup"),
+                "Single-copy ins matching adjacent A must emit dup, got: {}",
                 result
             );
         }
 
         #[test]
-        fn test_multiple_a_insertion_into_tract_becomes_repeat() {
-            // Sequence: GGGAAAGGG (3 A's at positions 4-6)
-            // Inserting AAA extends tract from 3 to 6 A's
+        fn test_multiple_a_insertion_into_tract_in_cds_stays_as_ins() {
+            // Sequence: GGGAAAGGG (3 A's at positions 4-6).
+            // Per HGVS spec (repeated.md codon-frame exception): in c.
+            // context, repeat notation requires unit_len % 3 == 0. With
+            // unit_len=1 the canonical form is `ins<literal>`, not A[N].
             let seq = "GGGAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insAAA");
-            // Should become A[6] repeat notation
             assert!(
-                result.contains("A[6]"),
-                "Expected repeat A[6], got: {}",
+                result.contains("insAAA") && !result.contains("A["),
+                "c. + unit_len=1 must emit insAAA literal, got: {}",
                 result
             );
         }
 
         #[test]
-        fn test_t_insertion_in_t_tract() {
-            // Sequence: AAATTTAAA (T's at positions 4-6)
-            // Inserting TT extends tract from 3 to 5 T's
+        fn test_t_insertion_in_t_tract_in_cds_stays_as_ins() {
+            // Sequence: AAATTTAAA (T's at positions 4-6). c. + unit_len=1.
             let seq = "AAATTTAAA";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insTT");
-            // Should become T[5]
             assert!(
-                result.contains("T[5]"),
-                "Expected repeat T[5], got: {}",
+                result.contains("insTT") && !result.contains("T["),
+                "c. + unit_len=1 must emit insTT literal, got: {}",
                 result
             );
         }
@@ -3257,15 +3266,16 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_large_homopolymer_expansion() {
-            // Sequence: GGAAAAAGGG (5 A's at positions 3-7)
-            // Inserting 5 A's should become A[10]
+        fn test_large_homopolymer_expansion_in_cds_stays_as_ins() {
+            // Sequence: GGAAAAAGGG (5 A's at positions 3-7). Inserting 5 A's
+            // would normally produce A[10]; the c. codon-frame gate forbids
+            // A[N] (unit_len=1), so the canonical form is `ins<literal>`.
             let seq = "GGAAAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.7_8insAAAAA");
             assert!(
-                result.contains("A[10]"),
-                "Expected repeat A[10], got: {}",
+                result.contains("insAAAAA") && !result.contains("A["),
+                "c. + unit_len=1 must emit insAAAAA literal, got: {}",
                 result
             );
         }
@@ -3403,21 +3413,24 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_repeat_contraction_to_repeat_decrement_homopolymer() {
-            // Per B2: A[3] against 5-A ref → A[3] (k=2, post=3).
+        fn test_repeat_contraction_in_cds_homopolymer_routes_to_del() {
+            // 5-A ref, A[3] in c. context. unit_len=1 — codon-frame gate
+            // forbids A[N], routes the contraction-with-survivors branch to
+            // a plain deletion.
             let seq = "GGAAAAAGGG"; // 5 A's at positions 3-7
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.3A[3]");
-            assert_eq!(result, "NM_TEST.1:c.3_7A[3]");
+            assert_eq!(result, "NM_TEST.1:c.6_7del");
         }
 
         #[test]
-        fn test_repeat_contraction_to_repeat_decrement_multibase() {
-            // Per B2: CT[1] against 3-CT ref → CT[1] (k=2, post=1).
+        fn test_repeat_contraction_in_cds_multibase_routes_to_del() {
+            // 3-CT ref, CT[1] in c. context. unit_len=2 — codon-frame gate
+            // forbids CT[N], routes to plain del.
             let seq = "AACTCTCTAA"; // 3 CTs at positions 3-8
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.3_4CT[1]");
-            assert_eq!(result, "NM_TEST.1:c.3_8CT[1]");
+            assert_eq!(result, "NM_TEST.1:c.5_8del");
         }
 
         #[test]
@@ -3513,15 +3526,17 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_large_homopolymer_expansion_stays_repeat() {
-            // Sequence: GGAAAAAGGG (5 A's)
-            // A[20] = large expansion
+        fn test_large_homopolymer_expansion_in_cds_routes_to_ins() {
+            // Sequence: GGAAAAAGGG (5 A's). A[20] = +15 unit copies.
+            // Per HGVS spec (repeated.md codon-frame exception): repeat
+            // notation in c. requires unit_len % 3 == 0. unit_len=1 is gated;
+            // canonical form is `ins<literal>` of the added copies.
             let seq = "GGAAAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.3A[20]");
             assert!(
-                result.contains("A[20]"),
-                "Large homopolymer expansion should stay as repeat, got: {}",
+                result.contains("ins") && !result.contains("A["),
+                "c. + unit_len=1 expansion must emit ins, got: {}",
                 result
             );
         }

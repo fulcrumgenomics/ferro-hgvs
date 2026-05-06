@@ -404,6 +404,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_start,
             rel_end,
             &Boundaries::new(1, ref_seq.len() as u64),
+            false, // genomic context: codon-frame gate does not apply
         )?;
 
         // Adjust back to genomic coordinates
@@ -504,10 +505,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         };
 
-        // Perform normalization on transcript sequence
+        // Perform normalization on transcript sequence (CDS context).
         let seq = transcript.sequence.as_bytes();
         let (new_tx_start, new_tx_end, new_edit, warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries)?;
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, true)?;
 
         // Convert back to CDS coordinates
         let new_start = self.tx_to_cds_pos(new_tx_start, cds_start, transcript.cds_end)?;
@@ -584,10 +585,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Get boundaries
         let boundaries = Boundaries::new(1, transcript.sequence.len() as u64);
 
-        // Perform normalization
+        // Perform normalization (n. non-coding tx context).
         let seq = transcript.sequence.as_bytes();
         let (new_start, new_end, new_edit, warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries)?;
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
@@ -894,10 +895,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Get boundaries
         let boundaries = Boundaries::new(1, transcript.sequence.len() as u64);
 
-        // Perform normalization
+        // Perform normalization (RNA context: codon-frame gate does not apply;
+        // r. is not in the spec's accepted reference types for repeats).
         let seq = transcript.sequence.as_bytes();
         let (new_start, new_end, new_edit, warnings) =
-            self.normalize_na_edit(seq, edit, rna_start, rna_end, &boundaries)?;
+            self.normalize_na_edit(seq, edit, rna_start, rna_end, &boundaries, false)?;
 
         let new_variant = RnaVariant {
             accession: variant.accession.clone(),
@@ -1032,7 +1034,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &boundaries,
         );
 
-        // Perform normalization in transcript-view space
+        // Perform normalization in transcript-view space (CDS intronic context).
         let seq_bytes = work_seq.as_bytes();
         let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
             seq_bytes,
@@ -1040,6 +1042,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
+            true,
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -1173,7 +1176,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &boundaries,
         );
 
-        // Perform normalization in transcript-view space
+        // Perform normalization in transcript-view space (n. non-coding intronic context).
         let seq_bytes = work_seq.as_bytes();
         let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
             seq_bytes,
@@ -1181,6 +1184,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
+            false,
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -1282,10 +1286,38 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let boundaries =
             self.get_boundary_spanning_limits(transcript, &mapper, start_pos, end_pos, seq_start)?;
 
-        // Normalize in genomic space
-        let seq_bytes = genomic_seq.as_bytes();
-        let (new_rel_start, new_rel_end, new_edit, warnings) =
-            self.normalize_na_edit(seq_bytes, edit, rel_start, rel_end, &boundaries)?;
+        // On minus-strand transcripts the genomic-strand window is the
+        // reverse complement of the transcript view, but the variant's edit
+        // alt is in transcript view. Running `normalize_na_edit` on raw
+        // genomic bytes therefore canonicalizes against the wrong alphabet
+        // (and the codon-frame repeat gate inspects ref context here too).
+        // Mirror the intronic flow: flip into transcript view before
+        // normalization, then unflip the result positions back to the
+        // genomic frame. (CDS boundary-spanning context.)
+        let (work_seq, work_rel_start, work_rel_end, work_boundaries) = flip_intronic_for_strand(
+            transcript.strand,
+            &genomic_seq,
+            rel_start,
+            rel_end,
+            &boundaries,
+        );
+
+        let seq_bytes = work_seq.as_bytes();
+        let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            seq_bytes,
+            edit,
+            work_rel_start,
+            work_rel_end,
+            &work_boundaries,
+            true,
+        )?;
+
+        let (new_rel_start, new_rel_end) = unflip_intronic_positions(
+            transcript.strand,
+            work_seq.len() as u64,
+            work_new_rel_start,
+            work_new_rel_end,
+        );
 
         // Convert back to absolute genomic
         let new_g_start = seq_start + new_rel_start - 1;
@@ -1427,6 +1459,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         start: u64,
         end: u64,
         boundaries: &Boundaries,
+        is_coding: bool,
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
         let mut warnings = Vec::new();
 
@@ -1496,7 +1529,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         sequence: None,
                         length: None,
                     };
-                    return self.normalize_na_edit(ref_seq, &del, start, end, boundaries);
+                    return self
+                        .normalize_na_edit(ref_seq, &del, start, end, boundaries, is_coding);
                 }
 
                 // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
@@ -1607,7 +1641,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 let pos_idx = hgvs_pos_to_index(start); // Convert 1-based to 0-based
 
                 // Normalize the repeat
-                match rules::normalize_repeat(ref_seq, pos_idx, &repeat_unit, *specified_count) {
+                match rules::normalize_repeat(
+                    ref_seq,
+                    pos_idx,
+                    &repeat_unit,
+                    *specified_count,
+                    is_coding,
+                ) {
                     rules::RepeatNormResult::Deletion {
                         start: del_start,
                         end: del_end,
@@ -1632,6 +1672,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         };
                         return Ok((dup_start, dup_end, dup_edit, warnings));
                     }
+                    rules::RepeatNormResult::Insertion {
+                        start: ins_start,
+                        end: ins_end,
+                        sequence: ins_seq,
+                    } => {
+                        // Codon-frame gate routed an expansion to ins literal form
+                        // (e.g., c.1741_1742insTATATATA per spec).
+                        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+                        let bases: Vec<Base> = ins_seq
+                            .iter()
+                            .filter_map(|&b| Base::from_char(b as char))
+                            .collect();
+                        if bases.len() == ins_seq.len() {
+                            let ins_edit = NaEdit::Insertion {
+                                sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                            };
+                            return Ok((ins_start, ins_end, ins_edit, warnings));
+                        }
+                        // Defensive fallback: rule layer returned a base byte
+                        // that doesn't fit the Base alphabet (e.g. N). Don't
+                        // emit a truncated insertion — keep the original edit
+                        // and positions so downstream invariants hold.
+                        return Ok((start, end, edit.clone(), warnings));
+                    }
                     rules::RepeatNormResult::Repeat {
                         start: rep_start,
                         end: rep_end,
@@ -1643,13 +1707,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             .iter()
                             .filter_map(|&b| Base::from_char(b as char))
                             .collect();
-                        let rep_edit = NaEdit::Repeat {
-                            sequence: Some(Sequence::new(bases)),
-                            count: RepeatCount::Exact(rep_count),
-                            additional_counts: vec![],
-                            trailing: None,
-                        };
-                        return Ok((rep_start, rep_end, rep_edit, warnings));
+                        if bases.len() == rep_seq.len() {
+                            let rep_edit = NaEdit::Repeat {
+                                sequence: Some(Sequence::new(bases)),
+                                count: RepeatCount::Exact(rep_count),
+                                additional_counts: vec![],
+                                trailing: None,
+                            };
+                            return Ok((rep_start, rep_end, rep_edit, warnings));
+                        }
+                        // Defensive fallback: rule layer returned a repeat
+                        // unit byte that doesn't fit the Base alphabet (e.g.
+                        // a gap or non-IUPAC byte from the reference). Don't
+                        // emit a truncated repeat sequence — keep the
+                        // original edit and positions.
+                        return Ok((start, end, edit.clone(), warnings));
                     }
                     rules::RepeatNormResult::Unchanged => {
                         return Ok((start, end, edit.clone(), warnings.clone()));
@@ -1721,7 +1793,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     if seq_bytes.len() > 1 {
                         let original_pos_idx = hgvs_pos_to_index(start) as u64; // 0-based original position
                         if let Some((_first, count, rep_start, rep_end, unit_bytes)) =
-                            rules::insertion_to_repeat(ref_seq, original_pos_idx, &seq_bytes)
+                            rules::insertion_to_repeat(
+                                ref_seq,
+                                original_pos_idx,
+                                &seq_bytes,
+                                is_coding,
+                            )
                         {
                             use crate::hgvs::edit::Base;
                             let bases: Vec<Base> = unit_bytes
@@ -1757,7 +1834,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         seq_bytes.clone()
                     };
 
-                    if rules::insertion_is_duplication(ref_seq, result.start, &rotated_seq) {
+                    // Codon-frame gate (repeated.md): in c., if the rotated
+                    // insertion is >=2 copies of a non-codon-aligned unit, the
+                    // spec mandates ins<literal>, not dup. Skip dup conversion
+                    // in that case so the caller falls through to the literal
+                    // ins emission below.
+                    let smallest_unit = rules::smallest_repeat_unit(&rotated_seq);
+                    let codon_blocks_dup = is_coding
+                        && smallest_unit.len() < rotated_seq.len()
+                        && !smallest_unit.len().is_multiple_of(3);
+                    if !codon_blocks_dup
+                        && rules::insertion_is_duplication(ref_seq, result.start, &rotated_seq)
+                    {
                         // For duplication, use minimal notation without explicit sequence
                         // Position: for c.X_(X+1)ins that duplicates preceding sequence,
                         // the result is c.(X-len+1)_Xdup
@@ -1785,15 +1873,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 .iter()
                                 .filter_map(|&b| Base::from_char(b as char))
                                 .collect();
-                            let new_sequence =
-                                InsertedSequence::Literal(Sequence::new(rotated_bases));
-                            (
-                                new_start,
-                                new_end,
-                                NaEdit::Insertion {
-                                    sequence: new_sequence,
-                                },
-                            )
+                            // Mirror the gated-ins guard used by the
+                            // RepeatNormResult::Insertion / GatedInsertion
+                            // branches: if any byte fell outside the Base
+                            // alphabet, refuse to emit a truncated `ins`
+                            // and fall back to the original edit so
+                            // downstream invariants hold.
+                            if rotated_bases.len() == rotated_seq.len() {
+                                let new_sequence =
+                                    InsertedSequence::Literal(Sequence::new(rotated_bases));
+                                (
+                                    new_start,
+                                    new_end,
+                                    NaEdit::Insertion {
+                                        sequence: new_sequence,
+                                    },
+                                )
+                            } else {
+                                (new_start, new_end, edit.clone())
+                            }
                         } else {
                             (new_start, new_end, edit.clone())
                         }
@@ -1809,7 +1907,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // Use the shuffled positions (result.start, result.end) which are 0-based
                 // This applies to both single-base dups in homopolymers and multi-base tandem dups
                 if let Some(dup_result) =
-                    rules::duplication_to_repeat(ref_seq, result.start, result.end)
+                    rules::duplication_to_repeat(ref_seq, result.start, result.end, is_coding)
                 {
                     match dup_result {
                         rules::DupToRepeatResult::Homopolymer {
@@ -1850,6 +1948,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 return Ok((rep_start, rep_end, repeat_edit, warnings));
                             }
                         }
+                        rules::DupToRepeatResult::GatedInsertion {
+                            start: ins_start,
+                            end: ins_end,
+                            sequence: ins_seq,
+                        } => {
+                            // Codon-frame gate routed a multi-copy dup to ins
+                            // literal form per HGVS spec.
+                            use crate::hgvs::edit::InsertedSequence;
+                            let bases: Vec<Base> = ins_seq
+                                .iter()
+                                .filter_map(|&b| Base::from_char(b as char))
+                                .collect();
+                            if bases.len() == ins_seq.len() {
+                                let ins_edit = NaEdit::Insertion {
+                                    sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                                };
+                                return Ok((ins_start, ins_end, ins_edit, warnings));
+                            }
+                            // Defensive fallback: rule layer returned a base
+                            // byte that doesn't fit the Base alphabet (e.g.
+                            // N). Fall through to the generic dup minimal-
+                            // notation path below rather than emitting a
+                            // truncated insertion.
+                        }
                     }
                 }
                 // Keep as duplication but strip explicit sequence (minimal notation)
@@ -1881,17 +2003,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             .iter()
                             .filter_map(|&b| crate::hgvs::edit::Base::from_char(b as char))
                             .collect();
-                        let dup_seq = Sequence::new(dup_bases);
-
-                        (
-                            new_start,
-                            new_end,
-                            NaEdit::Duplication {
-                                sequence: Some(dup_seq),
-                                length: Some(dup_len as u64),
-                                uncertain_extent: None,
-                            },
-                        )
+                        if dup_bases.len() == dup_seq_bytes.len() {
+                            let dup_seq = Sequence::new(dup_bases);
+                            (
+                                new_start,
+                                new_end,
+                                NaEdit::Duplication {
+                                    sequence: Some(dup_seq),
+                                    length: Some(dup_len as u64),
+                                    uncertain_extent: None,
+                                },
+                            )
+                        } else {
+                            // Defensive fallback: ref slice contains a byte
+                            // outside the Base alphabet. Keep the original
+                            // delins rather than emitting a duplication with
+                            // a truncated sequence.
+                            (new_start, new_end, edit.clone())
+                        }
                     } else {
                         (new_start, new_end, edit.clone())
                     }
@@ -1917,6 +2046,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         ref_seq,
                         result.start as usize,
                         result.end as usize,
+                        is_coding,
                     ) {
                         let bases: Option<Vec<Base>> = rep
                             .unit
@@ -3152,6 +3282,73 @@ mod tests {
         provider
     }
 
+    /// Minus-strand mirror of `make_boundary_test_provider`.
+    ///
+    /// Same transcript sequence as the plus-strand fixture, so c.40_40+3
+    /// still spans the same poly-A region in transcript view. The genomic
+    /// content at the gene region is the reverse complement of each exon
+    /// (so RC of the genomic plus strand recovers `tx_seq`), and the
+    /// exon-to-genomic mapping is reversed: tx 1 maps to the high genomic
+    /// end (g.1077) and tx 58 to the low end (g.1000). Intron 2 is laid
+    /// out so that c.40+1..c.40+4 read as `A` in transcript view, putting
+    /// the boundary-spanning dup inside the same 5-A tract that the plus
+    /// fixture exercises.
+    fn make_boundary_test_provider_minus() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        let mut provider = MockProvider::new();
+
+        let tx_seq = "ATGCCCAAAGGGTTTAGGCCAAAGGGTTTAGGCCCAAAAAGGGTTTAGGCCCAAATGA";
+
+        let mut genomic_seq = String::new();
+        for _ in 0..1000 {
+            genomic_seq.push('N');
+        }
+        // Exon 3 region (g.1000-1017): RC of tx[41..58] ("GGGTTTAGGCCCAAATGA").
+        genomic_seq.push_str("TCATTTGGGCCTAAACCC");
+        // Intron 2 (g.1018-1027): the last four bases (g.1024-1027) are 'T',
+        // so c.40+1..c.40+4 read as 'A' in transcript view, extending the
+        // exonic poly-A across the boundary.
+        genomic_seq.push_str("AAAGTATTTT");
+        // Exon 2 region (g.1028-1047): RC of tx[21..40] ("AAAGGGTTTAGGCCCAAAAA").
+        genomic_seq.push_str("TTTTTGGGCCTAAACCCTTT");
+        // Intron 1 (g.1048-1057): mirrors the plus fixture's intron 1 content.
+        genomic_seq.push_str("GTAAGCTAAA");
+        // Exon 1 region (g.1058-1077): RC of tx[1..20] ("ATGCCCAAAGGGTTTAGGCC").
+        genomic_seq.push_str("GGCCTAAACCCTTTGGGCAT");
+        for _ in 0..100 {
+            genomic_seq.push('N');
+        }
+
+        provider.add_genomic_sequence("chr1", genomic_seq);
+
+        provider.add_transcript(Transcript {
+            id: "NM_BOUNDARYM.1".to_string(),
+            gene_symbol: Some("BOUNDARY_M".to_string()),
+            strand: Strand::Minus,
+            sequence: tx_seq.to_string(),
+            cds_start: Some(1),
+            cds_end: Some(58),
+            exons: vec![
+                Exon::with_genomic(1, 1, 20, 1058, 1077),
+                Exon::with_genomic(2, 21, 40, 1028, 1047),
+                Exon::with_genomic(3, 41, 58, 1000, 1017),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1077),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+
+        provider
+    }
+
     #[test]
     fn test_boundary_spanning_exonic_to_intronic_del() {
         // Test: c.20_20+3del - deletion from last exon base into intron
@@ -3263,11 +3460,11 @@ mod tests {
 
     #[test]
     fn test_boundary_spanning_dup() {
-        // Test: c.40_40+3dup - duplication spanning exon-intron boundary
-        // c.40 = last base of exon 2 (A at g.1049)
-        // c.40+3 = 3rd intronic base of intron 2 (A at g.1052)
-        // Since intron 2 starts with AAA (and exon 2 ends with AAAAA), this creates a repeat pattern
-        // The normalizer correctly converts this to repeat notation (A[N])
+        // Test: c.40_40+3dup - duplication spanning exon-intron boundary.
+        // The dup is 4 A's in a poly-A region. Per HGVS spec (repeated.md
+        // codon-frame exception): in c. context, repeat notation requires
+        // unit_len % 3 == 0, so unit_len=1 routes the multi-copy dup to
+        // `ins<literal>` form rather than `A[N]` or a multi-base dup.
         let provider = make_boundary_test_provider();
         let normalizer = Normalizer::new(provider);
 
@@ -3281,10 +3478,38 @@ mod tests {
         );
 
         let output = format!("{}", result.unwrap());
-        // May remain as dup or be converted to repeat notation for poly-A
         assert!(
-            output.contains("dup") || output.contains("["),
-            "Should remain a duplication or become repeat notation, got: {}",
+            output.contains("ins") && !output.contains("A["),
+            "Boundary-spanning multi-copy dup in c. with unit_len=1 must emit \
+             ins<literal> per codon-frame gate, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_boundary_spanning_dup_minus_strand() {
+        // Minus-strand mirror of `test_boundary_spanning_dup`. Pins the
+        // strand-specific flip in `normalize_boundary_spanning_cds`: the
+        // genomic-strand window is RC of the transcript view, so without
+        // flipping, the codon-frame gate would inspect the wrong alphabet
+        // and the gated `ins<literal>` rewrite would not fire.
+        let provider = make_boundary_test_provider_minus();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_BOUNDARYM.1:c.40_40+3dup").unwrap();
+        let result = normalizer.normalize(&variant);
+
+        assert!(
+            result.is_ok(),
+            "Boundary-spanning duplication should normalize, got error: {:?}",
+            result.err()
+        );
+
+        let output = format!("{}", result.unwrap());
+        assert!(
+            output.contains("ins") && !output.contains("A["),
+            "Minus-strand boundary-spanning multi-copy dup in c. with \
+             unit_len=1 must emit ins<literal> per codon-frame gate, got: {}",
             output
         );
     }

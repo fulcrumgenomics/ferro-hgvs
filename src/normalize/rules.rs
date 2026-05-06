@@ -163,6 +163,11 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// variant is expressed as repeat notation `unit[N+k]`. A single-copy
 /// addition is left as a duplication (handled by `insertion_is_duplication`).
 ///
+/// `is_coding` enables the spec's codon-frame exception (repeated.md): in
+/// c. context, repeat notation requires `unit_len % 3 == 0`. When the gate
+/// blocks the rewrite this returns `None` and the caller falls back to a
+/// literal `ins` description.
+///
 /// Returns `Some((first_byte, total_count, ref_start_1based,
 /// ref_end_1based, unit_bytes))` when repeat notation applies, `None`
 /// otherwise. `first_byte` is preserved for backwards-compat with the
@@ -171,6 +176,7 @@ pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
     inserted_seq: &[u8],
+    is_coding: bool,
 ) -> Option<(u8, u64, u64, u64, Vec<u8>)> {
     if inserted_seq.is_empty() {
         return None;
@@ -180,6 +186,12 @@ pub fn insertion_to_repeat(
     let added_copies = (inserted_seq.len() / base_unit.len()) as u64;
     if added_copies < 2 {
         // Single-copy addition is a duplication, not repeat notation.
+        return None;
+    }
+
+    // HGVS spec (repeated.md): in c. context, repeat notation requires
+    // unit_len % 3 == 0. Falls back to literal `ins` when the gate blocks.
+    if is_coding && !base_unit.len().is_multiple_of(3) {
         return None;
     }
 
@@ -394,6 +406,7 @@ pub(crate) fn deletion_to_repeat(
     ref_seq: &[u8],
     del_start: usize,
     del_end: usize,
+    is_coding: bool,
 ) -> Option<DelToRepeatResult> {
     if del_start >= del_end || del_end > ref_seq.len() {
         return None;
@@ -402,6 +415,12 @@ pub(crate) fn deletion_to_repeat(
     let unit_slice = smallest_repeat_unit(del_slice);
     let p = unit_slice.len();
     if p == 0 || !(del_end - del_start).is_multiple_of(p) {
+        return None;
+    }
+
+    // HGVS spec (repeated.md): in c. context, repeat notation requires
+    // unit_len % 3 == 0. Falls back to plain del when the gate blocks.
+    if is_coding && !p.is_multiple_of(3) {
         return None;
     }
 
@@ -592,9 +611,24 @@ pub enum DupToRepeatResult {
         start: u64, // 1-based (HGVS), use index_to_hgvs_pos() for conversion
         end: u64,   // 1-based (HGVS), inclusive
     },
+    /// Codon-frame gate triggered: structural conditions for repeat
+    /// notation are met, but `unit_len % 3 != 0` in c. context, so the
+    /// canonical form is a literal `ins` of the duplicated sequence at
+    /// the 3' flanking position. `start` and `end` are the two flanking
+    /// 1-based HGVS positions (last tract base and the next base).
+    GatedInsertion {
+        start: u64,
+        end: u64,
+        sequence: Vec<u8>,
+    },
 }
 
-pub fn duplication_to_repeat(ref_seq: &[u8], start: u64, end: u64) -> Option<DupToRepeatResult> {
+pub fn duplication_to_repeat(
+    ref_seq: &[u8],
+    start: u64,
+    end: u64,
+    is_coding: bool,
+) -> Option<DupToRepeatResult> {
     let start_idx = start as usize;
     let end_idx = end as usize;
 
@@ -617,6 +651,18 @@ pub fn duplication_to_repeat(ref_seq: &[u8], start: u64, end: u64) -> Option<Dup
         // Find the full homopolymer extent
         if let Some(analysis) = find_homopolymer_at(ref_seq, start_idx) {
             if analysis.base == Some(first) {
+                // Codon-frame gate (repeated.md): homopolymer unit_len=1 is
+                // never codon-aligned, so c. context blocks repeat notation.
+                // Emit GatedInsertion so the caller renders as `ins<dup_seq>`
+                // at the 3' flanking position of the reference tract.
+                if is_coding {
+                    let last_tract_idx = analysis.ref_start + analysis.ref_count as usize - 1;
+                    return Some(DupToRepeatResult::GatedInsertion {
+                        start: index_to_hgvs_pos(last_tract_idx),
+                        end: index_to_hgvs_pos(last_tract_idx) + 1,
+                        sequence: dup_seq.to_vec(),
+                    });
+                }
                 let total_count = analysis.ref_count + dup_len as u64;
                 return Some(DupToRepeatResult::Homopolymer {
                     base: first,
@@ -660,6 +706,18 @@ pub fn duplication_to_repeat(ref_seq: &[u8], start: u64, end: u64) -> Option<Dup
         if let Some((ref_count, rep_start, rep_end)) =
             count_tandem_repeats(ref_seq, start_idx, unit)
         {
+            // Codon-frame gate (repeated.md): in c., repeat notation requires
+            // unit_len % 3 == 0. Structural conditions are met but the gate
+            // forces a literal `ins<dup_seq>` at the 3' tract flanking
+            // position instead.
+            if is_coding && !unit_len.is_multiple_of(3) {
+                let last_tract_idx = rep_end - 1;
+                return Some(DupToRepeatResult::GatedInsertion {
+                    start: index_to_hgvs_pos(last_tract_idx),
+                    end: index_to_hgvs_pos(last_tract_idx) + 1,
+                    sequence: dup_seq.to_vec(),
+                });
+            }
             // Total count = reference count + duplicated copies
             let total_count = ref_count + copies_in_dup as u64;
             // rep_end is exclusive (0-based), so last position is rep_end - 1
@@ -748,6 +806,16 @@ pub enum RepeatNormResult {
         end: u64,   // 1-based (HGVS), inclusive end of duplicated region
         sequence: Vec<u8>,
     },
+    /// Convert to insertion. Used when the codon-frame gate blocks repeat
+    /// notation in c. context for an expansion of >=2 unit copies. `start`
+    /// and `end` are the two flanking 1-based HGVS positions; `sequence` is
+    /// the literal inserted sequence (canonical unit repeated `specified -
+    /// ref_count` times).
+    Insertion {
+        start: u64,
+        end: u64,
+        sequence: Vec<u8>,
+    },
     /// Keep as repeat notation with canonical position
     Repeat {
         start: u64, // 1-based (HGVS), inclusive start
@@ -776,6 +844,7 @@ pub fn normalize_repeat(
     pos: usize,
     repeat_unit: &[u8],
     specified_count: u64,
+    is_coding: bool,
 ) -> RepeatNormResult {
     // Match `count_tandem_repeats`'s pre-refactor contract: an empty unit
     // is meaningless and falls through to `Unchanged`. Without this guard,
@@ -801,10 +870,14 @@ pub fn normalize_repeat(
     };
 
     let unit_len = canonical_unit.len() as u64;
+    // HGVS spec (repeated.md): in c. context, repeat notation requires
+    // unit_len % 3 == 0. When the gate blocks, contraction-with-survivors
+    // routes to Deletion and expansion-of->=2-copies routes to Insertion.
+    let codon_blocks_repeat = is_coding && !canonical_unit.len().is_multiple_of(3);
 
     if specified_count < ref_count {
         let k = ref_count - specified_count;
-        if k >= 2 && specified_count >= 1 {
+        if k >= 2 && specified_count >= 1 && !codon_blocks_repeat {
             // B2 (symmetric with A7): >=2 unit reduction with surviving units → repeat
             RepeatNormResult::Repeat {
                 start: index_to_hgvs_pos(ref_start),
@@ -813,7 +886,7 @@ pub fn normalize_repeat(
                 count: specified_count,
             }
         } else {
-            // 1-unit reduction or full tract removal → deletion
+            // 1-unit reduction, full tract removal, or codon-frame-gated → deletion
             // (HGVS prioritization: deletion outranks unranked repeat[0])
             let del_len = (k as usize) * unit_len as usize;
             let del_end_idx = ref_end - 1;
@@ -824,8 +897,9 @@ pub fn normalize_repeat(
             }
         }
     } else if specified_count == ref_count + 1 {
-        // Convert to duplication - we're adding exactly one copy
-        // The duplicated region is the last copy in the reference
+        // Convert to duplication - we're adding exactly one copy.
+        // dup is always permitted; the spec exception only forbids `[N]`.
+        // The duplicated region is the last copy in the reference.
         // ref_end is exclusive, so last position is ref_end - 1
         let dup_end_idx = ref_end - 1;
         let dup_start_idx = ref_end - canonical_unit.len();
@@ -837,8 +911,25 @@ pub fn normalize_repeat(
     } else if specified_count == ref_count {
         // Same as reference - this is identity (no change)
         RepeatNormResult::Unchanged
+    } else if codon_blocks_repeat {
+        // Expansion of >=2 copies in c. with non-codon-aligned unit: spec
+        // mandates `ins<literal>` form (e.g., c.1741_1742insTATATATA), not
+        // `[N]`. Insertion point is between the last base of the reference
+        // tract (ref_end - 1, 0-based) and the next base (ref_end).
+        let added_copies = specified_count - ref_count;
+        let mut inserted = Vec::with_capacity((added_copies as usize) * canonical_unit.len());
+        for _ in 0..added_copies {
+            inserted.extend_from_slice(canonical_unit);
+        }
+        let flank_left = index_to_hgvs_pos(ref_end - 1);
+        let flank_right = flank_left + 1;
+        RepeatNormResult::Insertion {
+            start: flank_left,
+            end: flank_right,
+            sequence: inserted,
+        }
     } else {
-        // Keep as repeat notation with canonical position
+        // Default expansion (>=2 copies, not gated): repeat notation.
         // The repeat region describes the REFERENCE tract (per HGVS spec)
         // ref_end is exclusive, so last position is ref_end - 1
         RepeatNormResult::Repeat {
@@ -1151,7 +1242,7 @@ mod tests {
         // insertion point. pos=7 means insert between index 7 and 8 — i.e.,
         // immediately after the last A in the homopolymer. Inserting AA here
         // should become A[7] (5 ref + 2 inserted).
-        let result = insertion_to_repeat(ref_seq, 7, b"AA");
+        let result = insertion_to_repeat(ref_seq, 7, b"AA", false);
         assert!(result.is_some());
         let (base, count, start, end, _unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -1160,15 +1251,15 @@ mod tests {
         assert_eq!(end, 8); // 1-indexed end of A region in reference (per HGVS, positions refer to reference tract)
 
         // Single-copy inserts (added_copies < 2) are duplications, not repeats.
-        let result = insertion_to_repeat(ref_seq, 7, b"A");
+        let result = insertion_to_repeat(ref_seq, 7, b"A", false);
         assert!(result.is_none());
 
         // Inserting T (non-matching) should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"T");
+        let result = insertion_to_repeat(ref_seq, 7, b"T", false);
         assert!(result.is_none());
 
         // Inserting mixed bases should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"AT");
+        let result = insertion_to_repeat(ref_seq, 7, b"AT", false);
         assert!(result.is_none());
 
         // Multi-base tandem unit: insert ACAC into ACAC tract → AC[4].
@@ -1176,7 +1267,7 @@ mod tests {
         // (pos=3, between A at index 3 and base at index 4). Expected:
         // 2 ref AC units + 2 inserted AC units = AC[4] at ref indices 0..3.
         let ref_ac = b"ACACGGG";
-        let result = insertion_to_repeat(ref_ac, 3, b"ACAC");
+        let result = insertion_to_repeat(ref_ac, 3, b"ACAC", false);
         assert!(result.is_some());
         let (base, count, start, end, unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -1192,7 +1283,7 @@ mod tests {
         let ref_seq = b"GGGAAAAAGGG";
 
         // Duplicating 2 A's (positions 3-5, 0-indexed) should become A[7]
-        let result = duplication_to_repeat(ref_seq, 3, 5);
+        let result = duplication_to_repeat(ref_seq, 3, 5, false);
         assert!(result.is_some());
         match result.unwrap() {
             DupToRepeatResult::Homopolymer {
@@ -1208,7 +1299,7 @@ mod tests {
         // Duplicating non-homopolymer region should return None (if not a tandem repeat)
         // ATGCXYZ has no repeats, so duplicating ATG should return None
         let non_repeat_seq = b"ATGCXYZ";
-        let result = duplication_to_repeat(non_repeat_seq, 0, 3);
+        let result = duplication_to_repeat(non_repeat_seq, 0, 3, false);
         assert!(result.is_none());
     }
 
@@ -1222,11 +1313,11 @@ mod tests {
 
         // Duplicating single GCA (one copy) should NOT become repeat notation
         // It should stay as a simple dup per HGVS rules
-        let result = duplication_to_repeat(ref_seq, 5, 8);
+        let result = duplication_to_repeat(ref_seq, 5, 8, false);
         assert!(result.is_none(), "Single-copy dup should not become repeat");
 
         // Duplicating GCAGCA (2 copies) SHOULD become repeat notation
-        let result = duplication_to_repeat(ref_seq, 5, 11);
+        let result = duplication_to_repeat(ref_seq, 5, 11, false);
         assert!(result.is_some());
         match result.unwrap() {
             DupToRepeatResult::TandemRepeat {
@@ -1300,7 +1391,7 @@ mod tests {
         // Specifying CAT[1]: ref_count=4, specified=1, k=3 >= 2, post=1 >= 1 → B2 → Repeat
         let ref_seq = b"GGGCATCATCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 1);
+        let result = normalize_repeat(ref_seq, 3, b"CAT", 1, false);
         match result {
             RepeatNormResult::Repeat {
                 sequence, count, ..
@@ -1318,7 +1409,7 @@ mod tests {
         // Specifying CAT[3] (ref is 2, so 2+1=3) should become duplication
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 3);
+        let result = normalize_repeat(ref_seq, 3, b"CAT", 3, false);
         match result {
             RepeatNormResult::Duplication {
                 start,
@@ -1338,7 +1429,7 @@ mod tests {
         // Specifying CAT[5] (ref is 2, 5 > 2+1) should stay as repeat
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 5);
+        let result = normalize_repeat(ref_seq, 3, b"CAT", 5, false);
         match result {
             RepeatNormResult::Repeat {
                 count, sequence, ..
@@ -1356,7 +1447,7 @@ mod tests {
         // Specifying CAT[2] (same as ref) should be unchanged
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 2);
+        let result = normalize_repeat(ref_seq, 3, b"CAT", 2, false);
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -1370,7 +1461,7 @@ mod tests {
         // canonical_unit.len()` unless we guard up front. This test pins the
         // pre-refactor contract.
         let ref_seq = b"GGGCATCATGGG";
-        let result = normalize_repeat(ref_seq, 3, b"", 1);
+        let result = normalize_repeat(ref_seq, 3, b"", 1, false);
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -1382,7 +1473,7 @@ mod tests {
         // this would fall to a 1-unit (ATAT) reduction → deletion (k<2).
         let ref_seq = b"GGGATATATATGGG"; // AT-tract at indices 3..11 (4 AT)
 
-        let result = normalize_repeat(ref_seq, 3, b"ATAT", 1);
+        let result = normalize_repeat(ref_seq, 3, b"ATAT", 1, false);
         match result {
             RepeatNormResult::Repeat {
                 start,
@@ -1542,7 +1633,7 @@ mod tests {
         // After 3' shift, del lands at [5..7). post-shift slice "AA", unit "A", k=2.
         // Tract [2..7), ref_count=5, post_count=3 → A[3] at HGVS [3..7] (1-based).
         let ref_seq = b"TTAAAAATT";
-        let r = deletion_to_repeat(ref_seq, 5, 7).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 5, 7, false).expect("should fire");
         assert_eq!(r.unit, b"A");
         assert_eq!(r.count, 3);
         assert_eq!(r.start, 3); // 1-based HGVS
@@ -1555,7 +1646,7 @@ mod tests {
         // post-shift slice "GCAGCA", unit "GCA", k=2. Tract [2..11), ref_count=3,
         // post_count=1 → GCA[1] at HGVS [3..11] (1-based).
         let ref_seq = b"TTGCAGCAGCATT";
-        let r = deletion_to_repeat(ref_seq, 5, 11).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 5, 11, false).expect("should fire");
         assert_eq!(r.unit, b"GCA");
         assert_eq!(r.count, 1);
         assert_eq!(r.start, 3);
@@ -1567,7 +1658,7 @@ mod tests {
         // k=1 → stays as del.
         // ref "TTAAAAATT", delete 1 A at [6..7).
         let ref_seq = b"TTAAAAATT";
-        assert!(deletion_to_repeat(ref_seq, 6, 7).is_none());
+        assert!(deletion_to_repeat(ref_seq, 6, 7, false).is_none());
     }
 
     #[test]
@@ -1575,7 +1666,7 @@ mod tests {
         // post_count == 0 → stays as del.
         // ref "TTAATT", delete both A's at [2..4). ref_count=2, k=2, post_count=0.
         let ref_seq = b"TTAATT";
-        assert!(deletion_to_repeat(ref_seq, 2, 4).is_none());
+        assert!(deletion_to_repeat(ref_seq, 2, 4, false).is_none());
     }
 
     #[test]
@@ -1584,7 +1675,7 @@ mod tests {
         // ref "TTGCATT", delete "GCA" at [2..5). smallest_repeat_unit("GCA")="GCA",
         // ref_count=1, returns None.
         let ref_seq = b"TTGCATT";
-        assert!(deletion_to_repeat(ref_seq, 2, 5).is_none());
+        assert!(deletion_to_repeat(ref_seq, 2, 5, false).is_none());
     }
 
     #[test]
@@ -1592,7 +1683,7 @@ mod tests {
         // ref "TTATATATATATT" (5 ATs at [2..12)). Delete "ATAT" at [8..12).
         // smallest_repeat_unit("ATAT")="AT", k=2, ref_count=5, post_count=3 → AT[3].
         let ref_seq = b"TTATATATATATT";
-        let r = deletion_to_repeat(ref_seq, 8, 12).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 8, 12, false).expect("should fire");
         assert_eq!(r.unit, b"AT");
         assert_eq!(r.count, 3);
         assert_eq!(r.start, 3); // 1-based HGVS [3..12]
@@ -1722,5 +1813,153 @@ mod tests {
             alternative: Base::G,
         };
         assert_eq!(canonicalize_edit(&real_sub), real_sub);
+    }
+
+    // =========================================================================
+    // Codon-frame gate tests (#81 B1)
+    //
+    // HGVS spec (docs/recommendations/DNA/repeated.md, §Notes):
+    // > using a coding DNA reference sequence ("c." description) a Repeated
+    // > sequence variant description can be used only for repeat units with
+    // > a length which is a multiple of 3, i.e. which can not affect the
+    // > reading frame.
+    // =========================================================================
+
+    #[test]
+    fn test_insertion_to_repeat_codon_frame_gate_blocks_a_in_coding() {
+        // Reference: 5-A homopolymer flanked by Cs. Insert AA → would normally
+        // emit A[7], but unit_len=1 is not a multiple of 3 in c. context,
+        // so the gate returns None.
+        let ref_seq = b"CAAAAAC";
+        let result = insertion_to_repeat(ref_seq, 5, b"AA", true);
+        assert!(
+            result.is_none(),
+            "is_coding=true + unit_len=1 must return None"
+        );
+    }
+
+    #[test]
+    fn test_insertion_to_repeat_codon_frame_gate_blocks_at_in_coding() {
+        // Reference: AT[3] tandem flanked by Cs. Insert ATAT → unit_len=2,
+        // gate blocks in coding context.
+        let ref_seq = b"CATATATC";
+        let result = insertion_to_repeat(ref_seq, 6, b"ATAT", true);
+        assert!(
+            result.is_none(),
+            "is_coding=true + unit_len=2 must return None"
+        );
+    }
+
+    #[test]
+    fn test_insertion_to_repeat_codon_frame_gate_passes_cag_in_coding() {
+        // Reference: CAG[3] tandem. Insert CAGCAG → unit_len=3, codon-aligned,
+        // gate passes; result is Some(...) carrying CAG[5].
+        let ref_seq = b"CCAGCAGCAGT";
+        let result = insertion_to_repeat(ref_seq, 9, b"CAGCAG", true);
+        assert!(
+            result.is_some(),
+            "is_coding=true + unit_len=3 must allow rewrite"
+        );
+        let (_first, count, _start, _end, unit) = result.unwrap();
+        assert_eq!(count, 5, "expected CAG[5]");
+        assert_eq!(unit, b"CAG");
+    }
+
+    #[test]
+    fn test_insertion_to_repeat_gate_no_op_in_genomic() {
+        // Same A-homopolymer case as the blocking test, but is_coding=false
+        // → gate is a no-op, repeat rewrite proceeds.
+        let ref_seq = b"CAAAAAC";
+        let result = insertion_to_repeat(ref_seq, 5, b"AA", false);
+        assert!(result.is_some(), "is_coding=false must not gate");
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_codon_frame_gate_blocks_a_in_coding() {
+        // 5-A tract, delete 2 A's. Span 2..4 covers two of the As so that
+        // without the codon-frame gate the function would return Some(A[3]);
+        // with the gate (coding) it must return None. Span 2..3 would also
+        // return None via the unrelated `k < 2` early exit, so it would not
+        // discriminate the gate.
+        let ref_seq = b"CAAAAAC";
+        let result = deletion_to_repeat(ref_seq, 2, 4, true);
+        assert!(
+            result.is_none(),
+            "is_coding=true + unit_len=1 must return None"
+        );
+    }
+
+    #[test]
+    fn test_deletion_to_repeat_codon_frame_gate_passes_cag_in_coding() {
+        // ref "CCAGCAGCAGT": 3-CAG tract at indices 1..10. Delete 2 CAGs at
+        // [1..7) (6 bases CAGCAG). With codon-aligned unit, gate passes.
+        let ref_seq = b"CCAGCAGCAGT";
+        let result = deletion_to_repeat(ref_seq, 1, 7, true);
+        assert!(
+            result.is_some(),
+            "is_coding=true + unit_len=3 must allow rewrite"
+        );
+    }
+
+    #[test]
+    fn test_duplication_to_repeat_codon_frame_gate_routes_a_to_gated_insertion() {
+        // 4-A tract at indices 1..5 (0-based). Duplicate 2 A's at positions 1..3.
+        // Under the gate, structural conditions for repeat notation are met
+        // but unit_len=1 in c. is forbidden, so the result routes to a
+        // GatedInsertion that the caller renders as `ins<dup_seq>`.
+        let ref_seq = b"CAAAAC";
+        let result = duplication_to_repeat(ref_seq, 1, 3, true);
+        match result {
+            Some(DupToRepeatResult::GatedInsertion { sequence, .. }) => {
+                assert_eq!(sequence, b"AA", "sequence is the duplicated literal");
+            }
+            other => panic!("expected GatedInsertion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_duplication_to_repeat_codon_frame_gate_passes_cag_in_coding() {
+        // 3-CAG tract. Duplicate 2 CAGs.
+        let ref_seq = b"CCAGCAGCAGT";
+        let result = duplication_to_repeat(ref_seq, 1, 7, true);
+        assert!(
+            result.is_some(),
+            "is_coding=true + unit_len=3 must allow rewrite"
+        );
+    }
+
+    #[test]
+    fn test_normalize_repeat_codon_frame_gate_routes_contraction_to_deletion() {
+        // 5-A tract, specified A[3] in coding → must NOT emit Repeat; emits Deletion.
+        let ref_seq = b"CAAAAAC";
+        let result = normalize_repeat(ref_seq, 1, b"A", 3, true);
+        match result {
+            RepeatNormResult::Deletion { .. } => {}
+            other => panic!("expected Deletion under gate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_repeat_codon_frame_gate_routes_expansion_to_insertion() {
+        // 5-A tract, specified A[8] in coding → must NOT emit Repeat; emits Insertion.
+        let ref_seq = b"CAAAAAC";
+        let result = normalize_repeat(ref_seq, 1, b"A", 8, true);
+        match result {
+            RepeatNormResult::Insertion { sequence, .. } => {
+                assert_eq!(sequence, b"AAA", "3 extra A's");
+            }
+            other => panic!("expected Insertion under gate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_repeat_codon_frame_gate_passes_through_dup_branch() {
+        // 5-A tract, specified A[6] in coding → +1 copy = dup, gate doesn't change this.
+        let ref_seq = b"CAAAAAC";
+        let result = normalize_repeat(ref_seq, 1, b"A", 6, true);
+        match result {
+            RepeatNormResult::Duplication { .. } => {}
+            other => panic!("expected Duplication, got {:?}", other),
+        }
     }
 }
