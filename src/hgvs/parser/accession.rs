@@ -421,8 +421,22 @@ fn looks_like_accession_start(input: &str) -> bool {
 /// Parse the inner accession of a compound reference (after the opening paren)
 fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
     let bytes = input.as_bytes();
-    // Try standard accession (NC_, NM_, etc.)
+    // Try standard 2-letter-prefix accession (NC_, NM_, NG_, etc.)
     if bytes.len() > 2 && bytes[2] == b'_' {
+        if let Ok(result) = parse_standard_accession(input) {
+            return Ok(result);
+        }
+    }
+    // Try LRG (3-letter prefix + underscore: `LRG_…`).
+    // `parse_standard_accession` already handles LRG once we know we're
+    // looking at the right shape — gate on the prefix bytes here so we
+    // don't double-call it for the 2-letter case.
+    if bytes.len() > 3
+        && bytes[0] == b'L'
+        && bytes[1] == b'R'
+        && bytes[2] == b'G'
+        && bytes[3] == b'_'
+    {
         if let Ok(result) = parse_standard_accession(input) {
             return Ok(result);
         }
@@ -632,6 +646,36 @@ mod tests {
 
         let acc =
             Accession::with_style("ENSP".to_string(), "00000012345".to_string(), Some(2), true);
+        assert_eq!(acc.inferred_variant_type(), Some("p"));
+    }
+
+    #[test]
+    fn test_parse_lrg_inferred_variant_type() {
+        // Bare LRG record → genomic coordinates
+        let (_, acc) = parse_accession("LRG_1:g.100A>G").unwrap();
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "1");
+        assert_eq!(acc.inferred_variant_type(), Some("g"));
+
+        // LRG transcript (`t<M>`) → coding (c.)
+        let (_, acc) = parse_accession("LRG_1t1:c.100A>G").unwrap();
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "1t1");
+        assert_eq!(acc.inferred_variant_type(), Some("c"));
+
+        // LRG protein (`p<M>`) → protein (p.)
+        let (_, acc) = parse_accession("LRG_1p1:p.Arg100Lys").unwrap();
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "1p1");
+        assert_eq!(acc.inferred_variant_type(), Some("p"));
+
+        // Multi-digit LRG and discriminator numbers
+        let (_, acc) = parse_accession("LRG_741t1:c.100A>G").unwrap();
+        assert_eq!(&*acc.number, "741t1");
+        assert_eq!(acc.inferred_variant_type(), Some("c"));
+
+        let (_, acc) = parse_accession("LRG_673p1:p.Lys903delLys").unwrap();
+        assert_eq!(&*acc.number, "673p1");
         assert_eq!(acc.inferred_variant_type(), Some("p"));
     }
 
@@ -850,6 +894,37 @@ mod tests {
         assert_eq!(&*acc.prefix, "NM");
         let ctx = acc.genomic_context.as_ref().unwrap();
         assert_eq!(&*ctx.prefix, "LRG");
+    }
+
+    #[test]
+    fn test_parse_compound_ref_lrg_inner_transcript() {
+        // NC outer + LRG transcript inner — primary is LRG.
+        let (remaining, acc) = parse_accession("NC_000023.11(LRG_199t1):c.357+1G>A").unwrap();
+        assert_eq!(remaining, ":c.357+1G>A");
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "199t1");
+        let ctx = acc.genomic_context.as_ref().unwrap();
+        assert_eq!(&*ctx.prefix, "NC");
+        assert_eq!(ctx.version, Some(11));
+    }
+
+    #[test]
+    fn test_parse_compound_ref_lrg_inner_protein() {
+        // NC outer + LRG protein inner.
+        let (remaining, acc) = parse_accession("NC_000023.11(LRG_199p1):p.Trp24Cys").unwrap();
+        assert_eq!(remaining, ":p.Trp24Cys");
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "199p1");
+        assert!(acc.genomic_context.is_some());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_lrg_inner_bare() {
+        // NC outer + bare LRG inner (no discriminator).
+        let (remaining, acc) = parse_accession("NC_000023.11(LRG_199):g.1A>G").unwrap();
+        assert_eq!(remaining, ":g.1A>G");
+        assert_eq!(&*acc.prefix, "LRG");
+        assert_eq!(&*acc.number, "199");
     }
 
     #[test]
