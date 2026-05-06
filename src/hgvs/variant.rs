@@ -449,14 +449,32 @@ fn use_compact_form(variants: &[HgvsVariant]) -> bool {
 }
 
 fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt::Result {
-    write!(
-        f,
-        "{}:{}.",
-        first
-            .accession()
-            .expect("compact form requires an accession; guarded by all_share_accession_and_type"),
-        first.variant_type()
-    )
+    let accession = first
+        .accession()
+        .expect("compact form requires an accession; guarded by all_share_accession_and_type");
+    write!(f, "{}", accession)?;
+    if let Some(gene) = first.gene_symbol() {
+        write!(f, "({})", gene)?;
+    }
+    write!(f, ":{}.", first.variant_type())
+}
+
+/// Write `accession(gene):` when `gene_symbol` is set, otherwise `accession:`.
+///
+/// Per HGVS Nomenclature, the gene-symbol selector is informational disambiguation.
+/// ferro's round-trip policy is "preserve when present in input; do not synthesize
+/// when absent" (#121). This helper centralizes the selector emission so all
+/// per-kind `Display` impls follow the same rule.
+fn write_accession_with_optional_gene(
+    f: &mut fmt::Formatter<'_>,
+    accession: &Accession,
+    gene_symbol: Option<&str>,
+) -> fmt::Result {
+    write!(f, "{}", accession)?;
+    if let Some(gene) = gene_symbol {
+        write!(f, "({})", gene)?;
+    }
+    Ok(())
 }
 
 impl fmt::Display for AlleleVariant {
@@ -623,6 +641,30 @@ impl HgvsVariant {
         }
     }
 
+    /// Get the gene-symbol selector for this variant, if one was present in the
+    /// original input.
+    ///
+    /// Mirrors `accession()` and is used by `Display` to preserve the selector
+    /// on round-trip (#121). Returns `None` for variant kinds that do not carry
+    /// a single top-level selector (`Allele`, `RnaFusion`, `NullAllele`,
+    /// `UnknownAllele`); selectors on those nested kinds are emitted by their
+    /// own `Display` impls.
+    pub fn gene_symbol(&self) -> Option<&str> {
+        match self {
+            HgvsVariant::Genome(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Cds(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Tx(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Rna(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Protein(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Mt(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::Circular(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::RnaFusion(_)
+            | HgvsVariant::Allele(_)
+            | HgvsVariant::NullAllele
+            | HgvsVariant::UnknownAllele => None,
+        }
+    }
+
     /// Get the variant type string
     pub fn variant_type(&self) -> &'static str {
         match self {
@@ -707,14 +749,24 @@ impl HgvsVariant {
         }
     }
 
-    /// Check if all variants in a slice share the same accession and coordinate type.
-    /// Used to determine whether the compact allele form can be used.
+    /// Check if all variants in a slice share the same accession, coordinate type, and
+    /// gene-symbol selector. Used to determine whether the compact allele form can be
+    /// used without losing information.
+    ///
+    /// The compact form (`ACC(GENE):c.[edit1;edit2]`) can carry exactly one
+    /// `(GENE)` selector on the prefix. Per the #121 round-trip policy
+    /// ("preserve when present; do not synthesize"), the compact form is only
+    /// safe when every sub-variant agrees on `gene_symbol`: both `Some(g)`
+    /// (same `g`) and all-`None` are safe; any disagreement (different `g`,
+    /// or `Some` vs `None`) falls back to the expanded form so each
+    /// sub-variant emits its own selector via per-variant `Display`.
     pub(crate) fn all_share_accession_and_type(variants: &[HgvsVariant]) -> bool {
         let Some(first) = variants.first() else {
             return true;
         };
         let first_acc = first.accession();
         let first_type = first.variant_type();
+        let first_gene = first.gene_symbol();
 
         // Don't use compact form for types that aren't simple coordinate-based variants,
         // or when the first variant has no accession (e.g. NullAllele, UnknownAllele)
@@ -722,9 +774,11 @@ impl HgvsVariant {
             return false;
         }
 
-        variants[1..]
-            .iter()
-            .all(|v| v.variant_type() == first_type && v.accession() == first_acc)
+        variants[1..].iter().all(|v| {
+            v.variant_type() == first_type
+                && v.accession() == first_acc
+                && v.gene_symbol() == first_gene
+        })
     }
 }
 
@@ -778,7 +832,8 @@ impl GenomeVariant {
 
 impl fmt::Display for GenomeVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:g.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":g.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -806,7 +861,8 @@ impl CdsVariant {
 
 impl fmt::Display for CdsVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:c.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":c.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -827,7 +883,8 @@ impl TxVariant {
 
 impl fmt::Display for TxVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:n.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":n.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -869,7 +926,8 @@ impl RnaVariant {
 
 impl fmt::Display for RnaVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:r.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":r.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -907,7 +965,8 @@ impl ProteinVariant {
 
 impl fmt::Display for ProteinVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:p.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":p.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -928,7 +987,8 @@ impl MtVariant {
 
 impl fmt::Display for MtVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:m.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":m.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -952,7 +1012,8 @@ impl CircularVariant {
 
 impl fmt::Display for CircularVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:o.", self.accession)?;
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":o.")?;
         self.fmt_loc_edit(f)
     }
 }
@@ -1370,6 +1431,146 @@ mod tests {
         assert_eq!(
             format!("{}", HgvsVariant::Allele(trans)),
             "[NM_000088.3:c.100A>G];[NM_000088.3:c.?]"
+        );
+    }
+
+    #[test]
+    fn test_allele_compact_form_requires_matching_gene_symbol() {
+        // Hand-built cis allele: same accession, same coordinate type, but the
+        // sub-variants disagree on gene_symbol. The compact form
+        // (`ACC(GENE):c.[edit1;edit2]`) can only carry one selector on the
+        // prefix, so collapsing two distinct selectors would silently drop
+        // the second. Per the #121 round-trip policy ("preserve when present;
+        // do not synthesize"), we fall back to the expanded form which
+        // emits each sub-variant's selector verbatim.
+        use crate::hgvs::location::CdsPos;
+
+        let acc = Accession::new("NM", "000088", Some(3));
+        let v_a = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let v_b = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A2".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![v_a.clone(), v_b.clone()]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NM_000088.3(COL1A1):c.100A>G;NM_000088.3(COL1A2):c.200C>T]",
+            "mismatched gene symbols must use expanded form to preserve both"
+        );
+
+        let trans = AlleleVariant::trans(vec![v_a, v_b]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(trans)),
+            "[NM_000088.3(COL1A1):c.100A>G];[NM_000088.3(COL1A2):c.200C>T]",
+            "trans expanded form already carries per-variant selectors"
+        );
+    }
+
+    #[test]
+    fn test_allele_compact_form_requires_matching_gene_symbol_some_vs_none() {
+        // First sub-variant has Some(gene), second has None. Compact form
+        // would either lose the gene symbol (emit bare prefix) or synthesize
+        // one for the bare sub-variant (emit prefix-with-gene). Both violate
+        // the #121 policy; fall back to expanded form.
+        use crate::hgvs::location::CdsPos;
+
+        let acc = Accession::new("NM", "000088", Some(3));
+        let v_with = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let v_bare = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![v_with, v_bare]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NM_000088.3(COL1A1):c.100A>G;NM_000088.3:c.200C>T]",
+            "Some/None gene_symbol mismatch must use expanded form"
+        );
+    }
+
+    #[test]
+    fn test_allele_compact_form_keeps_compact_when_all_match() {
+        // All sub-variants share Some(same gene): compact form is safe and
+        // emits the selector once on the prefix (regression test for the
+        // happy path so the new compact-form rule isn't over-constrained).
+        use crate::hgvs::location::CdsPos;
+
+        let acc = Accession::new("NM", "000088", Some(3));
+        let mk = |pos: i64, alt: Base| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: acc.clone(),
+                gene_symbol: Some("COL1A1".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+        let cis = AlleleVariant::cis(vec![mk(100, Base::G), mk(200, Base::T)]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "NM_000088.3(COL1A1):c.[100A>G;200A>T]",
+            "matching gene symbols must keep compact form"
+        );
+
+        // All-None: existing compact behavior must be preserved.
+        let mk_none = |pos: i64, alt: Base| {
+            HgvsVariant::Cds(CdsVariant {
+                accession: acc.clone(),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(pos)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: alt,
+                    },
+                ),
+            })
+        };
+        let cis_none = AlleleVariant::cis(vec![mk_none(100, Base::G), mk_none(200, Base::T)]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis_none)),
+            "NM_000088.3:c.[100A>G;200A>T]",
+            "all-None gene_symbol must use compact form unchanged"
         );
     }
 
@@ -1842,10 +2043,10 @@ mod tests {
             ),
         };
 
-        // Gene symbol is stored but not included in standard Display
+        // Per #121: Display preserves the gene-symbol selector when set.
         assert_eq!(variant.gene_symbol, Some("COL1A1".to_string()));
         let display = format!("{}", variant);
-        assert!(display.contains("NM_000088.3"));
+        assert_eq!(display, "NM_000088.3(COL1A1):c.100A>G");
     }
 
     #[test]
@@ -1862,10 +2063,10 @@ mod tests {
             ),
         };
 
-        // Gene symbol is stored but not included in standard Display
+        // Per #121: Display preserves the gene-symbol selector when set.
         assert_eq!(variant.gene_symbol, Some("BRCA1".to_string()));
         let display = format!("{}", variant);
-        assert!(display.contains("NC_000001.11"));
+        assert_eq!(display, "NC_000001.11(BRCA1):g.12345A>G");
     }
 
     #[test]
