@@ -104,6 +104,23 @@ pub enum NormalizationWarning {
         /// Whether the mismatch was auto-corrected
         corrected: bool,
     },
+
+    /// Two or more cis-allele edits share identical reference bounds.
+    /// The HGVS spec does not define a canonical form for this case;
+    /// ferro preserves the input verbatim and emits this warning.
+    /// Code: `OVERLAP_CONFLICTING_EDITS`.
+    OverlapConflict {
+        /// Human-readable description
+        message: String,
+        /// Accession of the reference sequence
+        accession: String,
+        /// Coordinate system: "g" | "c" | "n" | "r" | "m"
+        coordinate_system: String,
+        /// Canonical span text, e.g. "100" or "100_103"
+        location: String,
+        /// Edit kinds, e.g. ["sub", "sub"] or ["del", "inv"]
+        edit_kinds: Vec<String>,
+    },
 }
 
 impl NormalizationWarning {
@@ -111,6 +128,7 @@ impl NormalizationWarning {
     pub fn code(&self) -> &'static str {
         match self {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
+            Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
         }
     }
 
@@ -118,6 +136,7 @@ impl NormalizationWarning {
     pub fn message(&self) -> &str {
         match self {
             Self::RefSeqMismatch { message, .. } => message,
+            Self::OverlapConflict { message, .. } => message,
         }
     }
 }
@@ -196,8 +215,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let result = self.normalize_with_warnings(variant)?;
 
         // In strict mode, reject if there were reference mismatches.
-        // The `_ => None` arm is unreachable today (one variant) but becomes
-        // live as soon as Task 3 adds `OverlapConflict`. Drop the `#[allow]` then.
         if self.config.should_reject_ref_mismatch() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
                 NormalizationWarning::RefSeqMismatch {
@@ -210,7 +227,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     expected: stated_ref.clone(),
                     found: actual_ref.clone(),
                 }),
-                #[allow(unreachable_patterns)]
                 _ => None,
             }) {
                 return Err(err);

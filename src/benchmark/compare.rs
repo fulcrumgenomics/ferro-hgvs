@@ -1480,9 +1480,6 @@ fn run_ferro_normalize(
                     match normalizer.normalize_with_warnings(&parse_result.result) {
                         Ok(norm_result) => {
                             // Check if there were reference mismatches
-                            // The `_ => None` arm is unreachable today (one variant) but
-                            // becomes live as soon as Task 3 adds `OverlapConflict`. Drop
-                            // the `#[allow]` then.
                             let ref_mismatch = norm_result.warnings.iter().find_map(|w| match w {
                                 NormalizationWarning::RefSeqMismatch {
                                     stated_ref,
@@ -1496,7 +1493,6 @@ fn run_ferro_normalize(
                                     position: position.clone(),
                                     corrected: *corrected,
                                 }),
-                                #[allow(unreachable_patterns)]
                                 _ => None,
                             });
 
