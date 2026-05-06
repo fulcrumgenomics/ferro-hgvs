@@ -1487,6 +1487,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
             NaEdit::Delins { sequence } => {
                 use crate::hgvs::edit::InsertedSequence;
 
+                // HGVS spec (issue #81 A3): a delins with an empty inserted
+                // sequence is semantically a deletion and must be rendered as
+                // `del`. Rewrite up-front so the result picks up del 3'-shift
+                // and validation in the Deletion arm.
+                if matches!(sequence, InsertedSequence::Empty) {
+                    let del = NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    };
+                    return self.normalize_na_edit(ref_seq, &del, start, end, boundaries);
+                }
+
                 // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
                 // but the edit-type priority (sub > del > inv > dup > ins) means
                 // we may need to rewrite it as a higher-priority form: identity
@@ -2325,6 +2337,33 @@ mod tests {
             "Multi-base delete delins must not become a substitution, got: {}",
             output
         );
+    }
+
+    #[test]
+    fn test_normalize_empty_insert_delins_becomes_deletion() {
+        // HGVS spec: a delins whose inserted sequence is empty is semantically
+        // a deletion and must be rendered as `del`. Issue #81 item A3.
+        // Transcript NM_000088.3 starts ATGCCCAAGG…; c.10delins (empty insert)
+        // is a deletion of position 10 → c.10del.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10delins").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10del");
+    }
+
+    #[test]
+    fn test_normalize_empty_insert_multi_base_delins_becomes_deletion() {
+        // Multi-base form: c.10_11delins (deletes "GT" at positions 10-11,
+        // inserts nothing) → del, then the spec's 3'-rule shifts the deletion
+        // to c.11_12del because ref[10]=G == ref[12]=G. Issue #81 item A3.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10_11delins").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.11_12del");
     }
 
     #[test]
