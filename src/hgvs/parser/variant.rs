@@ -881,13 +881,23 @@ fn parse_genome_variant(
             }
         }
 
-        // Try compound allele notation: g.[pos1edit1;pos2edit2;...]
+        // Try compound allele notation: g.[pos1edit1;pos2edit2;...] or g.[a(;)b]
         if input.starts_with('[') {
             if let Ok((remaining, allele)) =
                 parse_genome_compound_allele(input, accession.clone(), gene_symbol.clone())
             {
                 return Ok((remaining, HgvsVariant::Allele(allele)));
             }
+        }
+
+        // Bracketless unknown-phase shorthand: g.123G>A(;)345del (#123)
+        if input.contains("(;)") && !input.starts_with('[') {
+            return parse_genome_position_unknown_phase(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+                GenomeKind::Genome,
+            );
         }
 
         let (input, interval) = parse_genome_interval(input)?;
@@ -924,54 +934,172 @@ fn parse_genome_variant(
     }
 }
 
-/// Parse a compound allele with genomic variants: [pos1edit1;pos2edit2;...]
+/// Tag that selects which DNA variant constructor to use when the genome-style
+/// allele helpers are shared between `g.`, `m.`, and `o.`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GenomeKind {
+    Genome,
+    Mt,
+    Circular,
+}
+
+impl GenomeKind {
+    fn build_variant(
+        self,
+        accession: Accession,
+        gene_symbol: Option<String>,
+        interval: GenomeInterval,
+        edit: crate::hgvs::edit::NaEdit,
+    ) -> HgvsVariant {
+        match self {
+            GenomeKind::Genome => HgvsVariant::Genome(GenomeVariant {
+                accession,
+                gene_symbol,
+                loc_edit: LocEdit::new(interval, edit),
+            }),
+            GenomeKind::Mt => HgvsVariant::Mt(MtVariant {
+                accession,
+                gene_symbol,
+                loc_edit: LocEdit::new(interval, edit),
+            }),
+            GenomeKind::Circular => HgvsVariant::Circular(CircularVariant {
+                accession,
+                gene_symbol,
+                loc_edit: LocEdit::new(interval, edit),
+            }),
+        }
+    }
+}
+
+/// Find the index of the `]` that closes the leading `[` in `input`, scanning
+/// at bracket depth 0. Returns `None` if `input` does not start with `[` or if
+/// the bracket is unbalanced.
+///
+/// Plain `input.find(']')` would truncate at any inner edit bracket
+/// (`delins[ACC:g.x_y]`, `delins[A;T]`, etc.); plain `input.rfind(']')` would
+/// over-consume on trans-form `[a];[b]`. The depth-tracking scan handles both.
+fn find_top_level_close_bracket(input: &str) -> Option<usize> {
+    if !input.starts_with('[') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    for (i, b) in input.bytes().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse a compound allele with genomic variants:
+///   `[pos1edit1;pos2edit2;...]`   (cis)
+///   `[pos1edit1(;)pos2edit2;...]` (unknown phase)
+///
+/// A single bracket pair must use exactly one separator type; mixed
+/// `;`/`(;)` inside one bracket pair is not spec-valid and is rejected.
 fn parse_genome_compound_allele(
     input: &str,
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, AlleleVariant> {
-    let (remaining, _) = char('[').parse(input)?;
+    parse_genome_kind_compound_allele(input, accession, gene_symbol, GenomeKind::Genome)
+}
 
-    let mut variants = Vec::new();
-    let mut current = remaining;
+fn parse_genome_kind_compound_allele(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+    kind: GenomeKind,
+) -> IResult<&str, AlleleVariant> {
+    if !input.starts_with('[') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
 
-    loop {
-        // Parse interval and edit
-        let (rest, interval) = parse_genome_interval(current)?;
-        // Edit is optional - if not present, treat as identity (no change)
-        let (rest, edit) = if let Ok((r, e)) = parse_na_edit(rest) {
+    // Locate the `]` that closes the leading `[`, scanning at bracket depth 0
+    // so that members containing nested edit brackets (`delins[ACC:g.x_y]`,
+    // `delins[A;T]`, etc.) are not truncated at the inner `]`.
+    let close_bracket = find_top_level_close_bracket(input).ok_or_else(|| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
+    })?;
+
+    let content = &input[1..close_bracket];
+    let remaining = &input[close_bracket + 1..];
+
+    // Distinguish unknown phase from cis based on `(;)` presence.
+    let has_unknown_phase = content.contains("(;)");
+    let has_cis_separator = {
+        // Any `;` that isn't part of `(;)`.
+        let temp = content.replace("(;)", "\x00");
+        temp.contains(';')
+    };
+
+    // Mixed `;` and `(;)` inside a single bracket pair is not spec-valid
+    // (HGVS `recommendations/{DNA,protein}/alleles.md` only mixes `;`/`(;)` at
+    // the top level via `[a;b];[c](;)d`, not inside one `[...]`). Reject
+    // rather than silently flatten the cis subgroup boundary into a single
+    // `phase: Unknown` allele.
+    if has_unknown_phase && has_cis_separator {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    let phase = if has_unknown_phase {
+        AllelePhase::Unknown
+    } else {
+        AllelePhase::Cis
+    };
+
+    let separator = if has_unknown_phase { "(;)" } else { ";" };
+    let mut variants = Vec::with_capacity(4);
+
+    for part in content.split(separator) {
+        let part = part.trim();
+        if part.is_empty() {
+            // Empty parts (e.g. `[a;;b]`, `[a(;)(;)b]`, or trailing `[a(;)]`)
+            // are malformed; reject rather than silently dropping them.
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+        let (edit_remaining, interval) = parse_genome_interval(part)?;
+        let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
             (r, e)
         } else {
-            // No edit found - use identity (reference)
             (
-                rest,
+                edit_remaining,
                 crate::hgvs::edit::NaEdit::Identity {
                     sequence: None,
                     whole_entity: false,
                 },
             )
         };
-
-        variants.push(HgvsVariant::Genome(GenomeVariant {
-            accession: accession.clone(),
-            gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
-        }));
-
-        // Check for more variants (semicolon separator) or end of allele
-        if let Some(after_semi) = rest.strip_prefix(';') {
-            current = after_semi;
-        } else if let Some(after_bracket) = rest.strip_prefix(']') {
-            current = after_bracket;
-            break;
-        } else {
+        if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
-                rest,
+                final_remaining,
                 nom::error::ErrorKind::Tag,
             )));
         }
+        variants.push(kind.build_variant(accession.clone(), gene_symbol.clone(), interval, edit));
     }
 
+    // Singletons (`[a]`) are intentionally accepted by ferro: the bracketed
+    // wrapper is preserved for upstream tooling rather than rejected, and a
+    // non-empty `remaining` (e.g. trans-form `[a];[b]`) is handled by the
+    // outer parser. See `test_singleton_cis_allele_preserves_wrapper` and
+    // `pinned_v21_normalization_behavior` for the pinned behavior.
     if variants.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -979,7 +1107,54 @@ fn parse_genome_compound_allele(
         )));
     }
 
-    Ok((current, AlleleVariant::cis(variants)))
+    Ok((remaining, AlleleVariant::new(variants, phase)))
+}
+
+/// Parse position-based unknown-phase shorthand for genome-style coord systems:
+///   `123G>A(;)345del` (uses [`GenomeKind`] to select the wrapping variant kind)
+fn parse_genome_position_unknown_phase(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+    kind: GenomeKind,
+) -> IResult<&str, HgvsVariant> {
+    let mut variants = Vec::with_capacity(4);
+
+    for part in input.split("(;)") {
+        let part = part.trim();
+        if part.is_empty() {
+            // An empty `(;)` group (e.g. `a(;)(;)b` or trailing/leading
+            // `(;)`) is malformed; reject rather than silently dropping it.
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+
+        let (edit_remaining, interval) = parse_genome_interval(part)?;
+        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+
+        if !final_remaining.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                final_remaining,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+
+        variants.push(kind.build_variant(accession.clone(), gene_symbol.clone(), interval, edit));
+    }
+
+    if variants.len() < 2 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    Ok((
+        "",
+        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Unknown)),
+    ))
 }
 
 /// Parse a genomic trans-allele compact-prefix shorthand: `[edit1];[edit2]`
@@ -1271,7 +1446,10 @@ fn parse_cds_position_unknown_phase(
     for part in input.split("(;)") {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
         }
 
         // Parse interval + edit
@@ -1360,7 +1538,10 @@ fn parse_cds_allele_shorthand(
             for part in unknown_group.split(';') {
                 let part = part.trim();
                 if part.is_empty() {
-                    continue;
+                    return Err(nom::Err::Error(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Verify,
+                    )));
                 }
 
                 let (edit_remaining, interval) = parse_cds_interval(part)?;
@@ -1398,7 +1579,10 @@ fn parse_cds_allele_shorthand(
         for part in content.split(separator) {
             let part = part.trim();
             if part.is_empty() {
-                continue;
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Verify,
+                )));
             }
 
             // Parse interval + edit (e.g., "145C>T" or "100_200del")
@@ -1535,6 +1719,20 @@ fn parse_tx_variant(
             }
         }
 
+        // Bracketed compound allele: n.[var;var;...] or n.[var(;)var]
+        if input.starts_with('[') {
+            if let Ok((remaining, allele)) =
+                parse_tx_compound_allele(input, accession.clone(), gene_symbol.clone())
+            {
+                return Ok((remaining, HgvsVariant::Allele(allele)));
+            }
+        }
+
+        // Bracketless unknown-phase shorthand: n.100A>G(;)200T>C (#123)
+        if input.contains("(;)") && !input.starts_with('[') {
+            return parse_tx_position_unknown_phase(input, accession.clone(), gene_symbol.clone());
+        }
+
         let (input, interval) = parse_tx_interval(input)?;
         let (input, edit) = parse_na_edit(input)?;
 
@@ -1630,6 +1828,142 @@ fn parse_tx_trans_allele_shorthand(
     ))
 }
 
+/// Parse a compound allele with `n.` (transcript) variants:
+///   `[100A>G;200T>C]` (cis) or `[100A>G(;)200T>C]` (unknown phase)
+fn parse_tx_compound_allele(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+) -> IResult<&str, AlleleVariant> {
+    if !input.starts_with('[') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    // See `find_top_level_close_bracket` for why a depth-aware scan is used.
+    let close_bracket = find_top_level_close_bracket(input).ok_or_else(|| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
+    })?;
+
+    let content = &input[1..close_bracket];
+    let remaining = &input[close_bracket + 1..];
+
+    let has_unknown_phase = content.contains("(;)");
+    let has_cis_separator = {
+        let temp = content.replace("(;)", "\x00");
+        temp.contains(';')
+    };
+
+    // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — see
+    // `parse_genome_kind_compound_allele` for the spec citation.
+    if has_unknown_phase && has_cis_separator {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    let phase = if has_unknown_phase {
+        AllelePhase::Unknown
+    } else {
+        AllelePhase::Cis
+    };
+
+    let separator = if has_unknown_phase { "(;)" } else { ";" };
+
+    let mut variants = Vec::with_capacity(4);
+    for part in content.split(separator) {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+        let (edit_remaining, interval) = parse_tx_interval(part)?;
+        let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
+            (r, e)
+        } else {
+            (
+                edit_remaining,
+                crate::hgvs::edit::NaEdit::Identity {
+                    sequence: None,
+                    whole_entity: false,
+                },
+            )
+        };
+        if !final_remaining.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                final_remaining,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+        variants.push(HgvsVariant::Tx(TxVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit: LocEdit::new(interval, edit),
+        }));
+    }
+
+    // Singletons are intentionally accepted — see
+    // `parse_genome_kind_compound_allele` for the rationale.
+    if variants.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    Ok((remaining, AlleleVariant::new(variants, phase)))
+}
+
+/// Parse position-based unknown-phase shorthand for `n.`:
+///   `100A>G(;)200T>C`
+fn parse_tx_position_unknown_phase(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+) -> IResult<&str, HgvsVariant> {
+    let mut variants = Vec::with_capacity(4);
+
+    for part in input.split("(;)") {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+        let (edit_remaining, interval) = parse_tx_interval(part)?;
+        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+        if !final_remaining.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                final_remaining,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+        variants.push(HgvsVariant::Tx(TxVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit: LocEdit::new(interval, edit),
+        }));
+    }
+
+    if variants.len() < 2 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    Ok((
+        "",
+        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Unknown)),
+    ))
+}
+
 /// Parse mitochondrial variant (m.)
 fn parse_mt_variant(
     accession: Accession,
@@ -1646,6 +1980,28 @@ fn parse_mt_variant(
             {
                 return Ok((remaining, variant));
             }
+        }
+
+        // Bracketed compound allele: m.[var;var] or m.[var(;)var]
+        if input.starts_with('[') {
+            if let Ok((remaining, allele)) = parse_genome_kind_compound_allele(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+                GenomeKind::Mt,
+            ) {
+                return Ok((remaining, HgvsVariant::Allele(allele)));
+            }
+        }
+
+        // Bracketless unknown-phase shorthand: m.100A>G(;)200T>C (#123)
+        if input.contains("(;)") && !input.starts_with('[') {
+            return parse_genome_position_unknown_phase(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+                GenomeKind::Mt,
+            );
         }
 
         let (input, interval) = parse_genome_interval(input)?;
@@ -1778,12 +2134,91 @@ fn parse_whole_protein_unknown(input: &str) -> IResult<&str, ProteinEdit> {
     .parse(input)
 }
 
-/// Parse a protein allele shorthand: p.[edit1;edit2;...]
+/// Parse a protein allele shorthand:
+///   `p.[edit1;edit2;...]`     (cis)
+///   `p.[edit1(;)edit2;...]`   (unknown phase)
+///
+/// A single bracket pair must use exactly one separator type; mixed
+/// `;`/`(;)` inside one bracket pair is not spec-valid and is rejected.
 fn parse_protein_allele_shorthand(
     input: &str,
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, AlleleVariant> {
+    if !input.starts_with('[') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    // Fast path: any `(;)` inside the brackets means unknown phase. Slice the
+    // bracketed content, split on `(;)`, and parse each sub-variant as
+    // `interval+edit`. Use a depth-aware scan for the closing `]` so members
+    // containing nested edit brackets are not truncated — see
+    // `find_top_level_close_bracket`.
+    let close_bracket = find_top_level_close_bracket(input).ok_or_else(|| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
+    })?;
+    let content = &input[1..close_bracket];
+    let after_bracket = &input[close_bracket + 1..];
+
+    let has_unknown_phase = content.contains("(;)");
+
+    if has_unknown_phase {
+        let has_cis_separator = {
+            let temp = content.replace("(;)", "\x00");
+            temp.contains(';')
+        };
+        // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — see
+        // `parse_genome_kind_compound_allele` for the spec citation.
+        if has_cis_separator {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+
+        let mut variants = Vec::with_capacity(4);
+        for part in content.split("(;)") {
+            let part = part.trim();
+            if part.is_empty() {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
+            let (edit_remaining, interval) = parse_prot_interval(part)?;
+            let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;
+            if !final_remaining.trim().is_empty() {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    final_remaining,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+            variants.push(HgvsVariant::Protein(ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new(interval, edit),
+            }));
+        }
+
+        // Singletons are intentionally accepted — see
+        // `parse_genome_kind_compound_allele` for the rationale.
+        if variants.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+
+        return Ok((
+            after_bracket,
+            AlleleVariant::new(variants, AllelePhase::Unknown),
+        ));
+    }
+
+    // Cis path (existing behavior).
     let (remaining, _) = char('[').parse(input)?;
 
     let mut variants = Vec::new();
@@ -1814,6 +2249,8 @@ fn parse_protein_allele_shorthand(
         }
     }
 
+    // Singletons are intentionally accepted — see
+    // `parse_genome_kind_compound_allele` for the rationale.
     if variants.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -1892,6 +2329,63 @@ fn parse_protein_trans_allele_shorthand(
     Ok((
         remaining,
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
+    ))
+}
+
+/// Parse position-based unknown-phase shorthand for protein (#123):
+///   `(Ser68Arg)(;)(Asn594del)`
+///
+/// Per `recommendations/protein/alleles.md` line 48, the protein unknown-phase
+/// form does NOT use surrounding square brackets and each sub-variant is a
+/// predicted change wrapped in `()`.
+fn parse_protein_position_unknown_phase(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+) -> IResult<&str, HgvsVariant> {
+    let mut variants = Vec::with_capacity(4);
+
+    for part in input.split("(;)") {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+
+        // Each part must be a parenthesized predicted change `(interval+edit)`.
+        let (rest, (interval, edit)) = delimited(
+            char('('),
+            (parse_prot_interval, parse_protein_edit),
+            char(')'),
+        )
+        .parse(part)?;
+
+        if !rest.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                rest,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+
+        variants.push(HgvsVariant::Protein(ProteinVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(interval, Mu::Uncertain(edit)),
+        }));
+    }
+
+    if variants.len() < 2 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    Ok((
+        "",
+        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Unknown)),
     ))
 }
 
@@ -2115,13 +2609,25 @@ fn parse_protein_variant(
             }
         }
 
-        // Try protein allele: p.[edit1;edit2;...]
+        // Try protein allele: p.[edit1;edit2;...] or p.[edit1(;)edit2]
         if input.starts_with('[') {
             if let Ok((remaining, allele)) =
                 parse_protein_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
                 return Ok((remaining, HgvsVariant::Allele(allele)));
             }
+        }
+
+        // Bracketless unknown-phase shorthand for protein (#123):
+        //   p.(Ser68Arg)(;)(Asn594del)
+        // Per spec the protein form is bare (no surrounding `[]`). Each
+        // sub-variant is a predicted change in parentheses.
+        if input.starts_with('(') && input.contains(")(;)(") {
+            return parse_protein_position_unknown_phase(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+            );
         }
 
         // Try predicted protein change: p.(position+edit) - wrapped in parentheses
@@ -2426,7 +2932,10 @@ fn parse_rna_position_unknown_phase(
     for part in input.split("(;)") {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
         }
 
         let (edit_remaining, interval) = parse_rna_interval(part)?;
@@ -2505,7 +3014,10 @@ fn parse_rna_allele_shorthand(
             for part in unknown_group.split(';') {
                 let part = part.trim();
                 if part.is_empty() {
-                    continue;
+                    return Err(nom::Err::Error(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Verify,
+                    )));
                 }
 
                 let (edit_remaining, interval) = parse_rna_interval(part)?;
@@ -2531,7 +3043,10 @@ fn parse_rna_allele_shorthand(
         for part in content.split(separator) {
             let part = part.trim();
             if part.is_empty() {
-                continue;
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Verify,
+                )));
             }
 
             let (edit_remaining, interval) = parse_rna_interval(part)?;
@@ -2648,6 +3163,28 @@ fn parse_circular_variant(
             {
                 return Ok((remaining, variant));
             }
+        }
+
+        // Bracketed compound allele: o.[var;var] or o.[var(;)var]
+        if input.starts_with('[') {
+            if let Ok((remaining, allele)) = parse_genome_kind_compound_allele(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+                GenomeKind::Circular,
+            ) {
+                return Ok((remaining, HgvsVariant::Allele(allele)));
+            }
+        }
+
+        // Bracketless unknown-phase shorthand: o.100A>G(;)200T>C (#123)
+        if input.contains("(;)") && !input.starts_with('[') {
+            return parse_genome_position_unknown_phase(
+                input,
+                accession.clone(),
+                gene_symbol.clone(),
+                GenomeKind::Circular,
+            );
         }
 
         let (input, interval) = parse_genome_interval(input)?;
@@ -3606,12 +4143,19 @@ fn parse_unknown_phase_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     // Extract content inside brackets
     let content = &input[1..input.len() - 1];
 
-    // Split by (;) and parse each variant
+    // Split by (;) and parse each variant. Empty groups (e.g.
+    // `[A:c.x(;)(;)B:c.y]`, leading/trailing `(;)`) are malformed; reject
+    // rather than silently dropping them — matches the per-coord helpers
+    // (`parse_genome_kind_compound_allele` etc.) introduced for #123.
     let mut variants = Vec::with_capacity(2);
     for part in content.split("(;)") {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: "Empty `(;)` group in unknown-phase allele".to_string(),
+                diagnostic: None,
+            });
         }
         let (remaining, variant) = parse_single_variant(part)?;
         if !remaining.trim().is_empty() {
