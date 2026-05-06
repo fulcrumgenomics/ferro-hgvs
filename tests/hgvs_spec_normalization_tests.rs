@@ -40,6 +40,10 @@ struct Row {
     /// evaluate (e.g. §2.1 3'-rule shifting). Skipped until #82 lands.
     #[serde(default)]
     requires_reference: Option<bool>,
+    /// Warning codes ferro currently emits for this row, sorted alphabetically.
+    /// Defaults to `vec![]` for rows with no warnings.
+    #[serde(default)]
+    expected_warnings: Vec<String>,
 }
 
 fn fixture_path() -> PathBuf {
@@ -48,12 +52,18 @@ fn fixture_path() -> PathBuf {
     p
 }
 
-fn observe(normalizer: &Normalizer<MockProvider>, input: &str) -> String {
+fn observe(normalizer: &Normalizer<MockProvider>, input: &str) -> (String, Vec<String>) {
     match parse_hgvs(input) {
-        Err(e) => format!("parse error: {e}"),
-        Ok(v) => match normalizer.normalize(&v) {
-            Err(e) => format!("normalize error: {e}"),
-            Ok(n) => format!("{n}"),
+        Err(e) => (format!("parse error: {e}"), Vec::new()),
+        Ok(v) => match normalizer.normalize_with_warnings(&v) {
+            Err(e) => (format!("normalize error: {e}"), Vec::new()),
+            Ok(n) => {
+                let mut codes: Vec<String> =
+                    n.warnings.iter().map(|w| w.code().to_string()).collect();
+                codes.sort();
+                codes.dedup();
+                (format!("{}", n.result), codes)
+            }
         },
     }
 }
@@ -79,11 +89,16 @@ fn pinned_v21_normalization_behavior() {
             continue;
         }
         let target = row.input_prefixed.as_deref().unwrap_or(&row.input);
-        let observed = observe(&normalizer, target);
-        if observed != row.current {
+        let (observed, mut observed_warnings) = observe(&normalizer, target);
+        observed_warnings.sort();
+        observed_warnings.dedup();
+        let mut expected_warnings = row.expected_warnings.clone();
+        expected_warnings.sort();
+        expected_warnings.dedup();
+        if observed != row.current || observed_warnings != expected_warnings {
             diffs.push(format!(
-                "  input        : {}\n    target     : {}\n    expected   : {}\n    observed   : {}\n    status     : {}",
-                row.input, target, row.current, observed, row.status,
+                "  input            : {}\n    target           : {}\n    expected         : {}\n    observed         : {}\n    expected_warnings: {:?}\n    observed_warnings: {:?}\n    status           : {}",
+                row.input, target, row.current, observed, expected_warnings, observed_warnings, row.status,
             ));
         }
         tested += 1;
