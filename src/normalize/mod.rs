@@ -1672,36 +1672,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // classify without the actual bases; return unchanged.
                 return Ok((start, end, edit.clone(), warnings.clone()));
             }
-            NaEdit::Inversion { sequence, length } => {
-                // Apply inversion shortening: remove outer bases that cancel out
-                // when the first base is complementary to the last base
+            NaEdit::Inversion { .. } => {
+                // Apply the complementary-outer-bases shortening rule. After
+                // shortening, the inversion's interval may no longer match the
+                // input's explicit `sequence`/`length` (if any), so emit
+                // minimal notation.
                 let start_idx = hgvs_pos_to_index(start); // Convert 1-based to 0-based
                 let end_idx = end as usize; // end is exclusive (0-based)
 
                 if let Some((new_s, new_e)) = rules::shorten_inversion(ref_seq, start_idx, end_idx)
                 {
-                    // Inversion was shortened - convert back to 1-based
-                    let shortened_edit = NaEdit::Inversion {
-                        sequence: sequence.clone(),
-                        length: *length,
-                    };
                     return Ok((
                         index_to_hgvs_pos(new_s),
                         new_e as u64,
-                        shortened_edit,
-                        warnings,
-                    ));
-                } else {
-                    // Inversion reduced to identity - return as identity
-                    return Ok((
-                        start,
-                        end,
-                        NaEdit::Identity {
+                        NaEdit::Inversion {
                             sequence: None,
-                            whole_entity: false,
+                            length: None,
                         },
                         warnings,
                     ));
+                } else {
+                    // Inversion reduced to identity. Use the canonical
+                    // position-only Identity (matches the Delins identity arm
+                    // above), so both inversion-collapse paths emit the same
+                    // shape.
+                    return Ok((start, end, NaEdit::position_identity(), warnings));
                 }
             }
             NaEdit::Repeat {

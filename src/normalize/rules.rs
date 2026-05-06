@@ -28,6 +28,7 @@ pub fn needs_normalization(edit: &NaEdit) -> bool {
             | NaEdit::Insertion { .. }
             | NaEdit::Duplication { .. }
             | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
             | NaEdit::Repeat { .. }
     ) {
         return true;
@@ -1186,7 +1187,9 @@ mod tests {
             length: None,
             uncertain_extent: None,
         }));
-        assert!(!needs_normalization(&NaEdit::Inversion {
+        // Inversions need normalization so the complementary-outer-bases
+        // shortening rule fires (RULE 10 in normalize_tests.rs).
+        assert!(needs_normalization(&NaEdit::Inversion {
             sequence: None,
             length: None,
         }));
