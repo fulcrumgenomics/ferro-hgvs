@@ -123,3 +123,18 @@ class TestNormalizeMergeConsecutive:
         assert "100G>A" in result
         assert "102C>T" in result
         assert ";" in result
+
+
+class TestNormalizeEmptyInsertDelinsToDel:
+    """Issue #81 item A3: a delins with an empty inserted sequence -> del."""
+
+    def test_single_position_empty_delins(self) -> None:
+        # NM_000088.3 c.10 = G; c.10delins is semantically a deletion of G.
+        result = ferro_hgvs.normalize("NM_000088.3:c.10delins")
+        assert result == "NM_000088.3:c.10del"
+
+    def test_multi_position_empty_delins_with_3prime_shift(self) -> None:
+        # NM_000088.3 c.10_11 = GT; rewriting to del then applying the spec's
+        # 3'-rule shifts to c.11_12 because ref[10]=G == ref[12]=G.
+        result = ferro_hgvs.normalize("NM_000088.3:c.10_11delins")
+        assert result == "NM_000088.3:c.11_12del"
