@@ -24,17 +24,45 @@
 //! Note: Deletions, delins, and duplications require reference sequence data
 //! to determine the deleted sequence.
 //!
+//! # Coordinate-system support
+//!
+//! [`hgvs_to_spdi_simple`] accepts coordinate systems whose positions are
+//! resolvable without provider data:
+//!
+//! - `g.` (genomic) — direct.
+//! - `m.` (mito) — the mito accession is genomic; same path as `g.`.
+//! - `n.` (non-coding tx) — exonic, positive base; SPDI on the transcript
+//!   accession.
+//! - `r.` (RNA) — exonic, positive base; `u`/`U` rewritten to `T` for
+//!   SPDI's DNA alphabet convention.
+//!
+//! [`hgvs_to_spdi`] additionally handles `c.` (CDS) and intronic / UTR
+//! `n.`/`r.` positions by consulting a [`ReferenceProvider`] for transcript
+//! metadata. Per the [SPDI spec], the SPDI accession matches the HGVS
+//! accession (NCBI Variation Services emits SPDI on transcript accessions
+//! the same way).
+//!
+//! `p.` (protein) variants are not representable in SPDI and are rejected.
+//!
+//! [`ReferenceProvider`]: crate::reference::provider::ReferenceProvider
+//! [SPDI spec]: https://www.ncbi.nlm.nih.gov/variation/notation/
+//!
 //! [`OneBasedPos`]: crate::coords::OneBasedPos
 //! [`ZeroBasedPos`]: crate::coords::ZeroBasedPos
 
 use super::SpdiVariant;
+use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{InsertedSequence, NaEdit, Sequence};
 use crate::hgvs::interval::Interval;
-use crate::hgvs::location::GenomePos;
+use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::accession::parse_accession;
-use crate::hgvs::variant::{GenomeVariant, HgvsVariant, LocEdit};
+use crate::hgvs::variant::{
+    Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
+};
+use crate::reference::provider::ReferenceProvider;
+use crate::reference::transcript::Transcript;
 
 /// Error type for conversion failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +92,17 @@ pub enum ConversionError {
         /// Description of the accession error.
         description: String,
     },
+    /// A reference provider is required to perform this conversion, but none
+    /// was supplied. Distinct from [`MissingReferenceData`], which means a
+    /// provider was supplied but does not have data for the requested region.
+    ///
+    /// [`MissingReferenceData`]: ConversionError::MissingReferenceData
+    ProviderRequired {
+        /// HGVS coordinate-system letter that triggered the error (`c`, `n`, `r`, ...).
+        variant_type: String,
+        /// Why a provider is needed for this variant.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ConversionError {
@@ -87,6 +126,16 @@ impl std::fmt::Display for ConversionError {
             }
             ConversionError::InvalidAccession { description } => {
                 write!(f, "invalid accession: {}", description)
+            }
+            ConversionError::ProviderRequired {
+                variant_type,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "reference provider required to convert {}. variant: {}",
+                    variant_type, reason
+                )
             }
         }
     }
@@ -125,21 +174,36 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.end.inner().map(|p| p.base)
 }
 
-/// Convert a genomic HGVS variant to SPDI format.
+/// Convert an HGVS variant to SPDI format without consulting a reference provider.
 ///
-/// This is a "simple" conversion that works for substitutions where the
-/// reference and alternate sequences are explicitly stated in the HGVS.
-/// For deletions, insertions, and duplications, use the version that takes
-/// a reference provider.
+/// This is the "simple" conversion path: the SPDI is emitted on the same
+/// accession the HGVS variant uses (no genomic projection of transcript
+/// variants). It accepts coordinate systems whose positions can be resolved
+/// without transcript metadata:
+///
+/// | HGVS coord | Supported here | Notes |
+/// |------------|----------------|-------|
+/// | `g.` (genomic) | yes | direct 1→0-based conversion |
+/// | `m.` (mito) | yes | mito accession is genomic; same as `g.` |
+/// | `n.` (non-coding tx) | exonic, positive base | SPDI sits on the transcript accession |
+/// | `r.` (RNA) | exonic, positive base | `u`/`U` rewritten to `T`; SPDI uses DNA alphabet |
+/// | `c.` (CDS) | NO — needs CDS start | use [`hgvs_to_spdi`] |
+/// | `p.` (protein) | NO | not representable in SPDI |
+///
+/// For `c.`, intronic `n.`/`r.`, UTR `n.`/`r.`, or deletion/dup variants
+/// without an explicit deleted sequence, use [`hgvs_to_spdi`] which consults
+/// a [`ReferenceProvider`].
 ///
 /// # Arguments
 ///
-/// * `variant` - A genomic HGVS variant (g. coordinate system)
+/// * `variant` - The HGVS variant to convert.
 ///
 /// # Returns
 ///
-/// * `Ok(SpdiVariant)` - Successfully converted variant
-/// * `Err(ConversionError)` - Conversion failed
+/// * `Ok(SpdiVariant)` - Successfully converted variant.
+/// * `Err(ConversionError::ProviderRequired)` - The variant requires a
+///   provider (typically `c.` or intronic `n.`/`r.`).
+/// * `Err(ConversionError)` - Conversion failed for another reason.
 ///
 /// # Examples
 ///
@@ -147,16 +211,89 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 /// use ferro_hgvs::spdi::convert::hgvs_to_spdi_simple;
 /// use ferro_hgvs::parse_hgvs;
 ///
+/// // Genomic variant
 /// let hgvs = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
 /// let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
 /// assert_eq!(spdi.to_string(), "NC_000001.11:12344:A:G");
+///
+/// // Non-coding transcript: SPDI emitted on the transcript accession
+/// let hgvs = parse_hgvs("NR_046018.2:n.5C>G").unwrap();
+/// let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+/// assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
 /// ```
+///
+/// [`ReferenceProvider`]: crate::reference::provider::ReferenceProvider
 pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, ConversionError> {
     match variant {
         HgvsVariant::Genome(g) => genome_to_spdi_simple(g),
+        HgvsVariant::Mt(m) => mt_to_spdi_simple(m),
+        HgvsVariant::Tx(n) => tx_to_spdi_simple(n),
+        HgvsVariant::Rna(r) => rna_to_spdi_simple(r),
+        HgvsVariant::Cds(_) => Err(ConversionError::ProviderRequired {
+            variant_type: "c".to_string(),
+            reason:
+                "CDS positions need transcript metadata (CDS start) to resolve to a transcript \
+                 position; call hgvs_to_spdi with a ReferenceProvider"
+                    .to_string(),
+        }),
+        HgvsVariant::Protein(_) => Err(ConversionError::UnsupportedVariantType {
+            description: "protein variants cannot be represented in SPDI; SPDI describes \
+                          nucleotide variants on a sequence accession"
+                .to_string(),
+        }),
         _ => Err(ConversionError::UnsupportedVariantType {
             description: format!(
-                "only genomic (g.) variants can be directly converted to SPDI, got {}",
+                "variant type {} cannot be converted to SPDI",
+                variant.variant_type()
+            ),
+        }),
+    }
+}
+
+/// Convert an HGVS variant to SPDI, consulting a reference provider when
+/// transcript metadata (CDS start, exon coordinates) is required.
+///
+/// This is the provider-aware companion to [`hgvs_to_spdi_simple`]. It
+/// handles `c.` (CDS) variants, `n.`/`r.` variants with intronic offsets or
+/// UTR-style positions, and falls back to the simple path for cases that
+/// don't need provider data.
+///
+/// The resulting SPDI uses the **same accession** as the HGVS variant — for
+/// `NM_000088.3:c.1A>G` the SPDI sequence is `NM_000088.3`, not the
+/// underlying genomic accession. This matches NCBI Variation Services'
+/// behavior: SPDI is positional on whichever accession is provided.
+///
+/// # Arguments
+///
+/// * `variant` - The HGVS variant to convert.
+/// * `provider` - A reference provider that can return the relevant
+///   transcript via `get_transcript`.
+///
+/// # Errors
+///
+/// * [`ConversionError::MissingReferenceData`] if the provider does not have
+///   the transcript or the position cannot be resolved (e.g. intronic
+///   without exon data).
+/// * Other `ConversionError` variants for the same reasons as
+///   [`hgvs_to_spdi_simple`].
+pub fn hgvs_to_spdi<P: ReferenceProvider>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    match variant {
+        HgvsVariant::Genome(g) => genome_to_spdi_simple(g),
+        HgvsVariant::Mt(m) => mt_to_spdi_simple(m),
+        HgvsVariant::Tx(n) => tx_to_spdi_with_provider(n, provider),
+        HgvsVariant::Rna(r) => rna_to_spdi_with_provider(r, provider),
+        HgvsVariant::Cds(c) => cds_to_spdi_with_provider(c, provider),
+        HgvsVariant::Protein(_) => Err(ConversionError::UnsupportedVariantType {
+            description: "protein variants cannot be represented in SPDI; SPDI describes \
+                          nucleotide variants on a sequence accession"
+                .to_string(),
+        }),
+        _ => Err(ConversionError::UnsupportedVariantType {
+            description: format!(
+                "variant type {} cannot be converted to SPDI",
                 variant.variant_type()
             ),
         }),
@@ -165,30 +302,489 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 
 /// Convert a genomic variant to SPDI (simple conversion).
 fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, ConversionError> {
-    let sequence = variant.accession.to_string();
-    let interval = &variant.loc_edit.location;
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+    )
+}
 
-    // Get the edit (unwrap from Mu)
-    let edit = variant
+/// Convert a mitochondrial variant to SPDI (simple conversion).
+///
+/// Mitochondrial accessions (e.g. `NC_012920.1`) are themselves genomic
+/// accessions, so the conversion is identical to the `g.` path with a
+/// different coordinate prefix on the HGVS side.
+fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+    )
+}
+
+/// Convert a non-coding transcript (`n.`) variant to SPDI without consulting
+/// a provider. The SPDI is emitted on the transcript accession.
+///
+/// Returns `MissingReferenceData` for cases that need provider-backed
+/// metadata: intronic offsets, downstream (`*N`) positions, and non-positive
+/// bases (5' UTR). Use [`hgvs_to_spdi`] with a provider for those.
+fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_tx = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
+    let end_tx = tx_end_for_simple_path(&variant.loc_edit.location, start_tx, "n")?;
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_tx,
+        end_tx,
+        edit,
+        AlphabetMode::Dna,
+    )
+}
+
+/// Convert an RNA (`r.`) variant to SPDI without consulting a provider.
+///
+/// Identical to [`tx_to_spdi_simple`] in terms of position handling. The
+/// edit's deletion/insertion sequences are rewritten with `u`/`U → T` so the
+/// output uses the DNA alphabet that SPDI uses by convention (RefSeq stores
+/// transcript sequences as DNA even on `NR_*` and `NM_*` accessions).
+fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = rna_pos_for_simple_path(&variant.loc_edit.location, "r")?;
+    let end_pos = rna_end_for_simple_path(&variant.loc_edit.location, start_pos, "r")?;
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Rna,
+    )
+}
+
+/// Convert a CDS (`c.`) variant to SPDI by resolving CDS coordinates to
+/// transcript positions through the supplied provider.
+///
+/// The resulting SPDI uses the variant's transcript accession (e.g.
+/// `NM_000088.3`), matching NCBI Variation Services' convention.
+fn cds_to_spdi_with_provider<P: ReferenceProvider>(
+    variant: &CdsVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_cds = variant.loc_edit.location.start.inner().ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert c. variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_cds = variant
         .loc_edit
-        .edit
+        .location
+        .end
         .inner()
+        .copied()
+        .unwrap_or(*start_cds);
+    let (start_tx, end_tx) = resolve_cds_to_tx(&variant.accession, start_cds, &end_cds, provider)?;
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_tx,
+        end_tx,
+        edit,
+        AlphabetMode::Dna,
+    )
+}
+
+/// Convert an `n.` variant using a provider for cases that the simple path
+/// can't handle (intronic offsets, downstream positions, non-positive base).
+fn tx_to_spdi_with_provider<P: ReferenceProvider>(
+    variant: &TxVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    // Fast path: positions resolvable without provider data
+    if !tx_needs_provider(&variant.loc_edit.location) {
+        return tx_to_spdi_simple(variant);
+    }
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_tx_pos = variant.loc_edit.location.start.inner().ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert n. variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_tx_pos = variant
+        .loc_edit
+        .location
+        .end
+        .inner()
+        .copied()
+        .unwrap_or(*start_tx_pos);
+    let (start_tx, end_tx) =
+        resolve_tx_to_provider_tx(&variant.accession, start_tx_pos, &end_tx_pos, provider)?;
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_tx,
+        end_tx,
+        edit,
+        AlphabetMode::Dna,
+    )
+}
+
+/// Convert an `r.` variant using a provider for cases the simple path can't
+/// handle. Same coordinate resolution as `n.`; alphabet conversion `u → T`
+/// is applied via [`AlphabetMode::Rna`].
+fn rna_to_spdi_with_provider<P: ReferenceProvider>(
+    variant: &RnaVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    if !rna_needs_provider(&variant.loc_edit.location) {
+        return rna_to_spdi_simple(variant);
+    }
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_rna = variant.loc_edit.location.start.inner().ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert r. variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_rna = variant
+        .loc_edit
+        .location
+        .end
+        .inner()
+        .copied()
+        .unwrap_or(*start_rna);
+    let (start_tx, end_tx) =
+        resolve_rna_to_provider_tx(&variant.accession, start_rna, &end_rna, provider)?;
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_tx,
+        end_tx,
+        edit,
+        AlphabetMode::Rna,
+    )
+}
+
+// ===========================================================================
+// Shared helpers
+// ===========================================================================
+
+/// Whether to rewrite RNA bases (`u/U`) to DNA (`T`) in the emitted SPDI
+/// deletion/insertion strings.
+#[derive(Debug, Clone, Copy)]
+enum AlphabetMode {
+    Dna,
+    Rna,
+}
+
+/// Unwrap an edit from `Mu`, returning a clear error if the edit is unknown.
+fn unwrap_edit<E>(edit: &crate::hgvs::uncertainty::Mu<E>) -> Result<&E, ConversionError> {
+    edit.inner()
         .ok_or_else(|| ConversionError::InvalidPosition {
             description: "cannot convert variant with unknown edit".to_string(),
+        })
+}
+
+/// Resolve the start position of a `TxInterval` for the simple (no-provider)
+/// path. Returns `MissingReferenceData` if the position requires provider
+/// data (intronic, downstream `*N`, or non-positive base).
+fn tx_pos_for_simple_path(interval: &Interval<TxPos>, coord: &str) -> Result<u64, ConversionError> {
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: format!(
+                "cannot convert {}. variant with unknown start position",
+                coord
+            ),
         })?;
+    require_simple_tx_pos(start, coord)
+}
 
-    // Get start position
-    let start_pos = get_start_pos(interval).ok_or_else(|| ConversionError::InvalidPosition {
-        description: "cannot convert variant with unknown start position".to_string(),
-    })?;
+fn tx_end_for_simple_path(
+    interval: &Interval<TxPos>,
+    fallback: u64,
+    coord: &str,
+) -> Result<u64, ConversionError> {
+    match interval.end.inner() {
+        Some(end) => require_simple_tx_pos(end, coord),
+        None => Ok(fallback),
+    }
+}
 
-    // Validate and wrap in type-safe 1-based position
+fn require_simple_tx_pos(pos: &TxPos, coord: &str) -> Result<u64, ConversionError> {
+    if pos.is_intronic() {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "intronic {}. position requires reference provider with exon data",
+                coord
+            ),
+        });
+    }
+    if pos.is_downstream() {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "downstream {}. position (*N) requires reference provider with transcript length",
+                coord
+            ),
+        });
+    }
+    if pos.base < 1 {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "non-positive {}. position {} requires reference provider with transcript length",
+                coord, pos.base
+            ),
+        });
+    }
+    Ok(pos.base as u64)
+}
+
+fn rna_pos_for_simple_path(
+    interval: &Interval<RnaPos>,
+    coord: &str,
+) -> Result<u64, ConversionError> {
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: format!(
+                "cannot convert {}. variant with unknown start position",
+                coord
+            ),
+        })?;
+    require_simple_rna_pos(start, coord)
+}
+
+fn rna_end_for_simple_path(
+    interval: &Interval<RnaPos>,
+    fallback: u64,
+    coord: &str,
+) -> Result<u64, ConversionError> {
+    match interval.end.inner() {
+        Some(end) => require_simple_rna_pos(end, coord),
+        None => Ok(fallback),
+    }
+}
+
+fn require_simple_rna_pos(pos: &RnaPos, coord: &str) -> Result<u64, ConversionError> {
+    if pos.is_intronic() {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "intronic {}. position requires reference provider with exon data",
+                coord
+            ),
+        });
+    }
+    if pos.utr3 {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "3' UTR {}. position (*N) requires reference provider with transcript length",
+                coord
+            ),
+        });
+    }
+    if pos.base < 1 {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "non-positive {}. position {} requires reference provider with transcript length",
+                coord, pos.base
+            ),
+        });
+    }
+    Ok(pos.base as u64)
+}
+
+/// True if any endpoint of the interval needs provider data to resolve to a
+/// transcript position.
+fn tx_needs_provider(interval: &Interval<TxPos>) -> bool {
+    let needs = |p: &TxPos| p.is_intronic() || p.is_downstream() || p.base < 1;
+    interval.start.inner().is_some_and(needs) || interval.end.inner().is_some_and(needs)
+}
+
+fn rna_needs_provider(interval: &Interval<RnaPos>) -> bool {
+    let needs = |p: &RnaPos| p.is_intronic() || p.utr3 || p.base < 1;
+    interval.start.inner().is_some_and(needs) || interval.end.inner().is_some_and(needs)
+}
+
+/// Resolve a CDS-position pair to 1-based transcript positions using the
+/// provider's transcript metadata.
+///
+/// Intronic c. positions (e.g. `c.100+5`) are rejected: SPDI is positional
+/// and has no offset notation, so an intronic CDS variant cannot be expressed
+/// on the transcript accession without first projecting to genomic coords.
+/// That projection is intentionally out of scope for this entry point —
+/// callers needing it can use the genomic conversion path explicitly.
+fn resolve_cds_to_tx<P: ReferenceProvider>(
+    accession: &Accession,
+    start: &CdsPos,
+    end: &CdsPos,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    if start.is_intronic() || end.is_intronic() {
+        return Err(ConversionError::MissingReferenceData {
+            description: "intronic c. positions cannot be expressed in SPDI without genomic \
+                          projection; SPDI is positional and has no offset notation"
+                .to_string(),
+        });
+    }
+    let tx_id = accession.transcript_accession();
+    let transcript =
+        provider
+            .get_transcript(&tx_id)
+            .map_err(|e| ConversionError::MissingReferenceData {
+                description: format!("could not load transcript {}: {}", tx_id, e),
+            })?;
+    let mapper = CoordinateMapper::new(&transcript);
+    let s = mapper
+        .cds_to_tx(start)
+        .map_err(|e| ConversionError::MissingReferenceData {
+            description: format!("could not resolve {} to transcript position: {}", start, e),
+        })?;
+    let e = mapper
+        .cds_to_tx(end)
+        .map_err(|e| ConversionError::MissingReferenceData {
+            description: format!("could not resolve {} to transcript position: {}", end, e),
+        })?;
+    let s_u = ensure_positive_tx(s.base, "c", start)?;
+    let e_u = ensure_positive_tx(e.base, "c", end)?;
+    Ok((s_u, e_u))
+}
+
+/// Resolve an `n.` (TxPos) pair to 1-based transcript positions, including
+/// intronic and downstream forms, using the provider.
+fn resolve_tx_to_provider_tx<P: ReferenceProvider>(
+    accession: &Accession,
+    start: &TxPos,
+    end: &TxPos,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    let tx_id = accession.transcript_accession();
+    let transcript =
+        provider
+            .get_transcript(&tx_id)
+            .map_err(|e| ConversionError::MissingReferenceData {
+                description: format!("could not load transcript {}: {}", tx_id, e),
+            })?;
+    let s = resolve_tx_pos(start, &transcript)?;
+    let e = resolve_tx_pos(end, &transcript)?;
+    Ok((s, e))
+}
+
+fn resolve_rna_to_provider_tx<P: ReferenceProvider>(
+    accession: &Accession,
+    start: &RnaPos,
+    end: &RnaPos,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    let tx_id = accession.transcript_accession();
+    let transcript =
+        provider
+            .get_transcript(&tx_id)
+            .map_err(|e| ConversionError::MissingReferenceData {
+                description: format!("could not load transcript {}: {}", tx_id, e),
+            })?;
+    let s = resolve_rna_pos(start, &transcript)?;
+    let e = resolve_rna_pos(end, &transcript)?;
+    Ok((s, e))
+}
+
+/// Resolve a single `TxPos` to a 1-based transcript position. For intronic
+/// positions, the returned position is the nearest exonic transcript base,
+/// because SPDI cannot directly represent intronic offsets. For downstream
+/// (*N) positions, the position is offset past the transcript end.
+fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, ConversionError> {
+    // Reject intronic + downstream-with-offset until #117/#118 wire ref-aware
+    // edit material in. SPDI cannot directly carry an intronic offset, so we
+    // surface a clear error rather than silently dropping it.
+    if pos.is_intronic() {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "intronic n.{} cannot be expressed in SPDI without genomic projection; \
+                 SPDI is positional and has no offset notation",
+                pos
+            ),
+        });
+    }
+    let tx_len = transcript.sequence_length();
+    if pos.is_downstream() {
+        if pos.base < 1 {
+            return Err(ConversionError::InvalidPosition {
+                description: format!("downstream position *{} must be >= 1", pos.base),
+            });
+        }
+        let value = tx_len.saturating_add(pos.base as u64);
+        return Ok(value);
+    }
+    ensure_positive_tx(pos.base, "n", pos)
+}
+
+fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, ConversionError> {
+    if pos.is_intronic() {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "intronic r.{} cannot be expressed in SPDI without genomic projection; \
+                 SPDI is positional and has no offset notation",
+                pos
+            ),
+        });
+    }
+    let tx_len = transcript.sequence_length();
+    if pos.utr3 {
+        if pos.base < 1 {
+            return Err(ConversionError::InvalidPosition {
+                description: format!("3' UTR position *{} must be >= 1", pos.base),
+            });
+        }
+        return Ok(tx_len.saturating_add(pos.base as u64));
+    }
+    ensure_positive_tx(pos.base, "r", pos)
+}
+
+fn ensure_positive_tx<P: std::fmt::Display>(
+    base: i64,
+    coord: &str,
+    pos: P,
+) -> Result<u64, ConversionError> {
+    if base < 1 {
+        return Err(ConversionError::InvalidPosition {
+            description: format!(
+                "transcript position from {}. coordinate {} resolves to a non-positive base ({})",
+                coord, pos, base
+            ),
+        });
+    }
+    Ok(base as u64)
+}
+
+/// Apply edit-specific position arithmetic and emit the SPDI variant.
+///
+/// `start_one_based` and `end_one_based` are 1-based positions on the SPDI
+/// accession (genomic for `g.`/`m.`, transcript for `c.`/`n.`/`r.`).
+fn emit_spdi_for_edit(
+    sequence: String,
+    start_one_based: u64,
+    end_one_based: u64,
+    edit: &NaEdit,
+    alphabet: AlphabetMode,
+) -> Result<SpdiVariant, ConversionError> {
     let hgvs_pos_ob =
-        OneBasedPos::try_new(start_pos).ok_or_else(|| ConversionError::InvalidPosition {
+        OneBasedPos::try_new(start_one_based).ok_or_else(|| ConversionError::InvalidPosition {
             description: "position 0 is not valid in HGVS".to_string(),
         })?;
-
-    // Convert 1-based HGVS position to 0-based SPDI position using type-safe conversion
     let spdi_pos_zb: ZeroBasedPos = hgvs_pos_ob.to_zero_based();
     let spdi_pos = spdi_pos_zb.value();
 
@@ -196,42 +792,36 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         NaEdit::Substitution {
             reference,
             alternative,
-        } => {
-            // Substitution: g.12345A>G -> seq:12344:A:G
-            Ok(SpdiVariant::new(
-                sequence,
-                spdi_pos,
-                reference.to_string(),
-                alternative.to_string(),
-            ))
-        }
+        } => Ok(SpdiVariant::new(
+            sequence,
+            spdi_pos,
+            apply_alphabet(&reference.to_string(), alphabet),
+            apply_alphabet(&alternative.to_string(), alphabet),
+        )),
         NaEdit::Insertion { sequence: inserted } => {
-            // Insertion: g.100_101insATG -> seq:100::ATG
-            // For insertion, HGVS uses positions flanking the insertion point
-            // SPDI position is the 0-based position where insertion happens
             let ins_str = inserted_sequence_to_string(inserted).ok_or_else(|| {
                 ConversionError::MissingReferenceData {
                     description: "insertion sequence is not a literal sequence".to_string(),
                 }
             })?;
-            Ok(SpdiVariant::new(sequence, spdi_pos, "", ins_str))
+            Ok(SpdiVariant::new(
+                sequence,
+                spdi_pos,
+                "",
+                apply_alphabet(&ins_str, alphabet),
+            ))
         }
         NaEdit::Duplication {
             sequence: dup_seq, ..
         } => {
-            // Duplication with sequence: g.100_102dupATG -> seq:102::ATG
-            // (insertion of the duplicated sequence after the original)
             if let Some(seq) = dup_seq {
-                // Position for dup is at the end of the duplicated region
-                let end_pos = get_end_pos(interval).unwrap_or(start_pos);
-                // Convert 1-based HGVS end position to 0-based SPDI position
-                let end_pos_ob = OneBasedPos::new(end_pos);
+                let end_pos_ob = OneBasedPos::new(end_one_based);
                 let spdi_end_zb = end_pos_ob.to_zero_based();
                 Ok(SpdiVariant::new(
                     sequence,
                     spdi_end_zb.value(),
                     "",
-                    sequence_to_string(seq),
+                    apply_alphabet(&sequence_to_string(seq), alphabet),
                 ))
             } else {
                 Err(ConversionError::MissingReferenceData {
@@ -244,13 +834,11 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         NaEdit::Deletion {
             sequence: del_seq, ..
         } => {
-            // Deletion: g.100_102del -> seq:99:ATG:
-            // Need the deleted sequence
             if let Some(seq) = del_seq {
                 Ok(SpdiVariant::new(
                     sequence,
                     spdi_pos,
-                    sequence_to_string(seq),
+                    apply_alphabet(&sequence_to_string(seq), alphabet),
                     "",
                 ))
             } else {
@@ -262,14 +850,9 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
             }
         }
         NaEdit::Delins { sequence: _ins_seq } => {
-            // Delins: g.100_102delinsATG -> seq:99:XYZ:ATG
-            // We need to know the deleted sequence to create a valid SPDI
-            // Without reference data, we cannot determine what was deleted
-            // Calculate deletion length from interval (saturating to avoid overflow)
-            let end_pos = get_end_pos(interval).unwrap_or(start_pos);
-            let del_len = (end_pos - start_pos).saturating_add(1) as usize;
-
-            // Without reference data, we can't know the deleted sequence
+            let del_len = end_one_based
+                .saturating_sub(start_one_based)
+                .saturating_add(1) as usize;
             Err(ConversionError::MissingReferenceData {
                 description: format!(
                     "Cannot convert delins to SPDI: deleted sequence of length {} is unknown (no reference data)",
@@ -280,8 +863,10 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         NaEdit::Identity {
             sequence: id_seq, ..
         } => {
-            // Identity: g.100= or g.100A=
-            let ref_base = id_seq.as_ref().map(sequence_to_string).unwrap_or_default();
+            let ref_base = id_seq
+                .as_ref()
+                .map(|s| apply_alphabet(&sequence_to_string(s), alphabet))
+                .unwrap_or_default();
             Ok(SpdiVariant::new(
                 sequence,
                 spdi_pos,
@@ -304,6 +889,25 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         _ => Err(ConversionError::UnsupportedEditType {
             description: format!("unsupported edit type: {:?}", edit),
         }),
+    }
+}
+
+/// Rewrite RNA-alphabet characters to the DNA alphabet for SPDI output.
+///
+/// SPDI uses the DNA alphabet by convention (RefSeq stores transcript
+/// sequences as DNA even on `NR_*` and `NM_*` accessions), so RNA `u`/`U`
+/// must become `T`. Other characters are returned unchanged. The output is
+/// always uppercase to match SPDI's standard form.
+fn apply_alphabet(s: &str, alphabet: AlphabetMode) -> String {
+    match alphabet {
+        AlphabetMode::Dna => s.to_ascii_uppercase(),
+        AlphabetMode::Rna => s
+            .chars()
+            .map(|c| match c.to_ascii_uppercase() {
+                'U' => 'T',
+                other => other,
+            })
+            .collect(),
     }
 }
 
@@ -686,13 +1290,23 @@ mod tests {
     }
 
     #[test]
-    fn test_hgvs_to_spdi_unsupported_coding() {
+    fn test_hgvs_to_spdi_simple_cds_requires_provider() {
+        // c. variants need transcript metadata to resolve to a transcript
+        // position; the simple path therefore returns ProviderRequired.
         let hgvs = parse_hgvs("NM_000088.3:c.100A>G").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
         assert!(matches!(
             result,
-            Err(ConversionError::UnsupportedVariantType { .. })
+            Err(ConversionError::ProviderRequired { .. })
         ));
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("c."), "message should mention c.: {}", msg);
+        assert!(
+            msg.contains("provider"),
+            "message should mention provider: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1456,6 +2070,110 @@ mod tests {
         ));
     }
 
+    // =========================================================================
+    // Issue #116: c./n./r./m. coordinate-system support
+    // =========================================================================
+
+    use crate::reference::mock::MockProvider;
+    use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand};
+
+    /// Build a small test transcript covering enough cases for c./n./r. tests:
+    /// - 5'UTR length 5 (positions 1-5 in tx)
+    /// - CDS  length 30 (tx positions 6-35; cds_start=6, cds_end=35)
+    /// - 3'UTR length 5 (tx positions 36-40)
+    ///
+    /// Single exon over the full transcript so the simple no-gap path applies.
+    fn make_test_provider() -> MockProvider {
+        let tx = Transcript::new(
+            "NM_TEST.1".to_string(),
+            Some("TEST".to_string()),
+            Strand::Plus,
+            // 40 bases: 5 (UTR5) + 30 (CDS) + 5 (UTR3)
+            "AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string() + "AA",
+            Some(6),
+            Some(35),
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        provider
+    }
+
+    /// Build a multi-exon transcript suitable for testing intronic resolution
+    /// rejections. Exon 1: tx 1-50, Exon 2: tx 51-100; CDS tx 11-90.
+    fn make_intronic_provider() -> MockProvider {
+        let tx = Transcript::new(
+            "NM_INTRON.1".to_string(),
+            Some("INTRON".to_string()),
+            Strand::Plus,
+            "A".repeat(100),
+            Some(11),
+            Some(90),
+            vec![Exon::new(1, 1, 50), Exon::new(2, 51, 100)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        provider
+    }
+
+    // ----- m. (mitochondrial) ------------------------------------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_substitution() {
+        // m. uses NC_012920.1, which is itself a genomic accession.
+        let hgvs = parse_hgvs("NC_012920.1:m.3243A>G").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.sequence, "NC_012920.1");
+        assert_eq!(spdi.position, 3242);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+        assert_eq!(spdi.to_string(), "NC_012920.1:3242:A:G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_insertion() {
+        let hgvs = parse_hgvs("NC_012920.1:m.100_101insATG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "ATG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_deletion_with_seq() {
+        let hgvs = parse_hgvs("NC_012920.1:m.3243_3245delAGG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 3242);
+        assert_eq!(spdi.deletion, "AGG");
+        assert_eq!(spdi.insertion, "");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_deletion_without_seq_needs_ref() {
+        // Without an explicit deleted sequence, the simple path can't supply
+        // the SPDI deletion field — same as g.
+        let hgvs = parse_hgvs("NC_012920.1:m.3243_3245del").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
     #[test]
     fn dup_hgvs_to_spdi_to_hgvs_with_ref_roundtrip_multi_base() {
         // Build a contig with 1-based 100..102 = "ATG"
@@ -1559,5 +2277,322 @@ mod tests {
         // Even for mito, the SPDI→HGVS path produces a g. variant; this
         // matches the existing convention in this module.
         assert_eq!(hgvs.to_string(), "NC_012920.1:g.100_102dupATG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_dup_with_seq() {
+        let hgvs = parse_hgvs("NC_012920.1:m.100_102dupATG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        // Dup converts to insertion at the end of the duplicated region (0-based).
+        assert_eq!(spdi.position, 101);
+        assert_eq!(spdi.insertion, "ATG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_mt_identity() {
+        let hgvs = parse_hgvs("NC_012920.1:m.3243A=").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 3242);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "A");
+    }
+
+    // ----- n. (non-coding transcript) ----------------------------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_substitution() {
+        // n. — SPDI emitted on the transcript accession.
+        let hgvs = parse_hgvs("NR_046018.2:n.5C>G").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.sequence, "NR_046018.2");
+        assert_eq!(spdi.position, 4); // 5 (1-based) → 4 (0-based)
+        assert_eq!(spdi.deletion, "C");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_insertion() {
+        let hgvs = parse_hgvs("NR_046018.2:n.10_11insATG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.sequence, "NR_046018.2");
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.insertion, "ATG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_deletion_with_seq() {
+        let hgvs = parse_hgvs("NR_046018.2:n.10_12delATG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_identity() {
+        let hgvs = parse_hgvs("NR_046018.2:n.10A=").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "A");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_intronic_needs_provider() {
+        // n.100+5: intronic offset cannot be expressed as a positional SPDI;
+        // the simple path bails with MissingReferenceData (provider needed
+        // for genomic projection — out of scope for this PR).
+        let hgvs = parse_hgvs("NR_046018.2:n.100+5A>G").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("intronic"), "msg: {}", msg);
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_downstream_needs_provider() {
+        // n.*5: downstream of transcript end; needs transcript length.
+        let hgvs = parse_hgvs("NR_046018.2:n.*5A>G").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_tx_negative_base_needs_provider() {
+        // n.-3: upstream of transcript start; the simple path has no way to
+        // anchor it without knowing the transcript length.
+        let hgvs = parse_hgvs("NR_046018.2:n.-3A>G").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
+    // ----- r. (RNA) ----------------------------------------------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_dna_lowercase_uppercased() {
+        // Lowercase DNA bases (e.g. `g.100a>g`) must emit uppercase SPDI
+        // alleles per the doc on `apply_alphabet`. Regression test: the DNA
+        // branch previously preserved input case.
+        let hgvs = parse_hgvs("NC_000001.11:g.100a>g").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_rna_substitution_lowercase() {
+        // r.5c>g (lowercase RNA) → SPDI uses uppercase DNA alphabet.
+        let hgvs = parse_hgvs("NR_046018.2:r.5c>g").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.sequence, "NR_046018.2");
+        assert_eq!(spdi.position, 4);
+        assert_eq!(spdi.deletion, "C");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_rna_substitution_u_to_t() {
+        // r.5u>g: U on the deleted side rewrites to T for SPDI.
+        let hgvs = parse_hgvs("NR_046018.2:r.5u>g").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.deletion, "T");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_rna_insertion_u_to_t() {
+        // r.10_11insauug → SPDI insertion ATTG (a→A, u→T, u→T, g→G).
+        let hgvs = parse_hgvs("NR_046018.2:r.10_11insauug").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "ATTG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_rna_deletion_with_seq() {
+        let hgvs = parse_hgvs("NR_046018.2:r.10_12delauu").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "ATT"); // a→A, u→T, u→T
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_rna_intronic_needs_provider() {
+        let hgvs = parse_hgvs("NR_046018.2:r.10+5a>g").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
+    // ----- p. (protein) — rejected with helpful error -----------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_protein_rejected() {
+        let hgvs = parse_hgvs("NP_000079.2:p.Arg600Gln").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::UnsupportedVariantType { .. })
+        ));
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("protein") && msg.contains("SPDI"),
+            "expected helpful protein-rejection message; got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_protein_rejected() {
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NP_000079.2:p.Arg600Gln").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(matches!(
+            result,
+            Err(ConversionError::UnsupportedVariantType { .. })
+        ));
+    }
+
+    // ----- c. (CDS) — provider-aware ----------------------------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_substitution() {
+        let provider = make_test_provider();
+        // c.1A>G: cds_start=6, so c.1 → tx 6 → SPDI 5
+        let hgvs = parse_hgvs("NM_TEST.1:c.1A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NM_TEST.1");
+        assert_eq!(spdi.position, 5);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_insertion() {
+        let provider = make_test_provider();
+        // c.1_2insATG: cds_start=6 → tx 6_7 → SPDI position 5 (interbase)
+        let hgvs = parse_hgvs("NM_TEST.1:c.1_2insATG").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 5);
+        assert_eq!(spdi.insertion, "ATG");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_deletion_with_seq() {
+        let provider = make_test_provider();
+        // c.1_3delATG: tx 6_8 → SPDI 5:ATG:
+        let hgvs = parse_hgvs("NM_TEST.1:c.1_3delATG").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 5);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_5utr() {
+        let provider = make_test_provider();
+        // c.-3A>G: 3 bases before cds_start (6) → tx 3 → SPDI 2
+        let hgvs = parse_hgvs("NM_TEST.1:c.-3A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 2);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_3utr() {
+        let provider = make_test_provider();
+        // c.*2A>G: 2 bases past cds_end (35) → tx 37 → SPDI 36
+        let hgvs = parse_hgvs("NM_TEST.1:c.*2A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 36);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_intronic_rejected() {
+        // Intronic c. cannot be expressed as a positional SPDI: SPDI has no
+        // offset notation. The provider-aware path surfaces a clear error.
+        let provider = make_intronic_provider();
+        let hgvs = parse_hgvs("NM_INTRON.1:c.10+5A>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_unknown_transcript() {
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NM_TEST.1:c.1A>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("transcript") || msg.contains("NM_TEST"));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_falls_through_to_simple_for_genome() {
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.to_string(), "NC_000001.11:12344:A:G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_falls_through_to_simple_for_mt() {
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NC_012920.1:m.3243A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.to_string(), "NC_012920.1:3242:A:G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_falls_through_to_simple_for_exonic_n() {
+        // Exonic positive-base n. doesn't actually need provider data; the
+        // provider-aware path delegates to the simple path.
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NR_046018.2:n.5C>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
+    }
+
+    // ----- Edit-type passthrough on new coord systems -----------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_n_inversion_unsupported() {
+        let hgvs = parse_hgvs("NR_046018.2:n.10_20inv").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::UnsupportedEditType { .. })
+        ));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_m_inversion_unsupported() {
+        let hgvs = parse_hgvs("NC_012920.1:m.100_200inv").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(matches!(
+            result,
+            Err(ConversionError::UnsupportedEditType { .. })
+        ));
     }
 }
