@@ -557,6 +557,147 @@ fn write_accession_with_optional_gene(
     Ok(())
 }
 
+/// True iff `variant` carries a position-bound (not whole-entity)
+/// identity edit (`<pos>=` or `<pos><ref>=`). This is the LHS shape
+/// of the HGVS spec compact mosaic / chimeric form.
+fn is_position_identity_lhs(variant: &HgvsVariant) -> bool {
+    let edit_is_pos_identity = |edit: &Mu<NaEdit>| {
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        )
+    };
+    match variant {
+        HgvsVariant::Genome(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Cds(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Tx(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Rna(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Mt(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Circular(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        _ => false,
+    }
+}
+
+/// True iff `variant` carries a whole-entity identity edit (the
+/// canonical shape produced by `create_identity_variant_from`, used
+/// in the `var/=` shorthand). On Display this should render as bare
+/// `=` rather than the full synthetic-position form.
+fn is_whole_entity_identity_rhs(variant: &HgvsVariant) -> bool {
+    let edit_is_whole = |edit: &Mu<NaEdit>| {
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: true,
+                ..
+            })
+        )
+    };
+    match variant {
+        HgvsVariant::Genome(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Cds(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Tx(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Rna(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Mt(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Circular(v) => edit_is_whole(&v.loc_edit.edit),
+        _ => false,
+    }
+}
+
+/// True iff `a` and `b` carry the same coord-system arm AND their
+/// `loc_edit.location` values compare equal. Used to decide whether
+/// the spec compact mosaic Display form applies to a 2-variant Allele.
+fn intervals_match_for_compact_mosaic(a: &HgvsVariant, b: &HgvsVariant) -> bool {
+    match (a, b) {
+        (HgvsVariant::Genome(x), HgvsVariant::Genome(y)) => {
+            x.loc_edit.location == y.loc_edit.location
+        }
+        (HgvsVariant::Cds(x), HgvsVariant::Cds(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HgvsVariant::Tx(x), HgvsVariant::Tx(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HgvsVariant::Rna(x), HgvsVariant::Rna(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HgvsVariant::Mt(x), HgvsVariant::Mt(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HgvsVariant::Circular(x), HgvsVariant::Circular(y)) => {
+            x.loc_edit.location == y.loc_edit.location
+        }
+        _ => false,
+    }
+}
+
+/// Shared Display path for `Mosaic` (`/`) and `Chimeric` (`//`) phases.
+///
+/// Three branches in priority order (mutually exclusive on each input):
+///
+/// 1. **Spec compact mosaic / chimeric** — LHS is a position-bound `=`
+///    identity edit, RHS shares accession + coord type + interval.
+///    Emits `<lhs-full>=/<rhs-bare-edit>`. Per
+///    `recommendations/DNA/{substitution,deletion,duplication}.md`.
+///
+/// 2. **`var/=` shorthand cleanup** — LHS is a non-identity variant,
+///    RHS is a whole-entity identity edit (the synthetic shape
+///    produced by `create_identity_variant_from`), and the two share
+///    accession + coord type. Emits `<lhs-full>/=` instead of
+///    expanding the synthetic identity to its `<acc>:<type>.1=` form.
+///
+/// 3. **Long form** — fallback per-variant join.
+fn write_mosaic_or_chimeric(
+    f: &mut fmt::Formatter<'_>,
+    variants: &[HgvsVariant],
+    sep: &str,
+) -> fmt::Result {
+    if variants.len() == 2 && use_compact_form(variants) {
+        let lhs = &variants[0];
+        let rhs = &variants[1];
+
+        // Branch 1: spec compact (LHS pos-identity, intervals match).
+        if is_position_identity_lhs(lhs) && intervals_match_for_compact_mosaic(lhs, rhs) {
+            write!(f, "{}", lhs)?;
+            write!(f, "{}", sep)?;
+            // Emit the RHS edit alone (no accession, no type prefix, no
+            // position) — that is the spec compact RHS shape.
+            return write_bare_edit(f, rhs);
+        }
+
+        // Branch 2: var/= cleanup. LHS must NOT be position-identity
+        // (otherwise branch 1 owns it); RHS must be whole-entity Identity.
+        if !is_position_identity_lhs(lhs) && is_whole_entity_identity_rhs(rhs) {
+            write!(f, "{}", lhs)?;
+            write!(f, "{}", sep)?;
+            write!(f, "=")?;
+            return Ok(());
+        }
+    }
+
+    // Branch 3: long-form join.
+    for (i, v) in variants.iter().enumerate() {
+        if i > 0 {
+            write!(f, "{}", sep)?;
+        }
+        write!(f, "{}", v)?;
+    }
+    Ok(())
+}
+
+/// Write the `NaEdit` portion of `variant` (no accession, no type
+/// prefix, no position). Used by `write_mosaic_or_chimeric` for the
+/// spec compact RHS.
+///
+/// Variants that are not NA-coord arms are written with their full
+/// `Display` (callers should not invoke this on those — guarded by
+/// `use_compact_form`).
+fn write_bare_edit(f: &mut fmt::Formatter<'_>, variant: &HgvsVariant) -> fmt::Result {
+    match variant {
+        HgvsVariant::Genome(v) => write!(f, "{}", v.loc_edit.edit),
+        HgvsVariant::Cds(v) => write!(f, "{}", v.loc_edit.edit),
+        HgvsVariant::Tx(v) => write!(f, "{}", v.loc_edit.edit),
+        HgvsVariant::Rna(v) => write!(f, "{}", v.loc_edit.edit),
+        HgvsVariant::Mt(v) => write!(f, "{}", v.loc_edit.edit),
+        HgvsVariant::Circular(v) => write!(f, "{}", v.loc_edit.edit),
+        _ => write!(f, "{}", variant),
+    }
+}
+
 impl fmt::Display for AlleleVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Per HGVS spec, `[var]` denotes a multi-variant allele; a singleton
@@ -640,26 +781,8 @@ impl fmt::Display for AlleleVariant {
                     write!(f, "]")
                 }
             }
-            AllelePhase::Mosaic => {
-                // var1/var2 (single forward slash) - always expanded
-                for (i, v) in self.variants.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, "/")?;
-                    }
-                    write!(f, "{}", v)?;
-                }
-                Ok(())
-            }
-            AllelePhase::Chimeric => {
-                // var1//var2 (double forward slash) - always expanded
-                for (i, v) in self.variants.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, "//")?;
-                    }
-                    write!(f, "{}", v)?;
-                }
-                Ok(())
-            }
+            AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/"),
+            AllelePhase::Chimeric => write_mosaic_or_chimeric(f, &self.variants, "//"),
         }
     }
 }
