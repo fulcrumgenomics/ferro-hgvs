@@ -1,0 +1,580 @@
+//! Audit and behavior-pinning tests for mitochondrial (`m.`) circular
+//! reference handling — issue #81 item F1 (wraparound at the origin).
+//!
+//! Tracking issue: **#129** ("Mitochondrial circular reference
+//! handling (m. coordinate system) (#81 F1)"). PR #106 explicitly
+//! excluded the `m.` dimension from the `del` 3'-shift coverage matrix
+//! because "circular wraparound is its own design"; this file pins
+//! what ferro does today so any future design lands as an intentional
+//! behavior change with a visible diff.
+//!
+//! ### Background — the HGVS spec
+//!
+//! - The mitochondrial genome (rCRS, NC_012920.1) is **circular**, length 16569.
+//!   Position 16569 is followed by position 1 with no gap. See
+//!   `assets/hgvs-nomenclature/docs/background/numbering.md` lines 6–8.
+//! - The HGVS recommendations therefore allow ranges that **cross the
+//!   origin**, written as `m.<high>_<low>` where `high > low`. The
+//!   exception is called out only on the **deletion** page:
+//!   `assets/hgvs-nomenclature/docs/recommendations/DNA/deletion.md`
+//!   line 18 says "when a circular genomic reference sequence is used
+//!   (`o` and `m` prefix) nucleotide positions may be listed from 3' to
+//!   5' when the deletion includes both the last and first nucleotides
+//!   of the reference sequence". The corresponding text is **not**
+//!   present in the `dup` / `ins` / `inv` / `delins` pages — that
+//!   asymmetry is one of the open ambiguities F1 has to resolve.
+//! - Normalization on a circular reference also has its own rules:
+//!   3'-shifting may have to wrap, and "leftmost-shifted" / "rightmost-
+//!   shifted" lose their absolute meaning — they are defined modulo
+//!   the contig length.
+//!
+//! ### What the spec corpus exercises today
+//!
+//! `tests/fixtures/grammar/hgvs_spec_normalization.json` carries rows
+//! for `NC_012920.1:m.3243A>G`, `NC_012920.1:m.3460G>A`, and
+//! `NC_012920.1(MT-ND1):m.3460del` (with and without gene symbol).
+//! **Zero** rows in the spec corpus exercise wraparound, full-mtDNA
+//! span, or any other circular-topology semantic. Anything F1
+//! introduces will need a corresponding extension of the spec-corpus
+//! fixtures — that is also out of scope here.
+//!
+//! ### What ferro does today (May 2026, pre-F1)
+//!
+//! There is no special handling for circular references anywhere in
+//! the crate:
+//!
+//! - `src/hgvs/parser/variant.rs::parse_genome_interval` rejects any
+//!   range whose `start.base > end.base` for non-structural edits — so
+//!   wraparound `del` / `delins` / `sub` ranges fail to parse at all.
+//!   (`ins`, `dup`, `inv`, and complex `delins` are exempt from the
+//!   inverted-range check, but for unrelated reasons. Sections 2, 3, 5
+//!   below pin both halves of the asymmetry.)
+//! - `src/normalize/mod.rs::normalize_mt` is a stub: it returns the
+//!   variant unchanged and adds no warnings. Comment in source: "MT
+//!   variants are similar to genomic … For now, return as-is (could
+//!   implement circular genome handling)".
+//! - `src/vcf/from_hgvs.rs` synthesizes a `GenomeVariant` from the
+//!   `MtVariant` and routes it through the linear genomic conversion
+//!   path; nothing knows the contig is circular.
+//! - `src/spdi/convert.rs::hgvs_to_spdi_simple` rejects all
+//!   non-`Genome` variants outright — including `Mt`. Section 13 pins
+//!   that policy.
+//! - `src/python_helpers.rs::compute_span` has a defensive `None` for
+//!   origin-crossing **circular (`o.`)** intervals where `end < start`,
+//!   but the same guard does not exist for `m.`. Section 6 pins the
+//!   resulting silent miscompute.
+//! - There is no contig-length validation: `m.16570A>G` (one past the
+//!   end of NC_012920.1) parses cleanly today. Section 7 pins this.
+//!
+//! ### Cross-cuts
+//!
+//! - **F2 (heteroplasmy, PR #139, tracking #133).** Heteroplasmy uses
+//!   `=/` (mosaic) and `=//` (chimeric) at the variant level, not as
+//!   a circular concern. The only cross-cut is via compound alleles
+//!   (Section 8 below): all `m.[…]` allele forms are rejected today,
+//!   so there is no path on which F1 and F2 can collide here.
+//! - **PR #106 (`del` 3'-shift coverage matrix).** Excluded the `m.`
+//!   axis with the explicit note "circular wraparound is its own
+//!   design"; this audit and #129 are the bookkeeping for that note.
+//!
+//! ### What this file pins
+//!
+//! Each test parses a string and asserts on the **observed outcome**
+//! (Ok with a specific render, or Err). When F1 lands, the assertions
+//! that pin "this fails today" must flip to "this succeeds with the
+//! expected canonical form" — that diff is the audit trail.
+
+use ferro_hgvs::python_helpers::get_indel_length;
+use ferro_hgvs::{hgvs_to_spdi_simple, parse_hgvs, HgvsVariant, MockProvider, Normalizer};
+
+// -----------------------------------------------------------------------------
+// Scenario 1 — non-wrapping substitution.
+//
+// Sanity check: a plain `m.` substitution that does not cross the
+// origin parses, round-trips, and passes through `normalize` unchanged.
+// This is the baseline that any F1 implementation must preserve.
+// -----------------------------------------------------------------------------
+
+/// Non-wrapping `m.` substitution parses and round-trips today.
+#[test]
+fn audit_mt_non_wrapping_sub_parses_and_round_trips() {
+    let input = "NC_012920.1:m.100A>G";
+    let variant =
+        parse_hgvs(input).unwrap_or_else(|e| panic!("expected parse to succeed for {input}: {e}"));
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// Non-wrapping `m.` substitution passes through `normalize` unchanged
+/// today (`normalize_mt` is a stub).
+#[test]
+fn audit_mt_non_wrapping_sub_normalizes_to_self() {
+    let input = "NC_012920.1:m.100A>G";
+    let variant = parse_hgvs(input).expect("parse should succeed");
+    let normalizer = Normalizer::new(MockProvider::new());
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize should succeed for non-wrapping m. substitution");
+    assert_eq!(format!("{}", normalized), input);
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 2 — wrapping deletion at the origin: `m.16569_1del`.
+//
+// Spec-canonical wraparound: a 2-nt deletion across positions 16569 and
+// 1 (in that circular order). Today the parser rejects this at the
+// inverted-range check. When F1 lands, this should parse to a
+// circular-aware interval and normalize accordingly.
+// -----------------------------------------------------------------------------
+
+/// `m.16569_1del` is rejected by the parser today (inverted range).
+/// F1 must replace this with a successful parse + circular-aware
+/// normalize result.
+#[test]
+fn audit_mt_wrapping_del_at_origin_currently_rejected() {
+    let input = "NC_012920.1:m.16569_1del";
+    let result = parse_hgvs(input);
+    assert!(
+        result.is_err(),
+        "PINNED: ferro currently rejects wraparound m. ranges; F1 must change this. \
+         Got Ok({:?}) — update this test as part of the F1 implementation.",
+        result.ok()
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 3 — longer wrapping deletion: `m.16569_5del`.
+//
+// 6-nt deletion spanning the origin (positions 16569, 1, 2, 3, 4, 5).
+// Same parser rejection as scenario 2; pinned separately because a
+// future F1 implementation may distinguish the 2-nt edge case from the
+// general N-nt wraparound case.
+// -----------------------------------------------------------------------------
+
+/// Longer wraparound deletion is also rejected by the parser today.
+#[test]
+fn audit_mt_wrapping_del_longer_currently_rejected() {
+    let input = "NC_012920.1:m.16569_5del";
+    let result = parse_hgvs(input);
+    assert!(
+        result.is_err(),
+        "PINNED: wraparound m. deletion across origin is rejected today. \
+         Got Ok({:?}) — update this test as part of the F1 implementation.",
+        result.ok()
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 4 — full mtDNA span as a duplication: `m.1_16569dup`.
+//
+// Not strictly a wraparound (1 ≤ 16569), but represents the entire
+// circular contig as a single duplication. It exercises the same
+// "circular contig length" semantics: in a linear view the result is a
+// 33138-nt sequence, but on a circular reference it is degenerate
+// (every base duplicated relative to itself). F1 must decide how to
+// handle this; today it parses (because `dup` is exempt from the
+// inverted-range check, and 1 ≤ 16569 anyway) and `normalize_mt` is a
+// no-op stub.
+// -----------------------------------------------------------------------------
+
+/// Full mtDNA span as a duplication parses today; pin the round-trip
+/// to expose any future change in canonical form.
+#[test]
+fn audit_mt_full_span_dup_round_trips_today() {
+    let input = "NC_012920.1:m.1_16569dup";
+    let variant = parse_hgvs(input)
+        .unwrap_or_else(|e| panic!("PINNED: expected parse to succeed today: {e}"));
+    assert_eq!(
+        format!("{}", variant),
+        input,
+        "PINNED: ferro currently round-trips full-mtDNA dup verbatim; \
+         F1 may decide to emit a circular-aware canonical form (e.g. \
+         reject, warn, or rewrite as `=`)."
+    );
+}
+
+/// Full mtDNA span passes through `normalize` unchanged today.
+#[test]
+fn audit_mt_full_span_dup_normalizes_to_self_today() {
+    let input = "NC_012920.1:m.1_16569dup";
+    let variant = parse_hgvs(input).expect("parse should succeed");
+    let normalizer = Normalizer::new(MockProvider::new());
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize should succeed (stub)");
+    assert_eq!(
+        format!("{}", normalized),
+        input,
+        "PINNED: `normalize_mt` is a stub that returns the variant unchanged. \
+         F1 must define what circular-aware normalization does for a \
+         full-mtDNA span."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 5 — wrapping non-`del` edits at the origin.
+//
+// The spec text in `recommendations/DNA/deletion.md` line 18 calls out
+// 3'→5' position order as a deletion-specific exception for circular
+// references. The `dup`, `ins`, `inv`, `delins` pages do **not** repeat
+// the exception. Ferro's parser today follows the inverse asymmetry:
+//   - `del` and `delins` reject inverted ranges (Verify error)
+//   - `dup`, `ins`, `inv` accept inverted ranges (parser carve-out for
+//     "structural" edits, unrelated to circular semantics)
+// F1 must close this gap one way or the other: either lift the `del` /
+// `delins` rejection so wraparound deletions parse, or tighten the
+// `dup` / `ins` / `inv` carve-out so wraparound forms are not silently
+// accepted without circular-aware normalize support.
+// -----------------------------------------------------------------------------
+
+/// Wrapping `delins` at the origin is rejected today (same parser path
+/// as `del`).
+#[test]
+fn audit_mt_wrapping_delins_currently_rejected() {
+    let input = "NC_012920.1:m.16569_1delinsT";
+    let result = parse_hgvs(input);
+    assert!(
+        result.is_err(),
+        "PINNED: wraparound m. delins is rejected today on the same \
+         inverted-range check as del. F1 must change this. \
+         Got Ok({:?}).",
+        result.ok()
+    );
+}
+
+/// Wrapping `dup` at the origin **parses** today and stub-normalizes
+/// to itself. Pinned to expose the parser asymmetry: wraparound
+/// `del` is rejected, but wraparound `dup` is silently accepted.
+#[test]
+fn audit_mt_wrapping_dup_silently_accepted_today() {
+    let input = "NC_012920.1:m.16560_5dup";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: wraparound m. dup parses today (parser exempts dup from \
+             the inverted-range check). Got Err({e}); update if F1 tightens this."
+        )
+    });
+    assert_eq!(
+        format!("{}", variant),
+        input,
+        "PINNED: wraparound m. dup round-trips verbatim today. F1 must \
+         define a circular-aware canonical form."
+    );
+    let normalizer = Normalizer::new(MockProvider::new());
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("stub normalize should succeed");
+    assert_eq!(
+        format!("{}", normalized),
+        input,
+        "PINNED: `normalize_mt` is a stub; wraparound dup is unchanged."
+    );
+}
+
+/// Wrapping `inv` at the origin parses today (same parser exemption).
+#[test]
+fn audit_mt_wrapping_inv_silently_accepted_today() {
+    let input = "NC_012920.1:m.16500_500inv";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: wraparound m. inv parses today (parser exempts inv from \
+             the inverted-range check). Got Err({e})."
+        )
+    });
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// Wrapping `ins` at the origin parses today (same parser exemption).
+#[test]
+fn audit_mt_wrapping_ins_silently_accepted_today() {
+    let input = "NC_012920.1:m.16569_1insT";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: wraparound m. ins parses today (parser exempts ins from \
+             the inverted-range check). Got Err({e})."
+        )
+    });
+    assert_eq!(format!("{}", variant), input);
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 6 — silent miscompute on wraparound `dup`.
+//
+// `python_helpers::compute_span` has a `Circular(_) && end < start →
+// None` guard but no `Mt` guard. Because wraparound `dup` parses today
+// (Scenario 5), a downstream caller asking `get_indel_length` for a
+// wrapping m. dup will get a *negative or otherwise wrong* number,
+// silently. F1 must either extend the guard to `Mt` or compute the
+// real circular span using contig length. Pin today's value so any
+// fix surfaces.
+// -----------------------------------------------------------------------------
+
+/// `get_indel_length` on a wrapping m. dup returns a value that is
+/// **wrong** under circular semantics (today: a large negative number,
+/// because compute_span = end - start + 1 with end < start). Pin the
+/// exact value so F1 surfaces.
+#[test]
+fn audit_mt_wrapping_dup_indel_length_silent_miscompute_today() {
+    let input = "NC_012920.1:m.16560_5dup";
+    let variant = parse_hgvs(input).expect("parse should succeed (Scenario 5)");
+    let observed = get_indel_length(&variant);
+    // Today: end (5) - start (16560) + 1 = -16554; sign flipped by the
+    // Duplication branch is not applied — that branch returns
+    // `Some(compute_span(variant)?)` directly, so we get -16554.
+    // The right answer for a wraparound dup of length (16569 - 16560 +
+    // 1) + 5 = 15 is +15. We are nowhere near that.
+    assert_eq!(
+        observed,
+        Some(-16554),
+        "PINNED: `compute_span` lacks an `Mt` guard, so a wraparound m. \
+         dup yields a silently-wrong indel length. F1 must extend the \
+         guard or compute the real circular span using contig length."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 7 — out-of-bounds and zero/negative positions.
+//
+// Spec: numbering is 1..=L (L = 16569 for NC_012920.1); there is no
+// position 0 (`numbering.md` line 20 documents the convention for
+// coding sequences; the same 1-based no-zero rule applies to `m.`).
+// Ferro today rejects 0 and negative but **accepts** positions past
+// the contig end. F1 must decide whether to add length validation —
+// it will need contig length anyway for wraparound math.
+// -----------------------------------------------------------------------------
+
+/// `m.16570A>G` (one past the end of NC_012920.1) parses today; ferro
+/// has no contig-length validation.
+#[test]
+fn audit_mt_position_past_end_silently_accepted_today() {
+    let input = "NC_012920.1:m.16570A>G";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: ferro has no length validation for m. accessions; \
+             m.16570A>G parses today. Got Err({e})."
+        )
+    });
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// `m.0A>G` is rejected today (1-based numbering, no zero).
+/// Baseline that any F1 implementation must preserve.
+#[test]
+fn audit_mt_position_zero_rejected_today() {
+    let input = "NC_012920.1:m.0A>G";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: m. position 0 is rejected; preserve under F1."
+    );
+}
+
+/// `m.-1A>G` is rejected today (negative positions not legal on `m.`).
+#[test]
+fn audit_mt_negative_position_rejected_today() {
+    let input = "NC_012920.1:m.-1A>G";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: m. negative position is rejected; preserve under F1."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 8 — compound alleles on `m.`.
+//
+// Spec permits compound HGVS allele descriptions in cis (`[a;b]`),
+// trans (`[a];[b]`), and the homozygous shorthand `[a](;)`. Ferro's
+// parser today rejects all three for the `m.` coordinate system.
+// This is unrelated to wraparound but is part of the F1 architectural
+// surface: any plan to support trans-heteroplasmy or to render a pair
+// of m. variants as a single allele has to clear this rejection.
+// (Sibling F2 / PR #139 / #133 is aware.)
+// -----------------------------------------------------------------------------
+
+/// Compound `m.[…;…]` (cis) is rejected today.
+#[test]
+fn audit_mt_compound_cis_allele_rejected_today() {
+    let input = "NC_012920.1:m.[100A>G;200T>C]";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: compound m. cis allele rejected today; F1 should \
+         reconsider as part of the m.-grammar surface."
+    );
+}
+
+/// Compound `m.[…];[…]` (trans) is rejected today.
+#[test]
+fn audit_mt_compound_trans_allele_rejected_today() {
+    let input = "NC_012920.1:m.[100A>G];[200T>C]";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: compound m. trans allele rejected today."
+    );
+}
+
+/// `m.[…](;)` (homozygous shorthand) is rejected today.
+#[test]
+fn audit_mt_homozygous_shorthand_allele_rejected_today() {
+    let input = "NC_012920.1:m.[100A>G](;)";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: m. homozygous-shorthand allele rejected today."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 9 — fully-qualified cross-coord allele.
+//
+// Spec describes "fully qualified" alleles where each variant carries
+// its own `accession:type.` prefix; ferro accepts mixing `m.` and `g.`
+// in such an allele today. Pinned to expose any future tightening
+// (e.g. rejecting cross-coord alleles entirely, or normalizing them).
+// -----------------------------------------------------------------------------
+
+/// Cross-coord allele `[NC_012920.1:m.…;NC_000001.11:g.…]` parses and
+/// round-trips today.
+#[test]
+fn audit_mt_cross_coord_allele_round_trips_today() {
+    let input = "[NC_012920.1:m.100A>G;NC_000001.11:g.100A>G]";
+    let variant = parse_hgvs(input)
+        .unwrap_or_else(|e| panic!("PINNED: cross-coord m./g. allele parses today: Err({e})"));
+    assert_eq!(format!("{}", variant), input);
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 10 — non-canonical mtDNA accession aliases.
+//
+// Spec prefers `NC_012920.1` (`numbering.md` line 8). Ferro is
+// permissive: `chrM`, `chrMT`, and `MT` are all accepted as
+// accessions. Pinned because F1 may want to whitelist mtDNA accessions
+// (the implementation needs to know "is this contig circular?" anyway,
+// which is a per-accession decision).
+// -----------------------------------------------------------------------------
+
+/// `chrM:m.100A>G` parses today as `HgvsVariant::Mt`.
+#[test]
+fn audit_mt_accession_chrm_lower_round_trips_today() {
+    let input = "chrM:m.100A>G";
+    let variant =
+        parse_hgvs(input).unwrap_or_else(|e| panic!("PINNED: chrM accession parses today: {e}"));
+    assert!(matches!(variant, HgvsVariant::Mt(_)));
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// `chrMT:m.100A>G` parses today as `HgvsVariant::Mt`.
+#[test]
+fn audit_mt_accession_chrmt_round_trips_today() {
+    let input = "chrMT:m.100A>G";
+    let variant =
+        parse_hgvs(input).unwrap_or_else(|e| panic!("PINNED: chrMT accession parses today: {e}"));
+    assert!(matches!(variant, HgvsVariant::Mt(_)));
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// `MT:m.100A>G` parses today as `HgvsVariant::Mt`.
+#[test]
+fn audit_mt_accession_mt_round_trips_today() {
+    let input = "MT:m.100A>G";
+    let variant =
+        parse_hgvs(input).unwrap_or_else(|e| panic!("PINNED: MT accession parses today: {e}"));
+    assert!(matches!(variant, HgvsVariant::Mt(_)));
+    assert_eq!(format!("{}", variant), input);
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 11 — coding-style position decorations on `m.`.
+//
+// mtDNA has no introns conventionally and no UTRs (`m.` has no `+`,
+// `-`, or `*` per `numbering.md` line 7). Ferro today nonetheless
+// accepts `m.100+1A>G` and `m.100-1A>G` (intronic-style offsets),
+// because the genome-position parser is shared with `g.` and does not
+// know `m.` should reject them. `m.*100A>G` (UTR-style) is rejected,
+// fortuitously, because `*` is not in the `m.`-position grammar.
+// F1 may want to reject `+`/`-` offsets explicitly.
+// -----------------------------------------------------------------------------
+
+/// `m.100+1A>G` (intronic-style positive offset) parses today.
+#[test]
+fn audit_mt_intronic_plus_offset_silently_accepted_today() {
+    let input = "NC_012920.1:m.100+1A>G";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: m. intronic-style `+` offset parses today even though \
+             mtDNA has no introns. Got Err({e})."
+        )
+    });
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// `m.100-1A>G` (intronic-style negative offset) parses today.
+#[test]
+fn audit_mt_intronic_minus_offset_silently_accepted_today() {
+    let input = "NC_012920.1:m.100-1A>G";
+    let variant = parse_hgvs(input).unwrap_or_else(|e| {
+        panic!(
+            "PINNED: m. intronic-style `-` offset parses today even though \
+             mtDNA has no introns. Got Err({e})."
+        )
+    });
+    assert_eq!(format!("{}", variant), input);
+}
+
+/// `m.*100A>G` (UTR-style asterisk position) is rejected today;
+/// preserve as the correct behavior under F1.
+#[test]
+fn audit_mt_utr_asterisk_position_rejected_today() {
+    let input = "NC_012920.1:m.*100A>G";
+    assert!(
+        parse_hgvs(input).is_err(),
+        "PINNED: m. UTR-style `*` position rejected; preserve under F1."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 12 — gene-symbol drop on round-trip.
+//
+// `NC_012920.1(MT-ND1):m.3460G>A` (a row that exists in the spec
+// normalization fixture) parses today, but the rendered output drops
+// the `(MT-ND1)` qualifier. This is unrelated to wraparound but is
+// surfaced by the same input class — pinned here so any incidental
+// fix during F1 implementation surfaces as a visible diff.
+// -----------------------------------------------------------------------------
+
+/// Gene-symbol qualifier on `m.` is dropped on render today.
+#[test]
+fn audit_mt_gene_symbol_dropped_on_round_trip_today() {
+    let input = "NC_012920.1(MT-ND1):m.3460G>A";
+    let variant = parse_hgvs(input).expect("parse should succeed");
+    assert_eq!(
+        format!("{}", variant),
+        "NC_012920.1:m.3460G>A",
+        "PINNED: the `(MT-ND1)` gene-symbol qualifier is dropped on \
+         render for m. variants today. Surfaced by the F1 audit but is \
+         a separate `m.`-display bug; F1 may or may not fix it."
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Scenario 13 — SPDI conversion on `m.`.
+//
+// `hgvs_to_spdi_simple` rejects all non-`Genome` variants outright,
+// including `Mt`, with a `ConversionError::UnsupportedVariantType`.
+// VCF conversion silently treats `m.` as linear `g.` (see
+// `src/vcf/from_hgvs.rs`); SPDI does not. F1 must reconcile the two
+// policies (and decide what the right answer is on a wraparound m.
+// variant where SPDI's linear semantics break down).
+// -----------------------------------------------------------------------------
+
+/// `hgvs_to_spdi_simple` rejects a plain non-wrapping `m.` substitution
+/// today. F1 must decide whether to lift this for non-wrapping m.
+/// variants (matching VCF's policy) or surface the same error from VCF.
+#[test]
+fn audit_mt_spdi_conversion_rejected_today() {
+    let variant = parse_hgvs("NC_012920.1:m.100A>G").expect("parse should succeed");
+    let result = hgvs_to_spdi_simple(&variant);
+    assert!(
+        result.is_err(),
+        "PINNED: ferro rejects m. → SPDI conversion today. F1 must \
+         decide whether SPDI grows m. support (matching VCF's silent \
+         treat-as-linear policy) or whether VCF gains the same \
+         rejection until circular semantics are defined."
+    );
+}
