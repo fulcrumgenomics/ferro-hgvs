@@ -4500,30 +4500,77 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     let input = input.trim();
 
     // Check for allele patterns and RNA fusion first
-    if let Some(allele_type) = detect_allele_type(input) {
-        return match allele_type {
-            "cis" => parse_cis_allele(input),
-            "trans" => parse_trans_allele(input),
-            "mosaic" => parse_mosaic_allele(input),
-            "chimeric" => parse_chimeric_allele(input),
-            "unknown_phase" => parse_unknown_phase_allele(input),
-            "rna_fusion" => parse_rna_fusion(input),
+    let variant = if let Some(allele_type) = detect_allele_type(input) {
+        match allele_type {
+            "cis" => parse_cis_allele(input)?,
+            "trans" => parse_trans_allele(input)?,
+            "mosaic" => parse_mosaic_allele(input)?,
+            "chimeric" => parse_chimeric_allele(input)?,
+            "unknown_phase" => parse_unknown_phase_allele(input)?,
+            "rna_fusion" => parse_rna_fusion(input)?,
             _ => unreachable!(),
-        };
-    }
-
-    // Parse as single variant
-    let (remaining, variant) = parse_single_variant(input)?;
-
-    if remaining.is_empty() {
-        Ok(variant)
+        }
     } else {
-        Err(FerroError::Parse {
-            pos: input.len() - remaining.len(),
-            msg: format!("Unexpected trailing characters: '{}'", remaining),
-            diagnostic: None,
-        })
+        // Parse as single variant
+        let (remaining, v) = parse_single_variant(input)?;
+        if !remaining.is_empty() {
+            return Err(FerroError::Parse {
+                pos: input.len() - remaining.len(),
+                msg: format!("Unexpected trailing characters: '{}'", remaining),
+                diagnostic: None,
+            });
+        }
+        v
+    };
+
+    // Spec-mandated post-parse semantic check: reject self-cancelling alleles
+    // (HGVS recommendations/general.md line 47, tracked under issue #115).
+    validate_no_self_cancelling(&variant)?;
+
+    Ok(variant)
+}
+
+/// Walk the variant tree and reject any `AlleleVariant` that contains an
+/// overlapping `del` + `dup` pair (HGVS `recommendations/general.md` line 47:
+/// "descriptions removing part of a reference sequence replacing it with
+/// part of the same sequence are not allowed").
+fn validate_no_self_cancelling(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    if let HgvsVariant::Allele(allele) = variant {
+        // Only cis-phase alleles describe edits on the same physical sequence.
+        // Trans/mosaic/chimeric place the edits on different alleles or cell
+        // populations, so an overlapping del+dup is not self-cancelling.
+        // Unknown phase is treated permissively to avoid false rejections.
+        if matches!(allele.phase, AllelePhase::Cis) {
+            if let Some((dl, du)) =
+                crate::hgvs::variant::AlleleVariant::detect_self_cancelling_pair(&allele.variants)
+            {
+                return Err(FerroError::Parse {
+                    pos: 0,
+                    msg: format!(
+                        "Self-cancelling allele: variants at index {} (del) and {} (dup) describe \
+                         overlapping reference positions",
+                        dl, du
+                    ),
+                    diagnostic: Some(Box::new(
+                        Diagnostic::new()
+                            .with_code(ErrorCode::SelfCancellingAllele)
+                            .with_hint(
+                                "HGVS does not allow describing both a deletion and a duplication \
+                                 of overlapping reference positions in the same allele \
+                                 (recommendations/general.md line 47); drop one edit or rewrite \
+                                 as a single delins",
+                            ),
+                    )),
+                });
+            }
+        }
+        // Recurse for nested alleles.
+        for inner in &allele.variants {
+            validate_no_self_cancelling(inner)?;
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -5792,5 +5839,30 @@ mod tests {
         // With offset
         let variant = parse_variant("NR_033294.1:n.*5+10C>G").expect("should parse");
         assert_eq!(variant.to_string(), "NR_033294.1:n.*5+10C>G");
+    }
+
+    // ----- Issue #115: self-cancelling allele rejection (E3006) -----
+
+    #[test]
+    fn test_parse_self_cancelling_allele_rejected() {
+        let result = parse_variant("NM_004006.2:c.[762_768del;767_774dup]");
+        assert!(result.is_err(), "self-cancelling allele must be rejected");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.code(),
+            Some(crate::error::ErrorCode::SelfCancellingAllele),
+            "rejection must carry E3006"
+        );
+    }
+
+    #[test]
+    fn test_parse_non_overlapping_allele_accepted() {
+        // Same edit kinds as the spec example but non-overlapping ranges:
+        // OK to coexist.
+        let result = parse_variant("NM_004006.2:c.[100_110del;200_210dup]");
+        assert!(
+            result.is_ok(),
+            "non-overlapping del+dup must be accepted: {result:?}"
+        );
     }
 }

@@ -1514,3 +1514,143 @@ mod w3013_redundant_repeat_label_emission {
             .any(|w| w.error_type == ErrorType::RedundantRepeatLabel));
     }
 }
+
+// ============================================================================
+// Issue #115 — spec-mandated input rejections
+// ============================================================================
+
+mod spec_mandated_rejections {
+    use super::*;
+    use ferro_hgvs::error::ErrorCode;
+    use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+    use ferro_hgvs::parse_hgvs;
+
+    // ----- W3003 OldSubstitutionSyntax (multi-base subs) -----
+
+    #[test]
+    fn w3003_lenient_rewrites_with_ref_bases_and_warns() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.79_80GC>TT").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.79_80delinsTT");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::OldSubstitutionSyntax));
+    }
+
+    #[test]
+    fn w3003_lenient_rewrites_no_ref_bases() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.100_102>ATG").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.100_102delinsATG");
+    }
+
+    #[test]
+    fn w3003_strict_rejects_multi_base_substitution() {
+        let config = ErrorConfig::strict();
+        let pp = config.preprocessor();
+        let result = pp.preprocess("NM_000088.3:c.79_80GC>TT");
+        assert!(!result.success);
+        let err = result.error.expect("strict mode must populate error");
+        assert_eq!(err.code(), Some(ErrorCode::InvalidEdit));
+    }
+
+    #[test]
+    fn w3003_canonical_substitution_unaffected() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.100A>G").unwrap();
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    // ----- W3014 DeprecatedIvsNotation -----
+
+    #[test]
+    fn w3014_strict_rejects_ivs() {
+        let config = ErrorConfig::strict();
+        let pp = config.preprocessor();
+        let result = pp.preprocess("NM_000088.3:c.IVS2+2T>G");
+        assert!(!result.success);
+        let err = result.error.expect("strict mode must populate error");
+        assert_eq!(err.code(), Some(ErrorCode::UnexpectedChar));
+    }
+
+    #[test]
+    fn w3014_lenient_rejects_ivs_no_autocorrect() {
+        let err = parse_hgvs_lenient("NM_000088.3:c.IVS2+2T>G")
+            .expect_err("IVS cannot be auto-corrected");
+        assert_eq!(err.code(), Some(ErrorCode::UnexpectedChar));
+    }
+
+    #[test]
+    fn w3014_canonical_intronic_unaffected() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.88+2T>G");
+        assert!(result.is_ok());
+    }
+
+    // ----- W3015 DeprecatedConSyntax -----
+
+    #[test]
+    fn w3015_lenient_rewrites_con_to_delins() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.100_200conNM_001.1:c.5_105").unwrap();
+        assert_eq!(
+            result.preprocessed_input,
+            "NM_004006.2:c.100_200delinsNM_001.1:c.5_105"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DeprecatedConSyntax));
+    }
+
+    #[test]
+    fn w3015_strict_rejects_con() {
+        let config = ErrorConfig::strict();
+        let pp = config.preprocessor();
+        let result = pp.preprocess("NM_004006.2:c.100_200conNM_001.1:c.5_105");
+        assert!(!result.success);
+        let err = result.error.expect("strict mode must populate error");
+        assert_eq!(err.code(), Some(ErrorCode::InvalidEdit));
+    }
+
+    // ----- E3006 SelfCancellingAllele -----
+
+    #[test]
+    fn e3006_rejects_spec_example_in_strict() {
+        let err = parse_hgvs("NM_004006.2:c.[762_768del;767_774dup]")
+            .expect_err("self-cancelling allele must be rejected in strict mode");
+        assert_eq!(err.code(), Some(ErrorCode::SelfCancellingAllele));
+    }
+
+    #[test]
+    fn e3006_rejects_spec_example_in_lenient() {
+        // E-codes are unconditional rejections; lenient mode is irrelevant.
+        let err = parse_hgvs_lenient("NM_004006.2:c.[762_768del;767_774dup]")
+            .expect_err("self-cancelling allele must be rejected in lenient mode");
+        assert_eq!(err.code(), Some(ErrorCode::SelfCancellingAllele));
+    }
+
+    #[test]
+    fn e3006_non_overlapping_allele_accepted() {
+        let result = parse_hgvs("NM_004006.2:c.[100_110del;200_210dup]");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn e3006_trans_phase_overlap_accepted() {
+        // Trans-phase alleles describe variants on different chromosomes;
+        // a del on one allele cannot self-cancel a dup on the other.
+        let result = parse_hgvs("NM_004006.2:c.[762_768del];[767_774dup]");
+        assert!(
+            result.is_ok(),
+            "trans-phase overlap should not trigger E3006: {:?}",
+            result
+        );
+    }
+
+    // ----- Registry sanity -----
+
+    #[test]
+    fn registry_exposes_all_new_codes() {
+        assert!(get_code_info("E3006").is_some());
+        assert!(get_code_info("W3014").is_some());
+        assert!(get_code_info("W3015").is_some());
+    }
+}

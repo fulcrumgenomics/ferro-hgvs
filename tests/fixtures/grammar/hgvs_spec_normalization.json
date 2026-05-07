@@ -12,8 +12,8 @@
       "correctly-rejected": 12,
       "diverges": 142,
       "false-acceptance": 22,
-      "parse-error": 196,
-      "preserved": 451
+      "parse-error": 197,
+      "preserved": 450
     },
     "by_coordinate_system": {
       "c": 298,
@@ -595,6 +595,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/alleles.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.[762_768del;767_774dup]",
+      "current": "parse error: Parse error at position 0: Self-cancelling allele: variants at index 0 (del) and 1 (dup) describe overlapping reference positions",
+      "spec_expected": "NM_004006.2:c.[762_768del;767_774dup]",
+      "status": "parse-error",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/general.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2653,17 +2665,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/alleles.md"
-      ]
-    },
-    {
-      "input": "NM_004006.2:c.[762_768del;767_774dup]",
-      "current": "NM_004006.2:c.[762_768del;767_774dup]",
-      "spec_expected": "NM_004006.2:c.[762_768del;767_774dup]",
-      "status": "preserved",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/general.md"
       ]
     },
     {

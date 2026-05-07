@@ -199,6 +199,22 @@ pub enum ErrorType {
     /// In strict mode, this is rejected. In lenient/silent mode, normalization
     /// proceeds using the actual reference sequence.
     RefSeqMismatch,
+
+    /// Retracted `c.IVS` intronic notation (e.g., `c.IVS2+2T>G`).
+    ///
+    /// The `c.IVSn+offset` / `c.IVSn-offset` form was retracted by HGVS;
+    /// canonical intronic offsets `c.<exon-pos>+<offset>` should be used
+    /// instead. The retracted form cannot be auto-rewritten without genomic
+    /// intron metadata (the IVS number is not unique across transcripts), so
+    /// all modes reject it with an actionable hint.
+    DeprecatedIvsNotation,
+
+    /// Deprecated `con` (sequence conversion) edit syntax.
+    ///
+    /// The HGVS spec retired `con` in favour of `delins`. ferro can rewrite
+    /// `c.100_200conNM_001:c.5_105` → `c.100_200delinsNM_001:c.5_105` in
+    /// lenient/silent modes; strict mode rejects the deprecated form.
+    DeprecatedConSyntax,
 }
 
 impl ErrorType {
@@ -226,6 +242,8 @@ impl ErrorType {
             ErrorType::DelSizeSuffix => "W3011",
             ErrorType::EmptyDelinsInsert => "W3012",
             ErrorType::RedundantRepeatLabel => "W3013",
+            ErrorType::DeprecatedIvsNotation => "W3014",
+            ErrorType::DeprecatedConSyntax => "W3015",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
             ErrorType::SinglePositionRange => "W4003",
@@ -267,18 +285,50 @@ impl ErrorType {
                 "single-position range used where a single position is canonical"
             }
             ErrorType::RefSeqMismatch => "reference sequence mismatch",
+            ErrorType::DeprecatedIvsNotation => "retracted c.IVS intronic notation",
+            ErrorType::DeprecatedConSyntax => "deprecated con (conversion) edit syntax",
         }
     }
 
     /// Returns true if this error type can be auto-corrected.
+    ///
+    /// Explicit arms per variant — adding a new `ErrorType` triggers an
+    /// exhaustiveness error here so the correctability decision is forced
+    /// at the source rather than silently falling through to `true`.
     pub fn is_correctable(&self) -> bool {
         match self {
+            ErrorType::LowercaseAminoAcid => true,
+            ErrorType::MissingVersion => true,
+            ErrorType::WrongDashCharacter => true,
+            ErrorType::ExtraWhitespace => true,
+            ErrorType::ProteinSubstitutionArrow => true,
             // Position zero is never valid and cannot be auto-corrected
             ErrorType::PositionZero => false,
+            ErrorType::SingleLetterAminoAcid => true,
+            ErrorType::WrongQuoteCharacter => true,
+            ErrorType::LowercaseAccessionPrefix => true,
+            ErrorType::MixedCaseEditType => true,
+            ErrorType::OldSubstitutionSyntax => true,
+            ErrorType::InvalidUnicodeCharacter => true,
+            ErrorType::SwappedPositions => true,
+            ErrorType::TrailingAnnotation => true,
+            ErrorType::MissingCoordinatePrefix => true,
+            ErrorType::OldAlleleFormat => true,
             // RefSeqMismatch can be "corrected" by using the actual reference
             ErrorType::RefSeqMismatch => true,
-            // All other error types can potentially be auto-corrected
-            _ => true,
+            ErrorType::DeprecatedStopCodonStar => true,
+            ErrorType::DeprecatedStopCodonX => true,
+            ErrorType::DeprecatedFrameshiftStar => true,
+            ErrorType::DeprecatedFrameshiftX => true,
+            // Lenient mode warns without rewriting (warn_accept); strict rejects.
+            ErrorType::DelSizeSuffix => false,
+            ErrorType::EmptyDelinsInsert => true,
+            ErrorType::RedundantRepeatLabel => true,
+            ErrorType::SinglePositionRange => true,
+            // IVS notation cannot be auto-rewritten without genomic metadata
+            ErrorType::DeprecatedIvsNotation => false,
+            // `con` is rewritten to `delins` per SVD-WG009
+            ErrorType::DeprecatedConSyntax => true,
         }
     }
 
@@ -319,6 +369,11 @@ impl ErrorType {
             ErrorType::RedundantRepeatLabel => ("r.100_102cug[4]", "r.100_102[4]"),
             ErrorType::SinglePositionRange => ("c.123_123del", "c.123del"),
             ErrorType::RefSeqMismatch => ("c.100G>A (ref is T)", "c.100T>A (corrected)"),
+            ErrorType::DeprecatedIvsNotation => ("c.IVS2+2T>G", "c.88+2T>G"),
+            ErrorType::DeprecatedConSyntax => (
+                "c.100_200conNM_001.1:c.5_105",
+                "c.100_200delinsNM_001.1:c.5_105",
+            ),
         }
     }
 }
@@ -470,11 +525,27 @@ mod tests {
 
     #[test]
     fn test_error_type_is_correctable() {
+        // Pin the correctability decision per variant. Adding a new variant
+        // forces an explicit choice in is_correctable() and an entry here.
         assert!(ErrorType::LowercaseAminoAcid.is_correctable());
+        assert!(ErrorType::MissingVersion.is_correctable());
         assert!(ErrorType::WrongDashCharacter.is_correctable());
+        assert!(ErrorType::ExtraWhitespace.is_correctable());
+        assert!(ErrorType::ProteinSubstitutionArrow.is_correctable());
         assert!(!ErrorType::PositionZero.is_correctable());
-        // RefSeqMismatch is correctable (use actual reference)
+        assert!(ErrorType::SingleLetterAminoAcid.is_correctable());
+        assert!(ErrorType::WrongQuoteCharacter.is_correctable());
+        assert!(ErrorType::LowercaseAccessionPrefix.is_correctable());
+        assert!(ErrorType::MixedCaseEditType.is_correctable());
+        assert!(ErrorType::OldSubstitutionSyntax.is_correctable());
+        assert!(ErrorType::InvalidUnicodeCharacter.is_correctable());
+        assert!(ErrorType::SwappedPositions.is_correctable());
+        assert!(ErrorType::TrailingAnnotation.is_correctable());
+        assert!(ErrorType::MissingCoordinatePrefix.is_correctable());
+        assert!(ErrorType::OldAlleleFormat.is_correctable());
         assert!(ErrorType::RefSeqMismatch.is_correctable());
+        assert!(!ErrorType::DeprecatedIvsNotation.is_correctable());
+        assert!(ErrorType::DeprecatedConSyntax.is_correctable());
     }
 
     #[test]
@@ -515,10 +586,20 @@ mod tests {
         assert_eq!(ErrorType::DelSizeSuffix.code(), "W3011");
         assert_eq!(ErrorType::EmptyDelinsInsert.code(), "W3012");
         assert_eq!(ErrorType::RedundantRepeatLabel.code(), "W3013");
+        assert_eq!(ErrorType::DeprecatedIvsNotation.code(), "W3014");
+        assert_eq!(ErrorType::DeprecatedConSyntax.code(), "W3015");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");
+    }
+
+    #[test]
+    fn test_error_type_is_correctable_new_variants() {
+        // IVS notation cannot be auto-corrected without metadata.
+        assert!(!ErrorType::DeprecatedIvsNotation.is_correctable());
+        // Con syntax CAN be rewritten to delins.
+        assert!(ErrorType::DeprecatedConSyntax.is_correctable());
     }
 
     // ErrorOverride tests

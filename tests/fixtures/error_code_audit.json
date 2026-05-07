@@ -126,6 +126,13 @@
       "status": "enforced"
     },
     {
+      "code": "E3006",
+      "description": "SelfCancellingAllele — overlapping del+dup pair within a single cis allele (e.g. 'c.[762_768del;767_774dup]').",
+      "spec_section": "recommendations/general.md line 47: 'descriptions removing part of a reference sequence replacing it with part of the same sequence are not allowed'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced"
+    },
+    {
       "code": "E4001",
       "description": "IntronicVariant — intronic variant cannot be normalized without genomic context.",
       "spec_section": "background/numbering.md line 28: 'a coding DNA reference sequence does not contain intron sequences and can therefore not be used as a reference'",
@@ -249,9 +256,8 @@
       "description": "OldSubstitutionSyntax — 'c.100_102>ATG' instead of 'c.100_102delinsATG'.",
       "spec_section": "recommendations/DNA/substitution.md line 16: 'substitutions involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants'",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
-      "status": "registered",
-      "spec_section_notes": "Empirically, c.100_102>ATG (no ref bases) hits a generic 'unexpected trailing characters' parse error in lenient mode (no W3003); c.79_80GC>TT (with explicit ref bases) is silently rewritten as c.79_80delinsTT with no warning. The ErrorType variant exists but no parse-time hook emits it. Wiring the emission for both forms is tracked in #115 item 3.",
-      "follow_up_issues": [115]
+      "status": "enforced",
+      "spec_section_notes": "Wired in the preprocessor (Phase 14) for the three deprecated multi-base substitution forms — c.79_80GC>TT, c.79GC>TT, c.100_102>ATG. Strict rejects with E1004 InvalidEdit + hint; lenient warns and rewrites to delins; silent rewrites without warning."
     },
     {
       "code": "W3004",
@@ -334,6 +340,22 @@
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/RNA/repeated/",
       "status": "enforced",
       "spec_section_notes": "Lenient/silent strip the lowercase a/c/g/u label and warn once; strict rejects. Wired in InputPreprocessor as Phase 12 via correct_redundant_repeat_label, scoped to the r. description so subsequent non-r. descriptions are not affected."
+    },
+    {
+      "code": "W3014",
+      "description": "DeprecatedIvsNotation — retracted 'c.IVS<n>+offset' / 'n.IVS' / 'r.IVS' intronic notation.",
+      "spec_section": "background/numbering.md line 32: IVS notation is retracted in favour of the canonical c.<exon-pos>+<offset> form",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced",
+      "spec_section_notes": "Cannot be auto-rewritten without genomic intron metadata (IVS number is not unique across transcripts). Registry uses always_reject(); the diagnostic carries E1006 UnexpectedChar + hint pointing at the canonical form. ErrorOverride::Accept lets a power-user opt out."
+    },
+    {
+      "code": "W3015",
+      "description": "DeprecatedConSyntax — '<pos>_<pos>con<source>' rewritten to '<pos>_<pos>delins<source>'.",
+      "spec_section": "SVD-WG009 (sequence conversion 'con' retired in favour of delins)",
+      "spec_url": "https://www.hgvs.org/varnomen/Conv-conv.html",
+      "status": "enforced",
+      "spec_section_notes": "Pre-parse rewrite in lenient/silent modes; strict rejects with E1004 InvalidEdit + hint. The legacy parser path still accepts NaEdit::Conversion for raw parse_hgvs callers; only parse_hgvs_with_config / lenient / silent / CLI go through the preprocessor phase."
     },
     {
       "code": "W4001",

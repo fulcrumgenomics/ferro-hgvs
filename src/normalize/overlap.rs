@@ -464,13 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn non_identical_overlap_no_warning() {
-        // The spec-preserved del+dup case: overlapping ranges, non-identical bounds.
-        let (variants, phase) = parse_allele("NM_TEST.1:c.[762_768del;767_774dup]");
-        assert!(detect_overlap_conflicts(&variants, phase).is_empty());
-    }
-
-    #[test]
     fn multi_accession_no_warning() {
         let (variants, phase) = parse_allele("[NC_000001.11:g.100A>C;NC_000002.11:g.100A>G]");
         assert!(detect_overlap_conflicts(&variants, phase).is_empty());

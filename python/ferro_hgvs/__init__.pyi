@@ -954,6 +954,8 @@ class ErrorType(IntEnum):
     EmptyDelinsInsert = 22
     RedundantRepeatLabel = 23
     SinglePositionRange = 24
+    DeprecatedIvsNotation = 25
+    DeprecatedConSyntax = 26
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

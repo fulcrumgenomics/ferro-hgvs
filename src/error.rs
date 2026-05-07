@@ -53,6 +53,8 @@ pub enum ErrorCode {
     ExonIntronBoundary = 3004,
     /// UTR-CDS boundary crossing
     UtrCdsBoundary = 3005,
+    /// Self-cancelling allele (overlapping del+dup that cancel out)
+    SelfCancellingAllele = 3006,
 
     // Normalization errors (E4xxx)
     /// Intronic variant (cannot normalize)
@@ -98,6 +100,7 @@ impl ErrorCode {
             ErrorCode::InvalidRange => "invalid coordinate range",
             ErrorCode::ExonIntronBoundary => "variant crosses exon-intron boundary",
             ErrorCode::UtrCdsBoundary => "variant crosses UTR-CDS boundary",
+            ErrorCode::SelfCancellingAllele => "self-cancelling allele (overlapping del+dup)",
             ErrorCode::IntronicVariant => "intronic variant not supported",
             ErrorCode::UnsupportedVariant => "unsupported variant type",
             ErrorCode::ConversionFailed => "coordinate conversion failed",
@@ -489,6 +492,15 @@ mod tests {
         assert_eq!(ErrorCode::IntronicVariant.as_str(), "E4001");
         assert_eq!(ErrorCode::ConversionFailed.as_str(), "E5001");
         assert_eq!(ErrorCode::IoError.as_str(), "E9001");
+    }
+
+    #[test]
+    fn test_self_cancelling_allele_code() {
+        assert_eq!(ErrorCode::SelfCancellingAllele.as_str(), "E3006");
+        assert_eq!(
+            ErrorCode::SelfCancellingAllele.description(),
+            "self-cancelling allele (overlapping del+dup)"
+        );
     }
 
     #[test]

@@ -515,6 +515,172 @@ impl AlleleVariant {
     pub fn unknown_phase(variants: Vec<HgvsVariant>) -> Self {
         Self::new(variants, AllelePhase::Unknown)
     }
+
+    /// Detect whether the allele contains a self-cancelling (`del` + `dup`)
+    /// pair that the HGVS spec disallows ("descriptions removing part of a
+    /// reference sequence replacing it with part of the same sequence are
+    /// not allowed", `recommendations/general.md` line 47).
+    ///
+    /// Returns `Some((idx_del, idx_dup))` for the first offending pair found
+    /// (deterministic by ascending pair index), or `None` otherwise.
+    ///
+    /// Detection is conservative: both variants must reference the same
+    /// accession AND have simple integer position ranges (no intronic
+    /// offsets, no UTR markers, no uncertain boundaries). Variants outside
+    /// that shape are skipped — the spec example
+    /// `c.[762_768del;767_774dup]` falls inside it.
+    pub fn detect_self_cancelling_pair(variants: &[HgvsVariant]) -> Option<(usize, usize)> {
+        // Indexed loops are intentional: we need both `i` and `j` to return
+        // the pair indices to the caller.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..variants.len() {
+            let Some((kind_i, range_i, acc_i)) = self_cancelling_descriptor(&variants[i]) else {
+                continue;
+            };
+            for j in (i + 1)..variants.len() {
+                let Some((kind_j, range_j, acc_j)) = self_cancelling_descriptor(&variants[j])
+                else {
+                    continue;
+                };
+                if acc_i.full() != acc_j.full() {
+                    continue;
+                }
+                let (del_idx, dup_idx) = match (kind_i, kind_j) {
+                    (SelfCancellingEditKind::Del, SelfCancellingEditKind::Dup) => (i, j),
+                    (SelfCancellingEditKind::Dup, SelfCancellingEditKind::Del) => (j, i),
+                    _ => continue,
+                };
+                if ranges_overlap(range_i, range_j) {
+                    return Some((del_idx, dup_idx));
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a new allele after running the spec-mandated self-cancelling
+    /// check. Returns `FerroError::Parse` with
+    /// `ErrorCode::SelfCancellingAllele` if the allele violates HGVS
+    /// `recommendations/general.md` line 47.
+    pub fn try_new_validated(
+        variants: Vec<HgvsVariant>,
+        phase: AllelePhase,
+    ) -> Result<Self, crate::error::FerroError> {
+        if let Some((dl, du)) = Self::detect_self_cancelling_pair(&variants) {
+            return Err(crate::error::FerroError::Parse {
+                pos: 0,
+                msg: format!(
+                    "Self-cancelling allele: variants at index {} (del) and {} (dup) describe \
+                     overlapping reference positions",
+                    dl, du
+                ),
+                diagnostic: Some(Box::new(
+                    crate::error::Diagnostic::new()
+                        .with_code(crate::error::ErrorCode::SelfCancellingAllele)
+                        .with_hint(
+                            "HGVS does not allow describing both a deletion and a duplication \
+                             of overlapping reference positions in the same allele \
+                             (recommendations/general.md line 47); drop one edit or rewrite \
+                             as a single delins",
+                        ),
+                )),
+            });
+        }
+        Ok(Self::new(variants, phase))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelfCancellingEditKind {
+    Del,
+    Dup,
+}
+
+/// Extract `(edit-kind, [start, end] base range, accession)` if the variant
+/// is a candidate for self-cancelling-pair detection. Returns `None` for any
+/// variant that is not a simple `del` / `dup` on bare integer positions.
+fn self_cancelling_descriptor(
+    v: &HgvsVariant,
+) -> Option<(SelfCancellingEditKind, (i64, i64), &Accession)> {
+    use crate::hgvs::edit::NaEdit;
+    let (edit, range, accession) = match v {
+        HgvsVariant::Cds(inner) => (
+            inner.loc_edit.edit.inner()?,
+            cds_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        HgvsVariant::Genome(inner) => (
+            inner.loc_edit.edit.inner()?,
+            genome_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        HgvsVariant::Tx(inner) => (
+            inner.loc_edit.edit.inner()?,
+            tx_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        HgvsVariant::Rna(inner) => (
+            inner.loc_edit.edit.inner()?,
+            rna_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        HgvsVariant::Mt(inner) => (
+            inner.loc_edit.edit.inner()?,
+            genome_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        HgvsVariant::Circular(inner) => (
+            inner.loc_edit.edit.inner()?,
+            genome_simple_range(&inner.loc_edit.location)?,
+            &inner.accession,
+        ),
+        _ => return None,
+    };
+    let kind = match edit {
+        NaEdit::Deletion { .. } => SelfCancellingEditKind::Del,
+        NaEdit::Duplication { .. } => SelfCancellingEditKind::Dup,
+        _ => return None,
+    };
+    Some((kind, range, accession))
+}
+
+fn cds_simple_range(interval: &crate::hgvs::interval::CdsInterval) -> Option<(i64, i64)> {
+    let s = interval.start.inner()?;
+    let e = interval.end.inner()?;
+    if s.offset.is_some() || e.offset.is_some() || s.utr3 || e.utr3 {
+        return None;
+    }
+    Some((s.base, e.base))
+}
+
+fn genome_simple_range(interval: &crate::hgvs::interval::GenomeInterval) -> Option<(i64, i64)> {
+    let s = interval.start.inner()?;
+    let e = interval.end.inner()?;
+    Some((s.base as i64, e.base as i64))
+}
+
+fn tx_simple_range(interval: &crate::hgvs::interval::TxInterval) -> Option<(i64, i64)> {
+    let s = interval.start.inner()?;
+    let e = interval.end.inner()?;
+    if s.offset.is_some() || e.offset.is_some() || s.downstream || e.downstream {
+        return None;
+    }
+    Some((s.base, e.base))
+}
+
+fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<(i64, i64)> {
+    let s = interval.start.inner()?;
+    let e = interval.end.inner()?;
+    if s.offset.is_some() || e.offset.is_some() || s.utr3 || e.utr3 {
+        return None;
+    }
+    Some((s.base, e.base))
+}
+
+fn ranges_overlap(a: (i64, i64), b: (i64, i64)) -> bool {
+    let lo = a.0.max(b.0);
+    let hi = a.1.min(b.1);
+    lo <= hi
 }
 
 /// Write the `ACC:<type>.` prefix for compact allele form.
@@ -2344,5 +2510,65 @@ mod tests {
 
         assert_eq!(compound.full(), "NC_000013.11(ENST00000241453.7)");
         assert_eq!(compound.transcript_accession(), "ENST00000241453.7");
+    }
+
+    // ----- Issue #115: self-cancelling allele detection (E3006) -----
+
+    use crate::hgvs::parser::variant::parse_variant;
+
+    #[test]
+    fn test_self_cancelling_detect_spec_example() {
+        // Spec example: c.[762_768del;767_774dup]
+        let del = parse_variant("NM_004006.2:c.762_768del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.767_774dup").unwrap();
+        let pair = AlleleVariant::detect_self_cancelling_pair(&[del, dup]);
+        assert!(
+            pair.is_some(),
+            "spec-example overlapping del+dup must be detected"
+        );
+        let (dl, du) = pair.unwrap();
+        assert_eq!(dl, 0, "first index is the del");
+        assert_eq!(du, 1, "second index is the dup");
+    }
+
+    #[test]
+    fn test_self_cancelling_no_overlap() {
+        let del = parse_variant("NM_004006.2:c.100_110del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.500_510dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none());
+    }
+
+    #[test]
+    fn test_self_cancelling_two_dels() {
+        let a = parse_variant("NM_004006.2:c.100_110del").unwrap();
+        let b = parse_variant("NM_004006.2:c.105_115del").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[a, b]).is_none());
+    }
+
+    #[test]
+    fn test_self_cancelling_different_accessions() {
+        let del = parse_variant("NM_004006.2:c.100_110del").unwrap();
+        let dup = parse_variant("NM_000088.3:c.105_115dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none());
+    }
+
+    #[test]
+    fn test_self_cancelling_dup_first_then_del() {
+        // Order in the allele shouldn't matter; the dup-first variant is
+        // still a self-cancelling pair.
+        let dup = parse_variant("NM_004006.2:c.767_774dup").unwrap();
+        let del = parse_variant("NM_004006.2:c.762_768del").unwrap();
+        let pair = AlleleVariant::detect_self_cancelling_pair(&[dup, del]);
+        assert!(pair.is_some());
+        let (dl, du) = pair.unwrap();
+        assert_eq!(dl, 1, "del is at index 1");
+        assert_eq!(du, 0, "dup is at index 0");
+    }
+
+    #[test]
+    fn test_self_cancelling_genomic_overlap() {
+        let del = parse_variant("NC_000017.11:g.43044295_43044300del").unwrap();
+        let dup = parse_variant("NC_000017.11:g.43044298_43044305dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some());
     }
 }

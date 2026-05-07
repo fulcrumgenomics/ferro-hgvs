@@ -4,6 +4,11 @@
       "category": "malformed_input",
       "reason": "Extra `_` between position and `+1` (`3708_+1` should be `3708+1`). Spec form per recommendations/uncertain.md is `(N+1_M-1)`."
     },
+    "[spec_self_cancelling_allele]": {
+      "category": "rejected_by_design",
+      "reason": "Overlapping del+dup in the same cis-allele that partially undo each other. HGVS recommendations/general.md line 47 forbids this; ferro emits E3006 SelfCancellingAllele.",
+      "tracking": "#115"
+    },
     "[uncertain_range_to_3utr_end]": {
       "category": "spec_not_yet_supported",
       "reason": "Compound uncertain range with 3'UTR `*` and unknown `?` end. Spec recommendations/uncertain.md."
@@ -419,11 +424,13 @@
     "NC_000023.11:g.(?_30304206_30309390_?)dup": "[malformed_four_positions_in_one_paren]",
     "NC_012920.1:m.961delTinsC(2_7)": "[deprecated_repeat_paren_after_delins]",
     "NG_000007.12:g.(108290244-?)_(?-114759023)del": "[malformed_paren_dash_instead_of_underscore]",
+    "NG_000007.3:g.[63249_70661del;63571_70985dup]": "[spec_self_cancelling_allele]",
     "NG_007563.1:g.[66203T>C;66207G>A": "[malformed_unclosed_compound_bracket]",
     "NG_008005.1:g.8384_8763AACATGCAGGNGGAGGAGGGTGAGAGTTCGTG[29-32]": "[deprecated_dash_range_repeat]",
     "NG_008047.1:g.17267CAG[(54-68)]": "[deprecated_dash_range_inside_brackets]",
     "NG_008233.1:g.17226_17227[ins17227_48142;GTTTGCATAGGCACAGAATGTAT]": "[ins_inside_compound_brackets_unusual]",
     "NG_008872.1:g.[16740_20819del;g.20987_21000del]": "[redundant_g_prefix_inside_compound]",
+    "NG_009018.1:g.[160934_261201dup;160941delA]": "[spec_self_cancelling_allele]",
     "NG_009031.1:g.12577_12578insAlu12579_12590dup": "[ins_with_TE_coords_then_dup]",
     "NG_009627.1:g.[6039G>T;6048G>T": "[malformed_unclosed_compound_bracket]",
     "NG_011593.1:g.55397_56585delins59701_59837invGCCCA": "[chained_delins_inv_seq]",

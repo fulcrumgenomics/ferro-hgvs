@@ -902,20 +902,6 @@ fn test_overlap_coincident_range_two_dels() {
 }
 
 #[test]
-fn test_no_overlap_warning_for_spec_legal_del_dup() {
-    // The spec preserves this overlapping del+dup form (non-identical bounds).
-    let (_text, codes) = normalize_with_provider_and_warning_codes(
-        provider_with_simple_transcript(),
-        "NM_TEST.1:c.[762_768del;767_774dup]",
-    );
-    assert!(
-        !codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
-        "spec-legal overlap must not emit OVERLAP_CONFLICTING_EDITS, got {:?}",
-        codes
-    );
-}
-
-#[test]
 fn test_no_overlap_warning_for_trans_alleles() {
     let (_text, codes) =
         normalize_to_string_and_warning_codes("[NC_000001.11:g.100A>C];[NC_000001.11:g.100A>G]");

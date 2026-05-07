@@ -1730,6 +1730,8 @@ pub enum PyErrorType {
     EmptyDelinsInsert = 22,
     RedundantRepeatLabel = 23,
     SinglePositionRange = 24,
+    DeprecatedIvsNotation = 25,
+    DeprecatedConSyntax = 26,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -1760,6 +1762,8 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::EmptyDelinsInsert => PyErrorType::EmptyDelinsInsert,
             ErrorType::RedundantRepeatLabel => PyErrorType::RedundantRepeatLabel,
             ErrorType::SinglePositionRange => PyErrorType::SinglePositionRange,
+            ErrorType::DeprecatedIvsNotation => PyErrorType::DeprecatedIvsNotation,
+            ErrorType::DeprecatedConSyntax => PyErrorType::DeprecatedConSyntax,
         }
     }
 }
@@ -1792,6 +1796,8 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::EmptyDelinsInsert => ErrorType::EmptyDelinsInsert,
             PyErrorType::RedundantRepeatLabel => ErrorType::RedundantRepeatLabel,
             PyErrorType::SinglePositionRange => ErrorType::SinglePositionRange,
+            PyErrorType::DeprecatedIvsNotation => ErrorType::DeprecatedIvsNotation,
+            PyErrorType::DeprecatedConSyntax => ErrorType::DeprecatedConSyntax,
         }
     }
 }
