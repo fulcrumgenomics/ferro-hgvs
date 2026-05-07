@@ -479,9 +479,9 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
                 return Ok(record);
             }
-            NaEdit::Splice => {
+            NaEdit::Splice { .. } => {
                 return Err(FerroError::ConversionError {
-                    msg: "Splice variants (r.spl) cannot be converted to VCF (RNA-specific effect)"
+                    msg: "Splice variants (r.spl/r.spl?) cannot be converted to VCF (RNA-specific effect)"
                         .to_string(),
                 });
             }

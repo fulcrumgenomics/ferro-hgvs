@@ -72,7 +72,7 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
         NaEdit::Unknown { .. } => "unknown",
         NaEdit::Methylation { .. } => "methylation",
         NaEdit::CopyNumber { .. } => "copy_number",
-        NaEdit::Splice => "splice",
+        NaEdit::Splice { .. } => "splice",
         NaEdit::NoProduct => "no_product",
         NaEdit::PositionOnly => "position_only",
     }

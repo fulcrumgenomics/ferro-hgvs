@@ -518,9 +518,21 @@ pub enum NaEdit {
     /// Copy number: specifies the number of copies of a region (e.g., copy2, copy4)
     CopyNumber { count: u64 },
 
-    /// Aberrant splicing (RNA-specific): r.spl
-    /// Indicates that the RNA is aberrantly spliced, but the exact effect is unknown
-    Splice,
+    /// Aberrant splicing (RNA-specific): `r.spl`, `r.spl?`, `r.(spl)`, `r.(spl?)`.
+    ///
+    /// Indicates that the RNA is aberrantly spliced. Per HGVS v21.0
+    /// (`assets/hgvs-nomenclature/docs/recommendations/RNA/splicing.md` and
+    /// `docs/recommendations/uncertain.md`):
+    /// - `unknown == false` (`spl`): RNA not analysed; splicing is **very likely**
+    ///   affected (canonical donor/acceptor positions: intron +1, +2, -2, -1, excl.
+    ///   GT↔GC).
+    /// - `unknown == true` (`spl?`): RNA not analysed; splicing **might** be affected
+    ///   (first/last exon nucleotide, intron +3..+6, new acceptor-adjacent AG).
+    ///
+    /// The predicted wrappers `r.(spl)` and `r.(spl?)` are produced by the parser as
+    /// `Mu::Uncertain(NaEdit::Splice { unknown })`; the parens are emitted by
+    /// `RnaVariant::fmt_loc_edit` for whole-entity uncertain edits.
+    Splice { unknown: bool },
 
     /// No RNA product (RNA-specific): r.0
     /// Indicates that no RNA is produced (similar to p.0 for protein)
@@ -570,9 +582,9 @@ impl NaEdit {
         matches!(self, NaEdit::Unknown { whole_entity: true })
     }
 
-    /// Check if this is an RNA splice edit (r.spl)
+    /// Check if this is an RNA splice edit (`r.spl` or `r.spl?`)
     pub fn is_splice(&self) -> bool {
-        matches!(self, NaEdit::Splice)
+        matches!(self, NaEdit::Splice { .. })
     }
 
     /// Check if this is an RNA no product edit (r.0)
@@ -685,7 +697,13 @@ impl NaEdit {
             NaEdit::Unknown { .. } => String::from("?"),
             NaEdit::Methylation { status } => status.to_string(),
             NaEdit::CopyNumber { count } => format!("copy{}", count),
-            NaEdit::Splice => String::from("spl"),
+            NaEdit::Splice { unknown } => {
+                if *unknown {
+                    String::from("spl?")
+                } else {
+                    String::from("spl")
+                }
+            }
             NaEdit::NoProduct => String::from("0"),
             NaEdit::PositionOnly => String::new(),
         }
@@ -790,8 +808,12 @@ impl fmt::Display for NaEdit {
             NaEdit::CopyNumber { count } => {
                 write!(f, "copy{}", count)
             }
-            NaEdit::Splice => {
-                write!(f, "spl")
+            NaEdit::Splice { unknown } => {
+                if *unknown {
+                    write!(f, "spl?")
+                } else {
+                    write!(f, "spl")
+                }
             }
             NaEdit::NoProduct => {
                 write!(f, "0")
@@ -1588,8 +1610,11 @@ mod tests {
 
     #[test]
     fn test_na_edit_splice_display() {
-        let edit = NaEdit::Splice;
+        let edit = NaEdit::Splice { unknown: false };
         assert_eq!(format!("{}", edit), "spl");
+
+        let edit = NaEdit::Splice { unknown: true };
+        assert_eq!(format!("{}", edit), "spl?");
     }
 
     #[test]
