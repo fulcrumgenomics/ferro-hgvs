@@ -236,7 +236,7 @@ fn simple_range_for_loc_edit<L>(
         NaEdit::Substitution { .. }
         | NaEdit::SubstitutionNoRef { .. }
         | NaEdit::Deletion { .. } => Some((region, start, end)),
-        NaEdit::Delins { sequence } => {
+        NaEdit::Delins { sequence, .. } => {
             sequence.bases()?;
             Some((region, start, end))
         }
@@ -296,7 +296,7 @@ fn anchor_from_loc_edit<L>(
             end,
             alt: Vec::new(),
         }),
-        NaEdit::Delins { sequence } => {
+        NaEdit::Delins { sequence, .. } => {
             let bases = sequence.bases()?.to_vec();
             Some(Anchor {
                 region,
@@ -578,6 +578,8 @@ fn build_naedit<P>(
     } else {
         NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
+            deleted: None,
+            deleted_length: None,
         }
     };
     let (lo, hi) = if merged.start > merged.end {

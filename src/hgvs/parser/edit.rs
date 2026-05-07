@@ -200,11 +200,14 @@ fn parse_multibase_substitution(input: &str) -> IResult<&str, NaEdit> {
         )));
     }
 
-    // Convert to delins
+    // Convert to delins. Multi-base ">" notation does not carry an explicit
+    // deleted sequence/length, so leave both as None.
     Ok((
         input,
         NaEdit::Delins {
             sequence: InsertedSequence::Literal(alt_seq),
+            deleted: None,
+            deleted_length: None,
         },
     ))
 }
@@ -840,32 +843,26 @@ fn parse_simple_count(input: &str) -> IResult<&str, InsertedSequence> {
 fn parse_delins(input: &str) -> IResult<&str, NaEdit> {
     let (input, _) = tag("delins").parse(input)?;
     let (input, sequence) = parse_inserted_sequence(input)?;
-    Ok((input, NaEdit::Delins { sequence }))
-}
-
-/// Parse a delins with explicit deleted sequence (e.g., delAinsT, delATGinsCCC)
-/// This is a legacy/redundant format but appears in some databases.
-/// The deleted sequence is parsed and then discarded (normalized to delinsXXX format).
-fn parse_delins_with_deleted_seq(input: &str) -> IResult<&str, NaEdit> {
-    let (input, _) = tag("del").parse(input)?;
-    let (input, _deleted_seq) = parse_sequence(input)?;
-    let (input, _) = tag("ins").parse(input)?;
-    let (input, inserted_seq) = parse_inserted_sequence(input)?;
-
     Ok((
         input,
         NaEdit::Delins {
-            sequence: inserted_seq,
+            sequence,
+            deleted: None,
+            deleted_length: None,
         },
     ))
 }
 
-/// Parse a delins with explicit deleted count (e.g., del35insTA, del17insTA)
-/// This is a legacy/redundant format but appears in some databases.
-/// The deleted count is parsed and then discarded (normalized to delinsXXX format).
-fn parse_delins_with_deleted_count(input: &str) -> IResult<&str, NaEdit> {
+/// Parse a delins with explicit deleted sequence (e.g., delAinsT, delATGinsCCC).
+///
+/// The HGVS spec actively recommends the short form `delinsXXX` (see
+/// `recommendations/DNA/delins.md`), but the explicit form is allowed and
+/// appears in databases. ferro preserves the explicit deleted sequence so
+/// `parse → Display` round-trips faithfully; `canonicalize_edit` strips it
+/// back to the short form when canonicalization is requested.
+fn parse_delins_with_deleted_seq(input: &str) -> IResult<&str, NaEdit> {
     let (input, _) = tag("del").parse(input)?;
-    let (input, _deleted_count) = digit1.parse(input)?;
+    let (input, deleted_seq) = parse_sequence(input)?;
     let (input, _) = tag("ins").parse(input)?;
     let (input, inserted_seq) = parse_inserted_sequence(input)?;
 
@@ -873,6 +870,30 @@ fn parse_delins_with_deleted_count(input: &str) -> IResult<&str, NaEdit> {
         input,
         NaEdit::Delins {
             sequence: inserted_seq,
+            deleted: Some(deleted_seq),
+            deleted_length: None,
+        },
+    ))
+}
+
+/// Parse a delins with explicit deleted count (e.g., del35insTA, del17insTA).
+///
+/// As with explicit deleted sequence, the spec prefers the short form but
+/// ferro preserves the count for round-trip fidelity.
+fn parse_delins_with_deleted_count(input: &str) -> IResult<&str, NaEdit> {
+    let (input, _) = tag("del").parse(input)?;
+    let (input, deleted_count_str) = digit1.parse(input)?;
+    let (input, _) = tag("ins").parse(input)?;
+    let (input, inserted_seq) = parse_inserted_sequence(input)?;
+
+    let deleted_count: u64 = deleted_count_str.parse().unwrap_or(0);
+
+    Ok((
+        input,
+        NaEdit::Delins {
+            sequence: inserted_seq,
+            deleted: None,
+            deleted_length: Some(deleted_count),
         },
     ))
 }
@@ -2082,6 +2103,130 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_delins_with_explicit_deleted_seq_preserved() {
+        use crate::hgvs::edit::Sequence;
+        use std::str::FromStr;
+        let (remaining, edit) = parse_na_edit("delATGinsTTCC").unwrap();
+        assert_eq!(remaining, "");
+        if let NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } = edit
+        {
+            assert_eq!(deleted, Some(Sequence::from_str("ATG").unwrap()));
+            assert_eq!(deleted_length, None);
+            if let InsertedSequence::Literal(seq) = sequence {
+                assert_eq!(seq.to_string(), "TTCC");
+            } else {
+                panic!("expected literal inserted sequence");
+            }
+        } else {
+            panic!("expected NaEdit::Delins");
+        }
+    }
+
+    #[test]
+    fn test_parse_delins_with_explicit_deleted_count_preserved() {
+        let (remaining, edit) = parse_na_edit("del3insTA").unwrap();
+        assert_eq!(remaining, "");
+        if let NaEdit::Delins {
+            sequence: _,
+            deleted,
+            deleted_length,
+        } = edit
+        {
+            assert_eq!(deleted, None);
+            assert_eq!(deleted_length, Some(3));
+        } else {
+            panic!("expected NaEdit::Delins");
+        }
+    }
+
+    #[test]
+    fn test_parse_delins_short_form_has_no_explicit_deleted() {
+        let (remaining, edit) = parse_na_edit("delinsTTCC").unwrap();
+        assert_eq!(remaining, "");
+        if let NaEdit::Delins {
+            sequence: _,
+            deleted,
+            deleted_length,
+        } = edit
+        {
+            assert_eq!(deleted, None);
+            assert_eq!(deleted_length, None);
+        } else {
+            panic!("expected NaEdit::Delins");
+        }
+    }
+
+    #[test]
+    fn test_parse_multibase_substitution_does_not_set_explicit_deleted() {
+        let (remaining, edit) = parse_na_edit("GG>G").unwrap();
+        assert_eq!(remaining, "");
+        if let NaEdit::Delins {
+            sequence: _,
+            deleted,
+            deleted_length,
+        } = edit
+        {
+            assert_eq!(deleted, None);
+            assert_eq!(deleted_length, None);
+        } else {
+            panic!("expected NaEdit::Delins");
+        }
+    }
+
+    #[test]
+    fn test_full_hgvs_round_trip_delins_with_explicit_deleted_seq() {
+        use crate::parse_hgvs;
+        // Cover g./c./n./m. coordinate systems that share the parser.
+        let inputs = [
+            "NC_000001.11:g.100_102delATGinsTTCC",
+            "NC_000008.10:g.24814007_24814008delGGinsCT",
+            "NM_006158.3:c.22_23delCCinsAG",
+            "NR_046018.2:n.50_51delAGinsTC",
+            "NC_012920.1:m.1000_1001delAGinsTC",
+        ];
+        for input in inputs {
+            let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input}: {e:?}"));
+            assert_eq!(v.to_string(), input, "round-trip mismatch for {input}");
+        }
+    }
+
+    #[test]
+    fn test_full_hgvs_round_trip_delins_with_explicit_deleted_count() {
+        use crate::parse_hgvs;
+        let input = "NC_000001.11:g.100_102del3insTTCC";
+        let v = parse_hgvs(input).unwrap();
+        assert_eq!(v.to_string(), input);
+    }
+
+    #[test]
+    fn test_full_hgvs_round_trip_delins_short_form_unchanged() {
+        use crate::parse_hgvs;
+        let inputs = [
+            "NC_000001.11:g.100_102delinsTTCC",
+            "NM_006158.3:c.22_23delinsAG",
+        ];
+        for input in inputs {
+            let v = parse_hgvs(input).unwrap();
+            assert_eq!(v.to_string(), input);
+        }
+    }
+
+    #[test]
+    fn test_delins_parse_display_reparse_idempotent() {
+        use crate::parse_hgvs;
+        let input = "NC_000001.11:g.100_102delATGinsTTCC";
+        let v1 = parse_hgvs(input).unwrap();
+        let s1 = v1.to_string();
+        let v2 = parse_hgvs(&s1).unwrap();
+        assert_eq!(v1, v2);
+        assert_eq!(s1, v2.to_string());
+    }
+
+    #[test]
     fn test_parse_duplication() {
         let (remaining, edit) = parse_na_edit("dup").unwrap();
         assert_eq!(remaining, "");
@@ -2524,7 +2669,7 @@ mod tests {
         // Delins with count: delins10
         let (remaining, edit) = parse_na_edit("delins10").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Delins { sequence } = edit {
+        if let NaEdit::Delins { sequence, .. } = edit {
             assert!(matches!(sequence, InsertedSequence::Count(10)));
         } else {
             panic!("Expected delins");
@@ -2536,7 +2681,7 @@ mod tests {
         // Delins with N[count]: delinsN[12]
         let (remaining, edit) = parse_na_edit("delinsN[12]").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Delins { sequence } = edit {
+        if let NaEdit::Delins { sequence, .. } = edit {
             if let InsertedSequence::Repeat { base, count } = sequence {
                 assert_eq!(base, Base::N);
                 assert!(matches!(count, RepeatCount::Exact(12)));
@@ -2684,7 +2829,7 @@ mod tests {
         let (remaining, edit) =
             parse_na_edit("delins[AGAAGGAAATTT;45310743_46521014;45043709_45310738inv]").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Delins { sequence } = edit {
+        if let NaEdit::Delins { sequence, .. } = edit {
             if let InsertedSequence::Complex(parts) = sequence {
                 assert_eq!(parts.len(), 3);
                 assert!(matches!(&parts[0], InsertedPart::Literal(_)));
@@ -2782,7 +2927,7 @@ mod tests {
         // Delins with sequence repeat count: delinsTCGGCAGCGGCACAGCGAGG[13]
         let (remaining, edit) = parse_na_edit("delinsTCGGCAGCGGCACAGCGAGG[13]").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Delins { sequence } = edit {
+        if let NaEdit::Delins { sequence, .. } = edit {
             if let InsertedSequence::SequenceRepeat {
                 sequence: seq,
                 count,
@@ -2800,7 +2945,7 @@ mod tests {
         // Delins with sequence repeat range: delinsAAAGG[400_2000]
         let (remaining, edit) = parse_na_edit("delinsAAAGG[400_2000]").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Delins { sequence } = edit {
+        if let NaEdit::Delins { sequence, .. } = edit {
             if let InsertedSequence::SequenceRepeat {
                 sequence: seq,
                 count,

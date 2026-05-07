@@ -385,7 +385,7 @@ pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
         NaEdit::Deletion { .. } => Some(-compute_span(variant)?),
         NaEdit::Duplication { .. } => Some(compute_span(variant)?),
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
-        NaEdit::Delins { sequence } => {
+        NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
         }
         _ => None,
@@ -523,6 +523,8 @@ mod tests {
         use std::str::FromStr;
         let edit = NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()),
+            deleted: None,
+            deleted_length: None,
         };
         assert_eq!(na_edit_type_str(&edit), "delins");
     }

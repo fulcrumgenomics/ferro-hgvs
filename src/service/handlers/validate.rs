@@ -223,7 +223,17 @@ fn extract_na_edit_info(
         NaEdit::Insertion { sequence } => {
             ("insertion".to_string(), None, Some(sequence.to_string()))
         }
-        NaEdit::Delins { sequence } => ("delins".to_string(), None, Some(sequence.to_string())),
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => {
+            let deleted = deleted
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| deleted_length.map(|l| format!("{} bp", l)));
+            ("delins".to_string(), deleted, Some(sequence.to_string()))
+        }
         NaEdit::Duplication {
             sequence, length, ..
         } => {
@@ -356,9 +366,38 @@ mod tests {
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350delinsATG").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (vtype, _deleted, inserted) = extract_na_edit_info(edit);
+                let (vtype, deleted, inserted) = extract_na_edit_info(edit);
                 assert_eq!(vtype, "delins");
+                assert_eq!(deleted, None, "short form has no explicit deleted");
                 assert_eq!(inserted, Some("ATG".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_delins_with_explicit_deleted_seq() {
+        let result =
+            crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350_352delATGinsTTCC").unwrap();
+        if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
+            if let Some(edit) = v.loc_edit.edit.inner() {
+                let (vtype, deleted, inserted) = extract_na_edit_info(edit);
+                assert_eq!(vtype, "delins");
+                assert_eq!(deleted, Some("ATG".to_string()));
+                assert_eq!(inserted, Some("TTCC".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_delins_with_explicit_deleted_length() {
+        let result =
+            crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350_352del3insTA").unwrap();
+        if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
+            if let Some(edit) = v.loc_edit.edit.inner() {
+                let (vtype, deleted, inserted) = extract_na_edit_info(edit);
+                assert_eq!(vtype, "delins");
+                assert_eq!(deleted, Some("3 bp".to_string()));
+                assert_eq!(inserted, Some("TA".to_string()));
             }
         }
     }

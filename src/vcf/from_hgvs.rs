@@ -304,7 +304,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
                 (anchor_pos, ref_allele, vec![alt_allele])
             }
-            NaEdit::Delins { sequence } => {
+            NaEdit::Delins { sequence, .. } => {
                 // Deletion-insertion: REF is deleted sequence, ALT is replacement
                 let deleted_seq = self.get_reference_sequence(chrom, start, end)?;
                 let alt_seq = sequence.to_string();
@@ -1212,6 +1212,8 @@ mod tests {
                 CdsInterval::new(CdsPos::new(1), CdsPos::new(3)),
                 NaEdit::Delins {
                     sequence: InsertedSequence::Literal(Sequence::from_str("TTT").unwrap()),
+                    deleted: None,
+                    deleted_length: None,
                 },
             ),
         });

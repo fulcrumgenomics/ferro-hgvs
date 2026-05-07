@@ -446,8 +446,21 @@ pub enum NaEdit {
     /// Insertion: addition of bases between two positions (e.g., insATG, ins10, insA[10])
     Insertion { sequence: InsertedSequence },
 
-    /// Deletion-insertion: replacement of bases (e.g., delinsATG, delinsA[10])
-    Delins { sequence: InsertedSequence },
+    /// Deletion-insertion: replacement of bases (e.g., delinsATG, delinsA[10],
+    /// delATGinsTTCC, del3insTA).
+    ///
+    /// `deleted` and `deleted_length` preserve an explicit deleted sequence or
+    /// length when the input notation provided one (e.g., `delATGinsTTCC`
+    /// parses to `deleted: Some("ATG")`). At most one of `deleted` /
+    /// `deleted_length` is `Some`; both are `None` for the recommended short
+    /// form `delinsXXX`. `Display` preserves on round-trip; `canonicalize_edit`
+    /// strips them back to the short form per the HGVS spec recommendation
+    /// (`recommendations/DNA/delins.md`).
+    Delins {
+        sequence: InsertedSequence,
+        deleted: Option<Sequence>,
+        deleted_length: Option<u64>,
+    },
 
     /// Duplication: copy of bases (e.g., dup, dupATG, dup101, dup(731_741), dup?)
     Duplication {
@@ -629,8 +642,20 @@ impl NaEdit {
             NaEdit::Insertion { sequence } => {
                 format!("ins{}", sequence.to_rna_string())
             }
-            NaEdit::Delins { sequence } => {
-                format!("delins{}", sequence.to_rna_string())
+            NaEdit::Delins {
+                sequence,
+                deleted,
+                deleted_length,
+            } => {
+                let mut s = String::from("del");
+                if let Some(seq) = deleted {
+                    s.push_str(&seq.to_lowercase_string());
+                } else if let Some(len) = deleted_length {
+                    s.push_str(&len.to_string());
+                }
+                s.push_str("ins");
+                s.push_str(&sequence.to_rna_string());
+                s
             }
             NaEdit::Duplication {
                 sequence,
@@ -734,8 +759,18 @@ impl fmt::Display for NaEdit {
             NaEdit::Insertion { sequence } => {
                 write!(f, "ins{}", sequence)
             }
-            NaEdit::Delins { sequence } => {
-                write!(f, "delins{}", sequence)
+            NaEdit::Delins {
+                sequence,
+                deleted,
+                deleted_length,
+            } => {
+                write!(f, "del")?;
+                if let Some(seq) = deleted {
+                    write!(f, "{}", seq)?;
+                } else if let Some(len) = deleted_length {
+                    write!(f, "{}", len)?;
+                }
+                write!(f, "ins{}", sequence)
             }
             NaEdit::Duplication {
                 sequence,
@@ -1154,8 +1189,55 @@ mod tests {
     fn test_delins_display() {
         let edit = NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()),
+            deleted: None,
+            deleted_length: None,
         };
         assert_eq!(format!("{}", edit), "delinsATG");
+    }
+
+    #[test]
+    fn test_delins_display_with_explicit_deleted_seq() {
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
+            deleted: Some(Sequence::from_str("ATG").unwrap()),
+            deleted_length: None,
+        };
+        assert_eq!(format!("{}", edit), "delATGinsTTCC");
+    }
+
+    #[test]
+    fn test_delins_display_with_explicit_deleted_count() {
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TA").unwrap()),
+            deleted: None,
+            deleted_length: Some(3),
+        };
+        assert_eq!(format!("{}", edit), "del3insTA");
+    }
+
+    #[test]
+    fn test_delins_to_rna_string_with_explicit_deleted_seq() {
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("UUCC").unwrap()),
+            deleted: Some(Sequence::from_str("AUG").unwrap()),
+            deleted_length: None,
+        };
+        assert_eq!(edit.to_rna_string(), "delauginsuucc");
+    }
+
+    #[test]
+    fn test_delins_eq_distinguishes_explicit_vs_short_form() {
+        let short = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
+            deleted: None,
+            deleted_length: None,
+        };
+        let explicit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
+            deleted: Some(Sequence::from_str("ATG").unwrap()),
+            deleted_length: None,
+        };
+        assert_ne!(short, explicit);
     }
 
     #[test]
@@ -1684,6 +1766,8 @@ mod tests {
                 base: Base::A,
                 count: RepeatCount::Exact(10),
             },
+            deleted: None,
+            deleted_length: None,
         };
         assert_eq!(format!("{}", edit), "delinsA[10]");
     }

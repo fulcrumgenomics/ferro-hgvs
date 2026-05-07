@@ -172,6 +172,25 @@ fn test_delins_with_explicit_deleted() {
 }
 
 #[test]
+fn test_delins_with_explicit_deleted_round_trips() {
+    // Issue #120: parse → Display must preserve the explicit deleted sequence
+    // for inputs like c.22_23delCCinsAG so users don't lose information.
+    let fixtures = load_fixtures();
+    for test in &fixtures.delins_with_explicit_deleted.tests {
+        if !test.valid {
+            continue;
+        }
+        let v = parse_hgvs(&test.input).unwrap_or_else(|e| panic!("parse {}: {e:?}", test.input));
+        assert_eq!(
+            v.to_string(),
+            test.input,
+            "round-trip mismatch for {}",
+            test.input
+        );
+    }
+}
+
+#[test]
 fn test_intronic_and_utr_ranges() {
     let fixtures = load_fixtures();
     run_test_category(&fixtures.intronic_and_utr_ranges, "Intronic and UTR Ranges");
