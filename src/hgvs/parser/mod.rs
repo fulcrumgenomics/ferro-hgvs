@@ -206,6 +206,44 @@ pub fn parse_hgvs_with_config(
 ///     .iter()
 ///     .any(|w| w.error_type.code() == "W3001"));
 /// ```
+///
+/// ```
+/// use ferro_hgvs::error_handling::ErrorType;
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// // SVA-008: single-position range is collapsed (W4003)
+/// let result = parse_hgvs_lenient("NM_000088.3:c.123_123del").unwrap();
+/// assert_eq!(result.preprocessed_input, "NM_000088.3:c.123del");
+/// assert!(result
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type == ErrorType::SinglePositionRange));
+/// ```
+///
+/// ```
+/// use ferro_hgvs::error_handling::ErrorType;
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// // SVA-010: empty delins is rewritten to del (W3012)
+/// let result = parse_hgvs_lenient("NC_000001.11:g.100_102delins").unwrap();
+/// assert_eq!(result.preprocessed_input, "NC_000001.11:g.100_102del");
+/// assert!(result
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type == ErrorType::EmptyDelinsInsert));
+/// ```
+///
+/// ```
+/// use ferro_hgvs::error_handling::ErrorType;
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// // SVA-007: deletion with size-count suffix warns but is not rewritten (W3011)
+/// let result = parse_hgvs_lenient("NG_012232.1:g.123del6").unwrap();
+/// assert!(result
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type == ErrorType::DelSizeSuffix));
+/// ```
 pub fn parse_hgvs_lenient(input: &str) -> Result<ParseResultWithWarnings<HgvsVariant>, FerroError> {
     parse_hgvs_with_config(input, ErrorConfig::lenient())
 }

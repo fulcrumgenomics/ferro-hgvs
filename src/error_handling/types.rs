@@ -155,6 +155,40 @@ pub enum ErrorType {
     /// `p.Arg97fsX23` (corrected to `p.Arg97fsTer23`).
     DeprecatedFrameshiftX,
 
+    /// Deletion described with a size-count suffix instead of a position range
+    /// (e.g. `g.123del6` instead of `g.123_128del`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/deletion.md`): "a deletion of more
+    /// than one residue should mention the first and last residue deleted,
+    /// e.g. `NG_012232.1:g.123_128del` and not `NG_012232.1:g.123del6`."
+    DelSizeSuffix,
+
+    /// Deletion-insertion with an empty inserted sequence (e.g.
+    /// `g.100_102delins` instead of `g.100_102del`).
+    ///
+    /// A `delins` whose inserted sequence is absent collapses semantically to
+    /// a plain deletion. Per `recommendations/DNA/delins.md` and the #81 A3
+    /// canonicalization rule, the canonical form is `del`.
+    EmptyDelinsInsert,
+
+    /// Repeat described with a redundant base label inside the brackets
+    /// (e.g. `r.100_102cug[4]` instead of `r.100_102[4]`).
+    ///
+    /// Per HGVS spec (`recommendations/RNA/repeated.md`): "the format
+    /// `r.-125_-123cug[4]`, should not be used; it contains redundant
+    /// information ('-125_-123' and 'cug')."
+    RedundantRepeatLabel,
+
+    /// Single-position range used where a single position is canonical (e.g.
+    /// `c.123_123del`, `c.123_123dup`, or `c.100_100inv`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/deletion.md`,
+    /// `recommendations/DNA/duplication.md`,
+    /// `recommendations/DNA/inversion.md`): "position(s)_deleted should
+    /// contain two different positions, e.g. 123_126 not 123_123" — the same
+    /// principle applies to duplications and inversions.
+    SinglePositionRange,
+
     // === Normalization Error Types ===
     /// Reference sequence mismatch during normalization.
     ///
@@ -189,8 +223,12 @@ impl ErrorType {
             ErrorType::DeprecatedStopCodonX => "W3008",
             ErrorType::DeprecatedFrameshiftStar => "W3009",
             ErrorType::DeprecatedFrameshiftX => "W3010",
+            ErrorType::DelSizeSuffix => "W3011",
+            ErrorType::EmptyDelinsInsert => "W3012",
+            ErrorType::RedundantRepeatLabel => "W3013",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
+            ErrorType::SinglePositionRange => "W4003",
             ErrorType::RefSeqMismatch => "W5001",
         }
     }
@@ -221,6 +259,12 @@ impl ErrorType {
             }
             ErrorType::DeprecatedFrameshiftX => {
                 "deprecated 'fsXN' frameshift notation (use 'fsTerN')"
+            }
+            ErrorType::DelSizeSuffix => "deletion described with a size-count suffix",
+            ErrorType::EmptyDelinsInsert => "delins with empty inserted sequence",
+            ErrorType::RedundantRepeatLabel => "repeat description with redundant base label",
+            ErrorType::SinglePositionRange => {
+                "single-position range used where a single position is canonical"
             }
             ErrorType::RefSeqMismatch => "reference sequence mismatch",
         }
@@ -270,6 +314,10 @@ impl ErrorType {
             ErrorType::DeprecatedStopCodonX => ("p.Arg97X", "p.Arg97Ter"),
             ErrorType::DeprecatedFrameshiftStar => ("p.Arg97fs*23", "p.Arg97fsTer23"),
             ErrorType::DeprecatedFrameshiftX => ("p.Arg97fsX23", "p.Arg97fsTer23"),
+            ErrorType::DelSizeSuffix => ("g.123del6", "g.123_128del"),
+            ErrorType::EmptyDelinsInsert => ("g.100_102delins", "g.100_102del"),
+            ErrorType::RedundantRepeatLabel => ("r.100_102cug[4]", "r.100_102[4]"),
+            ErrorType::SinglePositionRange => ("c.123_123del", "c.123del"),
             ErrorType::RefSeqMismatch => ("c.100G>A (ref is T)", "c.100T>A (corrected)"),
         }
     }
@@ -464,8 +512,12 @@ mod tests {
         assert_eq!(ErrorType::DeprecatedStopCodonX.code(), "W3008");
         assert_eq!(ErrorType::DeprecatedFrameshiftStar.code(), "W3009");
         assert_eq!(ErrorType::DeprecatedFrameshiftX.code(), "W3010");
+        assert_eq!(ErrorType::DelSizeSuffix.code(), "W3011");
+        assert_eq!(ErrorType::EmptyDelinsInsert.code(), "W3012");
+        assert_eq!(ErrorType::RedundantRepeatLabel.code(), "W3013");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
+        assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");
     }
 

@@ -1749,6 +1749,369 @@ fn find_potential_amino_acids(input: &str) -> Vec<(usize, usize, String)> {
     results
 }
 
+// =============================================================================
+// Issue #127 — non-canonical input forms (SVA-007 / 008 / 009 / 010 / 014 / 027)
+// =============================================================================
+
+/// Returns true if `input` contains a non-protein coordinate-type prefix
+/// (`g.`, `c.`, `n.`, `r.`, `m.`, `o.`).
+///
+/// Used to scope DNA/RNA-only checks and exclude protein descriptions, where
+/// the same surface syntax (`del32`, `_<n>_<n>del`) has different semantics
+/// and a different spec section.
+fn has_non_protein_description(bytes: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        let coord = bytes[i];
+        let dot = bytes[i + 1];
+        if dot == b'.'
+            && (coord == b'g'
+                || coord == b'c'
+                || coord == b'n'
+                || coord == b'r'
+                || coord == b'm'
+                || coord == b'o')
+        {
+            // Require the byte before `coord` to be a colon, an open paren /
+            // bracket, a semicolon, or the start of input. This avoids
+            // matching `del.` / interior letters within a token.
+            let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';');
+            if prev_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns the byte index immediately after the UTF-8 character starting at
+/// `i` in `bytes`. Falls back to `i + 1` for malformed input.
+#[inline]
+fn next_char_end(bytes: &[u8], i: usize) -> usize {
+    if i >= bytes.len() {
+        return i;
+    }
+    let b = bytes[i];
+    let extra = if b < 0x80 {
+        0
+    } else if b & 0xE0 == 0xC0 {
+        1
+    } else if b & 0xF0 == 0xE0 {
+        2
+    } else if b & 0xF8 == 0xF0 {
+        3
+    } else {
+        0
+    };
+    (i + 1 + extra).min(bytes.len())
+}
+
+/// Detect deletions described with a size-count suffix instead of a position
+/// range (W3011, SVA-007).
+///
+/// Matches `del<digits>` occurrences inside non-protein descriptions (after
+/// `g.`, `c.`, `n.`, `r.`, `m.`, or `o.`), excluding the `delins` keyword.
+/// Returns one `DetectedCorrection` per occurrence with `corrected` empty:
+/// W3011 is not auto-correctable because synthesizing the end position
+/// requires intronic / UTR-aware coordinate arithmetic that the preprocessor
+/// does not have.
+pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return hits;
+    }
+
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"del" {
+            i += 1;
+            continue;
+        }
+        // Skip `delins`.
+        if i + 6 <= bytes.len() && &bytes[i + 3..i + 6] == b"ins" {
+            i += 6;
+            continue;
+        }
+        // Look for one-or-more digits after `del`.
+        let digit_start = i + 3;
+        let mut j = digit_start;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digit_start {
+            i += 3;
+            continue;
+        }
+        // The token must end here — followed by end-of-string or one of the
+        // HGVS terminator bytes (`)`, `;`, `]`, whitespace).
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            i = j;
+            continue;
+        }
+        hits.push(DetectedCorrection::new(
+            ErrorType::DelSizeSuffix,
+            &input[i..j],
+            String::new(),
+            i,
+            j,
+        ));
+        i = j;
+    }
+    hits
+}
+
+/// Detect and correct deletion-insertions whose inserted sequence is empty
+/// (W3012, SVA-010).
+///
+/// Matches `delins` followed by a terminator (end-of-input, `)`, `;`, `]`,
+/// or whitespace). Rewrites to `del` and emits one `DetectedCorrection`
+/// per occurrence. Pre-existing `delinsATG` / `delins[…]` / `delinsN[12]` /
+/// `delins(10_20)` / `delins10` forms are left untouched.
+pub fn correct_empty_delins(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut result = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if i + 6 <= bytes.len() && &bytes[i..i + 6] == b"delins" {
+            let after = bytes.get(i + 6).copied();
+            let is_empty = match after {
+                None => true,
+                Some(b) => b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace(),
+            };
+            if is_empty {
+                hits.push(DetectedCorrection::new(
+                    ErrorType::EmptyDelinsInsert,
+                    "delins",
+                    "del",
+                    i,
+                    i + 6,
+                ));
+                result.push_str("del");
+                i += 6;
+                continue;
+            }
+        }
+        let ch_end = next_char_end(bytes, i);
+        result.push_str(&input[i..ch_end]);
+        i = ch_end;
+    }
+    (result, hits)
+}
+
+/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>` and
+/// the two numeric tokens (with sign) are equal, return `(pair_end,
+/// canonical_single_position_text)`; otherwise `None`.
+fn match_equal_position_pair(bytes: &[u8], i: usize, input: &str) -> Option<(usize, String)> {
+    let mut j = i;
+    let first_start = j;
+    if j < bytes.len() && bytes[j] == b'-' {
+        j += 1;
+    }
+    let num1_digit_start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == num1_digit_start {
+        return None;
+    }
+    let first_end = j;
+    if j >= bytes.len() || bytes[j] != b'_' {
+        return None;
+    }
+    j += 1;
+    let second_start = j;
+    if j < bytes.len() && bytes[j] == b'-' {
+        j += 1;
+    }
+    let num2_digit_start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == num2_digit_start {
+        return None;
+    }
+    let second_end = j;
+
+    let first = &input[first_start..first_end];
+    let second = &input[second_start..second_end];
+    if first != second {
+        return None;
+    }
+    Some((j, first.to_string()))
+}
+
+/// Returns true when `bytes` at `i` starts with one of `del` (not `delins`),
+/// `dup`, or `inv`.
+fn matches_single_pos_keyword(bytes: &[u8], i: usize) -> bool {
+    if i + 3 > bytes.len() {
+        return false;
+    }
+    let kw = &bytes[i..i + 3];
+    if kw == b"del" {
+        // Reject `delins`.
+        return !(i + 6 <= bytes.len() && &bytes[i + 3..i + 6] == b"ins");
+    }
+    kw == b"dup" || kw == b"inv"
+}
+
+/// Detect and collapse single-position ranges in `del` / `dup` / `inv`
+/// descriptions (W4003, SVA-008 / 009 / 014).
+///
+/// Matches `<sign?><digits>_<sign?><digits>` where the two integers are
+/// equal, followed by `del` (but not `delins`), `dup`, or `inv`. Rewrites to
+/// the single-position form and emits one `DetectedCorrection` per
+/// occurrence. The check is scoped to non-protein descriptions; protein has
+/// its own L2 issue track.
+pub fn correct_single_position_range(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut result = String::with_capacity(input.len());
+    let mut p = 0usize;
+    while p < bytes.len() {
+        if let Some((pair_end, value_text)) = match_equal_position_pair(bytes, p, input) {
+            if matches_single_pos_keyword(bytes, pair_end) {
+                hits.push(DetectedCorrection::new(
+                    ErrorType::SinglePositionRange,
+                    &input[p..pair_end],
+                    value_text.clone(),
+                    p,
+                    pair_end,
+                ));
+                result.push_str(&value_text);
+                p = pair_end;
+                continue;
+            }
+        }
+        let ch_end = next_char_end(bytes, p);
+        result.push_str(&input[p..ch_end]);
+        p = ch_end;
+    }
+    (result, hits)
+}
+
+/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>`,
+/// return the byte index just past the second number; otherwise `None`. Does
+/// NOT require the two numbers to be equal — used to find candidate
+/// positions-pair shapes for the redundant-repeat-label detector.
+fn match_position_pair(bytes: &[u8], i: usize) -> Option<usize> {
+    let mut j = i;
+    if j < bytes.len() && bytes[j] == b'-' {
+        j += 1;
+    }
+    let num1_start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == num1_start {
+        return None;
+    }
+    if j >= bytes.len() || bytes[j] != b'_' {
+        return None;
+    }
+    j += 1;
+    if j < bytes.len() && bytes[j] == b'-' {
+        j += 1;
+    }
+    let num2_start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == num2_start {
+        return None;
+    }
+    Some(j)
+}
+
+/// Detect and strip redundant base labels in RNA repeat descriptions (W3013,
+/// SVA-027).
+///
+/// Matches `r.<num1>_<num2><rna-bases>[<digits>...]` where `<rna-bases>` is
+/// a run of one or more lowercase a/c/g/u characters between the second
+/// position and the `[` count. Rewrites to drop the base label.
+///
+/// Scoped to `r.` (RNA) descriptions: the HGVS
+/// `recommendations/RNA/repeated.md` page is the only one that calls this
+/// form non-canonical; DNA repeats keep the base label by convention.
+pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+
+    // Locate the `r.` description start.
+    let mut desc_start = None;
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'r'
+            && bytes[i + 1] == b'.'
+            && (i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';'))
+        {
+            desc_start = Some(i + 2);
+            break;
+        }
+        i += 1;
+    }
+    let Some(start) = desc_start else {
+        return (input.to_string(), hits);
+    };
+
+    let mut result = String::with_capacity(input.len());
+    result.push_str(&input[..start]);
+    let mut p = start;
+    while p < bytes.len() {
+        // Stop scanning once we cross into a non-RNA description so we don't
+        // strip lowercase repeats that happen to live inside a later
+        // `c.`/`g.`/`m.`/`n.`/`o.`/`p.` description (e.g.
+        // `r.100_102cug[4];c.50_52acg[3]`).
+        if matches!(bytes[p], b'c' | b'g' | b'm' | b'n' | b'o' | b'p')
+            && bytes.get(p + 1).copied() == Some(b'.')
+            && p > start
+            && matches!(bytes[p - 1], b':' | b'(' | b'[' | b';' | b'|')
+        {
+            break;
+        }
+
+        let pair_start = p;
+        let pair = match_position_pair(bytes, p);
+        if let Some(after_pair) = pair {
+            let bases_start = after_pair;
+            let mut bases_end = bases_start;
+            while bases_end < bytes.len() && matches!(bytes[bases_end], b'a' | b'c' | b'g' | b'u') {
+                bases_end += 1;
+            }
+            if bases_end > bases_start && bytes.get(bases_end).copied() == Some(b'[') {
+                result.push_str(&input[pair_start..bases_start]);
+                hits.push(DetectedCorrection::new(
+                    ErrorType::RedundantRepeatLabel,
+                    &input[bases_start..bases_end],
+                    String::new(),
+                    bases_start,
+                    bases_end,
+                ));
+                p = bases_end;
+                continue;
+            }
+        }
+        let ch_end = next_char_end(bytes, p);
+        result.push_str(&input[p..ch_end]);
+        p = ch_end;
+    }
+    result.push_str(&input[p..]);
+    (result, hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2783,6 +3146,91 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // Issue #127 — non-canonical input forms (W3011 / W3012 / W3013 / W4003)
+    // ========================================================================
+
+    // --- W3011 DelSizeSuffix ---
+
+    #[test]
+    fn test_detect_del_size_suffix_basic() {
+        let hits = detect_del_size_suffix("NG_012232.1:g.123del6");
+        assert_eq!(hits.len(), 1, "expected one hit, got {:?}", hits);
+        let h = &hits[0];
+        assert_eq!(h.error_type, ErrorType::DelSizeSuffix);
+        assert_eq!(h.original, "del6");
+    }
+
+    #[test]
+    fn test_detect_del_size_suffix_canonical_no_hit() {
+        let hits = detect_del_size_suffix("NG_012232.1:g.123_128del");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_del_size_suffix_plain_del_no_hit() {
+        let hits = detect_del_size_suffix("NM_000088.3:c.123del");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_del_size_suffix_delins_no_hit() {
+        // `delinsNN` and `delins<digit><N>` patterns must not match — `delins`
+        // is a different keyword. Empty `delins` is handled separately.
+        let hits = detect_del_size_suffix("NC_000001.11:g.100_102delins10");
+        assert!(hits.is_empty());
+        let hits = detect_del_size_suffix("NC_000001.11:g.100_102delinsATG");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_del_size_suffix_with_range_still_hits() {
+        // `g.100_120del6` — range form with size suffix is still a violation
+        // (the size is redundant when both endpoints are given).
+        let hits = detect_del_size_suffix("NG_012232.1:g.100_120del6");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_del_size_suffix_protein_no_hit() {
+        // Protein `delN` is a deletion of N residues but the spec section
+        // (DNA/deletion) does not apply; protein has its own L2 track.
+        let hits = detect_del_size_suffix("NP_000079.2:p.Lys100del32");
+        assert!(hits.is_empty());
+    }
+
+    // --- W3012 EmptyDelinsInsert ---
+
+    #[test]
+    fn test_correct_empty_delins_basic() {
+        let (out, hits) = correct_empty_delins("NC_000001.11:g.100_102delins");
+        assert_eq!(out, "NC_000001.11:g.100_102del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::EmptyDelinsInsert);
+        assert_eq!(hits[0].original, "delins");
+        assert_eq!(hits[0].corrected, "del");
+    }
+
+    #[test]
+    fn test_correct_empty_delins_with_payload_no_change() {
+        for input in [
+            "NC_000001.11:g.100_102delinsATG",
+            "NC_000001.11:g.100_102delinsN[12]",
+            "NC_000001.11:g.100_102delins[A;G]",
+            "NC_000001.11:g.100_102delins(10_20)",
+            "NC_000001.11:g.100_102delins10",
+        ] {
+            let (out, hits) = correct_empty_delins(input);
+            assert_eq!(out, input, "input {} should not change", input);
+            assert!(
+                hits.is_empty(),
+                "input {} should not warn, got {:?}",
+                input,
+                hits
+            );
+        }
+    }
+
     #[test]
     fn test_deprecated_idempotent() {
         // Re-running over already-corrected text must be a no-op.
@@ -2881,5 +3329,161 @@ mod tests {
         let (corrected, corrections) = correct_deprecated_protein_forms(input);
         assert_eq!(corrected, input);
         assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_empty_delins_in_compound_allele() {
+        let (out, hits) = correct_empty_delins("NM_000088.3:c.[100_102delins;200T>G]");
+        assert_eq!(out, "NM_000088.3:c.[100_102del;200T>G]");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_empty_delins_idempotent() {
+        let (out1, hits1) = correct_empty_delins("NC_000001.11:g.100_102delins");
+        let (out2, hits2) = correct_empty_delins(&out1);
+        assert_eq!(out2, "NC_000001.11:g.100_102del");
+        assert_eq!(hits1.len(), 1);
+        assert!(hits2.is_empty());
+    }
+
+    // --- W3013 RedundantRepeatLabel ---
+
+    #[test]
+    fn test_correct_redundant_repeat_label_basic() {
+        let (out, hits) = correct_redundant_repeat_label("NM_000088.3:r.100_102cug[4]");
+        assert_eq!(out, "NM_000088.3:r.100_102[4]");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::RedundantRepeatLabel);
+        assert_eq!(hits[0].original, "cug");
+        assert_eq!(hits[0].corrected, "");
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_negative_positions() {
+        // The exemplar from the spec: `r.-125_-123cug[4]`
+        let (out, hits) = correct_redundant_repeat_label("NM_000088.3:r.-125_-123cug[4]");
+        assert_eq!(out, "NM_000088.3:r.-125_-123[4]");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_canonical_no_change() {
+        let (out, hits) = correct_redundant_repeat_label("NM_000088.3:r.100_102[4]");
+        assert_eq!(out, "NM_000088.3:r.100_102[4]");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_dna_no_change() {
+        // The spec note is RNA-specific; DNA `c.100_102CAG[4]` keeps its label.
+        let (out, hits) = correct_redundant_repeat_label("NM_000088.3:c.100_102CAG[4]");
+        assert_eq!(out, "NM_000088.3:c.100_102CAG[4]");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_range_count() {
+        let (out, hits) = correct_redundant_repeat_label("NM_000088.3:r.100_102cug[4_8]");
+        assert_eq!(out, "NM_000088.3:r.100_102[4_8]");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_idempotent() {
+        let input = "NM_000088.3:r.100_102cug[4]";
+        let (out1, _) = correct_redundant_repeat_label(input);
+        let (out2, hits2) = correct_redundant_repeat_label(&out1);
+        assert_eq!(out1, out2);
+        assert!(hits2.is_empty());
+    }
+
+    #[test]
+    fn test_correct_redundant_repeat_label_does_not_strip_non_rna_repeat_after_r_description() {
+        // Defensive regression: even though mixed `r.;c.` descriptions are not
+        // canonical HGVS, a lowercase `acg[` run inside a later non-r. segment
+        // must not be treated as a redundant RNA base label.
+        let input = "r.100_102cug[4];c.50_52acg[3]";
+        let (out, hits) = correct_redundant_repeat_label(input);
+        assert_eq!(out, "r.100_102[4];c.50_52acg[3]");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "cug");
+    }
+
+    // --- W4003 SinglePositionRange ---
+
+    #[test]
+    fn test_correct_single_position_range_del() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.123_123del");
+        assert_eq!(out, "NM_000088.3:c.123del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::SinglePositionRange);
+        assert_eq!(hits[0].original, "123_123");
+        assert_eq!(hits[0].corrected, "123");
+    }
+
+    #[test]
+    fn test_correct_single_position_range_dup() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.123_123dup");
+        assert_eq!(out, "NM_000088.3:c.123dup");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_single_position_range_inv() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.100_100inv");
+        assert_eq!(out, "NM_000088.3:c.100inv");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_single_position_range_distinct_positions_no_hit() {
+        for input in [
+            "NM_000088.3:c.123_126del",
+            "NM_000088.3:c.123_126dup",
+            "NM_000088.3:c.100_102inv",
+        ] {
+            let (out, hits) = correct_single_position_range(input);
+            assert_eq!(out, input);
+            assert!(hits.is_empty(), "input {} should not warn", input);
+        }
+    }
+
+    #[test]
+    fn test_correct_single_position_range_negative_positions() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.-50_-50del");
+        assert_eq!(out, "NM_000088.3:c.-50del");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_single_position_range_multiple_in_allele() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.[100_100del;200_200dup]");
+        assert_eq!(out, "NM_000088.3:c.[100del;200dup]");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_single_position_range_idempotent() {
+        let input = "NM_000088.3:c.123_123del";
+        let (out1, _) = correct_single_position_range(input);
+        let (out2, hits2) = correct_single_position_range(&out1);
+        assert_eq!(out1, out2);
+        assert!(hits2.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_position_range_does_not_touch_ins() {
+        // `ins` requires a range of two adjacent positions per spec; don't collapse.
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.100_100insATG");
+        assert_eq!(out, "NM_000088.3:c.100_100insATG");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_position_range_does_not_touch_substitution() {
+        let (out, hits) = correct_single_position_range("NM_000088.3:c.100A>G");
+        assert_eq!(out, "NM_000088.3:c.100A>G");
+        assert!(hits.is_empty());
     }
 }

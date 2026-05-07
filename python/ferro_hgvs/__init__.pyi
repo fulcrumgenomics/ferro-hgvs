@@ -950,6 +950,10 @@ class ErrorType(IntEnum):
     DeprecatedStopCodonX = 18
     DeprecatedFrameshiftStar = 19
     DeprecatedFrameshiftX = 20
+    DelSizeSuffix = 21
+    EmptyDelinsInsert = 22
+    RedundantRepeatLabel = 23
+    SinglePositionRange = 24
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

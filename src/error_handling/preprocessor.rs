@@ -5,10 +5,11 @@
 
 use super::corrections::{
     correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
-    correct_deprecated_protein_forms, correct_missing_coordinate_prefix, correct_old_allele_format,
-    correct_protein_arrow, correct_quote_characters, correct_single_letter_aa_in_protein,
-    correct_whitespace, detect_missing_versions, detect_position_zero, strip_trailing_annotation,
-    DetectedCorrection,
+    correct_deprecated_protein_forms, correct_empty_delins, correct_missing_coordinate_prefix,
+    correct_old_allele_format, correct_protein_arrow, correct_quote_characters,
+    correct_redundant_repeat_label, correct_single_letter_aa_in_protein,
+    correct_single_position_range, correct_whitespace, detect_del_size_suffix,
+    detect_missing_versions, detect_position_zero, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -649,6 +650,160 @@ impl InputPreprocessor {
                     current = corrected;
                 }
                 ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 10: Collapse single-position ranges in del/dup/inv (W4003).
+        // Per HGVS spec, `c.123_123del`, `c.123_123dup`, and `c.100_100inv`
+        // should be written as the single-position form.
+        let (corrected, corrections) = correct_single_position_range(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::SinglePositionRange);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Single-position range '{}' is non-canonical, expected '{}'",
+                                first.original, first.corrected
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidPosition)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS recommends a single position for del/dup/inv when the range collapses to one base",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 11: Rewrite `delins` with empty inserted sequence as `del` (W3012).
+        let (corrected, corrections) = correct_empty_delins(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::EmptyDelinsInsert);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            "Deletion-insertion has empty inserted sequence",
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "An empty `delins` is semantically equivalent to a plain deletion (`del`)",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 12: Strip redundant base labels in RNA repeat descriptions (W3013).
+        let (corrected, corrections) = correct_redundant_repeat_label(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::RedundantRepeatLabel);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Repeat description has redundant base label '{}'",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "RNA repeat descriptions should omit the base label when positions already define the unit",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 13: Flag deletions described with a size-count suffix (W3011).
+        // `warn_accept` semantics: lenient warns without rewriting the input
+        // (we cannot synthesise the end position safely; offset/intronic
+        // semantics defeat naive `start + length - 1`), silent accepts
+        // silently, strict rejects.
+        let del_size_hits = detect_del_size_suffix(&current);
+        if !del_size_hits.is_empty() {
+            let action = self.action_for(ErrorType::DelSizeSuffix);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &del_size_hits[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Deletion '{}' uses size-count suffix; canonical form names both endpoints",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(
+                                    "Write `g.<start>_<end>del` instead of `g.<start>del<size>`",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &del_size_hits {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                }
+                ResolvedAction::SilentCorrect | ResolvedAction::Accept => {}
             }
         }
 

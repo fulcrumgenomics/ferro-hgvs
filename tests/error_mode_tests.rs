@@ -1248,3 +1248,269 @@ mod deprecated_stop_codon_and_frameshift_forms {
         }
     }
 }
+
+// W3011 / W3012 / W3013 / W4003 — Issue #127 non-canonical input forms
+// ============================================================================
+
+mod w3011_del_size_suffix_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_without_rewrite() {
+        // SVA-007: warn_accept — lenient warns but does NOT rewrite the input
+        // (we cannot synthesise the end position safely).
+        let result = parse_hgvs_lenient("NG_012232.1:g.123del6").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DelSizeSuffix)
+                .count(),
+            1
+        );
+        // Input is unchanged (no auto-correction).
+        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123del6");
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NG_012232.1:g.123del6", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_accepts_without_warning() {
+        let result = parse_hgvs_silent("NG_012232.1:g.123del6").unwrap();
+        assert!(!result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123del6");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NG_012232.1:g.123_128del").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelSizeSuffix));
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NG_012232.1:g.123del6").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r1.preprocessed_input, r2.preprocessed_input);
+        assert!(r2.has_warnings());
+    }
+}
+
+mod w4003_single_position_range_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_and_collapses_del() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.123_123del").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.123del");
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::SinglePositionRange)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn lenient_warns_and_collapses_dup() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.123_123dup").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.123dup");
+    }
+
+    #[test]
+    fn lenient_warns_and_collapses_inv() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.100_100inv").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.100inv");
+    }
+
+    #[test]
+    fn strict_rejects() {
+        for input in [
+            "NM_000088.3:c.123_123del",
+            "NM_000088.3:c.123_123dup",
+            "NM_000088.3:c.100_100inv",
+        ] {
+            let result = parse_hgvs_with_config(input, ErrorConfig::strict());
+            assert!(result.is_err(), "strict should reject {}", input);
+        }
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NM_000088.3:c.123_123del").unwrap();
+        assert!(!result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.123del");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        for input in [
+            "NM_000088.3:c.123_126del",
+            "NM_000088.3:c.123_126dup",
+            "NM_000088.3:c.100_102inv",
+        ] {
+            let result = parse_hgvs_lenient(input).unwrap();
+            assert!(
+                !result
+                    .warnings
+                    .iter()
+                    .any(|w| w.error_type == ErrorType::SinglePositionRange),
+                "canonical input {} should not warn",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn compound_allele_two_warnings() {
+        let result = parse_hgvs_lenient("NM_000088.3:c.[100_100del;200_200dup]").unwrap();
+        let n = result
+            .warnings
+            .iter()
+            .filter(|w| w.error_type == ErrorType::SinglePositionRange)
+            .count();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NM_000088.3:c.123_123del").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r2.preprocessed_input, "NM_000088.3:c.123del");
+        assert!(!r2
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::SinglePositionRange));
+    }
+}
+
+mod w3012_empty_delins_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_and_rewrites_to_del() {
+        let result = parse_hgvs_lenient("NC_000001.11:g.100_102delins").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NC_000001.11:g.100_102del");
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::EmptyDelinsInsert)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NC_000001.11:g.100_102delins", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NC_000001.11:g.100_102delins").unwrap();
+        assert!(!result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NC_000001.11:g.100_102del");
+    }
+
+    #[test]
+    fn delins_with_payload_does_not_warn() {
+        for input in [
+            "NC_000001.11:g.100_102delinsATG",
+            "NC_000001.11:g.100_102delinsN[12]",
+            "NC_000001.11:g.100_102delins[A;G]",
+        ] {
+            let result = parse_hgvs_lenient(input).unwrap();
+            assert!(
+                !result
+                    .warnings
+                    .iter()
+                    .any(|w| w.error_type == ErrorType::EmptyDelinsInsert),
+                "{} should not warn",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NC_000001.11:g.100_102delins").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r2.preprocessed_input, "NC_000001.11:g.100_102del");
+        assert!(!r2
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::EmptyDelinsInsert));
+    }
+}
+
+mod w3013_redundant_repeat_label_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_and_strips_label() {
+        let result = parse_hgvs_lenient("NM_000088.3:r.100_102cug[4]").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:r.100_102[4]");
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::RedundantRepeatLabel)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NM_000088.3:r.100_102cug[4]", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_strips_label_without_warning() {
+        let result = parse_hgvs_silent("NM_000088.3:r.100_102cug[4]").unwrap();
+        assert!(!result.has_warnings());
+        assert_eq!(result.preprocessed_input, "NM_000088.3:r.100_102[4]");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NM_000088.3:r.100_102[4]").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::RedundantRepeatLabel));
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NM_000088.3:r.100_102cug[4]").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r2.preprocessed_input, "NM_000088.3:r.100_102[4]");
+        assert!(!r2
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::RedundantRepeatLabel));
+    }
+}
