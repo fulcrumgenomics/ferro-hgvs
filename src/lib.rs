@@ -65,7 +65,10 @@ pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
 pub use hgvs::variant::HgvsVariant;
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
 pub use reference::{MockProvider, MultiFastaProvider, ReferenceProvider};
-pub use spdi::{hgvs_to_spdi_simple, parse_spdi, spdi_to_hgvs, ConversionError, SpdiVariant};
+pub use spdi::{
+    hgvs_to_spdi_simple, parse_spdi, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError,
+    SpdiVariant,
+};
 
 // Re-export coordinate types for type-safe position handling
 pub use coords::{
