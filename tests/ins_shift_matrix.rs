@@ -233,14 +233,15 @@ mod cds_plus {
     }
 
     #[rstest]
-    // Case 1: 2 A's added to AAA tract → A[5]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}A[5]", &[3u64, 5u64])]
-    // Case 2: 4 A's added to AAA tract → A[7]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}A[7]", &[3u64, 5u64])]
-    // Case 3: 2 GCA units added → GCA[5]. Tract: c.3..11.
+    // Case 1: 2 A's added to AAA tract. unit_len=1; codon-frame gate forbids
+    // A[N] in c., emit insAA at the 3' tract flanking position per spec.
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}insAA", &[5u64, 6u64])]
+    // Case 2: 4 A's added to AAA tract → insAAAA (gate blocks A[N], unit_len=1).
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}insAAAA", &[5u64, 6u64])]
+    // Case 3: 2 GCA units added → GCA[5] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
-    // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: c.3..8.
-    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 8u64])]
+    // Case 4: 2 AC units added → insACAC (gate blocks AC[N], unit_len=2).
+    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}insACAC", &[8u64, 9u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -361,14 +362,15 @@ mod cds_minus {
     }
 
     #[rstest]
-    // Case 1: 2 A's added to AAA tract → A[5]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}A[5]", &[3u64, 5u64])]
-    // Case 2: 4 A's added to AAA tract → A[7]. Tract: c.3..5.
-    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}A[7]", &[3u64, 5u64])]
-    // Case 3: 2 GCA units added → GCA[5]. Tract: c.3..11.
+    // Case 1: 2 A's added to AAA tract. unit_len=1; codon-frame gate forbids
+    // A[N] in c., emit insAA at the 3' tract flanking position per spec.
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}insAA", &[5u64, 6u64])]
+    // Case 2: 4 A's added to AAA tract → insAAAA (gate blocks A[N], unit_len=1).
+    #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAAAA", &[2u64, 3u64], "c.{0}_{1}insAAAA", &[5u64, 6u64])]
+    // Case 3: 2 GCA units added → GCA[5] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCAGCA", &[2u64, 3u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
-    // Case 4: 2 AC units added to ACACAC tract → AC[5]. Tract: c.3..8.
-    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}AC[5]", &[3u64, 8u64])]
+    // Case 4: 2 AC units added → insACAC (gate blocks AC[N], unit_len=2).
+    #[case("GCACACACGTACGTACGTAC", "c.{0}_{1}insACAC", &[2u64, 3u64], "c.{0}_{1}insACAC", &[8u64, 9u64])]
     fn multi_base_ins_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,

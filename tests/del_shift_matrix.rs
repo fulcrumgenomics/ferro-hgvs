@@ -201,12 +201,20 @@ mod cds_plus {
     }
 
     #[rstest]
-    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}A[3]", &[3u64, 7u64])]
-    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}A[2]", &[3u64, 6u64])]
+    // Case 1: 2 A's removed from 5-A homopolymer. unit_len=1; codon-frame
+    // gate forbids A[N] in c., so falls through to plain del at the
+    // canonical 3' end of the post-shift tract.
+    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}del", &[6u64, 7u64])]
+    // Case 2: 2 A's removed from 4-A homopolymer → del at 3' end.
+    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}del", &[5u64, 6u64])]
+    // Case 3: 2 GCAs removed from 3-GCA tandem → GCA[1] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}del", &[3u64, 8u64], "c.{0}_{1}GCA[1]", &[3u64, 11u64])]
+    // Case 4: full tract removal → del.
     #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}del", &[3u64, 6u64])]
+    // Case 5: cyclic-rotation GCA tract (codon-aligned, gate passes).
     #[case("TTGCAGCAGCATTACGTACGT", "c.{0}_{1}del", &[4u64, 9u64], "c.{0}_{1}GCA[1]", &[3u64, 11u64])]
-    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}AT[3]", &[3u64, 12u64])]
+    // Case 6: AT periodicity. unit_len=2; gate forbids AT[N] in c. → plain del.
+    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}del", &[9u64, 12u64])]
     fn multi_base_del_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -321,12 +329,20 @@ mod cds_minus {
     }
 
     #[rstest]
-    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}A[3]", &[3u64, 7u64])]
-    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}A[2]", &[3u64, 6u64])]
+    // Case 1: 2 A's removed from 5-A homopolymer. unit_len=1; codon-frame
+    // gate forbids A[N] in c., so falls through to plain del at the
+    // canonical 3' end of the post-shift tract.
+    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}del", &[6u64, 7u64])]
+    // Case 2: 2 A's removed from 4-A homopolymer → del at 3' end.
+    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 4u64], "c.{0}_{1}del", &[5u64, 6u64])]
+    // Case 3: 2 GCAs removed from 3-GCA tandem → GCA[1] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}del", &[3u64, 8u64], "c.{0}_{1}GCA[1]", &[3u64, 11u64])]
+    // Case 4: full tract removal → del.
     #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}del", &[3u64, 6u64])]
+    // Case 5: cyclic-rotation GCA tract (codon-aligned, gate passes).
     #[case("TTGCAGCAGCATTACGTACGT", "c.{0}_{1}del", &[4u64, 9u64], "c.{0}_{1}GCA[1]", &[3u64, 11u64])]
-    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}AT[3]", &[3u64, 12u64])]
+    // Case 6: AT periodicity. unit_len=2; gate forbids AT[N] in c. → plain del.
+    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}del", &[3u64, 6u64], "c.{0}_{1}del", &[9u64, 12u64])]
     fn multi_base_del_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,

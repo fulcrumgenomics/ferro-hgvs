@@ -390,15 +390,14 @@ mod intronic_duplications {
     #[test]
     fn test_minus_strand_intronic_multi_base_dup() {
         // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to
-        // AAAAAA. Spec-canonical form per the HGVS DNA repeat page is
-        // `c.30+2_30+4A[6]` — full-tract position, transcript-view
-        // unit, post-edit unit count. Issue #98 closed the
-        // minus-strand intronic ref-base orientation gap that had
-        // previously caused ferro to emit `T[6]` (the genomic-strand
-        // letter) instead of `A[6]`.
+        // AAAAAA. Per HGVS spec (repeated.md codon-frame exception): in c.
+        // context, repeat notation requires unit_len % 3 == 0. With unit_len=1
+        // the canonical form is `ins<literal>` at the 3' tract flanking
+        // position, not `A[6]`. Issue #98 ensured the minus-strand orientation
+        // produces transcript-view `A`s rather than genomic-view `T`s.
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
-        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4A[6]");
+        assert_eq!(result, "NM_MINUS.1:c.30+4_30+5insAAA");
     }
 }
 
@@ -484,6 +483,26 @@ mod boundary_spanning {
             result.is_ok() || result.is_err(),
             "Intron-exon boundary insertion should not panic"
         );
+    }
+
+    #[test]
+    fn test_minus_strand_boundary_spanning_delins_identity() {
+        // Minus-strand boundary-spanning delins discriminator:
+        // c.30 (last exonic base of exon 1, tx view) = T;
+        // c.30+1 (first intronic base in tx-3' direction, tx view) = C
+        // (RC of genomic 'G' at the high end of intron 1).
+        // Inserting "TC" therefore matches the tx-view reference and PR #78
+        // collapses it to identity.
+        //
+        // If `normalize_boundary_spanning_cds` failed to flip the genomic
+        // window into transcript view before calling the delins-identity
+        // rule, the rule would compare "TC" against the genomic-strand
+        // bytes (G,A) and the insertion would not collapse — the result
+        // would stay as `c.30_30+1delinsTC`. Asserting `c.30_30+1=` locks
+        // the strand-aware path.
+        let provider = make_provider_with_minus_strand();
+        let result = normalize(provider, "NM_MINUS.1:c.30_30+1delinsTC");
+        assert_eq!(result, "NM_MINUS.1:c.30_30+1=");
     }
 }
 
