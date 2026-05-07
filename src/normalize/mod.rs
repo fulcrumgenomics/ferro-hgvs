@@ -1443,6 +1443,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
+        // Substitution with ref == alt is identity (e.g. c.100A>A → c.100=).
+        // This is the SNV companion to the same-base delins → identity rule;
+        // the rewrite is purely syntactic on the edit's stated bases, so it
+        // applies across coordinate systems and runs before shuffling.
+        if let NaEdit::Substitution {
+            reference,
+            alternative,
+        } = edit
+        {
+            if reference == alternative {
+                return Ok((start, end, NaEdit::position_identity(), warnings));
+            }
+        }
+
         // Get the alternate sequence for the edit
         let alt_seq = match edit {
             NaEdit::Deletion { .. } => vec![],
@@ -2347,6 +2361,58 @@ mod tests {
         let variant = parse_hgvs("NM_000088.3:c.1_3delinsACG").unwrap();
         let result = normalizer.normalize(&variant).unwrap();
         assert_eq!(format!("{}", result), "NM_000088.3:c.1_3delinsACG");
+    }
+
+    #[test]
+    fn test_normalize_substitution_ref_equals_alt_becomes_identity() {
+        // Per HGVS, a substitution where the reference and alternative bases
+        // are identical produces no change and must be expressed using
+        // identity notation (`=`). SNV companion to the same-base delins rule.
+        // Transcript NM_000088.3 starts ATGCCCAAGG...; position 10 is G.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10G>G").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10=");
+    }
+
+    #[test]
+    fn test_normalize_substitution_ref_equals_alt_first_position() {
+        // Boundary check: the rule must fire at position 1 (first base).
+        // Transcript NM_000088.3 starts ATG...; position 1 is A.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.1A>A").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.1=");
+    }
+
+    #[test]
+    fn test_normalize_substitution_ref_not_equal_alt_unchanged() {
+        // Regression guard: a real SNV must not be rewritten to identity.
+        // c.10G>T at position 10 (G) is a valid substitution.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10G>T").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:c.10G>T");
+    }
+
+    #[test]
+    fn test_normalize_substitution_ref_equals_alt_without_provider_data() {
+        // The A4 rule is purely syntactic, so it must fire even when the
+        // provider has no transcript loaded — matching the spec's stance that
+        // `c.123C>C` is "not allowed" regardless of reference availability.
+        // Spec example: docs/recommendations/DNA/other.md (HGVS v21.0).
+        let provider = MockProvider::new(); // empty — no transcripts
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_004006.2:c.123C>C").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_004006.2:c.123=");
     }
 
     #[test]

@@ -3110,8 +3110,8 @@
     {
       "input": "c.123C>C",
       "input_prefixed": "NM_004006.2:c.123C>C",
-      "current": "NM_004006.2:c.123C>C",
-      "spec_expected": "NM_004006.2:c.123C>C",
+      "current": "NM_004006.2:c.123=",
+      "spec_expected": "NM_004006.2:c.123=",
       "status": "preserved",
       "coordinate_system": "c",
       "source_kind": "recommendation",

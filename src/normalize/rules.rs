@@ -22,13 +22,22 @@ use crate::hgvs::edit::NaEdit;
 
 /// Check if an edit type needs normalization
 pub fn needs_normalization(edit: &NaEdit) -> bool {
-    matches!(
+    if matches!(
         edit,
         NaEdit::Deletion { .. }
             | NaEdit::Insertion { .. }
             | NaEdit::Duplication { .. }
             | NaEdit::Delins { .. }
             | NaEdit::Repeat { .. }
+    ) {
+        return true;
+    }
+    // A substitution with ref == alt is degenerate and must be rewritten to
+    // identity (`=`); route it through normalization so the rule fires.
+    // Real substitutions (ref != alt) keep the fast no-op path.
+    matches!(
+        edit,
+        NaEdit::Substitution { reference, alternative } if reference == alternative
     )
 }
 
@@ -904,6 +913,16 @@ pub fn canonicalize_edit(edit: &NaEdit) -> NaEdit {
                 sequence: sequence.clone(),
             }
         }
+        // A4: a substitution where ref == alt (e.g. `c.100A>A`) is degenerate;
+        // the HGVS v21 spec calls the form "not allowed" (recommendations/DNA/
+        // other.md) and gives `c.100=` as the canonical alternative. The rule
+        // is purely syntactic on the edit's stated bases, so it lives here in
+        // the no-reference canonicalization path alongside the other minimal-
+        // notation rewrites — it must fire regardless of provider availability.
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } if reference == alternative => NaEdit::position_identity(),
         // Other edits pass through unchanged
         _ => edit.clone(),
     }
@@ -917,6 +936,13 @@ pub fn should_canonicalize(edit: &NaEdit) -> bool {
         NaEdit::Duplication {
             sequence, length, ..
         } => sequence.is_some() || length.is_some(),
+        // Companion to the A4 arm in `canonicalize_edit`: route degenerate
+        // substitutions through the no-reference canonicalize path so the
+        // rewrite fires even when the provider is empty.
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => reference == alternative,
         _ => false,
     }
 }
@@ -927,6 +953,8 @@ mod tests {
 
     #[test]
     fn test_needs_normalization() {
+        use crate::hgvs::edit::Base;
+
         assert!(needs_normalization(&NaEdit::Deletion {
             sequence: None,
             length: None,
@@ -939,6 +967,17 @@ mod tests {
         assert!(!needs_normalization(&NaEdit::Inversion {
             sequence: None,
             length: None,
+        }));
+        // Real substitutions stay on the no-op fast path.
+        assert!(!needs_normalization(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        }));
+        // Degenerate `A>A` substitutions must enter normalization so they
+        // can be rewritten to identity (`=`).
+        assert!(needs_normalization(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::A,
         }));
     }
 
@@ -1650,11 +1689,38 @@ mod tests {
             length: None
         }));
 
-        // Substitution shouldn't be canonicalized
+        // Real substitutions stay on the no-op fast path
         use crate::hgvs::edit::Base;
         assert!(!should_canonicalize(&NaEdit::Substitution {
             reference: Base::A,
             alternative: Base::G
         }));
+
+        // Degenerate `A>A` substitutions enter the no-reference canonicalize
+        // path so they can be rewritten to identity (`=`) even when the
+        // provider has no transcript / genomic sequence loaded.
+        assert!(should_canonicalize(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::A
+        }));
+    }
+
+    #[test]
+    fn test_canonicalize_edit_degenerate_substitution_to_identity() {
+        // A4: c.100A>A is "not allowed" per HGVS v21 spec; canonicalize to `=`.
+        use crate::hgvs::edit::Base;
+
+        let degenerate = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::A,
+        };
+        assert_eq!(canonicalize_edit(&degenerate), NaEdit::position_identity());
+
+        // Real SNVs pass through unchanged.
+        let real_sub = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        };
+        assert_eq!(canonicalize_edit(&real_sub), real_sub);
     }
 }
