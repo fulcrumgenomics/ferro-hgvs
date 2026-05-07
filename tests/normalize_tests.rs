@@ -2230,16 +2230,15 @@ mod benchmark_comparison_tests {
 
     #[test]
     fn test_insertion_sequence_rotation() {
-        // Pattern: c.247_248insAACA
-        // ferro: c.249_250insAACA
-        // mutalyzer: c.249_250insCAAA
+        // Pattern: c.247_248insAACA against ref where c.247_250 == "AACA".
+        // ferro post-issue-132: c.247_250dup (the inserted AACA matches the
+        //   following 4 ref bases verbatim → 1-copy AACA dup).
+        // mutalyzer: c.249_250insCAAA (a different rotation choice).
         //
-        // Both shifted to 249_250, but different sequence!
-        // AACA rotated = ACAA, CAAA, AAAC
-        // CAAA is a valid rotation of AACA
-        //
-        // This may be a normalization choice - both are valid rotations
-        // after 3' shifting.
+        // The HGVS 3' rule prefers `dup` over `ins` when the inserted unit
+        // matches an adjacent reference unit (insertion_to_duplication's
+        // rotation iterator finds the AACA-phase tract with ref_count=1).
+        // The dup form is canonical regardless of input rotation.
         let mut seq = String::new();
         seq.push_str(&"G".repeat(246)); // Positions 1-246
         seq.push_str("AA"); // Positions 247-248
@@ -2250,13 +2249,13 @@ mod benchmark_comparison_tests {
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.247_248insAACA");
 
-        // Both AACA and CAAA are rotations - check that normalization happened
-        assert!(
-            result.contains("ins"),
-            "Should contain ins, got: {}",
+        // 1-copy AACA next to a single AACA in the ref → dup spanning
+        // the matched ref tract (c.247..c.250 inclusive).
+        assert_eq!(
+            result, "NM_TEST.1:c.247_250dup",
+            "Expected c.247_250dup (issue #132 dup-over-ins canonicalization), got: {}",
             result
         );
-        // The exact sequence after rotation is implementation-dependent
     }
 
     #[test]
@@ -2374,9 +2373,15 @@ mod insertion_rotation_tests {
         //          (22 positions of GGC repeat, then it ends)
         //
         // c.243 = position 38 + 242 = 280 (1-based), so index 279
-        // We want the insertion to shift from c.242_243 to c.264_265
-        // That's 22 positions of shift
-        // After shift, check c.262_264 for dup - should be GCG (rotated GGC)
+        //
+        // Issue #132 update: the canonical dup is now phase-aligned with
+        // the GGC tract (most-3' GGC dup), not the rotated GCG-phase that
+        // shuffle's iterative walk happened to land on. The new helper
+        // `insertion_to_duplication` picks the tract-aligned phase (GGC at
+        // tract [279..300)), so the dup spans the most-3' GGC = c.261_263.
+        // Both the new and old positions describe the same edit; the new
+        // behavior is symmetric with the multi-copy `insertion_to_repeat`
+        // path's phase choice.
 
         let mut seq = String::new();
         seq.push_str(&"A".repeat(37)); // Positions 1-37 (5' UTR)
@@ -2394,14 +2399,11 @@ mod insertion_rotation_tests {
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.242_243insGGC");
 
-        // After shifting 22 positions:
-        // - Rotation = 22 % 3 = 1, so GGC → GCG
-        // - Final position c.264_265insGCG (before dup conversion)
-        // - Check c.262_264: need to verify it equals GCG
-        // - If match, output is c.262_264dup
-        assert!(
-            result.contains("c.262_264dup"),
-            "Expected c.262_264dup (rotated GGC→GCG matches preceding), got: {}",
+        // GGC-phase tract: 7 GGC units at c.243..c.263 inclusive. Most-3'
+        // GGC dup → c.261_263.
+        assert_eq!(
+            result, "NM_TEST.1:c.261_263dup",
+            "Expected c.261_263dup (issue #132 GGC-phase canonical form), got: {}",
             result
         );
     }

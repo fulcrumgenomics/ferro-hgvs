@@ -51,6 +51,42 @@ mod genomic {
     }
 
     #[rstest]
+    // Issue #132: single-copy ins where alt is a non-zero cyclic rotation
+    // of the reference repeat unit. `insertion_to_duplication` iterates
+    // rotations, picks the rotation matching an adjacent tract, and emits
+    // a dup at the most-3' unit-aligned position.
+    //
+    // Case 1: GT tract (GTGTGT at core 3..9), insert TG at core 2_3.
+    //   alt "TG" is the r=1 rotation of canonical "GT". The flanking 'A'
+    //   on either side prevents leakage into padding. Most-3' GT in the
+    //   tract is at core 7_8 (with end of tract at core 8 and the trailing
+    //   T at core 9 breaking the tract for "GT" reading; 3 GT units span
+    //   core 3..9 — actually the tract is GTGTGT so 3 GT pairs at 3-4,5-6,7-8).
+    //   Most-3' GT dup → core 7_8.
+    #[case("ACGTGTGTAC", "g.{0}_{1}insTG", &[2u64, 3u64], "g.{0}_{1}dup", &[7u64, 8u64])]
+    // Case 2: GCA tract (GCAGCAGCA at core 3..11), insert CAG at core 2_3.
+    //   alt "CAG" is the r=1 rotation of canonical "GCA". Only the GCA
+    //   rotation finds an anchored tract abutting the insertion point;
+    //   the CAG and AGC rotations have no anchor in the abutting window
+    //   because padded[258]='G' (start of GCA tract) and the bases before
+    //   are 'TT' (padding boundary).
+    //   Most-3' GCA dup → core 9_11.
+    #[case("TTGCAGCAGCATT", "g.{0}_{1}insCAG", &[2u64, 3u64], "g.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NC_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NC_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
     // Multi-base ins in tandem repeat, ONE unit added → dup.
     // Case 1: AC tandem (ACAC at core pos 3-6), insert AC at core pos 2_3.
     //   Shifts to 3' end; dup at the most-3' AC = core pos 5_6.
@@ -233,6 +269,28 @@ mod cds_plus {
     }
 
     #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. Mirrors the genomic module case shape.
+    //
+    // Case 1: GT tract at c.3-8. Insert TG (r=1 of GT) at c.2_3 → dup at c.7_8.
+    #[case("ACGTGTGTACGTACGTACGT", "c.{0}_{1}insTG", &[2u64, 3u64], "c.{0}_{1}dup", &[7u64, 8u64])]
+    // Case 2: GCA tract at c.3-11. Insert CAG (r=1 of GCA) at c.2_3 → dup at c.9_11.
+    #[case("TTGCAGCAGCATTGACGTAC", "c.{0}_{1}insCAG", &[2u64, 3u64], "c.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NM_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NM_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
     // Case 1: 2 A's added to AAA tract. unit_len=1; codon-frame gate forbids
     // A[N] in c., emit insAA at the 3' tract flanking position per spec.
     #[case("ACAAACGTACGTACGTACGT", "c.{0}_{1}insAA", &[2u64, 3u64], "c.{0}_{1}insAA", &[5u64, 6u64])]
@@ -348,6 +406,28 @@ mod cds_minus {
     // Case 2: GCA tandem at c.3-11 (GCAGCAGCA). Insert GCA at c.2_3 → dup at c.9_11.
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}insGCA", &[2u64, 3u64], "c.{0}_{1}dup", &[9u64, 11u64])]
     fn multi_base_ins_in_tandem_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NM_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NM_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. Mirrors the genomic module case shape.
+    //
+    // Case 1: GT tract at c.3-8. Insert TG (r=1 of GT) at c.2_3 → dup at c.7_8.
+    #[case("ACGTGTGTACGTACGTACGT", "c.{0}_{1}insTG", &[2u64, 3u64], "c.{0}_{1}dup", &[7u64, 8u64])]
+    // Case 2: GCA tract at c.3-11. Insert CAG (r=1 of GCA) at c.2_3 → dup at c.9_11.
+    #[case("TTGCAGCAGCATTGACGTAC", "c.{0}_{1}insCAG", &[2u64, 3u64], "c.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
         #[case] core: &str,
         #[case] in_template: &str,
         #[case] in_args: &[u64],
@@ -492,6 +572,28 @@ mod noncoding_plus {
     }
 
     #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. Mirrors the genomic module case shape.
+    //
+    // Case 1: GT tract at n.3-8. Insert TG (r=1 of GT) at n.2_3 → dup at n.7_8.
+    #[case("ACGTGTGTACGTACGTACGT", "n.{0}_{1}insTG", &[2u64, 3u64], "n.{0}_{1}dup", &[7u64, 8u64])]
+    // Case 2: GCA tract at n.3-11. Insert CAG (r=1 of GCA) at n.2_3 → dup at n.9_11.
+    #[case("TTGCAGCAGCATTGACGTAC", "n.{0}_{1}insCAG", &[2u64, 3u64], "n.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NR_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NR_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
     // Case 1: 2 A's added to AAA tract → A[5]. Tract: n.3..5.
     #[case("ACAAACGTACGTACGTACGT", "n.{0}_{1}insAA", &[2u64, 3u64], "n.{0}_{1}A[5]", &[3u64, 5u64])]
     // Case 2: 4 A's added to AAA tract → A[7]. Tract: n.3..5.
@@ -607,6 +709,28 @@ mod noncoding_minus {
     // Case 2: GCA tandem at n.3-11 (GCAGCAGCA). Insert GCA at n.2_3 → dup at n.9_11.
     #[case("ACGCAGCAGCATGACGTACG", "n.{0}_{1}insGCA", &[2u64, 3u64], "n.{0}_{1}dup", &[9u64, 11u64])]
     fn multi_base_ins_in_tandem_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NR_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NR_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. Mirrors the genomic module case shape.
+    //
+    // Case 1: GT tract at n.3-8. Insert TG (r=1 of GT) at n.2_3 → dup at n.7_8.
+    #[case("ACGTGTGTACGTACGTACGT", "n.{0}_{1}insTG", &[2u64, 3u64], "n.{0}_{1}dup", &[7u64, 8u64])]
+    // Case 2: GCA tract at n.3-11. Insert CAG (r=1 of GCA) at n.2_3 → dup at n.9_11.
+    #[case("TTGCAGCAGCATTGACGTAC", "n.{0}_{1}insCAG", &[2u64, 3u64], "n.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
         #[case] core: &str,
         #[case] in_template: &str,
         #[case] in_args: &[u64],
@@ -747,6 +871,32 @@ mod rna_plus {
     }
 
     #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. RNA equivalent of the genomic case shape.
+    //
+    // Note: avoid units containing 'u' — ferro stores RNA refs as DNA
+    // (U→T). A `ug` rotation alt against a `gu` ref tract becomes byte
+    // 'U' vs 'T' and the rotation iterator won't match. The case below
+    // uses only A/C/G, which are unambiguous between DNA and RNA byte
+    // representations.
+    //
+    // Case 1: gca tract at r.3-11. Insert cag (r=1 of gca) at r.2_3 → dup at r.9_11.
+    #[case("uugcagcagcauugacguac", "r.{0}_{1}inscag", &[2u64, 3u64], "r.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NR_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NR_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
     // Case 1: 2 a's added to aaa tract → a[5]. Tract: r.3..5.
     #[case("acaaacguacguacguacgu", "r.{0}_{1}insaa", &[2u64, 3u64], "r.{0}_{1}a[5]", &[3u64, 5u64])]
     // Case 2: 4 a's added to aaa tract → a[7]. Tract: r.3..5.
@@ -859,6 +1009,32 @@ mod rna_minus {
     // Case 2: gca tandem at r.3-11 (gcagcagca). Insert gca at r.2_3 → dup at r.9_11.
     #[case("acgcagcagcaugacguacg", "r.{0}_{1}insgca", &[2u64, 3u64], "r.{0}_{1}dup", &[9u64, 11u64])]
     fn multi_base_ins_in_tandem_one_unit(
+        #[case] core: &str,
+        #[case] in_template: &str,
+        #[case] in_args: &[u64],
+        #[case] out_template: &str,
+        #[case] out_args: &[u64],
+    ) {
+        let p = provider(core);
+        let input = format!("NR_TEST.1:{}", hgvs(in_template, in_args));
+        let expected = format!("NR_TEST.1:{}", hgvs(out_template, out_args));
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    // Issue #132: cyclic-rotation single-copy ins → dup at most-3'
+    // rotation-aligned position. RNA equivalent of the genomic case shape.
+    //
+    // Note: avoid units containing 'u' — ferro stores RNA refs as DNA
+    // (U→T). A `ug` rotation alt against a `gu` ref tract becomes byte
+    // 'U' vs 'T' and the rotation iterator won't match. The case below
+    // uses only A/C/G, which are unambiguous between DNA and RNA byte
+    // representations.
+    //
+    // Case 1: gca tract at r.3-11. Insert cag (r=1 of gca) at r.2_3 → dup at r.9_11.
+    #[case("uugcagcagcauugacguac", "r.{0}_{1}inscag", &[2u64, 3u64], "r.{0}_{1}dup", &[9u64, 11u64])]
+    fn cyclic_rotation_ins_one_unit(
         #[case] core: &str,
         #[case] in_template: &str,
         #[case] in_args: &[u64],

@@ -225,6 +225,91 @@ pub fn insertion_to_repeat(
     ))
 }
 
+/// Description of how a single-copy insertion can be re-expressed as a
+/// 3'-rule canonical duplication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InsToDupResult {
+    /// The phase-aligned tandem unit chosen by rotation iteration. May
+    /// differ from the `inserted_seq` argument when the alt was spelled
+    /// as a non-zero cyclic rotation of the reference unit (issue #132).
+    pub unit: Vec<u8>,
+    /// 1-based HGVS start of the most-3' unit-aligned duplication position
+    /// inside the rotation-aligned reference tract (inclusive).
+    pub start: u64,
+    /// 1-based HGVS end of the most-3' unit-aligned duplication position
+    /// inside the rotation-aligned reference tract (inclusive).
+    pub end: u64,
+}
+
+/// Compute the canonical 3'-rule duplication position for a single-copy
+/// insertion whose alt is a (possibly rotated) tandem-repeat unit adjacent
+/// to a reference tract.
+///
+/// # Why this helper exists (the `insertion_to_repeat` asymmetry)
+///
+/// The 3' shuffle (`shuffle.rs`) walks one base at a time. When the inserted
+/// alt is a non-zero cyclic rotation of an adjacent reference unit, the very
+/// first-base check fails (`alt[0] != ref[ins_point]`) and shuffle never
+/// starts. `insertion_to_repeat` already iterates rotations to handle the
+/// 2+-copy case; this helper does the same for the 1-copy (duplication) case,
+/// restoring symmetry between the single- and multi-copy paths.
+///
+/// # Algorithm
+///
+/// 1. Compute `unit = smallest_repeat_unit(inserted_seq)`. Reject when
+///    `inserted_seq.len() / unit.len() != 1` (multi-copy is repeat
+///    notation's job, handled by `insertion_to_repeat`).
+/// 2. For each rotation `r in 0..unit.len()`, build the rotated unit and
+///    call `find_tandem_extent` to locate the maximal tandem run abutting
+///    the insertion point.
+/// 3. Pick the rotation yielding the largest tandem run (ties broken by
+///    iteration order — same convention as `insertion_to_repeat`).
+/// 4. Return the most-3' unit-aligned duplication slot inside that tract:
+///    `dup_start_idx = tract.end - unit.len()`, `dup_end_idx = tract.end - 1`,
+///    converted to 1-based HGVS positions.
+///
+/// Returns `None` when no rotation matches an adjacent tract (true
+/// non-tandem insertion — caller leaves it as plain `ins`).
+pub(crate) fn insertion_to_duplication(
+    ref_seq: &[u8],
+    pos: u64,
+    inserted_seq: &[u8],
+) -> Option<InsToDupResult> {
+    if inserted_seq.is_empty() {
+        return None;
+    }
+
+    let base_unit = smallest_repeat_unit(inserted_seq);
+    let added_copies = inserted_seq.len() / base_unit.len();
+    if added_copies != 1 {
+        // 2+-copy insertions are handled by `insertion_to_repeat`.
+        return None;
+    }
+
+    let u_len = base_unit.len();
+    let mut best: Option<(Vec<u8>, usize, u64)> = None;
+    for r in 0..u_len {
+        let mut rotated = Vec::with_capacity(u_len);
+        rotated.extend_from_slice(&base_unit[r..]);
+        rotated.extend_from_slice(&base_unit[..r]);
+        if let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated) {
+            if ref_count > 0 && best.as_ref().is_none_or(|(_, _, bc)| ref_count > *bc) {
+                best = Some((rotated, ref_start, ref_count));
+            }
+        }
+    }
+
+    let (unit, ref_start, ref_count) = best?;
+    let tract_end_idx = ref_start + (ref_count as usize) * unit.len();
+    let dup_start_idx = tract_end_idx - unit.len();
+    let dup_end_idx = tract_end_idx - 1;
+    Some(InsToDupResult {
+        unit,
+        start: index_to_hgvs_pos(dup_start_idx),
+        end: index_to_hgvs_pos(dup_end_idx),
+    })
+}
+
 /// Smallest unit `U` such that `seq = U * k` for some integer k ≥ 1.
 pub(crate) fn smallest_repeat_unit(seq: &[u8]) -> &[u8] {
     let n = seq.len();
@@ -2727,5 +2812,80 @@ mod tests {
             ),
             "expected Delins{{Reference}} fallback for 0_5"
         );
+    }
+
+    // =========================================================================
+    // INSERTION_TO_DUPLICATION TESTS (issue #132)
+    // =========================================================================
+
+    #[test]
+    fn test_insertion_to_duplication_homopolymer_matched() {
+        // ref "TTAAATT": insert A at pos 3 (between idx 3 and idx 4 = inside
+        // the A-tract). unit "A", only one rotation. tract [2..5), ref_count=3.
+        // Most-3' A dup → dup_start_idx = tract_end-1 = 4 → HGVS [5..5].
+        let ref_seq = b"TTAAATT";
+        let r = insertion_to_duplication(ref_seq, 3, b"A").expect("should fire");
+        assert_eq!(r.unit, b"A");
+        assert_eq!(r.start, 5);
+        assert_eq!(r.end, 5);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_cyclic_rotation_two_base() {
+        // ref "ACGTGTGTAC": GT tract at indices [2..8), ref_count=3.
+        // Insert TG at pos=2 (between idx 2=G and idx 3=T — at 5' edge of
+        // the tract). alt "TG" is the r=1 rotation of canonical "GT".
+        // Rotation iteration over `smallest_repeat_unit("TG") = "TG"`:
+        //   r=0 "TG": anchor=3 ref[3..5]="TG" matches; tract [3..7),
+        //     ref_count=2. (anchor=1 "CG" no; anchor=2 "GT" no.)
+        //   r=1 "GT": anchor=2 ref[2..4]="GT" matches; tract [2..8),
+        //     ref_count=3.
+        // "GT" wins with the larger run. Most-3' GT dup: tract end=8,
+        // dup_start_idx=6, dup_end_idx=7, HGVS [7..8].
+        //
+        // The non-tract flanking ('A' on both sides) ensures the TG-phase
+        // run is shorter than the GT-phase run; this mirrors the actual
+        // padded-sequence behavior in `MockProvider`-driven integration
+        // tests (the issue #132 reproducer at `g.258_259insTG`).
+        let ref_seq = b"ACGTGTGTAC";
+        let r = insertion_to_duplication(ref_seq, 2, b"TG").expect("should fire");
+        assert_eq!(r.unit, b"GT");
+        assert_eq!(r.start, 7);
+        assert_eq!(r.end, 8);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_no_adjacent_tract() {
+        // ref "ACGTACGT": no tandem of "X"; insert "X" at any pos returns None.
+        let ref_seq = b"ACGTACGT";
+        assert!(insertion_to_duplication(ref_seq, 3, b"X").is_none());
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_empty_or_oob() {
+        let ref_seq = b"TTAAATT";
+        assert!(insertion_to_duplication(ref_seq, 3, b"").is_none());
+        assert!(insertion_to_duplication(b"", 0, b"A").is_none());
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_rejects_multi_copy() {
+        // alt is 2 copies of unit A → not a 1-copy ins; helper returns None
+        // (caller routes 2+ copies to insertion_to_repeat instead).
+        let ref_seq = b"TTAAATT";
+        assert!(insertion_to_duplication(ref_seq, 3, b"AA").is_none());
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_phase_matched_first_base() {
+        // Sanity: phase-matched alt (no rotation needed) returns the same
+        // most-3' dup position as the rotation case. Same reference layout
+        // as `test_insertion_to_duplication_cyclic_rotation_two_base`,
+        // but alt "GT" is r=0 (matched). Result is identical.
+        let ref_seq = b"ACGTGTGTAC";
+        let r = insertion_to_duplication(ref_seq, 2, b"GT").expect("should fire");
+        assert_eq!(r.unit, b"GT");
+        assert_eq!(r.start, 7);
+        assert_eq!(r.end, 8);
     }
 }
