@@ -6,14 +6,12 @@
 
 pub mod format;
 pub mod parse;
-pub mod sequence;
 
 // Re-export commonly used items
 pub use format::{output_error, output_error_with_context, output_result, OutputFormat};
 pub use parse::{
     parse_genome_build, parse_shuffle_direction, parse_vcf_line, parse_vcf_line_with_build,
 };
-pub use sequence::reverse_complement;
 
 /// UTF-8 BOM (Byte Order Mark) constant
 const UTF8_BOM: &str = "\u{feff}";

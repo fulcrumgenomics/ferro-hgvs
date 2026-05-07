@@ -54,6 +54,7 @@ pub mod python;
 pub mod python_helpers;
 pub mod reference;
 pub mod rsid;
+pub mod sequence;
 #[cfg(feature = "web-service")]
 pub mod service;
 pub mod spdi;

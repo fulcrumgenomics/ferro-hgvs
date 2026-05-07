@@ -2811,7 +2811,7 @@ fn flip_intronic_for_strand(
         );
     }
     let seq_len = genomic_seq.len() as u64;
-    let rc = crate::cli::reverse_complement(genomic_seq);
+    let rc = crate::sequence::reverse_complement(genomic_seq);
     let new_rel_start = seq_len - rel_end + 1;
     let new_rel_end = seq_len - rel_start + 1;
     let new_boundaries = Boundaries::new(
