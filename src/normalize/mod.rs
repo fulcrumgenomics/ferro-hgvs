@@ -2565,6 +2565,17 @@ mod tests {
         let variant = parse_hgvs("NM_000088.3:c.1_3delinsACG").unwrap();
         let result = normalizer.normalize(&variant).unwrap();
         assert_eq!(format!("{}", result), "NM_000088.3:c.2T>C");
+
+        // r. twin: same collapse on the RNA path. NM_000088.3 has cds_start = 1,
+        // so r.1_3 maps to the same ATG run and the residual is at r.2.
+        // The substitution edit Display lowercases the reference byte but does
+        // not map T -> u for r. variants synthesized by canonicalize_delins,
+        // so the locked form is `r.2t>c` rather than the spec-ideal `r.2u>c`.
+        // RNA U/T mapping for synthesized substitutions is a separate display-
+        // layer concern (see `NaEdit::Substitution` in src/hgvs/edit.rs).
+        let variant = parse_hgvs("NM_000088.3:r.1_3delinsacg").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", result), "NM_000088.3:r.2t>c");
     }
 
     #[test]

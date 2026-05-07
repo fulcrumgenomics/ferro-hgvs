@@ -1308,6 +1308,46 @@ mod tests {
             }
         ));
 
+        // Substitution after both-side trim leaving exactly 1 residual base.
+        // ref window NACGN[1..4] = ACG, ins = ATG. Prefix `A` and suffix `G`
+        // shared; trimmed range idx 2..3 (C) -> T. The both-ends control flow
+        // is distinct from the prefix-only and suffix-only paths above.
+        assert!(matches!(
+            canonicalize_delins(b"NACGN", 1, 4, b"ATG"),
+            DelinsCanonical::Substitution {
+                position: 2,
+                reference: Base::C,
+                alternative: Base::T,
+            }
+        ));
+
+        // Mutalyzer A9 canonical example. ref window NGTAN[1..4] = GTA, ins = GTT.
+        // Greedy prefix `GT` matches; the residual A>T lands at the last
+        // position of the input window (the 3'-most index when no suffix
+        // shares). This is the byte-level analogue of the original report's
+        // `c.5948_5950delinsGTT over GTA -> c.5950A>T`.
+        assert!(matches!(
+            canonicalize_delins(b"NGTAN", 1, 4, b"GTT"),
+            DelinsCanonical::Substitution {
+                position: 3,
+                reference: Base::A,
+                alternative: Base::T,
+            }
+        ));
+
+        // Homopolymer residual: ref AAAA, ins AAAT. Multiple positions are
+        // semantically equivalent (any A could be the one that mutated to T);
+        // greedy prefix-trim consumes 3 As, locking the residual to the
+        // 3'-most position. This pins the tie-breaking convention.
+        assert!(matches!(
+            canonicalize_delins(b"AAAA", 0, 4, b"AAAT"),
+            DelinsCanonical::Substitution {
+                position: 3,
+                reference: Base::A,
+                alternative: Base::T,
+            }
+        ));
+
         // Pure deletion after both-side trim: ref ACGT (idx 0..4) -> AT.
         // Prefix A and suffix T shared; deleted CG remains at idx 1..3.
         assert!(matches!(
