@@ -241,14 +241,16 @@ fn test_normalize_duplication_type_preserved() {
 
 #[test]
 fn test_normalize_delins_type_preserved() {
-    // Test delins normalization - should remain delins when not simplifiable
+    // Test delins normalization - should remain delins when not simplifiable.
+    // ref NM_000088.3 c.10_11 = GT. delete GT, insert CA: no shared affix,
+    // revcomp(GT) = AC != CA so not an inversion, length doesn't fit dup, so
+    // the minimal form is still a 2->2 delins.
     let provider = MockProvider::with_test_data();
     let normalizer = Normalizer::new(provider);
 
-    let variant = parse_hgvs("NM_000088.3:c.10_12delinsATG").unwrap();
+    let variant = parse_hgvs("NM_000088.3:c.10_11delinsCA").unwrap();
     let result = normalizer.normalize(&variant).unwrap();
 
-    // Delins that doesn't simplify should remain delins
     let output = format!("{}", result);
     assert!(
         output.contains("delins"),
@@ -684,21 +686,15 @@ mod expected_failures {
 
     #[test]
     fn test_inversion_shortening() {
-        // Mutalyzer: c.215_220inv -> c.217_218inv
-        // When outer bases of inversion are palindromic, they cancel out
-        // Example: inverting ATGCAT where AT...AT are outer = just invert GC
-        let seq = "GGGGATGCATGGGGG"; // ATGCAT at pos 5-10, AT on outside cancel
+        // Mutalyzer-style canonical form: outer complement pairs cascade.
+        // Sequence: GGGGAGGGCTGGGGG (AGGGCT at c.5_10).
+        //           123456789012345
+        // Cascade: A/T cancel -> GGGC; G/C cancel -> GG. Inner G/G are not
+        // complementary so shortening stops at c.7_8inv.
+        let seq = "GGGGAGGGCTGGGGG";
         let provider = provider_with_transcript("NM_TEST.1", seq);
-
         let result = normalize_to_string(provider, "NM_TEST.1:c.5_10inv");
-
-        // Inverting ATGCAT: outer A-T and T-A are complementary, should shorten
-        // This is a complex rule - exact behavior depends on sequence
-        assert!(
-            result.contains("inv"),
-            "Inversion should still be inv (possibly shortened), got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.7_8inv");
     }
 }
 
@@ -3610,16 +3606,18 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_delins_partial_match_stays_delins() {
+        fn test_delins_partial_match_becomes_pure_insertion() {
             // Sequence: NNATGCNNNNN
-            // c.3_5delinsATGTTT → first half matches but not a double
+            // c.3_5 = ATG. Insert ATGTTT: shared ATG prefix consumes the
+            // entire deleted reference, leaving TTT inserted between c.5
+            // and c.6 per HGVS minimal-form rules. Not a duplication
+            // (insert second half TTT != ATG).
             let seq = "NNATGCNNNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5delinsATGTTT");
-            assert!(
-                result.contains("delins"),
-                "delinsATGTTT should stay delins, got: {}",
-                result
+            assert_normalizes_to(
+                "NM_TEST.1:c.3_5delinsATGTTT",
+                "NM_TEST.1:c.5_6insTTT",
+                provider,
             );
         }
 
@@ -3641,6 +3639,149 @@ mod comprehensive_normalization_tests {
     }
 
     // =========================================================================
+    // RULE 9b: Delins → Inversion (item A2 of issue #81)
+    // =========================================================================
+    // Delins whose insert is the reverse complement of the deleted reference
+    // becomes an inversion. The HGVS spec defines `inv` precisely as this case
+    // and excludes it from the definition of `delins`. The complementary-outer-
+    // bases shortening rule applies to the resulting inversion so that a
+    // delins-encoded inversion and a directly-encoded `inv` produce the same
+    // canonical output.
+    // Function: canonicalize_delins() in src/normalize/rules.rs
+
+    mod delins_to_inv_tests {
+        use super::*;
+
+        #[test]
+        fn test_simple_delins_to_inv() {
+            // Sequence: NNCTANNNNN (CTA at c.3_5, revcomp = TAG)
+            //           1234567890
+            let seq = "NNCTANNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.3_5delinsTAG", "NM_TEST.1:c.3_5inv", provider);
+        }
+
+        #[test]
+        fn test_delins_to_inv_with_outer_shortening() {
+            // Sequence: NCTATGNNNN (CTATG at c.2_6, revcomp = CATAG)
+            //           1234567890
+            // Outer C/G are complement -> shortens to inner TAT (c.3_5)
+            let seq = "NCTATGNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_6delinsCATAG", "NM_TEST.1:c.3_5inv", provider);
+        }
+
+        #[test]
+        fn test_delins_shared_suffix_becomes_substitution() {
+            // Sequence: NCTAGNNNNN (CTAG at c.2_5)
+            //           1234567890
+            // Insert TTAG: shares the `TAG` suffix with the reference, so the
+            // minimal HGVS edit is a single-base substitution at c.2 (priority
+            // sub > delins). This also confirms the partial-complement input
+            // does NOT become an inversion (revcomp(CTAG) = CTAG, palindrome,
+            // not equal to TTAG).
+            let seq = "NCTAGNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_5delinsTTAG", "NM_TEST.1:c.2C>T", provider);
+        }
+
+        #[test]
+        fn test_delins_shared_prefix_becomes_substitution() {
+            // Mirror of the suffix-trim test: shared `CTA` prefix, single-base
+            // mismatch at the trimmed tail position.
+            // Sequence: NCTAGNNNNN (CTAG at c.2_5)
+            //           1234567890
+            // Insert CTAA: shares `CTA` prefix; minimal edit is c.5G>A.
+            let seq = "NCTAGNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_5delinsCTAA", "NM_TEST.1:c.5G>A", provider);
+        }
+
+        #[test]
+        fn test_delins_shared_affix_pure_deletion() {
+            // Shared affixes consume the entire inserted sequence -> pure deletion.
+            // Sequence: NACGTNNNNN (ACGT at c.2_5)
+            //           1234567890
+            // Insert AT: prefix A=A, suffix T=T. Trimmed: delete CG at c.3_4,
+            // insert nothing. Minimal HGVS: c.3_4del.
+            let seq = "NACGTNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_5delinsAT", "NM_TEST.1:c.3_4del", provider);
+        }
+
+        #[test]
+        fn test_delins_shared_affix_pure_insertion() {
+            // Shared affixes consume the entire deleted reference -> pure insertion.
+            // Sequence: NACTNNNNNN (ACT at c.2_4)
+            //           1234567890
+            // Insert ACGT: prefix AC=AC, suffix T=T. Trimmed: delete nothing,
+            // insert G between c.3 and c.4. Minimal HGVS: c.3_4insG.
+            let seq = "NACTNNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_4delinsACGT", "NM_TEST.1:c.3_4insG", provider);
+        }
+
+        #[test]
+        fn test_delins_shared_affix_residual_delins() {
+            // Shared affixes leave a residual N->M (here 2->2) that doesn't
+            // fit any higher-priority form -> emit minimal (trimmed) delins.
+            // Sequence: NAGGCTNNN (AGGCT at c.2_6)
+            //           123456789
+            // Insert AAACT: prefix A=A, suffix CT=CT. Trimmed range c.3_4
+            // (deleted GG, length 2) -> insert AA (length 2). revcomp(GG)=CC,
+            // not AA, so not an inversion. Minimal HGVS: c.3_4delinsAA.
+            let seq = "NAGGCTNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to(
+                "NM_TEST.1:c.2_6delinsAAACT",
+                "NM_TEST.1:c.3_4delinsAA",
+                provider,
+            );
+        }
+
+        #[test]
+        fn test_delins_one_base_complement_is_substitution() {
+            // Priority guard: a 1-base complement (ref=A, insert=T) is a
+            // substitution per HGVS spec, NEVER an inversion (which requires
+            // more than one nucleotide).
+            let seq = "NANNNNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2delinsT", "NM_TEST.1:c.2A>T", provider);
+        }
+
+        #[test]
+        fn test_delins_palindrome_is_identity() {
+            // Sequence: NATATNNNNN (ATAT at c.2_5)
+            //           1234567890
+            // ATAT is its own revcomp; insert ATAT must hit Identity, not Inversion.
+            let seq = "NATATNNNNN";
+            let provider = provider_with_transcript("NM_TEST.1", seq);
+            assert_normalizes_to("NM_TEST.1:c.2_5delinsATAT", "NM_TEST.1:c.2_5=", provider);
+        }
+
+        #[test]
+        fn test_delins_revcomp_round_trip_matches_direct_inv() {
+            // The same biological event written as delins or as inv must produce
+            // the same normalized string.
+            let seq = "NCTATGNNNN";
+            let direct = normalize_to_string(
+                provider_with_transcript("NM_TEST.1", seq),
+                "NM_TEST.1:c.2_6inv",
+            );
+            let via_delins = normalize_to_string(
+                provider_with_transcript("NM_TEST.1", seq),
+                "NM_TEST.1:c.2_6delinsCATAG",
+            );
+            assert_eq!(
+                direct, via_delins,
+                "delins-encoded inversion must normalize to the same string \
+                 as a directly-encoded inversion (direct={}, via_delins={})",
+                direct, via_delins,
+            );
+        }
+    }
+
+    // =========================================================================
     // RULE 10: Inversion Shortening
     // =========================================================================
     // Inversions with complementary outer bases shorten.
@@ -3651,83 +3792,58 @@ mod comprehensive_normalization_tests {
 
         #[test]
         fn test_inversion_no_shortening_when_not_complementary() {
-            // Sequence: NNATGCNNNN (ATGC at positions 3-6)
+            // Sequence: NNATGCNNNN (ATGC at c.3_6)
             //           1234567890
-            // A and C are not complementary, no shortening
+            // A vs C: complement(A)=T != C, so no shortening; stays c.3_6inv.
             let seq = "NNATGCNNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_6inv");
-            assert!(
-                result.contains("c.3_6inv"),
-                "Non-complementary inversion should not shorten, got: {}",
-                result
-            );
+            assert_normalizes_to("NM_TEST.1:c.3_6inv", "NM_TEST.1:c.3_6inv", provider);
         }
 
         #[test]
-        fn test_inversion_shortens_with_complementary_bases() {
-            // Sequence: NNATCGATNN (AT...AT pattern, where outer A-T are complementary)
+        fn test_inversion_palindrome_collapses_to_identity() {
+            // Sequence: NNATCGATNN (ATCGAT at c.3_8). ATCGAT is its own
             //           1234567890
-            // For inversion: ref = ATCGAT, inverted = ATCGAT (rev comp)
-            // If outer bases match after inversion, it shortens
+            // reverse complement, so every outer pair is complementary and
+            // shortening collapses to identity.
             let seq = "NNATCGATNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_8inv");
-            // Should shorten if outer A-T (complementary pair) cancel
-            // This depends on exact implementation
-            assert!(
-                result.contains("inv"),
-                "Inversion result should contain 'inv', got: {}",
-                result
-            );
+            assert_normalizes_to("NM_TEST.1:c.3_8inv", "NM_TEST.1:c.3_8=", provider);
         }
 
         #[test]
-        fn test_inversion_preserved_when_no_cancellation() {
-            // Sequence: NNGGCCNNNN
+        fn test_inversion_partial_shortening() {
+            // Sequence: NAGGGCTNNN (AGGGCT at c.2_7).
             //           1234567890
-            // GG and CC - G pairs with C, so this might cancel
-            let seq = "NNGGCCNNNN";
+            // Outer A/T are complement -> shortens to inner GGGC (c.3_6inv).
+            // GGGC has no further cancelling outer pair (G vs C complement
+            // would cancel further but G == G's revcomp partner here is the
+            // inner GG, not a complement of C). Wait — G complement IS C, so
+            // GGGC also cancels: G-C cancels to GG. Then G-G doesn't cancel.
+            // Final: c.4_5inv over GG.
+            let seq = "NAGGGCTNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_6inv");
-            // GGCC inverted is GGCC (G↔C, G↔C, C↔G, C↔G reversed = GGCC)
-            // Actually: rev_comp(GGCC) = GGCC, so this is identity!
-            assert!(
-                result.contains("inv") || result.contains("="),
-                "Inversion should be preserved or become identity, got: {}",
-                result
-            );
+            assert_normalizes_to("NM_TEST.1:c.2_7inv", "NM_TEST.1:c.4_5inv", provider);
         }
 
         #[test]
-        fn test_two_base_inversion() {
-            // Sequence: NNATNNNNNN
+        fn test_two_base_palindrome_collapses_to_identity() {
+            // Sequence: NNATNNNNNN (AT at c.3_4). revcomp(AT) = AT (palindrome)
             //           1234567890
-            // AT inverted is AT (rev_comp(AT) = AT)
+            // -> shortening collapses to identity.
             let seq = "NNATNNNNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_4inv");
-            // rev_comp(AT) = AT, so this is identity
-            assert!(
-                result.contains("inv") || result.contains("="),
-                "Two-base inversion AT→AT should be identity or preserved, got: {}",
-                result
-            );
+            assert_normalizes_to("NM_TEST.1:c.3_4inv", "NM_TEST.1:c.3_4=", provider);
         }
 
         #[test]
-        fn test_real_inversion_gc_to_gc() {
-            // Sequence: NNGCNNNNNN
-            // GC inverted: rev_comp(GC) = GC (G↔C, C↔G, reversed)
+        fn test_two_base_gc_palindrome_collapses_to_identity() {
+            // Sequence: NNGCNNNNNN (GC at c.3_4). revcomp(GC) = GC (palindrome)
+            //           1234567890
+            // -> shortening collapses to identity.
             let seq = "NNGCNNNNNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_4inv");
-            // rev_comp(GC) = GC, identity
-            assert!(
-                result.contains("inv") || result.contains("="),
-                "GC inversion should be identity or preserved, got: {}",
-                result
-            );
+            assert_normalizes_to("NM_TEST.1:c.3_4inv", "NM_TEST.1:c.3_4=", provider);
         }
     }
 

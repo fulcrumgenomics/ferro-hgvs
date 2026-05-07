@@ -28,6 +28,7 @@ pub fn needs_normalization(edit: &NaEdit) -> bool {
             | NaEdit::Insertion { .. }
             | NaEdit::Duplication { .. }
             | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
             | NaEdit::Repeat { .. }
     ) {
         return true;
@@ -497,97 +498,228 @@ pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(us
     Some((s, e))
 }
 
-/// Check if a delins should be represented as identity
+/// Canonical form for a delins per HGVS edit-type priority (sub > del > inv > dup > ins).
 ///
-/// Per the HGVS spec, a delins whose inserted sequence equals the deleted
-/// reference produces no change and must be expressed using identity
-/// notation (`=`). The rule applies for any matching length.
-///
-/// Examples:
-/// - g.1000delinsG where ref[1000] = G → g.1000=
-/// - g.1000_1002delinsGCA where ref[1000..1002] = GCA → g.1000_1002=
-pub fn delins_is_identity(ref_seq: &[u8], start: usize, end: usize, inserted_seq: &[u8]) -> bool {
-    if start >= end || end > ref_seq.len() {
-        return false;
-    }
-    let deleted_len = end - start;
-    if inserted_seq.len() != deleted_len {
-        return false;
-    }
-    &ref_seq[start..end] == inserted_seq
+/// All position fields are 0-indexed. Sub/del/ins/inv/keep-as-delins variants
+/// carry positions taken from the *trimmed* delins (after greedy shared-affix
+/// elimination on both ends); `Identity` and `Duplication` reflect the full
+/// input range because shared-affix trimming would destroy those classifications.
+/// The caller converts each 0-indexed position to HGVS 1-based for emission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelinsCanonical {
+    /// Inserted sequence equals the deleted reference. Emit as identity (`=`)
+    /// at the input range.
+    Identity,
+    /// 1-base substitution at 0-indexed `position` (in `ref_seq`). Emit `ref>alt`.
+    Substitution {
+        position: usize,
+        reference: crate::hgvs::edit::Base,
+        alternative: crate::hgvs::edit::Base,
+    },
+    /// Pure deletion (insert consumed entirely by shared-affix trimming) over
+    /// half-open 0-indexed `[start, end)`.
+    Deletion { start: usize, end: usize },
+    /// Pure insertion (deleted reference consumed entirely by shared-affix
+    /// trimming). `after_index` is the 0-indexed position of the base
+    /// immediately AFTER the insertion point — equivalently, the 1-based HGVS
+    /// position of the base immediately BEFORE. HGVS form:
+    /// `c.{after_index}_{after_index + 1}ins{sequence}`.
+    Insertion {
+        after_index: usize,
+        sequence: Vec<u8>,
+    },
+    /// N>=2 delins whose insert is the reverse complement of the deleted
+    /// reference (possibly after shared-affix trimming), with the
+    /// complementary-outer-bases shortening rule applied. Half-open 0-indexed
+    /// `[start, end)`; by construction `end > start + 1`.
+    Inversion { start: usize, end: usize },
+    /// N -> 2N delins where insert is the (full-range) deleted sequence
+    /// repeated twice. Range fields are the full input range, not a trimmed
+    /// sub-range — see the doc on `canonicalize_delins` for why duplication
+    /// must be detected before trimming.
+    Duplication { start: usize, end: usize },
+    /// None of the higher-priority forms apply. The (possibly trimmed) delins
+    /// occupies half-open 0-indexed `[start, end)` with `sequence` as the
+    /// inserted bases. If no trimming was possible these match the input.
+    KeepAsDelins {
+        start: usize,
+        end: usize,
+        sequence: Vec<u8>,
+    },
 }
 
-/// Check if a delins should be represented as a substitution
+/// Classify a delins into its HGVS canonical form.
 ///
-/// Per the HGVS edit-type priority (substitution > deletion > inversion >
-/// duplication > insertion), a delins that replaces a single base with a
-/// *different* single base must be expressed as a substitution.
+/// Implements item A2 of issue #81 alongside the previously separate
+/// identity / substitution / duplication checks, plus shared-affix trimming
+/// so a delins that is structurally a smaller edit (sub / del / ins / inv)
+/// surrounded by identical context canonicalizes to that smaller form per
+/// the HGVS minimal-form rule. Priority follows the HGVS edit-priority
+/// recommendation (substitution > deletion > inversion > duplication >
+/// insertion); `Identity` short-circuits ahead of all of them because an
+/// identity is never a real edit.
 ///
-/// Example: g.1000delinsA where ref[1000] is G → g.1000G>A
+/// Algorithm:
+/// 1. Bounds / degenerate input -> `KeepAsDelins` (untrimmed).
+/// 2. Full-range `Identity` (`insert == deleted`).
+/// 3. Full-range `Duplication` (`insert == deleted + deleted`). Must precede
+///    trimming, since greedy shared-affix trimming on a duplication would
+///    consume the entire deleted range and falsely reclassify it as a pure
+///    insertion of the duplicated unit.
+/// 4. Greedy shared-affix trimming on both ends.
+/// 5. Reclassify the trimmed range as `Insertion` (deleted empty),
+///    `Deletion` (insert empty), `Substitution` (1->1), `Inversion`
+///    (N>=2 revcomp + outer-pair shortening), or `KeepAsDelins`.
 ///
-/// Returns `None` for the same-base case (e.g. `g.1000delinsG` where ref=G),
-/// which is identity rather than substitution; that rewrite is handled by
-/// `delins_is_identity`.
-pub fn delins_is_substitution(
+/// Spec references (`assets/hgvs-nomenclature/docs/recommendations/DNA/`):
+/// - `inversion.md`: an inversion requires "more than one nucleotide" and is
+///   defined as the inserted sequence being the reverse complement of the
+///   deleted reference; a one-nucleotide complement is a substitution.
+/// - `delins.md`: a delins is "not a substitution, inversion or conversion".
+pub fn canonicalize_delins(
     ref_seq: &[u8],
     start: usize,
     end: usize,
     inserted_seq: &[u8],
-) -> Option<(crate::hgvs::edit::Base, crate::hgvs::edit::Base)> {
+) -> DelinsCanonical {
     use crate::hgvs::edit::Base;
 
-    if end != start + 1 || end > ref_seq.len() || inserted_seq.len() != 1 {
-        return None;
+    if start >= end || end > ref_seq.len() || inserted_seq.is_empty() {
+        return DelinsCanonical::KeepAsDelins {
+            start,
+            end,
+            sequence: inserted_seq.to_vec(),
+        };
     }
-    let ref_byte = ref_seq[start];
-    let alt_byte = inserted_seq[0];
-    if ref_byte == alt_byte {
-        return None;
+
+    let deleted = &ref_seq[start..end];
+
+    // 1. Identity (insert == deleted reference). Caught at full range; trimming
+    //    would otherwise consume the entire range and lose this classification.
+    if deleted == inserted_seq {
+        return DelinsCanonical::Identity;
     }
-    Some((
-        Base::from_char(ref_byte as char)?,
-        Base::from_char(alt_byte as char)?,
-    ))
+
+    // 2. Duplication (N -> 2N, full-range insert == deleted+deleted). Must be
+    //    checked before trimming: a true duplication has identical prefixes
+    //    (insert[..N] == deleted == ref[start..end]) so greedy trimming would
+    //    eat the entire deleted range and downgrade dup to ins, violating the
+    //    sub > del > inv > dup > ins priority.
+    if inserted_seq.len() == 2 * deleted.len() {
+        let (first_half, second_half) = inserted_seq.split_at(deleted.len());
+        if first_half == deleted && second_half == deleted {
+            return DelinsCanonical::Duplication { start, end };
+        }
+    }
+
+    // 3. Trim shared affixes on both ends. After this, sub/del/ins/inv are
+    //    all classified on the trimmed range, so equivalent edits canonicalize
+    //    identically regardless of how much identical context the input
+    //    carried.
+    let (k_prefix, l_suffix) = shared_affix_lengths(deleted, inserted_seq);
+    let trim_start = start + k_prefix;
+    let trim_end = end - l_suffix;
+    let trim_insert = &inserted_seq[k_prefix..inserted_seq.len() - l_suffix];
+
+    // 4a. Pure insertion (trim consumed the entire deleted range).
+    if trim_start == trim_end {
+        // Identity (insert == deleted) is the only way greedy trim could leave
+        // both sides empty; that case returned at step 1.
+        debug_assert!(!trim_insert.is_empty(), "Identity case caught above");
+        return DelinsCanonical::Insertion {
+            after_index: trim_start,
+            sequence: trim_insert.to_vec(),
+        };
+    }
+
+    // 4b. Pure deletion (trim consumed the entire inserted sequence).
+    if trim_insert.is_empty() {
+        return DelinsCanonical::Deletion {
+            start: trim_start,
+            end: trim_end,
+        };
+    }
+
+    let trim_deleted = &ref_seq[trim_start..trim_end];
+
+    // 4c. 1-base substitution at the trimmed position. Falls through on
+    //     non-IUPAC bytes (Base::from_char returns None) because we cannot
+    //     express the substitution without a typed Base — better to keep the
+    //     variant as a delins than fabricate one. The trim_deleted.len() >= 2
+    //     gates on the inversion / dup checks below also exclude this path,
+    //     so non-IUPAC 1->1 inputs end up at KeepAsDelins as intended.
+    if trim_deleted.len() == 1 && trim_insert.len() == 1 {
+        if let (Some(reference), Some(alternative)) = (
+            Base::from_char(trim_deleted[0] as char),
+            Base::from_char(trim_insert[0] as char),
+        ) {
+            return DelinsCanonical::Substitution {
+                position: trim_start,
+                reference,
+                alternative,
+            };
+        }
+    }
+
+    // 4d. Inversion at trimmed range (revcomp + outer-pair shortening).
+    //     Shared-affix trimming can reveal an inversion that the full-range
+    //     check missed, e.g. `ACGAGT -> ACTCGT`: full-range revcomp does not
+    //     match (revcomp(ACGAGT) = ACTCGT — does match here), but cases like
+    //     a non-palindromic shared prefix only become revcomp after trimming.
+    if trim_deleted.len() >= 2
+        && trim_insert.len() == trim_deleted.len()
+        && is_revcomp(trim_deleted, trim_insert)
+    {
+        // Invariant: outer-pair shortening of a true revcomp cannot collapse
+        // to identity here. A full collapse would mean trim_deleted is its own
+        // reverse complement, i.e. trim_deleted == trim_insert. But then
+        // greedy shared-affix trimming would have consumed the entire range,
+        // leaving trim_start == trim_end (handled by the Insertion / Identity
+        // branches above).
+        let (s, e) = shorten_inversion(ref_seq, trim_start, trim_end).expect(
+            "revcomp delins cannot collapse to identity under shortening; \
+             that case is handled by the Identity / Insertion branches above",
+        );
+        debug_assert!(e > s + 1, "Inversion interval must contain >=2 bases");
+        return DelinsCanonical::Inversion { start: s, end: e };
+    }
+
+    // 5. Nothing reduced to a higher form. Emit minimal (trimmed) delins.
+    DelinsCanonical::KeepAsDelins {
+        start: trim_start,
+        end: trim_end,
+        sequence: trim_insert.to_vec(),
+    }
 }
 
-/// Check if a delins should be represented as a duplication
-///
-/// In HGVS, if a delins deletes N bases and inserts 2N bases where the
-/// inserted sequence is the deleted sequence repeated twice, the net effect
-/// is a duplication.
-///
-/// Example: c.5delinsGG where position 5 has G → del G, ins GG = dup G
-///
-/// Arguments:
-/// - ref_seq: The reference sequence (0-indexed)
-/// - start: Start position (0-indexed, inclusive)
-/// - end: End position (0-indexed, exclusive)
-/// - inserted_seq: The sequence being inserted
-///
-/// Returns: true if this delins should become a duplication
-pub fn delins_is_duplication(
-    ref_seq: &[u8],
-    start: usize,
-    end: usize,
-    inserted_seq: &[u8],
-) -> bool {
-    // Get the deleted region
-    if start >= end || end > ref_seq.len() {
-        return false;
+/// Compute greedy shared-prefix and shared-suffix lengths between `deleted`
+/// and `inserted`, with the constraint that the prefix and suffix together
+/// cannot consume more than `min(deleted.len(), inserted.len())` bytes from
+/// either side (so the two regions never overlap on either string).
+fn shared_affix_lengths(deleted: &[u8], inserted: &[u8]) -> (usize, usize) {
+    let max_total = deleted.len().min(inserted.len());
+    let mut k = 0;
+    while k < max_total && deleted[k] == inserted[k] {
+        k += 1;
     }
-
-    let deleted_len = end - start;
-    let deleted_seq = &ref_seq[start..end];
-
-    // For delins to be a dup, inserted must be 2x the deleted length
-    // and the inserted sequence must be the deleted sequence repeated twice
-    if inserted_seq.len() != 2 * deleted_len {
-        return false;
+    let mut l = 0;
+    while k + l < max_total && deleted[deleted.len() - 1 - l] == inserted[inserted.len() - 1 - l] {
+        l += 1;
     }
+    (k, l)
+}
 
-    // Check that inserted = deleted + deleted
-    let (first_half, second_half) = inserted_seq.split_at(deleted_len);
-    first_half == deleted_seq && second_half == deleted_seq
+/// Bytewise reverse-complement equality check.
+///
+/// Returns true iff `inserted` is the reverse complement of `deleted`, both
+/// of equal length. Allocation-free; uses the existing `complement()` helper.
+fn is_revcomp(deleted: &[u8], inserted: &[u8]) -> bool {
+    deleted.len() == inserted.len()
+        && deleted
+            .iter()
+            .rev()
+            .zip(inserted.iter())
+            .all(|(d, i)| complement(*d) == *i)
 }
 
 /// Check if a duplication in a homopolymer should become repeat notation
@@ -1055,7 +1187,9 @@ mod tests {
             length: None,
             uncertain_extent: None,
         }));
-        assert!(!needs_normalization(&NaEdit::Inversion {
+        // Inversions need normalization so the complementary-outer-bases
+        // shortening rule fires (RULE 10 in normalize_tests.rs).
+        assert!(needs_normalization(&NaEdit::Inversion {
             sequence: None,
             length: None,
         }));
@@ -1115,66 +1249,192 @@ mod tests {
     }
 
     #[test]
-    fn test_delins_is_identity() {
-        let ref_seq = b"ACGTACGT";
-
-        // Single-base same → identity
-        assert!(delins_is_identity(ref_seq, 3, 4, b"T"));
-
-        // Multi-base same → identity
-        assert!(delins_is_identity(ref_seq, 1, 4, b"CGT"));
-
-        // Whole region, full match → identity
-        assert!(delins_is_identity(ref_seq, 0, 8, b"ACGTACGT"));
-
-        // Single-base differ → not identity
-        assert!(!delins_is_identity(ref_seq, 3, 4, b"A"));
-
-        // Multi-base differ at one position → not identity
-        assert!(!delins_is_identity(ref_seq, 1, 4, b"CGA"));
-
-        // Length mismatch (1→2) → not identity
-        assert!(!delins_is_identity(ref_seq, 3, 4, b"TT"));
-
-        // Length mismatch (2→1) → not identity
-        assert!(!delins_is_identity(ref_seq, 1, 3, b"C"));
-
-        // Empty insert → not identity
-        assert!(!delins_is_identity(ref_seq, 3, 4, b""));
-
-        // OOB end → false (no panic)
-        assert!(!delins_is_identity(ref_seq, 7, 9, b"TT"));
-
-        // Inverted range → false
-        assert!(!delins_is_identity(ref_seq, 5, 3, b"CG"));
-    }
-
-    #[test]
-    fn test_delins_is_substitution() {
+    fn test_canonicalize_delins() {
         use crate::hgvs::edit::Base;
-
         let ref_seq = b"ACGTACGT";
-        // ref[3] = T, insert A → T>A
-        assert_eq!(
-            delins_is_substitution(ref_seq, 3, 4, b"A"),
-            Some((Base::T, Base::A))
-        );
 
-        // Single-base delins where ref == alt → not a substitution
-        // (would be identity, handled separately)
-        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b"T"), None);
+        // Identity: insert == ref
+        assert!(matches!(
+            canonicalize_delins(ref_seq, 3, 4, b"T"),
+            DelinsCanonical::Identity
+        ));
+        assert!(matches!(
+            canonicalize_delins(ref_seq, 1, 4, b"CGT"),
+            DelinsCanonical::Identity
+        ));
+        assert!(matches!(
+            canonicalize_delins(ref_seq, 0, 8, b"ACGTACGT"),
+            DelinsCanonical::Identity
+        ));
 
-        // Multi-base delete → not a single-base substitution
-        assert_eq!(delins_is_substitution(ref_seq, 3, 5, b"A"), None);
+        // Substitution: 1->1, ref != alt (no trimming needed; trimmed position
+        // == input position)
+        assert!(matches!(
+            canonicalize_delins(ref_seq, 3, 4, b"A"),
+            DelinsCanonical::Substitution {
+                position: 3,
+                reference: Base::T,
+                alternative: Base::A,
+            }
+        ));
+        // 1-base complement (ref=A, alt=T) -> Substitution, NEVER Inversion (HGVS spec gate)
+        assert!(matches!(
+            canonicalize_delins(b"A", 0, 1, b"T"),
+            DelinsCanonical::Substitution {
+                position: 0,
+                reference: Base::A,
+                alternative: Base::T,
+            }
+        ));
 
-        // Single-base delete with multi-base insert → not a substitution
-        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b"AT"), None);
+        // Substitution after shared-suffix trim: ref CTAG (idx 0..4) -> TTAG.
+        // Suffix TAG is shared, leaving C->T at position 0.
+        assert!(matches!(
+            canonicalize_delins(b"CTAG", 0, 4, b"TTAG"),
+            DelinsCanonical::Substitution {
+                position: 0,
+                reference: Base::C,
+                alternative: Base::T,
+            }
+        ));
+        // Substitution after shared-prefix trim: ref CTAG -> CTAA. Prefix CTA
+        // is shared, leaving G->A at position 3.
+        assert!(matches!(
+            canonicalize_delins(b"CTAG", 0, 4, b"CTAA"),
+            DelinsCanonical::Substitution {
+                position: 3,
+                reference: Base::G,
+                alternative: Base::A,
+            }
+        ));
 
-        // Bounds: end past reference → None (no panic)
-        assert_eq!(delins_is_substitution(ref_seq, 8, 9, b"A"), None);
+        // Pure deletion after both-side trim: ref ACGT (idx 0..4) -> AT.
+        // Prefix A and suffix T shared; deleted CG remains at idx 1..3.
+        assert!(matches!(
+            canonicalize_delins(b"ACGT", 0, 4, b"AT"),
+            DelinsCanonical::Deletion { start: 1, end: 3 }
+        ));
 
-        // Empty insert → None
-        assert_eq!(delins_is_substitution(ref_seq, 3, 4, b""), None);
+        // Pure insertion after both-side trim: ref ACT (idx 0..3) -> ACGT.
+        // Prefix AC and suffix T shared; G inserted between idx 2 and idx 2.
+        assert!(matches!(
+            canonicalize_delins(b"ACT", 0, 3, b"ACGT"),
+            DelinsCanonical::Insertion {
+                after_index: 2,
+                ref sequence,
+            } if sequence == b"G"
+        ));
+
+        // Inversion: insert == revcomp(ref), no shortening
+        // ref = CTA (idx 0..3), revcomp = TAG; A and C not complements -> stays at (0,3)
+        assert!(matches!(
+            canonicalize_delins(b"CTA", 0, 3, b"TAG"),
+            DelinsCanonical::Inversion { start: 0, end: 3 }
+        ));
+
+        // Inversion with shortening: ref CTATG, revcomp CATAG
+        // outer C/G are complement -> shortens to inner TAT (0-idx 1..4)
+        assert!(matches!(
+            canonicalize_delins(b"CTATG", 0, 5, b"CATAG"),
+            DelinsCanonical::Inversion { start: 1, end: 4 }
+        ));
+
+        // Inversion revealed by shared-affix trim: ref ACGAGT (idx 0..6) -> ACTCGT.
+        // Full-range revcomp(ACGAGT) = ACTCGT — so this is also a full-range
+        // inversion, but more importantly the trim path classifies it via the
+        // trimmed-range revcomp check on GA -> TC.
+        assert!(matches!(
+            canonicalize_delins(b"ACGAGT", 0, 6, b"ACTCGT"),
+            DelinsCanonical::Inversion { start, end } if start < end
+        ));
+
+        // Palindrome: ref ATAT, revcomp ATAT == ref -> Identity (NOT Inversion)
+        assert!(matches!(
+            canonicalize_delins(b"ATAT", 0, 4, b"ATAT"),
+            DelinsCanonical::Identity
+        ));
+
+        // Duplication: 1->2 doubling. Range fields equal the input.
+        assert!(matches!(
+            canonicalize_delins(b"GATG", 1, 2, b"AA"),
+            DelinsCanonical::Duplication { start: 1, end: 2 }
+        ));
+        // Duplication: 3->6 doubling
+        assert!(matches!(
+            canonicalize_delins(b"NATGCN", 1, 4, b"ATGATG"),
+            DelinsCanonical::Duplication { start: 1, end: 4 }
+        ));
+
+        // KeepAsDelins: only complement, not reverse (AAGC -> TTCG). No
+        // shared affix, so trim is a no-op and (start, end, sequence) match
+        // the input.
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 0, 4, b"TTCG"),
+            DelinsCanonical::KeepAsDelins {
+                start: 0,
+                end: 4,
+                ref sequence,
+            } if sequence == b"TTCG"
+        ));
+        // KeepAsDelins: only reverse, not revcomp (AAGC -> CGAA)
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 0, 4, b"CGAA"),
+            DelinsCanonical::KeepAsDelins {
+                start: 0,
+                end: 4,
+                ref sequence,
+            } if sequence == b"CGAA"
+        ));
+        // KeepAsDelins: length doesn't fit any rule
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 0, 4, b"GGG"),
+            DelinsCanonical::KeepAsDelins {
+                start: 0,
+                end: 4,
+                ref sequence,
+            } if sequence == b"GGG"
+        ));
+
+        // KeepAsDelins after trim: ref AGGCT (idx 0..5) -> AAACT. Prefix A
+        // and suffix CT shared; trimmed range idx 1..3 (GG) -> AA. revcomp(GG)
+        // = CC != AA, so not an inversion. 2->2 stays as a (trimmed) delins.
+        assert!(matches!(
+            canonicalize_delins(b"AGGCT", 0, 5, b"AAACT"),
+            DelinsCanonical::KeepAsDelins {
+                start: 1,
+                end: 3,
+                ref sequence,
+            } if sequence == b"AA"
+        ));
+
+        // Bounds / degenerate: empty insert. Returns the (untrimmed) input
+        // since classification requires a non-empty insert.
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 0, 1, b""),
+            DelinsCanonical::KeepAsDelins {
+                start: 0,
+                end: 1,
+                ref sequence,
+            } if sequence.is_empty()
+        ));
+        // start >= end
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 2, 2, b"X"),
+            DelinsCanonical::KeepAsDelins {
+                start: 2,
+                end: 2,
+                ref sequence,
+            } if sequence == b"X"
+        ));
+        // OOB end
+        assert!(matches!(
+            canonicalize_delins(b"AAGC", 3, 5, b"X"),
+            DelinsCanonical::KeepAsDelins {
+                start: 3,
+                end: 5,
+                ref sequence,
+            } if sequence == b"X"
+        ));
     }
 
     #[test]
