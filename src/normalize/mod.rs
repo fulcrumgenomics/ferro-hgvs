@@ -53,6 +53,22 @@ fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
     )
 }
 
+/// Whether a variant carries a pure `Deletion` edit (no inserted sequence).
+///
+/// Used by the cis-allele post-merge step to decide whether to re-apply
+/// the 3'-rule to a freshly-merged anchor (issue #161).
+fn is_pure_deletion(v: &HgvsVariant) -> bool {
+    let edit = match v {
+        HV::Genome(g) => g.loc_edit.edit.inner(),
+        HV::Cds(c) => c.loc_edit.edit.inner(),
+        HV::Tx(t) => t.loc_edit.edit.inner(),
+        HV::Rna(r) => r.loc_edit.edit.inner(),
+        HV::Mt(m) => m.loc_edit.edit.inner(),
+        _ => None,
+    };
+    matches!(edit, Some(NaEdit::Deletion { .. }))
+}
+
 /// Check if a TxPos has an unknown (?) offset sentinel value
 fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     matches!(
@@ -230,6 +246,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (Display already renders singletons in bare form regardless).
         let original_len = normalized.len();
         let mut merged = merge::merge_consecutive_edits(normalized, allele.phase, &self.provider);
+
+        // The HGVS 3'-rule requires the most-3' position possible — and that
+        // applies to the post-merge form, not just the per-variant inputs.
+        // When merge collapses adjacent single-base deletions into one
+        // ranged Deletion, that fresh anchor must reach its rotation
+        // fixed point. (Issue #161.)
+        //
+        // We restrict the re-normalize to merged Deletions specifically.
+        // Other merged forms (delins from sub+sub, delins from sub+ins,
+        // pure ins, etc.) are produced by the merge layer in their
+        // intended form; sending them back through `normalize_with_warnings`
+        // would re-canonicalize delins and traverse coord-system paths
+        // that are out of scope for this issue.
+        if merged.len() < original_len {
+            let mut renormalized = Vec::with_capacity(merged.len());
+            for v in merged {
+                if is_pure_deletion(&v) {
+                    let r = self.normalize_with_warnings(&v)?;
+                    all_warnings.extend(r.warnings);
+                    renormalized.push(r.result);
+                } else {
+                    renormalized.push(v);
+                }
+            }
+            merged = renormalized;
+        }
 
         let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
             && original_len > 1

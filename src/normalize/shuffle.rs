@@ -64,7 +64,14 @@ pub fn shuffle(
 
     match direction {
         ShuffleDirection::ThreePrime => {
-            // Shuffle right (3')
+            // Shuffle right (3').
+            //
+            // HGVS rotation invariant for a deletion of length L over the
+            // 0-based half-open window [s, s+L): advance to (s+1, s+L+1) iff
+            // ref[s] == ref[s+L]. The deleted bases at (s+1, s+L+1) then
+            // equal a 1-position rotation of ref[s, s+L), so the haplotype
+            // is unchanged. Iterating to the fixed point yields the
+            // spec-canonical 3'-most representation.
             while new_end < boundaries.right {
                 let ref_idx = new_end as usize;
                 if ref_idx >= ref_seq.len() {
@@ -73,7 +80,8 @@ pub fn shuffle(
 
                 // For deletion: check if we can shift right
                 if alt_seq.is_empty() {
-                    // The base at the end of the deletion matches the base after
+                    // ref[del_start] == ref[del_end_exclusive] is the
+                    // rotation predicate above.
                     let del_start_idx = new_start as usize;
                     if del_start_idx < ref_seq.len() && ref_seq[del_start_idx] == ref_seq[ref_idx] {
                         new_start += 1;
@@ -92,6 +100,20 @@ pub fn shuffle(
                     }
                 }
             }
+            // Fixed-point invariant: on loop exit while still strictly
+            // inside the boundary and the reference, the rotation
+            // predicate must be false. A regression that under-shifts
+            // by one rotation trips this in debug builds.
+            debug_assert!(
+                new_end >= boundaries.right
+                    || (new_end as usize) >= ref_seq.len()
+                    || (alt_seq.is_empty()
+                        && ref_seq[new_start as usize] != ref_seq[new_end as usize])
+                    || (!alt_seq.is_empty()
+                        && ref_seq[new_end as usize]
+                            != alt_seq[((new_end - start) % alt_seq.len() as u64) as usize]),
+                "3'-shuffle terminated before reaching the rotation fixed point",
+            );
         }
         ShuffleDirection::FivePrime => {
             // Shuffle left (5')
