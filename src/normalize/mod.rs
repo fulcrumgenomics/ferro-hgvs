@@ -846,7 +846,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &crate::hgvs::variant::RnaVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::hgvs::interval::RnaInterval;
-        use crate::hgvs::location::RnaPos;
         use crate::hgvs::variant::{LocEdit, RnaVariant};
 
         // Can't normalize variants with unknown edits or positions
@@ -883,34 +882,131 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Err(_) => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // Only normalize positive positions (within transcript)
-        // Negative positions are outside the transcript sequence
-        if start_pos.base < 1 || end_pos.base < 1 {
-            return Ok((HV::Rna(variant.clone()), vec![]));
-        }
+        // Convert RNA positions to transcript-1 positions, deciding per
+        // endpoint. UTR (`r.*N`/`r.-N`) and non-positive bases need a CDS
+        // to translate; non-UTR positive bases map 1:1 to transcript-1
+        // indices and work without a CDS (mock providers used in tests
+        // often omit cds_start/end). Choosing per endpoint keeps mixed
+        // intervals like `r.50_*1del` from rerouting the positive end
+        // through `rna_to_tx_pos` — issue #163 follow-up.
+        let cds_info = transcript.cds_start.zip(transcript.cds_end);
+        let map_in = |pos: &crate::hgvs::location::RnaPos| -> Option<u64> {
+            if pos.utr3 || pos.base < 1 {
+                let (cds_start, cds_end) = cds_info?;
+                self.rna_to_tx_pos(pos, cds_start, Some(cds_end)).ok()
+            } else {
+                Some(pos.base as u64)
+            }
+        };
+        let tx_start = match map_in(start_pos) {
+            Some(v) => v,
+            None => return Ok((HV::Rna(variant.clone()), vec![])),
+        };
+        let tx_end = match map_in(end_pos) {
+            Some(v) => v,
+            None => return Ok((HV::Rna(variant.clone()), vec![])),
+        };
 
-        let rna_start = start_pos.base as u64;
-        let rna_end = end_pos.base as u64;
-
-        // Get boundaries
+        // Get boundaries (entire transcript span; r. has no exon-level
+        // junction restriction beyond the transcript ends).
         let boundaries = Boundaries::new(1, transcript.sequence.len() as u64);
 
         // Perform normalization (RNA context: codon-frame gate does not apply;
         // r. is not in the spec's accepted reference types for repeats).
         let seq = transcript.sequence.as_bytes();
-        let (new_start, new_end, new_edit, warnings) =
-            self.normalize_na_edit(seq, edit, rna_start, rna_end, &boundaries, false)?;
+        let (new_tx_start, new_tx_end, new_edit, warnings) =
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+
+        // Convert each normalized tx position back independently, restoring
+        // UTR notation when the position falls outside the CDS. This catches
+        // both the original issue #163 case (UTR input shuffling within the
+        // UTR) and a positive-base input that shifts past `cds_end` during
+        // normalization. Without `cds_info` we keep the simple base-1 mapping.
+        use crate::hgvs::location::RnaPos;
+        let map_out = |pos: u64| -> Result<RnaPos, FerroError> {
+            if let Some((cds_start, cds_end)) = cds_info {
+                if pos < cds_start || pos > cds_end {
+                    return self.tx_to_rna_pos(pos, cds_start, Some(cds_end));
+                }
+            }
+            Ok(RnaPos::new(pos as i64))
+        };
+        let new_start = map_out(new_tx_start)?;
+        let new_end = map_out(new_tx_end)?;
 
         let new_variant = RnaVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(
-                RnaInterval::new(RnaPos::new(new_start as i64), RnaPos::new(new_end as i64)),
-                new_edit,
-            ),
+            loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
         };
 
         Ok((HV::Rna(new_variant), warnings))
+    }
+
+    /// Convert an RNA position to a transcript-1 position.
+    ///
+    /// Mirrors `cds_to_tx_pos`. `r.*N` maps to `cds_end + N`, `r.-N` to
+    /// `cds_start + N` (HGVS skips the `0` gap).
+    fn rna_to_tx_pos(
+        &self,
+        pos: &crate::hgvs::location::RnaPos,
+        cds_start: u64,
+        cds_end: Option<u64>,
+    ) -> Result<u64, FerroError> {
+        if pos.utr3 {
+            let end = cds_end.ok_or_else(|| FerroError::ConversionError {
+                msg: "No CDS end".to_string(),
+            })?;
+            let base = u64::try_from(pos.base).map_err(|_| FerroError::ConversionError {
+                msg: format!("Negative base {} in 3' UTR position", pos.base),
+            })?;
+            Ok(end + base)
+        } else if pos.base < 0 {
+            let tx_pos = cds_start as i64 + pos.base;
+            u64::try_from(tx_pos).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "RNA position r.{} maps before transcript start (cds_start={})",
+                    pos.base, cds_start
+                ),
+            })
+        } else if pos.base == 0 {
+            Ok(cds_start.saturating_sub(1))
+        } else {
+            Ok(cds_start + pos.base as u64 - 1)
+        }
+    }
+
+    /// Convert a transcript-1 position back to an RNA position, restoring
+    /// the appropriate region (`r.*N` for 3'UTR, `r.-N` for 5'UTR).
+    fn tx_to_rna_pos(
+        &self,
+        pos: u64,
+        cds_start: u64,
+        cds_end: Option<u64>,
+    ) -> Result<crate::hgvs::location::RnaPos, FerroError> {
+        use crate::hgvs::location::RnaPos;
+        let end = cds_end.ok_or_else(|| FerroError::ConversionError {
+            msg: "No CDS end".to_string(),
+        })?;
+        if pos < cds_start {
+            Ok(RnaPos {
+                base: pos as i64 - cds_start as i64,
+                offset: None,
+                utr3: false,
+            })
+        } else if pos > end {
+            Ok(RnaPos {
+                base: (pos - end) as i64,
+                offset: None,
+                utr3: true,
+            })
+        } else {
+            Ok(RnaPos {
+                base: (pos - cds_start + 1) as i64,
+                offset: None,
+                utr3: false,
+            })
+        }
     }
 
     /// Normalize a mitochondrial variant
