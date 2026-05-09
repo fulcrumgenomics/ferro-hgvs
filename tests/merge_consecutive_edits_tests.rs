@@ -198,36 +198,43 @@ fn normalize_with_provider(provider: MockProvider, input: &str) -> String {
 
 #[test]
 fn test_merge_cds_consecutive_subs() {
+    // Positions 10-11 in the simple transcript are "CC". Use ref-matching
+    // SNV inputs so the merged delins reflects the actual ref bases (under
+    // issue #160 the merged delins is re-canonicalized post-merge, which
+    // would otherwise rewrite a ref-mismatched delins to its actual-ref
+    // canonical form).
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
-            "NM_TEST.1:c.[10A>G;11A>C]",
+            "NM_TEST.1:c.[10C>G;11C>A]",
         ),
-        "NM_TEST.1:c.10_11delinsGC",
+        "NM_TEST.1:c.10_11delinsGA",
     );
 }
 
 #[test]
 fn test_merge_tx_consecutive_subs() {
     // n. compact form isn't accepted by the parser; use expanded form.
+    // Same ref-matching rationale as test_merge_cds_consecutive_subs.
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
-            "[NM_TEST.1:n.10A>G;NM_TEST.1:n.11A>C]",
+            "[NM_TEST.1:n.10C>G;NM_TEST.1:n.11C>A]",
         ),
-        "NM_TEST.1:n.10_11delinsGC",
+        "NM_TEST.1:n.10_11delinsGA",
     );
 }
 
 #[test]
 fn test_merge_rna_consecutive_subs_lowercase() {
     // RNA uses lowercase nucleotides per HGVS spec; merged alt must preserve case.
+    // Same ref-matching rationale as test_merge_cds_consecutive_subs.
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
-            "NM_TEST.1:r.[10a>g;11a>c]",
+            "NM_TEST.1:r.[10c>g;11c>a]",
         ),
-        "NM_TEST.1:r.10_11delinsgc",
+        "NM_TEST.1:r.10_11delinsga",
     );
 }
 
@@ -602,13 +609,19 @@ fn test_codon_frame_two_subs_one_codon() {
     // Codon for c.10 is `(10-1)/3 = 3`; codon for c.12 is `(12-1)/3 = 3`.
     // Same codon. The unchanged middle base is the actual reference at
     // c.11 = C, so the merged delins alt is
-    // `G(c.10) + C(ref c.11) + C(c.12) = "GCC"`.
+    // `G(c.10) + C(ref c.11) + A(c.12) = "GCA"`.
+    //
+    // Inputs use ref-matching SNVs (`c.10C>G;c.12C>A`) so the codon-frame
+    // merge result is a real 3-base delins; under issue #160 the merged
+    // delins is re-canonicalized post-merge, which would otherwise trim
+    // the codon-frame-merged form down to a single sub if the second
+    // SNV's stated alt happened to equal the actual middle reference.
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
-            "NM_TEST.1:c.[10A>G;12A>C]",
+            "NM_TEST.1:c.[10C>G;12C>A]",
         ),
-        "NM_TEST.1:c.10_12delinsGCC",
+        "NM_TEST.1:c.10_12delinsGCA",
     );
 }
 

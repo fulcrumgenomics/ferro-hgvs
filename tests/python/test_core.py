@@ -105,6 +105,83 @@ class TestVersion:
         assert len(ferro_hgvs.__version__) > 0
 
 
+class TestNormalizeIssue160RevcompInvSubspans:
+    """Issue #160: revcomp inv sub-span detection within compound variants.
+
+    Uses a temporary JSON reference so the test can pin specific genomic bases
+    at the positions referenced by the variant strings (the bundled
+    `with_test_data` mock has no NC_000001.11 sequence).
+    """
+
+    @staticmethod
+    def _make_reference_json(tmp_path, contig: str, start_1based: int, bases: str) -> str:
+        """Write a JSON reference with `bases` at `start_1based..` and return its path."""
+        # Filler `A` from position 1 up to start_1based, then the test bases,
+        # then more filler to cover the normalize window. JSON loader accepts
+        # an object with `genomic_sequences`.
+        seq = ["A"] * max(2000, start_1based + len(bases) + 200)
+        for i, b in enumerate(bases):
+            seq[start_1based - 1 + i] = b
+        payload = {
+            "transcripts": [],
+            "proteins": {},
+            "genomic_sequences": {contig: "".join(seq)},
+        }
+        path = tmp_path / "ref.json"
+        path.write_text(json.dumps(payload))
+        return str(path)
+
+    def test_full_span_revcomp_in_cis_merges_to_inv(self, tmp_path) -> None:
+        # Cis allele over GG at 1092-1093 → full-span inv.
+        ref = self._make_reference_json(tmp_path, "NC_000001.11", 1092, "GG")
+        normalizer = ferro_hgvs.Normalizer(reference_json=ref)
+        result = normalizer.normalize("NC_000001.11:g.[1092G>C;1093G>C]")
+        assert result == "NC_000001.11:g.1092_1093inv"
+
+    def test_sub_span_revcomp_splits_into_inv_plus_sub(self, tmp_path) -> None:
+        # Headline issue #160 case: cis allele over TCC at 1150-1152
+        # decomposes the merged delinsGAG into [1150_1151inv;1152C>G].
+        ref = self._make_reference_json(tmp_path, "NC_000001.11", 1150, "TCC")
+        normalizer = ferro_hgvs.Normalizer(reference_json=ref)
+        result = normalizer.normalize("NC_000001.11:g.[1150T>G;1151C>A;1152C>G]")
+        assert result == "NC_000001.11:g.[1150_1151inv;1152C>G]"
+
+    def test_user_typed_delins_with_inv_subspan_splits_symmetric(self, tmp_path) -> None:
+        # User-typed `g.1150_1152delinsGAG` produces the same canonical
+        # form as the cis-allele input — the rule depends only on
+        # (ref, position, alt), not input shape.
+        ref = self._make_reference_json(tmp_path, "NC_000001.11", 1150, "TCC")
+        normalizer = ferro_hgvs.Normalizer(reference_json=ref)
+        result = normalizer.normalize("NC_000001.11:g.1150_1152delinsGAG")
+        assert result == "NC_000001.11:g.[1150_1151inv;1152C>G]"
+
+    def test_cds_full_span_revcomp_in_cis_merges_to_inv(self) -> None:
+        # NM_000088.3 c.9-10 = "GG" (in the bundled mock); revcomp = "CC".
+        # Cis allele merges to delinsCC then canonicalizes to inv.
+        result = ferro_hgvs.normalize("NM_000088.3:c.[9G>C;10G>C]")
+        assert result == "NM_000088.3:c.9_10inv"
+
+    def test_cds_sub_span_revcomp_splits_into_inv_plus_sub(self) -> None:
+        # NM_000088.3 c.13-15 = "CTG"; revcomp(CT)=AG → inv at 13-14;
+        # 15G>T stays separate.
+        result = ferro_hgvs.normalize("NM_000088.3:c.[13C>A;14T>G;15G>T]")
+        assert result == "NM_000088.3:c.[13_14inv;15G>T]"
+
+    def test_rna_full_span_revcomp_in_cis_merges_to_inv(self) -> None:
+        # NM_000088.3 r.9-10 over "GG" → revcomp "CC" → r.9_10inv.
+        # Lower-case bases per HGVS r. spec.
+        result = ferro_hgvs.normalize("NM_000088.3:r.[9g>c;10g>c]")
+        assert result == "NM_000088.3:r.9_10inv"
+
+    def test_n_user_typed_delins_with_full_span_revcomp(self) -> None:
+        # Coordinate-system parity for n.: the n. allele syntax `[...]` isn't
+        # accepted by the parser, so cover the n. inv-split path via a
+        # user-typed delins. NM_000088.3 n.9-10 = "GG" (transcript bytes);
+        # revcomp = "CC" → n.9_10inv.
+        result = ferro_hgvs.normalize("NM_000088.3:n.9_10delinsCC")
+        assert result == "NM_000088.3:n.9_10inv"
+
+
 class TestNormalizeMergeConsecutive:
     """Smoke tests for HGVS-spec consecutive-edit merging via the Python binding."""
 

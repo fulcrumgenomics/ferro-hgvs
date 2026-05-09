@@ -32,17 +32,21 @@ pub mod validate;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
-use crate::hgvs::edit::NaEdit;
+use crate::hgvs::edit::{InsertedSequence, NaEdit};
 use crate::hgvs::interval::Interval;
-use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
+use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
-use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, LocEdit, TxVariant};
+use crate::hgvs::uncertainty::Mu;
+use crate::hgvs::variant::{
+    AllelePhase, AlleleVariant, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant,
+    RnaVariant, TxVariant,
+};
 use crate::hgvs::HgvsVariant as HV;
 use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
-use rules::{canonicalize_edit, needs_normalization, should_canonicalize};
+use rules::{canonicalize_edit, needs_normalization, should_canonicalize, DelinsSubedit};
 use shuffle::shuffle;
 
 /// Check if a CDS position has an unknown (?) offset sentinel value
@@ -229,7 +233,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // must round-trip with the Allele wrapper intact for programmatic callers
         // (Display already renders singletons in bare form regardless).
         let original_len = normalized.len();
-        let mut merged = merge::merge_consecutive_edits(normalized, allele.phase, &self.provider);
+        let merged_raw = merge::merge_consecutive_edits(normalized, allele.phase, &self.provider);
+
+        // Issue #160: any merged delins (or pre-existing delins that survived
+        // merge unchanged) may decompose into [..., inv, ...] when an inv-
+        // eligible sub-span is present. Run the split per merged variant; the
+        // helper is a no-op for non-Delins variants and for Delins without an
+        // inv sub-span. Only applies in cis phase — trans alleles aren't
+        // collapsible in the first place.
+        let mut merged: Vec<HgvsVariant> = Vec::with_capacity(merged_raw.len());
+        if allele.phase == crate::hgvs::variant::AllelePhase::Cis {
+            for v in merged_raw {
+                merged.extend(self.split_inv_for_variant(v));
+            }
+        } else {
+            merged = merged_raw;
+        }
 
         let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
             && original_len > 1
@@ -421,7 +440,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         };
 
-        Ok((HV::Genome(new_variant), warnings))
+        // Issue #160: a normalized Delins may decompose into [..., inv, ...]
+        // when an inv-eligible sub-span is present. Returns the variant
+        // unchanged for non-Delins or no-decomposition cases.
+        let split = self.apply_inv_split(HV::Genome(new_variant));
+        Ok((wrap_allele_if_split(split), warnings))
     }
 
     /// Normalize a CDS variant
@@ -520,7 +543,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
         };
 
-        Ok((HV::Cds(new_variant), warnings))
+        // Issue #160 inv sub-span split (CDS-proper positions only).
+        let split = self.apply_inv_split(HV::Cds(new_variant));
+        Ok((wrap_allele_if_split(split), warnings))
     }
 
     /// Normalize a transcript variant
@@ -599,7 +624,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         };
 
-        Ok((HV::Tx(new_variant), warnings))
+        // Issue #160 inv sub-span split.
+        let split = self.apply_inv_split(HV::Tx(new_variant));
+        Ok((wrap_allele_if_split(split), warnings))
     }
 
     /// Normalize a protein variant
@@ -910,7 +937,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         };
 
-        Ok((HV::Rna(new_variant), warnings))
+        // Issue #160 inv sub-span split (T/U-equivalent comparison).
+        let split = self.apply_inv_split(HV::Rna(new_variant));
+        Ok((wrap_allele_if_split(split), warnings))
     }
 
     /// Normalize a mitochondrial variant
@@ -918,9 +947,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &crate::hgvs::variant::MtVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        // MT variants are similar to genomic
-        // For now, return as-is (could implement circular genome handling)
-        Ok((HV::Mt(variant.clone()), vec![]))
+        // MT variants are similar to genomic. Full window-based normalization
+        // and the per-edit canonicalization that runs inside normalize_na_edit
+        // for g./c./n./r. is not yet wired up for m. (would also need circular
+        // genome handling) — that gap is pre-existing and out of scope here.
+        // Issue #160 only requires that a delins whose ref/alt span contains
+        // an inv-eligible sub-span decomposes for m. the same way it does for
+        // g.; route through apply_inv_split so user-typed and merged Mt
+        // delins both reach the split path.
+        let split = self.apply_inv_split(HV::Mt(variant.clone()));
+        Ok((wrap_allele_if_split(split), vec![]))
     }
 
     /// Normalize an intronic CDS variant
@@ -2270,6 +2306,189 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         }
     }
+
+    /// Issue #160 inv sub-span split for a single normalized variant.
+    /// Coord-system-agnostic: handles `g.`, `m.`, `c.` (CDS-proper positions
+    /// only), `n.`, and `r.`. Fetches the per-coord-system reference window
+    /// internally, calls `decompose_delins_inv`, and rebuilds N variants when
+    /// the decomposition fires. Returns `vec![variant]` if the variant
+    /// doesn't decompose (non-Delins, complex location, no provider data,
+    /// no inv sub-span).
+    ///
+    /// Position math: `decompose_delins_inv` returns 0-indexed offsets into
+    /// the fetched `ref_bytes` slice. `ref_bytes[0]` corresponds to the
+    /// variant's HGVS start position, so absolute HGVS pos = `hgvs_start +
+    /// offset`.
+    ///
+    /// RNA `r.` variants have `U` bases in the alt while transcript ref bytes
+    /// are `T`. Both slices are normalized to `T` before comparison so the
+    /// rev-comp scan works uniformly; the emitted `Substitution` sub-edits
+    /// preserve the original alt `Base` (which may be `Base::U`).
+    fn apply_inv_split(&self, variant: HgvsVariant) -> Vec<HgvsVariant> {
+        let Some((hgvs_start, hgvs_end, alt_bytes, ref_bytes)) =
+            self.fetch_ref_for_inv_split(&variant)
+        else {
+            return vec![variant];
+        };
+        let n = ref_bytes.len();
+        debug_assert_eq!(
+            n,
+            (hgvs_end - hgvs_start + 1) as usize,
+            "ref_bytes length must match HGVS interval span"
+        );
+        let ref_norm = normalize_t_u(&ref_bytes);
+        let alt_norm = normalize_t_u(&alt_bytes);
+        let Some(subedits) = rules::decompose_delins_inv(&ref_norm, 0, n, &alt_norm) else {
+            return vec![variant];
+        };
+        // Substitution sub-edits inherit `alt_norm` bytes (T-form) from
+        // decompose_delins_inv, but the user's literal alt may have been U
+        // (r. inputs). Re-derive the substitution `alternative` from the
+        // pre-normalized `alt_bytes` so r. variants render `g>u` instead of
+        // a silently coerced `g>t`. The position field is a 0-indexed offset
+        // into the same window passed to decompose_delins_inv, so it indexes
+        // alt_bytes directly.
+        let subedits = subedits
+            .into_iter()
+            .map(|se| match se {
+                rules::DelinsSubedit::Substitution {
+                    position,
+                    reference,
+                    alternative,
+                } => {
+                    let alt = crate::hgvs::edit::Base::from_char(alt_bytes[position] as char)
+                        .unwrap_or(alternative);
+                    rules::DelinsSubedit::Substitution {
+                        position,
+                        reference,
+                        alternative: alt,
+                    }
+                }
+                other => other,
+            })
+            .collect();
+        build_split_variants(&variant, subedits, hgvs_start)
+    }
+
+    /// Per-coord-system extraction of `(hgvs_start, hgvs_end, alt_bytes,
+    /// ref_bytes)` for inv-split. Returns `None` when the variant is not a
+    /// single-Delins at simple positions, or when the provider can't supply
+    /// the ref window.
+    ///
+    /// The `ref_bytes` slice is sized exactly to the variant's HGVS interval
+    /// (`hgvs_end - hgvs_start + 1` bytes), with `ref_bytes[0]` aligned to
+    /// HGVS pos `hgvs_start`. This invariant lets the caller use a uniform
+    /// `hgvs_pos = hgvs_start + offset` formula regardless of coord system.
+    fn fetch_ref_for_inv_split(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Option<(u64, u64, Vec<u8>, Vec<u8>)> {
+        let (hgvs_start, hgvs_end, alt) = extract_simple_delins(variant)?;
+        let ref_bytes = match variant {
+            HgvsVariant::Genome(g) => self
+                .provider
+                // get_sequence is 0-based half-open: [hgvs_start - 1, hgvs_end).
+                .get_sequence(
+                    &g.accession.transcript_accession(),
+                    hgvs_start - 1,
+                    hgvs_end,
+                )
+                .ok()?
+                .into_bytes(),
+            HgvsVariant::Mt(m) => self
+                .provider
+                .get_sequence(
+                    &m.accession.transcript_accession(),
+                    hgvs_start - 1,
+                    hgvs_end,
+                )
+                .ok()?
+                .into_bytes(),
+            HgvsVariant::Cds(c) => {
+                // CDS pos N → 1-based tx pos = cds_start + N - 1.
+                // 0-based tx slice = [cds_start + N - 2, cds_start + end - 1).
+                let tx = self
+                    .provider
+                    .get_transcript(&c.accession.transcript_accession())
+                    .ok()?;
+                let cds_start = tx.cds_start?;
+                let s = cds_start.checked_add(hgvs_start)?.checked_sub(2)? as usize;
+                let e = cds_start.checked_add(hgvs_end)?.checked_sub(1)? as usize;
+                let bytes = tx.sequence.as_bytes();
+                if e > bytes.len() || s >= e {
+                    return None;
+                }
+                bytes[s..e].to_vec()
+            }
+            HgvsVariant::Tx(t) => {
+                let tx = self
+                    .provider
+                    .get_transcript(&t.accession.transcript_accession())
+                    .ok()?;
+                let s = (hgvs_start - 1) as usize;
+                let e = hgvs_end as usize;
+                let bytes = tx.sequence.as_bytes();
+                if e > bytes.len() || s >= e {
+                    return None;
+                }
+                bytes[s..e].to_vec()
+            }
+            HgvsVariant::Rna(r) => {
+                let tx = self
+                    .provider
+                    .get_transcript(&r.accession.transcript_accession())
+                    .ok()?;
+                let s = (hgvs_start - 1) as usize;
+                let e = hgvs_end as usize;
+                let bytes = tx.sequence.as_bytes();
+                if e > bytes.len() || s >= e {
+                    return None;
+                }
+                bytes[s..e].to_vec()
+            }
+            _ => return None,
+        };
+        Some((hgvs_start, hgvs_end, alt, ref_bytes))
+    }
+
+    /// Issue #160 post-merge canonicalization for a single variant. Used by
+    /// the cis-allele merge path; `normalize_allele` applies this per merged
+    /// variant. Conservatively returns `vec![v]` for variants the helper
+    /// can't process.
+    ///
+    /// Two spec rules are folded together by re-running normalization on the
+    /// merged variant:
+    /// - Full-span canonicalization (identity / dup / sub / del / ins /
+    ///   full-span inv with outer-pair shortening) handled by
+    ///   `canonicalize_delins` inside `normalize_na_edit`.
+    /// - Sub-span inv decomposition (the issue #160 case) handled by
+    ///   `apply_inv_split` wired into each per-coord-system `normalize_*`.
+    ///
+    /// If the result is an `HgvsVariant::Allele` (sub-span split fired),
+    /// unwrap its inner variants so they flatten into the outer cis-allele
+    /// list rather than nesting.
+    fn split_inv_for_variant(&self, v: HgvsVariant) -> Vec<HgvsVariant> {
+        if !matches!(
+            v,
+            HgvsVariant::Genome(_)
+                | HgvsVariant::Mt(_)
+                | HgvsVariant::Cds(_)
+                | HgvsVariant::Tx(_)
+                | HgvsVariant::Rna(_)
+        ) {
+            return vec![v];
+        }
+        if extract_simple_delins(&v).is_none() {
+            return vec![v];
+        }
+        match self.normalize_with_warnings(&v) {
+            Ok(r) => match r.result {
+                HgvsVariant::Allele(a) => a.variants,
+                other => vec![other],
+            },
+            Err(_) => vec![v],
+        }
+    }
 }
 
 /// Flip a fetched intronic genomic-strand window into transcript-view
@@ -2317,6 +2536,251 @@ fn unflip_intronic_positions(
         (seq_len - rel_end + 1, seq_len - rel_start + 1)
     } else {
         (rel_start, rel_end)
+    }
+}
+
+// =============================================================================
+// Issue #160: inv sub-span split helpers
+// =============================================================================
+//
+// After `normalize_na_edit` (or `merge_consecutive_edits` for cis alleles)
+// produces a Delins variant, we may discover the delins span actually contains
+// an `inv`-eligible sub-span. The HGVS spec puts `inv` higher than `delins`
+// in the edit-priority order, so the canonical form is to split the delins
+// into a sequence of [..., inv, ...] sub-edits and wrap them back in a cis
+// allele.
+//
+// The split is implemented as a post-pass over an already-built variant. It
+// fetches a reference window via the provider, calls
+// `rules::decompose_delins_inv`, and rebuilds N variants when the
+// decomposition fires. For variants that don't decompose (most cases), the
+// helper returns `vec![input]` and is effectively a no-op.
+
+/// Per-coord-system-aware extraction of `(hgvs_start, hgvs_end, alt_bytes)`
+/// from a variant whose edit is a literal `Delins` at simple positions
+/// (no offsets, no uncertainty). Returns `None` for any variant shape that
+/// can't be decomposed by the inv-split rule (non-Delins, intronic, uncertain
+/// boundary, non-literal insert, etc.).
+fn extract_simple_delins(variant: &HgvsVariant) -> Option<(u64, u64, Vec<u8>)> {
+    let (start, end, edit) = match variant {
+        HgvsVariant::Genome(v) => simple_genome_loc_edit(&v.loc_edit)?,
+        HgvsVariant::Cds(v) => simple_cds_loc_edit(&v.loc_edit)?,
+        HgvsVariant::Tx(v) => simple_tx_loc_edit(&v.loc_edit)?,
+        HgvsVariant::Rna(v) => simple_rna_loc_edit(&v.loc_edit)?,
+        HgvsVariant::Mt(v) => simple_genome_loc_edit(&v.loc_edit)?,
+        _ => return None,
+    };
+    let NaEdit::Delins { sequence } = edit else {
+        return None;
+    };
+    let InsertedSequence::Literal(seq) = sequence else {
+        return None;
+    };
+    let alt: Vec<u8> = seq.bases().iter().map(|b| b.to_u8()).collect();
+    Some((start, end, alt))
+}
+
+fn simple_genome_loc_edit(
+    le: &LocEdit<Interval<GenomePos>, NaEdit>,
+) -> Option<(u64, u64, &NaEdit)> {
+    let edit = le.edit.inner()?;
+    let s = simple_genome_pos(le.location.start.as_single()?)?;
+    let e = simple_genome_pos(le.location.end.as_single()?)?;
+    Some((s, e, edit))
+}
+fn simple_genome_pos(mu: &Mu<GenomePos>) -> Option<u64> {
+    let Mu::Certain(p) = mu else { return None };
+    if p.is_special() || p.offset.is_some() {
+        return None;
+    }
+    Some(p.base)
+}
+
+fn simple_cds_loc_edit(le: &LocEdit<Interval<CdsPos>, NaEdit>) -> Option<(u64, u64, &NaEdit)> {
+    let edit = le.edit.inner()?;
+    // Only handle simple positive CDS positions (no UTR, no intronic, no
+    // uncertainty). UTR delins decomposition would need its own coord-axis
+    // logic and is out of scope for this fix.
+    let s = simple_cds_pos(le.location.start.as_single()?)?;
+    let e = simple_cds_pos(le.location.end.as_single()?)?;
+    Some((s, e, edit))
+}
+fn simple_cds_pos(mu: &Mu<CdsPos>) -> Option<u64> {
+    let Mu::Certain(p) = mu else { return None };
+    if p.is_unknown() || p.is_intronic() || p.is_3utr() || p.base <= 0 {
+        return None;
+    }
+    Some(p.base as u64)
+}
+
+fn simple_tx_loc_edit(le: &LocEdit<Interval<TxPos>, NaEdit>) -> Option<(u64, u64, &NaEdit)> {
+    let edit = le.edit.inner()?;
+    let s = simple_tx_pos(le.location.start.as_single()?)?;
+    let e = simple_tx_pos(le.location.end.as_single()?)?;
+    Some((s, e, edit))
+}
+fn simple_tx_pos(mu: &Mu<TxPos>) -> Option<u64> {
+    let Mu::Certain(p) = mu else { return None };
+    if p.is_intronic() || p.is_downstream() || p.base <= 0 {
+        return None;
+    }
+    Some(p.base as u64)
+}
+
+fn simple_rna_loc_edit(le: &LocEdit<Interval<RnaPos>, NaEdit>) -> Option<(u64, u64, &NaEdit)> {
+    let edit = le.edit.inner()?;
+    let s = simple_rna_pos(le.location.start.as_single()?)?;
+    let e = simple_rna_pos(le.location.end.as_single()?)?;
+    Some((s, e, edit))
+}
+fn simple_rna_pos(mu: &Mu<RnaPos>) -> Option<u64> {
+    let Mu::Certain(p) = mu else { return None };
+    if p.is_intronic() || p.is_3utr() || p.base <= 0 {
+        return None;
+    }
+    Some(p.base as u64)
+}
+
+/// Build a single HgvsVariant matching `template`'s coord-system kind /
+/// accession / gene_symbol, with a new `[start_1based, end_1based]` location
+/// and the given edit. Used by `build_split_variants` to spread the output
+/// of `decompose_delins_inv` back into a sequence of HgvsVariants.
+fn build_variant_at(
+    template: &HgvsVariant,
+    start_1based: u64,
+    end_1based: u64,
+    edit: NaEdit,
+) -> HgvsVariant {
+    match template {
+        HgvsVariant::Genome(g) => HgvsVariant::Genome(GenomeVariant {
+            accession: g.accession.clone(),
+            gene_symbol: g.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(GenomePos::new(start_1based), GenomePos::new(end_1based)),
+                edit,
+            ),
+        }),
+        HgvsVariant::Cds(c) => HgvsVariant::Cds(CdsVariant {
+            accession: c.accession.clone(),
+            gene_symbol: c.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(
+                    CdsPos::new(start_1based as i64),
+                    CdsPos::new(end_1based as i64),
+                ),
+                edit,
+            ),
+        }),
+        HgvsVariant::Tx(t) => HgvsVariant::Tx(TxVariant {
+            accession: t.accession.clone(),
+            gene_symbol: t.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(
+                    TxPos::new(start_1based as i64),
+                    TxPos::new(end_1based as i64),
+                ),
+                edit,
+            ),
+        }),
+        HgvsVariant::Rna(r) => HgvsVariant::Rna(RnaVariant {
+            accession: r.accession.clone(),
+            gene_symbol: r.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(
+                    RnaPos::new(start_1based as i64),
+                    RnaPos::new(end_1based as i64),
+                ),
+                edit,
+            ),
+        }),
+        HgvsVariant::Mt(m) => HgvsVariant::Mt(MtVariant {
+            accession: m.accession.clone(),
+            gene_symbol: m.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(GenomePos::new(start_1based), GenomePos::new(end_1based)),
+                edit,
+            ),
+        }),
+        _ => unreachable!("build_variant_at called with non-NaEdit variant kind"),
+    }
+}
+
+/// Build N HgvsVariants from a Vec<DelinsSubedit>. Position offsets in the
+/// subedits are 0-indexed into the (per-variant-sized) ref slice; absolute
+/// 1-based HGVS positions are recovered as `offset + hgvs_start`, where
+/// `hgvs_start` is the variant's HGVS start position.
+fn build_split_variants(
+    template: &HgvsVariant,
+    subedits: Vec<DelinsSubedit>,
+    hgvs_start: u64,
+) -> Vec<HgvsVariant> {
+    let abs = |idx: usize| -> u64 { idx as u64 + hgvs_start };
+
+    subedits
+        .into_iter()
+        .filter_map(|se| match se {
+            DelinsSubedit::Substitution {
+                position,
+                reference,
+                alternative,
+            } => {
+                let p = abs(position);
+                Some(build_variant_at(
+                    template,
+                    p,
+                    p,
+                    NaEdit::Substitution {
+                        reference,
+                        alternative,
+                    },
+                ))
+            }
+            DelinsSubedit::Inversion { start, end } => {
+                // Half-open 0-indexed [start, end) of length L=end-start.
+                // HGVS inclusive interval covers L bases starting at
+                // abs(start) and ending at abs(start)+L-1 = abs(end-1).
+                let s = abs(start);
+                let e = abs(end) - 1;
+                Some(build_variant_at(
+                    template,
+                    s,
+                    e,
+                    NaEdit::Inversion {
+                        sequence: None,
+                        length: None,
+                    },
+                ))
+            }
+            // Drop IdentityAt: an unchanged base is not an edit, so emitting
+            // a `pos=` sub-variant would clutter the split allele. Both the
+            // codon-frame-merge interior identity (issue #79) and the outer
+            // bases absorbed by `shorten_inversion` map to IdentityAt.
+            DelinsSubedit::IdentityAt { .. } => None,
+        })
+        .collect()
+}
+
+/// Normalize DNA `T` and RNA `U` to a single byte (`T`) so byte-wise
+/// comparison works across coord systems. Used by `apply_inv_split` to make
+/// the rev-comp scan T/U-agnostic for `r.` variants whose alt bytes contain
+/// `U` while the transcript ref contains `T`.
+fn normalize_t_u(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .map(|&b| match b {
+            b'U' => b'T',
+            b'u' => b't',
+            other => other,
+        })
+        .collect()
+}
+
+/// If `variants` has 1 element return it directly; if >1 wrap in a cis Allele.
+fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>) -> HgvsVariant {
+    debug_assert!(!variants.is_empty(), "wrap_allele_if_split: empty input");
+    if variants.len() == 1 {
+        variants.pop().unwrap()
+    } else {
+        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Cis))
     }
 }
 

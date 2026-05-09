@@ -548,6 +548,145 @@ pub enum DelinsCanonical {
     },
 }
 
+/// Per-position sub-edit kind emitted by `decompose_delins_inv` when a delins
+/// span contains an `inv`-eligible sub-span (issue #160).
+///
+/// All position fields are 0-indexed offsets into `ref_seq` (the same input
+/// passed to `decompose_delins_inv`), matching the convention used by
+/// `DelinsCanonical` so callers can convert with the same `index_to_hgvs_pos`
+/// helper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelinsSubedit {
+    /// 1-base substitution at `position`. Renders as `g.<position+1>R>A`.
+    Substitution {
+        position: usize,
+        reference: crate::hgvs::edit::Base,
+        alternative: crate::hgvs::edit::Base,
+    },
+    /// Inversion over half-open `[start, end)`; by construction `end > start + 1`.
+    Inversion { start: usize, end: usize },
+    /// 1-base identity at `position` — interior position unchanged from
+    /// reference (e.g. codon-frame merge synthesized middle base, issue #79).
+    /// Renders as `g.<position+1>=`.
+    IdentityAt { position: usize },
+}
+
+/// Decompose a delins into a sequence of canonical sub-edits when its span
+/// contains at least one inv-eligible sub-span (length >= 2, alt is the
+/// reverse-complement of ref). Returns `Some(edits)` only when the scan emits
+/// at least one `Inversion` element AND the resulting decomposition has more
+/// than one element.
+///
+/// Returns `None` for:
+/// - Inputs with no inv sub-span (so the caller can leave the delins as-is).
+/// - Inputs where the entire span is a single inversion (already handled by
+///   the existing full-span check in `canonicalize_delins`).
+/// - Unequal-length delins (`alt.len() != ref.len()`).
+/// - Length-1 inputs (substitution range, never a delins shape).
+/// - Inputs containing a non-IUPAC byte at a substitution position.
+///
+/// Algorithm (left-to-right longest-greedy scan over `start..end`):
+/// - At each position `i`, find the largest `j ∈ (i+2 ..= N)` with
+///   `alt[i..j] == revcomp(ref[i..j])`. If found: emit `Inversion(i, j)`,
+///   advance `i = j`.
+/// - Else if `alt[i] != ref[i]`: emit `Substitution(i)`, advance `i += 1`.
+/// - Else (`alt[i] == ref[i]`): emit `IdentityAt(i)`, advance `i += 1`.
+///
+/// The "fire only when at least one Inversion is present" trigger preserves
+/// issue #79's codon-frame merge: a codon-frame-merged 3-base delins
+/// `[Sub; Identity; Sub]` cannot contain an inv (the synthesized middle base
+/// satisfies `alt[mid] == ref[mid]`, which is incompatible with revcomp at
+/// the boundary), so it stays as delins.
+pub fn decompose_delins_inv(
+    ref_seq: &[u8],
+    start: usize,
+    end: usize,
+    inserted_seq: &[u8],
+) -> Option<Vec<DelinsSubedit>> {
+    use crate::hgvs::edit::Base;
+
+    // Bounds + length precondition. Sub-span decomposition is only meaningful
+    // when alt and ref have the same length and the span has at least 2 bases.
+    if start >= end || end > ref_seq.len() {
+        return None;
+    }
+    let n = end - start;
+    if inserted_seq.len() != n || n < 2 {
+        return None;
+    }
+    let deleted = &ref_seq[start..end];
+
+    let mut emitted: Vec<DelinsSubedit> = Vec::new();
+    let mut has_inv = false;
+    let mut i = 0;
+    while i < n {
+        // Longest j in (i+2 ..= n) with alt[i..j] == revcomp(ref[i..j]) AND
+        // whose ref window does not collapse to identity under
+        // shorten_inversion (which peels complementary outer pairs). A
+        // candidate that fully collapses (e.g. palindromic ATAT) is skipped
+        // so the unchanged bases fall through to the IdentityAt branch
+        // instead of being emitted as a no-op inv. Track both the raw end
+        // (for advancing `i` past the consumed window — outer-pair bases that
+        // shorten away are unchanged so they need no emit) and the shortened
+        // [s..e) absolute span (for emission).
+        let mut longest: Option<(usize, usize, usize)> = None;
+        let mut j = i + 2;
+        while j <= n {
+            if is_revcomp(&deleted[i..j], &inserted_seq[i..j]) {
+                if let Some((s, e)) = shorten_inversion(ref_seq, start + i, start + j) {
+                    longest = Some((j, s, e));
+                }
+            }
+            j += 1;
+        }
+
+        if let Some((j, s, e)) = longest {
+            emitted.push(DelinsSubedit::Inversion { start: s, end: e });
+            has_inv = true;
+            i = j;
+        } else if deleted[i] != inserted_seq[i] {
+            // Substitution at this position. Bases must be IUPAC; non-IUPAC
+            // bytes cannot be expressed as `Base`, so abandon the whole
+            // decomposition (the caller will keep the delins as-is). Mirrors
+            // the `canonicalize_delins` 1-base substitution branch.
+            let r = Base::from_char(deleted[i] as char)?;
+            let a = Base::from_char(inserted_seq[i] as char)?;
+            emitted.push(DelinsSubedit::Substitution {
+                position: start + i,
+                reference: r,
+                alternative: a,
+            });
+            i += 1;
+        } else {
+            emitted.push(DelinsSubedit::IdentityAt {
+                position: start + i,
+            });
+            i += 1;
+        }
+    }
+
+    // Trigger: commit only if at least one Inversion was emitted AND the
+    // decomposition has more than one element. A single-Inversion result is
+    // the same shape that the existing full-span check in
+    // `canonicalize_delins` already produces, so there is no point splitting
+    // for it (returning None lets the caller keep the existing single-form
+    // path).
+    //
+    // TODO(#165): the `has_inv` gate restricts this function to the inv
+    // branch of the spec's edit-priority rule (sub > del > inv > dup > ins).
+    // The same priority rule implies a delins with two or more independent
+    // single-base mismatches (no rev-comp sub-span) should also decompose to
+    // [X>A; B>Y] under sub > delins. Issue #165 tracks loosening this trigger
+    // to fire on any decomposition with > 1 element; the function should
+    // probably be renamed to `decompose_delins` at that point. See also
+    // tracking issue #81 item A10.
+    if has_inv && emitted.len() >= 2 {
+        Some(emitted)
+    } else {
+        None
+    }
+}
+
 /// Classify a delins into its HGVS canonical form.
 ///
 /// Implements item A2 of issue #81 alongside the previously separate
@@ -2261,5 +2400,160 @@ mod tests {
             RepeatNormResult::Duplication { .. } => {}
             other => panic!("expected Duplication, got {:?}", other),
         }
+    }
+
+    // =========================================================================
+    // ISSUE #160: decompose_delins_inv tests
+    // =========================================================================
+
+    fn sub_at(position: usize, r: char, a: char) -> DelinsSubedit {
+        DelinsSubedit::Substitution {
+            position,
+            reference: crate::hgvs::edit::Base::from_char(r).unwrap(),
+            alternative: crate::hgvs::edit::Base::from_char(a).unwrap(),
+        }
+    }
+    fn inv_at(start: usize, end: usize) -> DelinsSubedit {
+        DelinsSubedit::Inversion { start, end }
+    }
+    fn ident_at(position: usize) -> DelinsSubedit {
+        DelinsSubedit::IdentityAt { position }
+    }
+
+    #[test]
+    fn decompose_inv_subspan_at_start() {
+        // ref=TCC, alt=GAG: positions 0-1 are inv (revcomp(TC)=GA), position
+        // 2 is sub C>G. Mirrors the issue #160 row-2 example.
+        let result = decompose_delins_inv(b"TCC", 0, 3, b"GAG");
+        assert_eq!(result, Some(vec![inv_at(0, 2), sub_at(2, 'C', 'G')]));
+    }
+
+    #[test]
+    fn decompose_inv_subspan_at_end() {
+        // ref=AAG, alt=GCT: position 0 is sub A>G, positions 1-2 are inv
+        // (revcomp(AG)=CT).
+        let result = decompose_delins_inv(b"AAG", 0, 3, b"GCT");
+        assert_eq!(result, Some(vec![sub_at(0, 'A', 'G'), inv_at(1, 3)]));
+    }
+
+    #[test]
+    fn decompose_full_span_inv_returns_none() {
+        // ref=GCT, alt=AGC: revcomp(GCT)=AGC, full span is inv. Single-
+        // element result with one Inversion → trigger doesn't fire (already
+        // handled by canonicalize_delins's full-span check).
+        let result = decompose_delins_inv(b"GCT", 0, 3, b"AGC");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_no_inv_returns_none() {
+        // ref=AT, alt=GC: no inv possible (revcomp(AT)=AT != GC).
+        let result = decompose_delins_inv(b"AT", 0, 2, b"GC");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_disjoint_inv_runs() {
+        // ref=AGACC, alt=CTTGG:
+        //   inv(0,2): revcomp(AG)=CT ✓
+        //   sub(2): A>T (no inv possible spanning here)
+        //   inv(3,5): revcomp(CC)=GG ✓
+        let result = decompose_delins_inv(b"AGACC", 0, 5, b"CTTGG");
+        assert_eq!(
+            result,
+            Some(vec![inv_at(0, 2), sub_at(2, 'A', 'T'), inv_at(3, 5)])
+        );
+    }
+
+    #[test]
+    fn decompose_codon_frame_merge_returns_none() {
+        // ref=TAG, alt=AAC: T>A at pos 0, identity at pos 1 (synthesized
+        // middle from issue #79), G>C at pos 2. No inv possible — issue #79
+        // codon-frame merge is preserved.
+        let result = decompose_delins_inv(b"TAG", 0, 3, b"AAC");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_complement_only_returns_none() {
+        // complement(AC)=TG matches at each position but isn't reversed.
+        // revcomp(AC)=GT != TG.
+        let result = decompose_delins_inv(b"AC", 0, 2, b"TG");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_reverse_only_returns_none() {
+        // reverse(AC)=CA matches but isn't complemented.
+        let result = decompose_delins_inv(b"AC", 0, 2, b"CA");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_unequal_length_returns_none() {
+        let result = decompose_delins_inv(b"AC", 0, 2, b"GTT");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_offset_start_propagates_position() {
+        // Same TCC -> GAG pattern but at offset 100. Positions in the result
+        // are 0-indexed offsets into the input ref_seq slice.
+        let mut seq = vec![b'A'; 200];
+        seq[100] = b'T';
+        seq[101] = b'C';
+        seq[102] = b'C';
+        let result = decompose_delins_inv(&seq, 100, 103, b"GAG");
+        assert_eq!(result, Some(vec![inv_at(100, 102), sub_at(102, 'C', 'G')]));
+    }
+
+    #[test]
+    fn decompose_palindromic_full_span_returns_none() {
+        // ref=GCTA, alt=TAGC: full-span inv (revcomp(GCTA)=TAGC). Single-
+        // element result — trigger doesn't fire.
+        let result = decompose_delins_inv(b"GCTA", 0, 4, b"TAGC");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_palindromic_inv_subspan_skipped() {
+        // ATATC -> ATATG: the ATAT prefix is its own revcomp (palindrome) but
+        // shorten_inversion collapses it to identity, so it must NOT be
+        // emitted as an inv. The trailing C>G is a single substitution; with
+        // no inv emitted, the trigger doesn't fire and we return None,
+        // letting the caller keep the (canonicalize_delins-trimmed) form.
+        let result = decompose_delins_inv(b"ATATC", 0, 5, b"ATATG");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn decompose_inv_subspan_shortened_outer_pair() {
+        // CTATGC -> CATAGG: revcomp(CTATG)=CATAG matches over [0..5], but
+        // outer C/G complement and shorten_inversion peels them off, leaving
+        // inv at [1..4] (TAT). The trailing C>G stays as a substitution.
+        let result = decompose_delins_inv(b"CTATGC", 0, 6, b"CATAGG");
+        assert_eq!(result, Some(vec![inv_at(1, 4), sub_at(5, 'C', 'G')]));
+    }
+
+    #[test]
+    fn decompose_inv_run_with_identity_in_middle() {
+        // Construct a 5-base pattern with inv at left, identity in middle,
+        // sub at right: ref=AGXCC, alt=CTXGT for some X where alt[2]==X.
+        // Pick X='A': ref=AGACC, alt=CTAGT
+        //   inv(0,2): revcomp(AG)=CT ✓
+        //   identity(2): A == A ✓
+        //   No inv (3,5): revcomp(CC)=GG, alt[3..5]=GT ✗
+        //   sub(3): C>G; sub(4): C>T.
+        // Verify the algorithm threads through: [Inv, Identity, Sub, Sub].
+        let result = decompose_delins_inv(b"AGACC", 0, 5, b"CTAGT");
+        assert_eq!(
+            result,
+            Some(vec![
+                inv_at(0, 2),
+                ident_at(2),
+                sub_at(3, 'C', 'G'),
+                sub_at(4, 'C', 'T'),
+            ])
+        );
     }
 }
