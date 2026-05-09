@@ -148,6 +148,53 @@ mod genomic {
         let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}del", &[6]));
         assert_eq!(result, hgvs("NC_TEST.1:g.{0}del", &[6]));
     }
+
+    // Issue #161: cis-allele bracket form whose merged 4-bp deletion is
+    // one rotation 5' of the spec-canonical 3'-most form. Per-variant
+    // shuffle does not move the individual delN bases; the 3'-rule must
+    // apply to the post-merge form.
+    //
+    // Core CCGTCTGAAGG: positions 3-6 (core) = G,T,C,T (the 4 bases the
+    // bracket allele deletes); core[7] = G matches core[3] = G, allowing
+    // exactly one 3' rotation of the merged window. core[8] = A then
+    // breaks the predicate and the loop terminates.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_4bp_del_shifts_one_rotation() {
+        let p = provider("CCGTCTGAAGG");
+        let input = hgvs(
+            "NC_TEST.1:g.[{0}delG;{1}delT;{2}delC;{3}delT]",
+            &[3, 4, 5, 6],
+        );
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}del", &[4, 7]));
+    }
+
+    // Issue #161, second example: a 2-bp del in cis-allele form whose
+    // merged window can shift exactly one position 3'.
+    //
+    // Core CCTGTAAGG: positions 3-4 (core) = T,G (the bracket allele
+    // deletes these two). core[5] = T matches core[3] = T, so the merged
+    // window rotates once 3' to positions 4-5; core[6] = A then breaks
+    // the predicate.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_2bp_del_shifts_one_rotation() {
+        let p = provider("CCTGTAAGG");
+        let input = hgvs("NC_TEST.1:g.[{0}delT;{1}delG]", &[3, 4]);
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}del", &[4, 5]));
+    }
+
+    // Issue #161 sanity guard: the canonical (non-bracket) form of the
+    // same merged deletion already normalizes correctly today. Locking it
+    // here ensures the post-merge re-normalize produces the same answer
+    // as the direct-form path.
+    #[rstest]
+    fn issue_161_canonical_form_4bp_del_matches_bracket_form() {
+        let p = provider("CCGTCTGAAGG");
+        let input = hgvs("NC_TEST.1:g.{0}_{1}del", &[3, 6]);
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}del", &[4, 7]));
+    }
 }
 
 mod cds_plus {
@@ -278,6 +325,18 @@ mod cds_plus {
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}del", &[19]));
         assert_eq!(result, hgvs("NM_TEST.1:c.{0}del", &[19]));
     }
+
+    // Issue #161: post-merge re-normalize on the c. path.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_4bp_del_shifts_one_rotation() {
+        let p = provider("CCGTCTGAAGGACGTACGT");
+        let input = hgvs(
+            "NM_TEST.1:c.[{0}delG;{1}delT;{2}delC;{3}delT]",
+            &[3, 4, 5, 6],
+        );
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}del", &[4, 7]));
+    }
 }
 
 mod cds_minus {
@@ -403,6 +462,18 @@ mod cds_minus {
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}del", &[19]));
         assert_eq!(result, hgvs("NM_TEST.1:c.{0}del", &[19]));
     }
+
+    // Issue #161: post-merge re-normalize on the c. minus-strand path.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_4bp_del_shifts_one_rotation() {
+        let p = provider("CCGTCTGAAGGACGTACGT");
+        let input = hgvs(
+            "NM_TEST.1:c.[{0}delG;{1}delT;{2}delC;{3}delT]",
+            &[3, 4, 5, 6],
+        );
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}del", &[4, 7]));
+    }
 }
 
 mod noncoding_plus {
@@ -520,6 +591,14 @@ mod noncoding_plus {
         let result = normalize_to_string(p, &hgvs("NR_TEST.1:n.{0}del", &[19]));
         assert_eq!(result, hgvs("NR_TEST.1:n.{0}del", &[19]));
     }
+
+    // Note on issue #161 coverage on the n. path: the parser does not
+    // (yet) accept `n.[...]` cis-allele bracket shorthand, so the
+    // bracket-then-merge code path can't be exercised through the parser
+    // here. The post-merge re-normalize fix lives at the allele dispatch
+    // and applies uniformly across coord systems; coverage for the
+    // bracket-form bug is locked on the g., c., and r. paths in this
+    // file.
 }
 
 mod noncoding_minus {
@@ -637,6 +716,8 @@ mod noncoding_minus {
         let result = normalize_to_string(p, &hgvs("NR_TEST.1:n.{0}del", &[19]));
         assert_eq!(result, hgvs("NR_TEST.1:n.{0}del", &[19]));
     }
+
+    // See comment in `noncoding_plus` on n.-path issue #161 coverage.
 }
 
 mod rna_plus {
@@ -759,6 +840,18 @@ mod rna_plus {
         let result = normalize_to_string(p, &hgvs("NR_TEST.1:r.{0}del", &[18]));
         assert_eq!(result, hgvs("NR_TEST.1:r.{0}del", &[18]));
     }
+
+    // Issue #161: post-merge re-normalize on the r. path.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_4bp_del_shifts_one_rotation() {
+        let p = provider("ccgucugaaggacguacgu");
+        let input = hgvs(
+            "NR_TEST.1:r.[{0}delg;{1}delu;{2}delc;{3}delu]",
+            &[3, 4, 5, 6],
+        );
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NR_TEST.1:r.{0}_{1}del", &[4, 7]));
+    }
 }
 
 mod rna_minus {
@@ -876,5 +969,17 @@ mod rna_minus {
         let p = provider("cguacguacguacgaaaa");
         let result = normalize_to_string(p, &hgvs("NR_TEST.1:r.{0}del", &[18]));
         assert_eq!(result, hgvs("NR_TEST.1:r.{0}del", &[18]));
+    }
+
+    // Issue #161: post-merge re-normalize on the r. minus-strand path.
+    #[rstest]
+    fn issue_161_bracket_cis_allele_4bp_del_shifts_one_rotation() {
+        let p = provider("ccgucugaaggacguacgu");
+        let input = hgvs(
+            "NR_TEST.1:r.[{0}delg;{1}delu;{2}delc;{3}delu]",
+            &[3, 4, 5, 6],
+        );
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, hgvs("NR_TEST.1:r.{0}_{1}del", &[4, 7]));
     }
 }
