@@ -7,63 +7,65 @@
 
 use ferro_hgvs::parse_hgvs;
 use flate2::read::GzDecoder;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::Read;
 use std::time::Instant;
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct CmrgFixture {
-    description: String,
-    source: String,
-    source_url: String,
-    reference: String,
-    version: String,
-    generated: String,
+// Slim deserialization shape: only the fields the test reads are
+// captured. `&'a str` borrows directly into the decompressed JSON
+// buffer (no per-string allocation; serde_json hands back slices
+// pointing into the buffer). Combined with `IgnoredAny` for unread
+// keys this avoids ~10M `String` allocations on the cmrg fixture.
+#[derive(Deserialize)]
+struct CmrgFixture<'a> {
     total_cmrg_genes: usize,
     genes_with_variants: usize,
-    genes_missing: usize,
-    total_test_cases: usize,
-    summary: serde_json::Value,
-    test_cases: Vec<CmrgCase>,
+    #[serde(borrow)]
+    test_cases: Vec<CmrgCase<'a>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct CmrgCase {
-    input: String,
-    #[serde(rename = "type")]
-    coord_type: String,
-    hgvs_type: String,
-    variation_id: String,
-    gene: String,
-    #[serde(default)]
-    assembly: Option<String>,
-    valid: bool,
+#[derive(Deserialize)]
+struct CmrgCase<'a> {
+    #[serde(borrow)]
+    input: &'a str,
+    #[serde(rename = "type", borrow)]
+    coord_type: &'a str,
 }
 
-fn load_fixture() -> Option<CmrgFixture> {
+fn load_fixture_bytes() -> Option<Vec<u8>> {
     let path = "tests/fixtures/validation/cmrg_genes_exhaustive.json.gz";
     if !std::path::Path::new(path).exists() {
         return None;
     }
+    // Decompress to an in-memory Vec, then deser via `from_slice` rather
+    // than `from_reader` over a streaming gzip pipeline. Empirically ~5x
+    // faster on this fixture (34s -> 7s in debug mode) — `from_slice`
+    // works against a contiguous byte slice and supports zero-copy
+    // borrowed `&str` deserialization. The transient ~1 GB buffer is
+    // fine on the CI runner (16 GB RAM).
     let file = File::open(path).expect("Failed to open cmrg_genes_exhaustive.json.gz");
-    let decoder = GzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-    Some(serde_json::from_reader(reader).expect("Failed to parse cmrg_genes_exhaustive.json.gz"))
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .expect("Failed to decompress cmrg_genes_exhaustive.json.gz");
+    Some(buf)
 }
 
 #[test]
 fn test_cmrg_exhaustive_benchmark() {
-    let fixture = match load_fixture() {
-        Some(f) => f,
+    let buf = match load_fixture_bytes() {
+        Some(b) => b,
         None => {
             eprintln!("Skipping: cmrg_genes_exhaustive.json not found");
             return;
         }
     };
+    let fixture: CmrgFixture<'_> =
+        serde_json::from_slice(&buf).expect("Failed to parse cmrg_genes_exhaustive.json.gz");
 
     let total = fixture.test_cases.len();
     eprintln!("\n========================================");
@@ -74,20 +76,29 @@ fn test_cmrg_exhaustive_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    let mut passed = 0;
-    let mut by_type: HashMap<String, (usize, usize)> = HashMap::new();
+    // Parse all cases (parallel with rayon when available — yields a ~4x
+    // wall-clock speedup on a 4 vCPU CI runner). Aggregate the per-coord-
+    // type counts serially after the parallel section.
+    #[cfg(feature = "parallel")]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .par_iter()
+        .map(|case| parse_hgvs(case.input).is_ok())
+        .collect();
+    #[cfg(not(feature = "parallel"))]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .iter()
+        .map(|case| parse_hgvs(case.input).is_ok())
+        .collect();
 
-    for (i, case) in fixture.test_cases.iter().enumerate() {
-        if i % 500000 == 0 && i > 0 {
-            let elapsed = start.elapsed();
-            let rate = i as f64 / elapsed.as_secs_f64();
-            eprintln!("  Progress: {}/{} ({:.0}/sec)", i, total, rate);
-        }
-
-        let result = parse_hgvs(&case.input);
-        let entry = by_type.entry(case.coord_type.clone()).or_insert((0, 0));
-
-        if result.is_ok() {
+    // Per-coord-type tally with `&str` keys borrowed from the buffer:
+    // there are ~3 distinct coord_types, so this stays a tiny map.
+    let mut passed = 0usize;
+    let mut by_type: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (case, ok) in fixture.test_cases.iter().zip(oks.iter()) {
+        let entry = by_type.entry(case.coord_type).or_insert((0, 0));
+        if *ok {
             passed += 1;
             entry.0 += 1;
         } else {

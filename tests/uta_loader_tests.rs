@@ -1,17 +1,20 @@
 //! Integration tests for UTA loader.
 //!
-//! These tests require:
-//! - Docker running
-//! - ferro-uta container available
-//! - Prepared ferro reference with cdot
+//! Tests gated on Docker/UTA-container/cdot are `#[ignore]`d. The
+//! always-on `--no-load-alignments` flag-help test parses the CLI
+//! in-process via `clap::CommandFactory`, avoiding the ~32s cost of
+//! spawning `cargo run --release` from inside a test.
 //!
-//! Run with: `cargo test --features benchmark --test uta_loader_tests -- --ignored`
+//! Run the ignored tests with:
+//!   cargo test --features benchmark --test uta_loader_tests -- --ignored
 
 #![cfg(feature = "benchmark")]
 
 use std::path::PathBuf;
 use std::process::Command;
 
+use clap::CommandFactory;
+use ferro_hgvs::benchmark::cli::Cli;
 use ferro_hgvs::benchmark::{load_cdot_alignments_to_uta, UtaLoadConfig, UtaLoadResult};
 
 /// Test that UTA load config defaults are correct.
@@ -66,25 +69,16 @@ fn test_load_cdot_alignments() {
 /// Test CLI --no-load-alignments flag is recognized.
 #[test]
 fn test_no_load_alignments_flag_help() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--release",
-            "--features",
-            "benchmark",
-            "--bin",
-            "ferro-benchmark",
-            "--",
-            "prepare",
-            "--help",
-        ])
-        .output()
-        .expect("Failed to run help");
+    let mut cmd = Cli::command();
+    let prepare = cmd
+        .find_subcommand_mut("prepare")
+        .expect("prepare subcommand should exist");
+    let help_text = prepare.render_long_help().to_string();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("--no-load-alignments"),
-        "Help should show --no-load-alignments flag"
+        help_text.contains("--no-load-alignments"),
+        "Help should show --no-load-alignments flag. Got:\n{}",
+        help_text
     );
 }
 

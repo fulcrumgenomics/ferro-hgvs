@@ -1,37 +1,30 @@
 //! Integration tests for network vs cache performance comparison
 //!
-//! These tests verify that the --allow-network flag works correctly and
-//! measure the performance difference between network and cached modes.
+//! The full network-vs-cache timing test below is `#[ignore]`d because it
+//! requires network access and a prepared mutalyzer cache. The two
+//! always-on tests (help-text + flag acceptance) parse the CLI in-process
+//! via `clap::CommandFactory` and `Cli::try_parse_from`, avoiding the
+//! ~170s-per-test cost of spawning `cargo run --release` from inside a
+//! test.
 //!
-//! These tests are ignored by default as they require:
-//! - Network access
-//! - Mutalyzer cache to be prepared
-//! - Significant time to run
-//!
-//! Run with: cargo test --features benchmark network_benchmark -- --ignored
+//! Run the ignored test with:
+//!   cargo test --features benchmark --test network_benchmark_tests -- --ignored
 
-use std::process::Command;
+#![cfg(feature = "benchmark")]
 
-/// Test that the normalize help shows the --allow-network flag
+use clap::{CommandFactory, Parser};
+use ferro_hgvs::benchmark::cli::Cli;
+
+/// The `normalize` subcommand's help text advertises `--allow-network` and
+/// explains its purpose.
 #[test]
-#[cfg(feature = "benchmark")]
 fn test_normalize_help_shows_allow_network_flag() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--release",
-            "--features",
-            "benchmark",
-            "--bin",
-            "ferro-benchmark",
-            "--",
-            "normalize",
-            "--help",
-        ])
-        .output()
-        .expect("Failed to run help command");
+    let mut cmd = Cli::command();
+    let normalize = cmd
+        .find_subcommand_mut("normalize")
+        .expect("normalize subcommand should exist");
+    let help_text = normalize.render_long_help().to_string();
 
-    let help_text = String::from_utf8_lossy(&output.stdout);
     assert!(
         help_text.contains("--allow-network"),
         "Help should show --allow-network flag. Got:\n{}",
@@ -44,43 +37,84 @@ fn test_normalize_help_shows_allow_network_flag() {
     );
 }
 
-/// Test that the normalize command accepts the --allow-network flag without error
+/// The CLI parser accepts `--allow-network` on the `normalize` subcommand
+/// without complaining about an unknown argument.
 #[test]
-#[cfg(feature = "benchmark")]
 fn test_normalize_accepts_allow_network_flag() {
-    // This test verifies that --allow-network is parsed correctly
-    // It will fail on "file not found" rather than "unknown argument"
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--release",
-            "--features",
-            "benchmark",
-            "--bin",
-            "ferro-benchmark",
-            "--",
-            "normalize",
-            "mutalyzer",
-            "-i",
-            "nonexistent_file_12345.txt",
-            "-o",
-            "output.json",
-            "--allow-network",
-        ])
-        .output()
-        .expect("Failed to run command");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // Should fail on file not found, not unknown argument
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "normalize",
+        "mutalyzer",
+        "-i",
+        "nonexistent_file_12345.txt",
+        "-o",
+        "output.json",
+        "--allow-network",
+    ]);
     assert!(
-        !stderr.contains("unexpected argument"),
-        "Command should accept --allow-network flag. Got:\n{}",
-        stderr
+        result.is_ok(),
+        "Parser should accept --allow-network on normalize. Got error:\n{}",
+        result.err().map(|e| e.to_string()).unwrap_or_default()
     );
+}
+
+/// `parse all ...` must be rejected at the CLI boundary — the runtime
+/// rejects it later, but tightening the parser keeps invalid commands
+/// from ever parsing.
+#[test]
+fn test_parse_rejects_all_tool() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "parse",
+        "all",
+        "-i",
+        "patterns.txt",
+        "-o",
+        "out.json",
+    ]);
     assert!(
-        !stderr.contains("error: Found argument '--allow-network'"),
-        "Command should accept --allow-network flag. Got:\n{}",
-        stderr
+        result.is_err(),
+        "Parser should reject 'all' on parse subcommand"
+    );
+}
+
+/// `--detailed` was a no-op on `generate summary` (destructured and
+/// dropped). The flag has been removed; the parser must now reject it.
+#[test]
+fn test_generate_summary_rejects_detailed_flag() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "generate",
+        "summary",
+        "--parsing",
+        "p.json",
+        "--normalization",
+        "n.json",
+        "-o",
+        "out.json",
+        "--detailed",
+    ]);
+    assert!(
+        result.is_err(),
+        "Parser should reject --detailed on generate summary"
+    );
+}
+
+/// `normalize all ...` must be rejected at the CLI boundary.
+#[test]
+fn test_normalize_rejects_all_tool() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "normalize",
+        "all",
+        "-i",
+        "patterns.txt",
+        "-o",
+        "out.json",
+    ]);
+    assert!(
+        result.is_err(),
+        "Parser should reject 'all' on normalize subcommand"
     );
 }
 
@@ -92,8 +126,8 @@ fn test_normalize_accepts_allow_network_flag() {
 /// - sample_100.txt to exist with test patterns
 #[test]
 #[ignore = "requires network access and prepared cache - run manually"]
-#[cfg(feature = "benchmark")]
 fn test_mutalyzer_network_slower_than_cache() {
+    use std::process::Command;
     use std::time::Instant;
     use tempfile::TempDir;
 
