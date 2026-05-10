@@ -13,8 +13,8 @@
       "correctly-rejected": 12,
       "diverges": 144,
       "false-acceptance": 22,
-      "parse-error": 209,
-      "preserved": 436
+      "parse-error": 204,
+      "preserved": 441
     },
     "by_coordinate_system": {
       "c": 298,
@@ -4551,18 +4551,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000001.11:g.123G>A(;)345del",
-      "current": "parse error: Parse error at position 21: Unexpected trailing characters: '(;)345del'",
-      "spec_expected": "NC_000001.11:g.123G>A(;)345del",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "syntax_yaml",
-      "source_paths": [
-        "docs/syntax.yaml"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000002.12::g.pter_8247756::NC_000011.10:g.15825273_cen_qter",
       "current": "parse error: Parse error at position 13: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found ':g.'",
       "spec_expected": "NC_000002.12::g.pter_8247756::NC_000011.10:g.15825273_cen_qter",
@@ -4667,18 +4655,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/duplication.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NG_012232.1:g.12G>T(;)13C>G",
-      "current": "parse error: Parse error at position 19: Unexpected trailing characters: '(;)13C>G'",
-      "spec_expected": "NG_012232.1:g.12G>T(;)13C>G",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/substitution.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -4952,6 +4928,17 @@
       "source_paths": [
         "docs/syntax.yaml",
         "tests/hgvs_spec_compliance_tests.rs (legacy)"
+      ]
+    },
+    {
+      "input": "NC_000001.11:g.123G>A(;)345del",
+      "current": "NC_000001.11:g.123G>A(;)345del",
+      "spec_expected": "NC_000001.11:g.123G>A(;)345del",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "syntax_yaml",
+      "source_paths": [
+        "docs/syntax.yaml"
       ]
     },
     {
@@ -5583,6 +5570,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/general.md"
+      ]
+    },
+    {
+      "input": "NG_012232.1:g.12G>T(;)13C>G",
+      "current": "NG_012232.1:g.12G>T(;)13C>G",
+      "spec_expected": "NG_012232.1:g.12G>T(;)13C>G",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/substitution.md"
       ]
     },
     {
@@ -6286,30 +6284,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
-      "current": "parse error: Parse error at position 24: Unexpected trailing characters: '(;)(Asn594del)'",
-      "spec_expected": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
-      "current": "parse error: Parse error at position 24: Unexpected trailing characters: '(;)(Ser68Arg)'",
-      "spec_expected": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_003997.1:p.(Ser73Arg)](;)[(Asn103del)",
       "current": "parse error: Parse error at position 24: Unexpected trailing characters: '](;)[(Asn103del)'",
       "spec_expected": "NP_003997.1:p.(Ser73Arg)](;)[(Asn103del)",
@@ -6536,19 +6510,6 @@
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.(Asn158Asp)(;)(Asn158Ile)",
-      "input_prefixed": "NP_003997.1:p.(Asn158Asp)(;)(Asn158Ile)",
-      "current": "parse error: Parse error at position 25: Unexpected trailing characters: '(;)(Asn158Ile)'",
-      "spec_expected": "NP_003997.1:p.(Asn158Asp)(;)(Asn158Ile)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -6874,6 +6835,28 @@
       "source_kind": "syntax_yaml",
       "source_paths": [
         "docs/syntax.yaml"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+      "current": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+      "spec_expected": "NP_003997.1:p.(Ser68Arg)(;)(Asn594del)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+      "current": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+      "spec_expected": "NP_003997.1:p.(Ser68Arg)(;)(Ser68Arg)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
       ]
     },
     {
@@ -7383,6 +7366,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/duplication.md"
+      ]
+    },
+    {
+      "input": "p.(Asn158Asp)(;)(Asn158Ile)",
+      "input_prefixed": "NP_003997.1:p.(Asn158Asp)(;)(Asn158Ile)",
+      "current": "NP_003997.1:p.(Asn158Asp)(;)(Asn158Ile)",
+      "spec_expected": "NP_003997.1:p.(Asn158Asp)(;)(Asn158Ile)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
       ]
     },
     {

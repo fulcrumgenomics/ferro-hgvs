@@ -383,22 +383,26 @@ fn audit_mt_negative_position_rejected_today() {
 //
 // Spec permits compound HGVS allele descriptions in cis (`[a;b]`),
 // trans (`[a];[b]`), and the homozygous shorthand `[a](;)`. Ferro's
-// parser accepts trans (`[a];[b]`) on `m.` (PR #146 / sibling C1);
-// cis and homozygous shorthand are still rejected. This is unrelated
-// to wraparound but is part of the F1 architectural surface: any plan
-// to render a pair of m. variants as a single cis allele still has to
-// clear this rejection. (Sibling F2 / PR #139 / #133 is aware.)
+// parser accepts trans (`[a];[b]`) on `m.` (PR #146 / sibling C1) and
+// cis (`[a;b]`) plus unknown-phase (`[a(;)b]`) on `m.` (PR #148 /
+// sibling C3, issue #123). The bracket-suffix homozygous shorthand
+// (`[a](;)`) is still rejected — it is a separate construct from the
+// bracketless unknown-phase form covered by #123.
 // -----------------------------------------------------------------------------
 
-/// Compound `m.[…;…]` (cis) is rejected today.
+/// Compound `m.[…;…]` (cis) parses today (PR #148 / issue #123) as an
+/// `AlleleVariant` in `Cis` phase.
 #[test]
-fn audit_mt_compound_cis_allele_rejected_today() {
+fn audit_mt_compound_cis_allele_accepted_today() {
     let input = "NC_012920.1:m.[100A>G;200T>C]";
-    assert!(
-        parse_hgvs(input).is_err(),
-        "PINNED: compound m. cis allele rejected today; F1 should \
-         reconsider as part of the m.-grammar surface."
-    );
+    let variant = parse_hgvs(input).expect("compound m. cis allele should parse");
+    let HgvsVariant::Allele(allele) = &variant else {
+        panic!("expected HgvsVariant::Allele, got {variant:?}");
+    };
+    assert_eq!(allele.phase, AllelePhase::Cis);
+    assert_eq!(allele.variants.len(), 2);
+    assert!(matches!(allele.variants[0], HgvsVariant::Mt(_)));
+    assert!(matches!(allele.variants[1], HgvsVariant::Mt(_)));
 }
 
 /// Compound `m.[…];[…]` (trans) parses today as an `AlleleVariant` in
