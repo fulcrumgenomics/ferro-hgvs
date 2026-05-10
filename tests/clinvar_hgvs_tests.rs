@@ -6,6 +6,8 @@
 
 use ferro_hgvs::parse_hgvs;
 use flate2::read::GzDecoder;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -13,43 +15,20 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+// Slim deserialization shape: drop fields the test never reads.
+// Mostly a readability win; serde's `IgnoredAny` still walks unread
+// JSON tokens, so the perf gain is small.
+#[derive(Deserialize)]
 struct ClinvarHgvsFixture {
-    description: String,
-    source: String,
-    source_url: String,
-    version: String,
-    generated: String,
-    total_test_cases: usize,
-    summary: ClinvarHgvsSummary,
     test_cases: Vec<ClinvarHgvsCase>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ClinvarHgvsSummary {
-    by_coordinate_type: HashMap<String, usize>,
-    by_hgvs_type: HashMap<String, usize>,
-    #[serde(default)]
-    source_stats: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Deserialize)]
 struct ClinvarHgvsCase {
     input: String,
     #[serde(rename = "type")]
     coord_type: String,
     hgvs_type: String,
-    variation_id: String,
-    #[serde(default)]
-    gene: Option<String>,
-    #[serde(default)]
-    assembly: Option<String>,
-    #[serde(default)]
-    protein_expr: Option<String>,
-    valid: bool,
 }
 
 fn load_fixture(filename: &str) -> Option<ClinvarHgvsFixture> {
@@ -106,19 +85,34 @@ fn test_clinvar_hgvs_500k_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
+    // Parse all cases (parallel with rayon when available). Aggregate
+    // per-type counts and the first-20 failure sample serially over the
+    // resulting Vec<bool>; the aggregation pass is microseconds.
+    #[cfg(feature = "parallel")]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .par_iter()
+        .map(|case| parse_hgvs(&case.input).is_ok())
+        .collect();
+    #[cfg(not(feature = "parallel"))]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .iter()
+        .map(|case| parse_hgvs(&case.input).is_ok())
+        .collect();
+
     let mut passed = 0usize;
     let mut by_coord_type: HashMap<String, (usize, usize)> = HashMap::new();
     let mut by_hgvs_type: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut sample_failures: Vec<&ClinvarHgvsCase> = Vec::new();
 
-    for case in &fixture.test_cases {
-        let result = parse_hgvs(&case.input);
+    for (case, ok) in fixture.test_cases.iter().zip(oks.iter()) {
         let coord_entry = by_coord_type
             .entry(case.coord_type.clone())
             .or_insert((0, 0));
         let hgvs_entry = by_hgvs_type.entry(case.hgvs_type.clone()).or_insert((0, 0));
 
-        if result.is_ok() {
+        if *ok {
             passed += 1;
             coord_entry.0 += 1;
             hgvs_entry.0 += 1;

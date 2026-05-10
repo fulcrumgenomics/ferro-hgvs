@@ -7,42 +7,31 @@
 
 use ferro_hgvs::parse_hgvs;
 use flate2::read::GzDecoder;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::time::Instant;
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+// Slim deserialization shape: drop fields the test never reads.
+// Mostly a readability win; serde's `IgnoredAny` still walks unread
+// JSON tokens, so the perf gain is small.
+#[derive(Deserialize)]
 struct ParaphaseFixture {
-    description: String,
-    source: String,
-    source_url: String,
-    version: String,
-    generated: String,
     total_target_genes: usize,
     genes_with_variants: usize,
-    genes_missing: usize,
-    total_test_cases: usize,
     gene_descriptions: HashMap<String, String>,
-    summary: serde_json::Value,
     test_cases: Vec<ParaphaseCase>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Deserialize)]
 struct ParaphaseCase {
     input: String,
     #[serde(rename = "type")]
     coord_type: String,
-    hgvs_type: String,
-    variation_id: String,
     gene: String,
-    challenge: String,
-    #[serde(default)]
-    assembly: Option<String>,
-    valid: bool,
 }
 
 fn load_fixture() -> Option<ParaphaseFixture> {
@@ -78,22 +67,29 @@ fn test_paraphase_exhaustive_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    let mut passed = 0;
+    // Parse all cases (parallel with rayon when available). Aggregate the
+    // per-coord-type and per-gene counts serially over the resulting
+    // Vec<bool>; the aggregation pass is microseconds.
+    #[cfg(feature = "parallel")]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .par_iter()
+        .map(|case| parse_hgvs(&case.input).is_ok())
+        .collect();
+    #[cfg(not(feature = "parallel"))]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .iter()
+        .map(|case| parse_hgvs(&case.input).is_ok())
+        .collect();
+
+    let mut passed = 0usize;
     let mut by_type: HashMap<String, (usize, usize)> = HashMap::new();
     let mut by_gene: HashMap<String, (usize, usize)> = HashMap::new();
-
-    for (i, case) in fixture.test_cases.iter().enumerate() {
-        if i % 100000 == 0 && i > 0 {
-            let elapsed = start.elapsed();
-            let rate = i as f64 / elapsed.as_secs_f64();
-            eprintln!("  Progress: {}/{} ({:.0}/sec)", i, total, rate);
-        }
-
-        let result = parse_hgvs(&case.input);
+    for (case, ok) in fixture.test_cases.iter().zip(oks.iter()) {
         let type_entry = by_type.entry(case.coord_type.clone()).or_insert((0, 0));
         let gene_entry = by_gene.entry(case.gene.clone()).or_insert((0, 0));
-
-        if result.is_ok() {
+        if *ok {
             passed += 1;
             type_entry.0 += 1;
             gene_entry.0 += 1;
