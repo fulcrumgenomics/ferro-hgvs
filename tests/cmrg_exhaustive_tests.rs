@@ -10,10 +10,17 @@ use flate2::read::GzDecoder;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::time::Instant;
+
+mod common;
+use common::failure_expectations::{enforce, FixtureCheck};
+
+const FAILURE_EXPECTATIONS_PATH: &str =
+    "tests/fixtures/validation/cmrg_genes_failure_expectations.json";
 
 // Slim deserialization shape: only the fields the test reads are
 // captured. `&'a str` borrows directly into the decompressed JSON
@@ -76,39 +83,46 @@ fn test_cmrg_exhaustive_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    // Parse all cases (parallel with rayon when available — yields a ~4x
-    // wall-clock speedup on a 4 vCPU CI runner). Aggregate the per-coord-
-    // type counts serially after the parallel section.
+    // Parse all cases (parallel with rayon when available). For each
+    // failure capture (input, error_string) so the per-input expectations
+    // framework can categorize it.
     #[cfg(feature = "parallel")]
-    let oks: Vec<bool> = fixture
+    let case_failures: Vec<(&str, String)> = fixture
         .test_cases
         .par_iter()
-        .map(|case| parse_hgvs(case.input).is_ok())
+        .filter_map(|case| {
+            parse_hgvs(case.input)
+                .err()
+                .map(|e| (case.input, e.to_string()))
+        })
         .collect();
     #[cfg(not(feature = "parallel"))]
-    let oks: Vec<bool> = fixture
+    let case_failures: Vec<(&str, String)> = fixture
         .test_cases
         .iter()
-        .map(|case| parse_hgvs(case.input).is_ok())
+        .filter_map(|case| {
+            parse_hgvs(case.input)
+                .err()
+                .map(|e| (case.input, e.to_string()))
+        })
         .collect();
 
-    // Per-coord-type tally with `&str` keys borrowed from the buffer:
-    // there are ~3 distinct coord_types, so this stays a tiny map.
-    let mut passed = 0usize;
-    let mut by_type: HashMap<&str, (usize, usize)> = HashMap::new();
-    for (case, ok) in fixture.test_cases.iter().zip(oks.iter()) {
-        let entry = by_type.entry(case.coord_type).or_insert((0, 0));
-        if *ok {
-            passed += 1;
-            entry.0 += 1;
-        } else {
-            entry.1 += 1;
-        }
-    }
-
+    let failures: BTreeMap<&str, String> = case_failures.into_iter().collect();
+    let passed = total - failures.len();
     let elapsed = start.elapsed();
     let rate = total as f64 / elapsed.as_secs_f64();
     let pass_rate = (passed as f64 / total as f64) * 100.0;
+
+    // Per-coord-type tally for diagnostic eprintln only.
+    let mut by_type: HashMap<&str, (usize, usize)> = HashMap::new();
+    for case in &fixture.test_cases {
+        let entry = by_type.entry(case.coord_type).or_insert((0, 0));
+        if failures.contains_key(case.input) {
+            entry.1 += 1;
+        } else {
+            entry.0 += 1;
+        }
+    }
 
     eprintln!("\nPerformance:");
     eprintln!("  Time: {:.2}s", elapsed.as_secs_f64());
@@ -126,10 +140,12 @@ fn test_cmrg_exhaustive_benchmark() {
 
     eprintln!("\n========================================\n");
 
-    // Benchmark assertion
-    assert!(
-        pass_rate > 99.0,
-        "CMRG exhaustive pass rate should be >99%, got {:.2}%",
-        pass_rate
+    enforce(
+        Path::new(FAILURE_EXPECTATIONS_PATH),
+        "UPDATE_FAILURE_EXPECTATIONS",
+        FixtureCheck {
+            total_inputs: total,
+            failures,
+        },
     );
 }

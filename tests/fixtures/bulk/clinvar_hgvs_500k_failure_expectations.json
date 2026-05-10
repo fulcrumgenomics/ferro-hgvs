@@ -1,0 +1,24 @@
+{
+  "kinds": {
+    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: '+'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: '+'"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'"
+    }
+  },
+  "expected_failures": {
+    "NC_000005.9:g.(?_13922436_13923774del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NC_000017.10:g.[(729319_882558)_(882998_?)del];[704262_704264[1]]": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'",
+    "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NP_000081.1:p.Gly333_Lys350del+": "Parse error at position <N>: Unexpected trailing characters: '+'"
+  }
+}
