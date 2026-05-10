@@ -84,6 +84,7 @@
 //! that pin "this fails today" must flip to "this succeeds with the
 //! expected canonical form" — that diff is the audit trail.
 
+use ferro_hgvs::hgvs::AllelePhase;
 use ferro_hgvs::python_helpers::get_indel_length;
 use ferro_hgvs::{hgvs_to_spdi_simple, parse_hgvs, HgvsVariant, MockProvider, Normalizer};
 
@@ -382,11 +383,11 @@ fn audit_mt_negative_position_rejected_today() {
 //
 // Spec permits compound HGVS allele descriptions in cis (`[a;b]`),
 // trans (`[a];[b]`), and the homozygous shorthand `[a](;)`. Ferro's
-// parser today rejects all three for the `m.` coordinate system.
-// This is unrelated to wraparound but is part of the F1 architectural
-// surface: any plan to support trans-heteroplasmy or to render a pair
-// of m. variants as a single allele has to clear this rejection.
-// (Sibling F2 / PR #139 / #133 is aware.)
+// parser accepts trans (`[a];[b]`) on `m.` (PR #146 / sibling C1);
+// cis and homozygous shorthand are still rejected. This is unrelated
+// to wraparound but is part of the F1 architectural surface: any plan
+// to render a pair of m. variants as a single cis allele still has to
+// clear this rejection. (Sibling F2 / PR #139 / #133 is aware.)
 // -----------------------------------------------------------------------------
 
 /// Compound `m.[…;…]` (cis) is rejected today.
@@ -400,14 +401,21 @@ fn audit_mt_compound_cis_allele_rejected_today() {
     );
 }
 
-/// Compound `m.[…];[…]` (trans) is rejected today.
+/// Compound `m.[…];[…]` (trans) parses today as an `AlleleVariant` in
+/// `Trans` phase. PR #146 (sibling C1) added the compact-prefix trans
+/// shorthand for `m.` to parallel `g.`/`n.`. Heteroplasmy is the
+/// canonical use case (different alleles on different mtDNA copies).
 #[test]
-fn audit_mt_compound_trans_allele_rejected_today() {
+fn audit_mt_compound_trans_allele_accepted_today() {
     let input = "NC_012920.1:m.[100A>G];[200T>C]";
-    assert!(
-        parse_hgvs(input).is_err(),
-        "PINNED: compound m. trans allele rejected today."
-    );
+    let variant = parse_hgvs(input).expect("compound m. trans allele should parse");
+    let HgvsVariant::Allele(allele) = &variant else {
+        panic!("expected HgvsVariant::Allele, got {variant:?}");
+    };
+    assert_eq!(allele.phase, AllelePhase::Trans);
+    assert_eq!(allele.variants.len(), 2);
+    assert!(matches!(allele.variants[0], HgvsVariant::Mt(_)));
+    assert!(matches!(allele.variants[1], HgvsVariant::Mt(_)));
 }
 
 /// `m.[…](;)` (homozygous shorthand) is rejected today.

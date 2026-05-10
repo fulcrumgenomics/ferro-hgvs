@@ -546,30 +546,17 @@ fn silent_eq_fast_path_matches_full_path() {
 }
 
 #[test]
-fn silent_eq_trans_allele_compact_form_drift_pinned_to_current_behavior() {
-    // CURRENT BEHAVIOR (drift; tracked by issue #83 in the v21.0 spec fixture
-    // at tests/fixtures/grammar/hgvs_spec_normalization.json:6390-6399 with
-    // `status: parse-error`):
+fn silent_eq_trans_allele_compact_form_round_trips() {
+    // PR #146 (sibling C1) added the compact-prefix protein trans-allele
+    // shorthand `ACC:p.[a];[b]`, fixing the parse-error drift previously
+    // tracked under issue #83.  Both expanded and compact forms now parse
+    // and the AST round-trips structurally:
     //
-    // The expanded trans-allele form `[ACC:p.Leu54=];[ACC:p.Arg97Trp]` parses
-    // and the resulting `AlleleVariant` Displays in the compact form
-    // `ACC:p.[Leu54=];[Arg97Trp]` — but ferro's own protein parser cannot
-    // re-parse that compact form today: it bails with "Unexpected trailing
-    // characters: ';[Arg97Trp]'".  This is not specific to silent `=`; the
-    // same drift hits any same-accession protein trans allele (e.g.
-    // `p.[Arg97Trp];[Leu54Pro]`), which is why the v21.0 fixture rows for
-    // `p.[(Ser68Arg)];[(Ser68Arg)]` and `p.[(Ser68Arg)];[?]` are also marked
-    // `parse-error`.
+    //   parse("[ACC:p.Leu54=];[ACC:p.Arg97Trp]")
+    //     == parse("ACC:p.[Leu54=];[Arg97Trp]")
     //
-    // We pin the drift here (rather than asserting the round-trip) so that:
-    //   1. D5's contract is locked in factually (no false-positive failure on
-    //      an existing #83 gap), and
-    //   2. when #83 is fixed and the compact form re-parses, this test fails
-    //      loudly and forces an update to assert structural round-trip.
-    //
-    // The cis form `ACC:p.[Leu54=;Arg97Trp]` (single bracket pair, semicolons
-    // inside) DOES round-trip cleanly today, and we pin that as the
-    // already-working contract below.
+    // The cis form `ACC:p.[Leu54=;Arg97Trp]` (single bracket pair,
+    // semicolons inside) was already working and is pinned alongside.
     let expanded = "[NP_000079.2:p.Leu54=];[NP_000079.2:p.Arg97Trp]";
     let parsed = parse_hgvs(expanded).unwrap_or_else(|e| panic!("parse({expanded:?}) failed: {e}"));
 
@@ -580,14 +567,16 @@ fn silent_eq_trans_allele_compact_form_drift_pinned_to_current_behavior() {
         "expanded trans allele did not Display as the compact form"
     );
 
-    // CURRENT BEHAVIOR: compact-form re-parse fails (issue #83).  When that
-    // is fixed, flip this to assert_eq!(parsed, reparse).
-    let reparse = parse_hgvs(compact);
-    assert!(
-        reparse.is_err(),
-        "compact-form trans allele unexpectedly re-parsed (issue #83 may be fixed; flip this \
-         assertion to round-trip): {:?}",
-        reparse.ok()
+    let reparsed = parse_hgvs(compact)
+        .unwrap_or_else(|e| panic!("parse({compact:?}) failed after PR #146: {e}"));
+    assert_eq!(
+        parsed, reparsed,
+        "compact-form trans allele AST drifted on re-parse"
+    );
+    assert_eq!(
+        format!("{}", reparsed),
+        compact,
+        "compact-form trans allele Display did not round-trip"
     );
 
     // Cis compact form does round-trip cleanly today; pin that contract too.
