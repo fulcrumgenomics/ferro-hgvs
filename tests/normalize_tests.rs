@@ -4384,3 +4384,218 @@ mod cigar_cds_mapping {
         // the 3bp insertion reducing the effective CDS span by 3)
     }
 }
+
+// =============================================================================
+// Issue #160: revcomp inv sub-span detection within compound variants
+// =============================================================================
+// HGVS spec: a delins span containing an inv-eligible sub-span (length >= 2,
+// alt = revcomp(ref)) decomposes to [..., inv, ...] per the edit-priority
+// rule (sub > del > inv > dup > ins). Applies to:
+//   - Cis allele inputs that merge into a delins, then decompose.
+//   - User-typed delins inputs whose post-trim range contains an inv sub-span.
+// Function: rules::decompose_delins_inv() in src/normalize/rules.rs
+mod issue_160_revcomp_inv_subspans {
+    use super::*;
+
+    /// Build a `MockProvider` whose contig sequence has `bases` placed at
+    /// 1-based positions starting at `start_1based`. The rest of the sequence
+    /// is filler `A`s long enough to cover the variant's normalization window.
+    fn provider_with_genomic(contig: &str, start_1based: usize, bases: &str) -> MockProvider {
+        let total = (start_1based + bases.len() + 200).max(2000);
+        let mut seq = vec![b'A'; total];
+        for (i, b) in bases.bytes().enumerate() {
+            seq[start_1based - 1 + i] = b;
+        }
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence(contig, String::from_utf8(seq).unwrap());
+        provider
+    }
+
+    fn normalize_to_string(provider: MockProvider, input: &str) -> String {
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs(input).unwrap_or_else(|_| panic!("Failed to parse: {}", input));
+        let normalized = normalizer
+            .normalize(&variant)
+            .unwrap_or_else(|_| panic!("Normalization failed for: {}", input));
+        format!("{}", normalized)
+    }
+
+    #[test]
+    fn full_span_revcomp_in_cis_merges_to_inv() {
+        // g.[1092G>C;1093G>C] over GG → g.1092_1093inv (full span is rev-comp).
+        // Closes the cis-allele post-merge full-span gap noted in issue #160.
+        let provider = provider_with_genomic("NC_000001.11", 1092, "GG");
+        let result = normalize_to_string(provider, "NC_000001.11:g.[1092G>C;1093G>C]");
+        assert_eq!(result, "NC_000001.11:g.1092_1093inv");
+    }
+
+    #[test]
+    fn sub_span_revcomp_splits_into_inv_plus_sub() {
+        // g.[1150T>G;1151C>A;1152C>G] over TCC → g.[1150_1151inv;1152C>G].
+        // The headline sub-span case from issue #160.
+        let provider = provider_with_genomic("NC_000001.11", 1150, "TCC");
+        let result = normalize_to_string(provider, "NC_000001.11:g.[1150T>G;1151C>A;1152C>G]");
+        assert_eq!(result, "NC_000001.11:g.[1150_1151inv;1152C>G]");
+    }
+
+    #[test]
+    fn user_typed_delins_with_inv_subspan_splits_symmetric() {
+        // User-typed g.1150_1152delinsGAG over TCC produces the same
+        // canonical form as the cis-allele input above. The canonical form
+        // depends on (ref, position, alt), not on input shape.
+        let provider = provider_with_genomic("NC_000001.11", 1150, "TCC");
+        let result = normalize_to_string(provider, "NC_000001.11:g.1150_1152delinsGAG");
+        assert_eq!(result, "NC_000001.11:g.[1150_1151inv;1152C>G]");
+    }
+
+    #[test]
+    fn three_nt_inv_run_flanked_by_subs() {
+        // ref bases at 1099-1103: T G C T C
+        //   1099 T>A : sub (alt[0]=A)
+        //   1100 G>A : start of inv (alt[1]=A)
+        //   1101 C>G : middle of inv (alt[2]=G)
+        //   1102 T>C : end of inv  (alt[3]=C; revcomp("GCT")="AGC")
+        //   1103 C>T : sub (alt[4]=T)
+        // Merged delins is `g.1099_1103delinsAAGCT`. revcomp("TGCTC")=
+        // "GAGCA" != "AAGCT", so the full span is NOT inv (avoiding the
+        // palindromic-full-span hazard). The inv-eligible sub-span is
+        // positions [1100..1102]; flanked subs at 1099 and 1103 stay
+        // separate.
+        let provider = provider_with_genomic("NC_000001.11", 1099, "TGCTC");
+        let result = normalize_to_string(
+            provider,
+            "NC_000001.11:g.[1099T>A;1100G>A;1101C>G;1102T>C;1103C>T]",
+        );
+        assert_eq!(result, "NC_000001.11:g.[1099T>A;1100_1102inv;1103C>T]");
+    }
+
+    #[test]
+    fn split_drops_identity_subedit_no_eq_emitted() {
+        // ref AGACC at 1300-1304, alt CTAGT decomposes to
+        // [Inv(0,2); Identity(2); Sub(3 C>G); Sub(4 C>T)] inside
+        // decompose_delins_inv. The IdentityAt sub-edit must NOT render as a
+        // spurious `g.1302=` variant — the split allele should contain
+        // exactly the 3 real edits, in order.
+        let provider = provider_with_genomic("NC_000001.11", 1300, "AGACC");
+        let result = normalize_to_string(provider, "NC_000001.11:g.1300_1304delinsCTAGT");
+        assert_eq!(result, "NC_000001.11:g.[1300_1301inv;1303C>G;1304C>T]");
+    }
+
+    #[test]
+    fn near_miss_complement_only_stays_delins() {
+        // ref AC at 1200-1201, alt TG = complement(AC) but NOT revcomp(AC).
+        // revcomp(AC) = GT != TG, so no inv. The cis allele merges to delins
+        // and stays delins.
+        let provider = provider_with_genomic("NC_000001.11", 1200, "AC");
+        let result = normalize_to_string(provider, "NC_000001.11:g.[1200A>T;1201C>G]");
+        assert_eq!(result, "NC_000001.11:g.1200_1201delinsTG");
+    }
+
+    #[test]
+    fn near_miss_reverse_only_stays_delins() {
+        // Companion to near_miss_complement_only: ref AC at 1200-1201, alt
+        // CA = reverse(AC) but NOT revcomp(AC). Both near-miss classes
+        // (complement-only and reverse-only) must stay delins.
+        let provider = provider_with_genomic("NC_000001.11", 1200, "AC");
+        let result = normalize_to_string(provider, "NC_000001.11:g.[1200A>C;1201C>A]");
+        assert_eq!(result, "NC_000001.11:g.1200_1201delinsCA");
+    }
+
+    #[test]
+    fn single_nt_complement_remains_substitution() {
+        // 1-nt complement is NOT inv per spec (inv requires N >= 2).
+        // Sanity guard against accidental inv-promotion of single SNVs.
+        let provider = provider_with_genomic("NC_000001.11", 1300, "A");
+        let result = normalize_to_string(provider, "NC_000001.11:g.1300A>T");
+        assert_eq!(result, "NC_000001.11:g.1300A>T");
+    }
+
+    // -------------------------------------------------------------------------
+    // CDS / n. / r. coverage. NM_000088.3's bundled mock sequence is
+    //   ATGCCCAAGGTGCTGCCCCAGATGCTGCCAGTGCTGCTGCTGCTGCTGCTGCTGCTGCTG
+    //   1234567890123456789012345678901234567890...
+    // cds_start = 1, so c. positions == tx (n.) positions for this transcript.
+    // Positions 9-10 = "GG", revcomp = "CC" (full-span inv test).
+    // Positions 13-14-15 = "CTG":
+    //   c.13C>A, c.14T>G, c.15G>T merges to delinsAGT;
+    //   full span revcomp(CTG)=CAG != AGT → no full inv;
+    //   sub-span [13..14]: revcomp(CT)=AG ✓ → inv;
+    //   pos 15 stays as separate sub.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn cds_full_span_revcomp_in_cis_merges_to_inv() {
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:c.[9G>C;10G>C]").unwrap();
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:c.9_10inv");
+    }
+
+    #[test]
+    fn cds_sub_span_revcomp_splits_into_inv_plus_sub() {
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:c.[13C>A;14T>G;15G>T]").unwrap();
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:c.[13_14inv;15G>T]");
+    }
+
+    #[test]
+    fn cds_user_typed_delins_with_inv_subspan_splits_symmetric() {
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:c.13_15delinsAGT").unwrap();
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:c.[13_14inv;15G>T]");
+    }
+
+    #[test]
+    fn tx_user_typed_delins_with_full_span_revcomp() {
+        // n. allele syntax `[...]` isn't supported by the parser, so cover
+        // the n. inv-split path via a user-typed delins instead. Use the
+        // NM_000088.3 sequence under an n. variant (positions 9-10 = "GG";
+        // revcomp = "CC" → n.9_10inv).
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:n.9_10delinsCC").expect("n. delins must parse");
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:n.9_10inv");
+    }
+
+    #[test]
+    fn rna_sub_span_split_preserves_u_in_substitution() {
+        // r. inputs use U; ref is in transcript T-form. The inv-split scan
+        // T/U-normalizes both sides for revcomp detection, but the emitted
+        // Substitution sub-edit must preserve the user-typed U so r. output
+        // doesn't silently coerce u→t. NM_000088.3 r.13_15 transcript is
+        // "cug"; input r.13_15delinsagu decomposes to [13_14inv; 15g>u].
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:r.13_15delinsagu").expect("r. delins parses");
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:r.[13_14inv;15g>u]");
+    }
+
+    #[test]
+    fn mt_user_typed_delins_with_inv_subspan_splits() {
+        // m. variants must reach apply_inv_split (issue #160). Mt has its own
+        // normalize_mt() which historically returned the variant unchanged;
+        // a user-typed Mt delins over a sub-span revcomp must still
+        // decompose to [..; inv; ..]. Mirrors the g. headline case.
+        let provider = provider_with_genomic("NC_012920.1", 1150, "TCC");
+        let result = normalize_to_string(provider, "NC_012920.1:m.1150_1152delinsGAG");
+        assert_eq!(result, "NC_012920.1:m.[1150_1151inv;1152C>G]");
+    }
+
+    #[test]
+    fn rna_full_span_revcomp_in_cis_merges_to_inv() {
+        // r. uses lowercase bases; inv output also lowercase per spec render.
+        // Positions 9-10 = "GG" in transcript → revcomp = "CC" → r.9_10inv.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+        let parsed = parse_hgvs("NM_000088.3:r.[9g>c;10g>c]").unwrap();
+        let normalized = normalizer.normalize(&parsed).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_000088.3:r.9_10inv");
+    }
+}
