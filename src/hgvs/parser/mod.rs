@@ -155,14 +155,56 @@ pub fn parse_hgvs_with_config(
 /// This is a convenience function that uses lenient mode, which auto-corrects
 /// common errors and returns warnings.
 ///
-/// # Example
+/// # Examples
+///
+/// Auto-corrects an en-dash to a hyphen:
 ///
 /// ```
 /// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
 ///
-/// // This will auto-correct the en-dash to hyphen
 /// let result = parse_hgvs_lenient("NM_000088.3:c.100\u{2013}200del");
 /// assert!(result.is_ok());
+/// ```
+///
+/// Soft-validation warnings emitted in lenient mode include W1001 for
+/// lowercase amino-acid codes:
+///
+/// ```
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// let parsed = parse_hgvs_lenient("NP_000079.2:p.val600glu").unwrap();
+/// assert_eq!(parsed.preprocessed_input, "NP_000079.2:p.Val600Glu");
+/// assert!(parsed
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type.code() == "W1001"));
+/// ```
+///
+/// W1002 for one-letter amino-acid abbreviations:
+///
+/// ```
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// let parsed = parse_hgvs_lenient("NP_000079.2:p.V600E").unwrap();
+/// assert_eq!(parsed.preprocessed_input, "NP_000079.2:p.Val600Glu");
+/// assert!(parsed
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type.code() == "W1002"));
+/// ```
+///
+/// W3001 for accessions missing a `.<version>` suffix (the warning fires
+/// but the input is not auto-corrected — the version cannot be synthesised):
+///
+/// ```
+/// use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+///
+/// let parsed = parse_hgvs_lenient("NM_000088:c.100A>G").unwrap();
+/// assert_eq!(parsed.preprocessed_input, "NM_000088:c.100A>G");
+/// assert!(parsed
+///     .warnings
+///     .iter()
+///     .any(|w| w.error_type.code() == "W3001"));
 /// ```
 pub fn parse_hgvs_lenient(input: &str) -> Result<ParseResultWithWarnings<HgvsVariant>, FerroError> {
     parse_hgvs_with_config(input, ErrorConfig::lenient())

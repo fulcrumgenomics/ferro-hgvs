@@ -280,8 +280,8 @@ fn is_amino_acid_like(s: &str) -> bool {
 ///
 /// Converts `val` to `Val`, `GLU` to `Glu`, etc.
 ///
-/// Note: This function will be used by the smart error correction feature.
-#[allow(dead_code)]
+/// Used by `correct_amino_acid_case_in_protein` to classify individual
+/// three-letter tokens.
 pub fn correct_amino_acid_case(token: &str) -> Option<(String, ErrorType)> {
     // Three-letter amino acid codes (case-insensitive check)
     let amino_acids = [
@@ -320,10 +320,212 @@ pub fn correct_amino_acid_case(token: &str) -> Option<(String, ErrorType)> {
     None
 }
 
+/// Scan only the `p.` segment of an HGVS expression and rewrite three-letter
+/// amino-acid tokens to canonical capitalization (e.g. `val` -> `Val`,
+/// `VAL` -> `Val`).
+///
+/// Records one `DetectedCorrection` per token rewritten. Inputs without a
+/// `:p.` (or leading `p.`) variant-type marker are returned unchanged. This
+/// scoping prevents false matches against accession bodies, gene-symbol
+/// selectors, or coding-variant nucleotide tokens.
+pub fn correct_amino_acid_case_in_protein(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut corrections = Vec::new();
+    let Some(start) = find_protein_segment_start(input) else {
+        return (input.to_string(), corrections);
+    };
+    let prefix = &input[..start];
+    let body = &input[start..];
+
+    let mut out = String::with_capacity(input.len());
+    out.push_str(prefix);
+
+    // Operate on byte offsets within `body`. AA tokens are pure ASCII, so
+    // 3-byte windows align with 3-character windows whenever the leading
+    // byte is ASCII. We treat non-ASCII bytes as opaque single chars and
+    // copy them through verbatim using `char_indices`.
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    while i < len {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() {
+            // Greedy: collect the run of ASCII letters, then probe a 3-letter
+            // window from the current offset against the AA table.
+            let mut run_end = i;
+            while run_end < len && bytes[run_end].is_ascii_alphabetic() {
+                run_end += 1;
+            }
+            let mut j = i;
+            while j + 3 <= run_end {
+                let token = &body[j..j + 3];
+                if let Some((canonical, error_type)) = correct_amino_acid_case(token) {
+                    let abs_start = start + j;
+                    corrections.push(DetectedCorrection::new(
+                        error_type,
+                        token.to_string(),
+                        canonical.clone(),
+                        abs_start,
+                        abs_start + 3,
+                    ));
+                    out.push_str(&canonical);
+                    j += 3;
+                } else {
+                    // Push one ASCII letter and advance.
+                    out.push(bytes[j] as char);
+                    j += 1;
+                }
+            }
+            while j < run_end {
+                out.push(bytes[j] as char);
+                j += 1;
+            }
+            i = run_end;
+        } else if c.is_ascii() {
+            out.push(c as char);
+            i += 1;
+        } else {
+            // Non-ASCII char: copy the full UTF-8 sequence verbatim.
+            let ch_len = utf8_char_len(c);
+            out.push_str(&body[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+
+    (out, corrections)
+}
+
+/// UTF-8 leading-byte → byte count.
+///
+/// Returns 1 for ASCII bytes (`< 0x80`) and for invalid continuation/lead
+/// bytes (`< 0xC0`); consuming one byte at a time avoids stalling on
+/// malformed input. Returns 2/3/4 for valid 2/3/4-byte UTF-8 sequences.
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0xC0 {
+        1
+    } else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
+}
+
+/// Scan only the `p.` segment and expand uppercase one-letter amino-acid
+/// codes (e.g. `V` -> `Val`) to their three-letter canonical forms.
+///
+/// Only **uppercase** ASCII letters are treated as one-letter AA candidates:
+/// HGVS one-letter AA codes are uppercase, and lowercase letters inside the
+/// `p.` segment belong to edit-type keywords (`del`, `ins`, `dup`, `inv`,
+/// `con`, `delins`, `fs`, `ext`). The leading character of a canonical
+/// three-letter token (`Ala`, `Arg`, ..., `Val`, `Ter`, `Xaa`) is also
+/// skipped — by the time this phase runs (after W1001), every recognised
+/// three-letter run already has canonical capitalisation.
+///
+/// One `DetectedCorrection` is emitted per replaced one-letter code.
+pub fn correct_single_letter_aa_in_protein(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut corrections = Vec::new();
+    let Some(start) = find_protein_segment_start(input) else {
+        return (input.to_string(), corrections);
+    };
+    let prefix = &input[..start];
+    let body = &input[start..];
+
+    let mut out = String::with_capacity(input.len());
+    out.push_str(prefix);
+
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    while i < len {
+        let c = bytes[i];
+
+        // Skip three-letter canonical AA tokens already in place.
+        if c.is_ascii_uppercase() && i + 3 <= len {
+            let token = &body[i..i + 3];
+            if is_canonical_three_letter_aa(token) {
+                out.push_str(token);
+                i += 3;
+                continue;
+            }
+        }
+
+        // Only uppercase ASCII letters are one-letter AA candidates.
+        if c.is_ascii_uppercase() {
+            if let Some(three) = single_to_three_letter_aa(c as char) {
+                let abs_start = start + i;
+                corrections.push(DetectedCorrection::new(
+                    ErrorType::SingleLetterAminoAcid,
+                    (c as char).to_string(),
+                    three.to_string(),
+                    abs_start,
+                    abs_start + 1,
+                ));
+                out.push_str(three);
+                i += 1;
+                continue;
+            }
+        }
+
+        if c.is_ascii() {
+            out.push(c as char);
+            i += 1;
+        } else {
+            let ch_len = utf8_char_len(c);
+            out.push_str(&body[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+
+    (out, corrections)
+}
+
+/// Find the byte offset *within `input`* at which the protein description
+/// body begins (one byte past the `p.` marker), or `None` if the input does
+/// not have a protein variant type.
+fn find_protein_segment_start(input: &str) -> Option<usize> {
+    if let Some(idx) = input.find(":p.") {
+        return Some(idx + 3);
+    }
+    if input.starts_with("p.") {
+        return Some(2);
+    }
+    None
+}
+
+/// Returns true if `token` is a canonical three-letter amino-acid code.
+fn is_canonical_three_letter_aa(token: &str) -> bool {
+    matches!(
+        token,
+        "Ala"
+            | "Arg"
+            | "Asn"
+            | "Asp"
+            | "Cys"
+            | "Gln"
+            | "Glu"
+            | "Gly"
+            | "His"
+            | "Ile"
+            | "Leu"
+            | "Lys"
+            | "Met"
+            | "Phe"
+            | "Pro"
+            | "Sec"
+            | "Ser"
+            | "Thr"
+            | "Trp"
+            | "Tyr"
+            | "Val"
+            | "Ter"
+            | "Xaa"
+    )
+}
+
 /// Convert single-letter amino acid code to three-letter code.
 ///
-/// Note: This function will be used by the smart error correction feature.
-#[allow(dead_code)]
+/// Used by `correct_single_letter_aa_in_protein` to expand W1002 candidates.
 pub fn single_to_three_letter_aa(single: char) -> Option<&'static str> {
     match single.to_ascii_uppercase() {
         'A' => Some("Ala"),
@@ -461,6 +663,98 @@ pub fn detect_missing_version(input: &str) -> Option<(usize, String)> {
         }
     }
     None
+}
+
+/// Find *all* RefSeq-style accessions in the input that lack a `.<version>`
+/// suffix. Returns one `DetectedCorrection` per occurrence, with `original`
+/// set to the unversioned accession and `corrected` left empty (W3001 is not
+/// auto-correctable: we have no way to know which version was intended).
+///
+/// Walks the input character-by-character, identifying contiguous
+/// `[A-Za-z_]+\d+` accession bodies, then classifying each by prefix.
+/// Accessions whose prefix is in the optional-version set (Ensembl
+/// ENST/ENSP/ENSG/ENSR) are skipped.
+pub fn detect_missing_versions(input: &str) -> Vec<DetectedCorrection> {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_uppercase() {
+            i += 1;
+            continue;
+        }
+        let prefix_start = i;
+        let mut j = i;
+        while j < bytes.len() && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+            j += 1;
+        }
+        let alpha_end = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        let digit_end = j;
+
+        if alpha_end == prefix_start || digit_end == alpha_end {
+            i = (alpha_end + 1).max(i + 1);
+            continue;
+        }
+
+        let accession_alpha = &input[prefix_start..alpha_end];
+        let accession_full = &input[prefix_start..digit_end];
+
+        let (recognised, optional) = classify_accession_prefix(accession_alpha);
+        if !recognised {
+            i = digit_end;
+            continue;
+        }
+
+        let has_version = digit_end < bytes.len()
+            && bytes[digit_end] == b'.'
+            && bytes
+                .get(digit_end + 1)
+                .copied()
+                .map(|b| b.is_ascii_digit())
+                .unwrap_or(false);
+
+        if !has_version && !optional {
+            // LRG transcript (`LRG_NNNtM`) and protein (`LRG_NNNpM`) refs
+            // encode the version as an alphabetic suffix immediately after
+            // the numeric ID, not as `.<version>`. Skip them rather than
+            // flagging a false W3001.
+            let is_lrg_suffix_ref = accession_alpha == "LRG_"
+                && digit_end < bytes.len()
+                && bytes[digit_end].is_ascii_alphabetic();
+            if !is_lrg_suffix_ref {
+                hits.push(DetectedCorrection::new(
+                    ErrorType::MissingVersion,
+                    accession_full.to_string(),
+                    String::new(),
+                    prefix_start,
+                    digit_end,
+                ));
+            }
+        }
+
+        i = digit_end;
+    }
+    hits
+}
+
+/// Classify an accession's leading alphabetic prefix.
+///
+/// Returns `(recognised, optional_version)`:
+/// - `recognised = true` when the prefix matches a known RefSeq/Ensembl/LRG
+///   accession family.
+/// - `optional_version = true` when that family routinely appears in the
+///   wild without a version suffix (Ensembl).
+fn classify_accession_prefix(prefix: &str) -> (bool, bool) {
+    match prefix {
+        "NM_" | "NP_" | "NC_" | "NG_" | "NR_" | "NT_" | "NW_" | "XM_" | "XP_" | "XR_" | "LRG_" => {
+            (true, false)
+        }
+        "ENST" | "ENSP" | "ENSG" | "ENSR" => (true, true),
+        _ => (false, false),
+    }
 }
 
 /// Detect swapped interval positions.
@@ -1486,6 +1780,183 @@ mod tests {
         assert_eq!(single_to_three_letter_aa('E'), Some("Glu"));
         assert_eq!(single_to_three_letter_aa('*'), Some("Ter"));
         assert_eq!(single_to_three_letter_aa('Z'), None);
+    }
+
+    // Protein-scoped AA case correction (W1001) tests
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_lowercase() {
+        let (corrected, corrections) =
+            correct_amino_acid_case_in_protein("NP_000079.2:p.val600glu");
+        assert_eq!(corrected, "NP_000079.2:p.Val600Glu");
+        assert_eq!(corrections.len(), 2);
+        assert!(corrections
+            .iter()
+            .all(|c| c.error_type == ErrorType::LowercaseAminoAcid));
+        assert_eq!(corrections[0].original, "val");
+        assert_eq!(corrections[0].corrected, "Val");
+        assert_eq!(corrections[1].original, "glu");
+        assert_eq!(corrections[1].corrected, "Glu");
+    }
+
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_uppercase() {
+        let (corrected, corrections) =
+            correct_amino_acid_case_in_protein("NP_000079.2:p.VAL600GLU");
+        assert_eq!(corrected, "NP_000079.2:p.Val600Glu");
+        assert_eq!(corrections.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_canonical_no_warning() {
+        let (corrected, corrections) =
+            correct_amino_acid_case_in_protein("NP_000079.2:p.Val600Glu");
+        assert_eq!(corrected, "NP_000079.2:p.Val600Glu");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_only_runs_on_protein() {
+        let (corrected, corrections) = correct_amino_acid_case_in_protein("NM_000088.3:c.100A>G");
+        assert_eq!(corrected, "NM_000088.3:c.100A>G");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_predicted_parens() {
+        let (corrected, corrections) =
+            correct_amino_acid_case_in_protein("NP_000079.2:p.(val600glu)");
+        assert_eq!(corrected, "NP_000079.2:p.(Val600Glu)");
+        assert_eq!(corrections.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_amino_acid_case_in_protein_idempotent() {
+        let (once, _) = correct_amino_acid_case_in_protein("NP_000079.2:p.val600glu");
+        let (twice, corrections) = correct_amino_acid_case_in_protein(&once);
+        assert_eq!(twice, once);
+        assert!(corrections.is_empty());
+    }
+
+    // Protein-scoped single-letter AA expansion (W1002) tests
+    #[test]
+    fn test_correct_single_letter_aa_substitution() {
+        let (corrected, corrections) = correct_single_letter_aa_in_protein("NP_000079.2:p.V600E");
+        assert_eq!(corrected, "NP_000079.2:p.Val600Glu");
+        assert_eq!(corrections.len(), 2);
+        assert!(corrections
+            .iter()
+            .all(|c| c.error_type == ErrorType::SingleLetterAminoAcid));
+    }
+
+    #[test]
+    fn test_correct_single_letter_aa_canonical_no_warning() {
+        let (corrected, corrections) =
+            correct_single_letter_aa_in_protein("NP_000079.2:p.Val600Glu");
+        assert_eq!(corrected, "NP_000079.2:p.Val600Glu");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_letter_aa_no_p_segment() {
+        let (corrected, corrections) = correct_single_letter_aa_in_protein("NM_000088.3:c.459A>G");
+        assert_eq!(corrected, "NM_000088.3:c.459A>G");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_letter_aa_predicted() {
+        let (corrected, corrections) = correct_single_letter_aa_in_protein("NP_000079.2:p.(V600E)");
+        assert_eq!(corrected, "NP_000079.2:p.(Val600Glu)");
+        assert_eq!(corrections.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_single_letter_aa_delins() {
+        let (corrected, corrections) =
+            correct_single_letter_aa_in_protein("NP_000079.2:p.V600_E601delinsK");
+        assert_eq!(corrected, "NP_000079.2:p.Val600_Glu601delinsLys");
+        assert_eq!(corrections.len(), 3);
+    }
+
+    #[test]
+    fn test_correct_single_letter_aa_idempotent() {
+        let (once, _) = correct_single_letter_aa_in_protein("NP_000079.2:p.V600E");
+        let (twice, corrections) = correct_single_letter_aa_in_protein(&once);
+        assert_eq!(twice, once);
+        assert!(corrections.is_empty());
+    }
+
+    // Missing-version (W3001) detection tests
+    #[test]
+    fn test_detect_missing_versions_single() {
+        let hits = detect_missing_versions("NM_000088:c.100A>G");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "NM_000088");
+        assert_eq!(hits[0].error_type, ErrorType::MissingVersion);
+        assert_eq!(hits[0].start, 0);
+        assert_eq!(hits[0].end, "NM_000088".len());
+    }
+
+    #[test]
+    fn test_detect_missing_versions_with_version_no_hit() {
+        let hits = detect_missing_versions("NM_000088.3:c.100A>G");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_missing_versions_inner_accession() {
+        let hits = detect_missing_versions("NG_012232(NM_004006.2):c.93+1G>T");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "NG_012232");
+    }
+
+    #[test]
+    fn test_detect_missing_versions_both_missing() {
+        let hits = detect_missing_versions("NG_012232(NM_004006):c.93+1G>T");
+        assert_eq!(hits.len(), 2);
+        let originals: Vec<&str> = hits.iter().map(|h| h.original.as_str()).collect();
+        assert!(originals.contains(&"NG_012232"));
+        assert!(originals.contains(&"NM_004006"));
+    }
+
+    #[test]
+    fn test_detect_missing_versions_ensembl_optional() {
+        let hits = detect_missing_versions("ENST00000380152:c.100A>G");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_missing_versions_no_accession() {
+        let hits = detect_missing_versions("c.100A>G");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_detect_missing_versions_lrg() {
+        let hits = detect_missing_versions("LRG_199:c.100A>G");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "LRG_199");
+    }
+
+    #[test]
+    fn test_detect_missing_versions_lrg_transcript_no_hit() {
+        // LRG transcript references (`LRG_NNNtM`) carry the version as a
+        // `t<digit>` suffix directly after the numeric ID, not as `.<digit>`.
+        let hits = detect_missing_versions("LRG_292t1:c.100A>G");
+        assert!(
+            hits.is_empty(),
+            "LRG transcript suffix should not trigger W3001, got {hits:?}",
+        );
+    }
+
+    #[test]
+    fn test_detect_missing_versions_lrg_protein_no_hit() {
+        // Same for LRG protein references (`LRG_NNNpM`).
+        let hits = detect_missing_versions("LRG_292p1:p.Ser68Arg");
+        assert!(
+            hits.is_empty(),
+            "LRG protein suffix should not trigger W3001, got {hits:?}",
+        );
     }
 
     // Accession prefix case tests

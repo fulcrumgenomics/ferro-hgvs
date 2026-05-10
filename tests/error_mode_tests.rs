@@ -784,3 +784,234 @@ fn test_full_parsing_workflow_silent() {
     let parsed = parse_hgvs(&result.preprocessed);
     assert!(parsed.is_ok());
 }
+
+// ============================================================================
+// W1001 LowercaseAminoAcid emission tests (#124)
+// ============================================================================
+
+mod w1001_lowercase_amino_acid_emission {
+    use super::*;
+
+    #[test]
+    fn test_lenient_emits_w1001_on_lowercase_aa() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.val600glu");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Val600Glu");
+        let codes: Vec<&'static str> = result
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code())
+            .collect();
+        assert_eq!(codes, vec!["W1001", "W1001"]);
+    }
+
+    #[test]
+    fn test_strict_rejects_lowercase_aa() {
+        let preprocessor = ErrorConfig::strict().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.val600glu");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_silent_corrects_lowercase_aa_no_warning() {
+        let preprocessor = ErrorConfig::silent().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.val600glu");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Val600Glu");
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_input_no_w1001() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Val600Glu");
+        assert!(result.success);
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::LowercaseAminoAcid));
+    }
+
+    #[test]
+    fn test_w1001_idempotent() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let first = preprocessor.preprocess("NP_000079.2:p.val600glu");
+        assert!(first.success);
+        let second = preprocessor.preprocess(&first.preprocessed);
+        assert!(second.success);
+        assert!(second
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::LowercaseAminoAcid));
+    }
+}
+
+// ============================================================================
+// W1002 SingleLetterAminoAcid emission tests (#124)
+// ============================================================================
+
+mod w1002_single_letter_amino_acid_emission {
+    use super::*;
+
+    #[test]
+    fn test_lenient_emits_w1002_on_single_letter_aa() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.V600E");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Val600Glu");
+        let codes: Vec<&'static str> = result
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code())
+            .collect();
+        assert_eq!(codes, vec!["W1002", "W1002"]);
+    }
+
+    #[test]
+    fn test_strict_rejects_single_letter_aa() {
+        let preprocessor = ErrorConfig::strict().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.V600E");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_silent_corrects_single_letter_aa_no_warning() {
+        let preprocessor = ErrorConfig::silent().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.V600E");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Val600Glu");
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_input_no_w1002() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.Val600Glu");
+        assert!(result.success);
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::SingleLetterAminoAcid));
+    }
+
+    #[test]
+    fn test_w1002_idempotent() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let first = preprocessor.preprocess("NP_000079.2:p.V600E");
+        assert!(first.success);
+        let second = preprocessor.preprocess(&first.preprocessed);
+        assert!(second.success);
+        assert!(second
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::SingleLetterAminoAcid));
+    }
+
+    #[test]
+    fn test_w1001_w1002_combined() {
+        // Mixed: lowercase three-letter (`glu`) and a single-letter (`V`).
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NP_000079.2:p.V600glu");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Val600Glu");
+        let codes: Vec<&'static str> = result
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code())
+            .collect();
+        assert!(codes.contains(&"W1001"));
+        assert!(codes.contains(&"W1002"));
+    }
+}
+
+// ============================================================================
+// W3001 MissingVersion emission tests (#124)
+// ============================================================================
+
+mod w3001_missing_version_emission {
+    use super::*;
+
+    #[test]
+    fn test_lenient_emits_w3001_on_unversioned_accession() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NM_000088:c.100A>G");
+        assert!(
+            result.success,
+            "lenient should accept unversioned accession"
+        );
+        // Input is NOT mutated: there is no version to inject.
+        assert_eq!(result.preprocessed, "NM_000088:c.100A>G");
+        let codes: Vec<&'static str> = result
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code())
+            .collect();
+        assert_eq!(codes, vec!["W3001"]);
+    }
+
+    #[test]
+    fn test_strict_rejects_unversioned_accession() {
+        let preprocessor = ErrorConfig::strict().preprocessor();
+        let result = preprocessor.preprocess("NM_000088:c.100A>G");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_silent_accepts_unversioned_no_warning() {
+        let preprocessor = ErrorConfig::silent().preprocessor();
+        let result = preprocessor.preprocess("NM_000088:c.100A>G");
+        assert!(result.success);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_versioned_no_w3001() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NM_000088.3:c.100A>G");
+        assert!(result.success);
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::MissingVersion));
+    }
+
+    #[test]
+    fn test_w3001_idempotent_on_unversioned() {
+        // Re-preprocessing an unversioned accession STILL warns — the input
+        // is not auto-corrected, so the warning is persistent. But it warns
+        // at most once per occurrence on each pass.
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let first = preprocessor.preprocess("NM_000088:c.100A>G");
+        let second = preprocessor.preprocess(&first.preprocessed);
+        assert_eq!(
+            first
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::MissingVersion)
+                .count(),
+            1
+        );
+        assert_eq!(
+            second
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::MissingVersion)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_w3001_inner_outer_accession() {
+        let preprocessor = ErrorConfig::lenient().preprocessor();
+        let result = preprocessor.preprocess("NG_012232(NM_004006):c.93+1G>T");
+        assert!(result.success);
+        let count = result
+            .warnings
+            .iter()
+            .filter(|w| w.error_type == ErrorType::MissingVersion)
+            .count();
+        assert_eq!(count, 2);
+    }
+}
