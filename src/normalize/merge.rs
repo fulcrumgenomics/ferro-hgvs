@@ -28,8 +28,10 @@ pub(crate) enum Region {
     /// `g.` (genomic) and `m.` (mitochondrial) — single axis, no
     /// sub-regions.
     Genome,
-    /// `c.` / `r.` CDS proper (positive non-UTR base).
+    /// `c.` CDS proper (positive non-UTR base).
     Cds,
+    /// `r.` CDS proper (positive non-UTR base on a transcript).
+    Rna,
     /// `c.` / `r.` 5'UTR (negative base, e.g. `c.-3`).
     FivePrimeUtr,
     /// `c.` / `r.` 3'UTR (`utr3` flag, e.g. `c.*1`).
@@ -441,7 +443,7 @@ fn simple_rna_pos(boundary: &UncertainBoundary<RnaPos>) -> Option<(Region, i64)>
         return Some((Region::FivePrimeUtr, pos.base));
     }
     if pos.base > 0 {
-        return Some((Region::Cds, pos.base));
+        return Some((Region::Rna, pos.base));
     }
     None
 }
@@ -490,7 +492,7 @@ fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
 
 fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
     let (location, edit) = build_naedit(merged, |region, b| match region {
-        Region::Cds | Region::FivePrimeUtr => RnaPos::new(b),
+        Region::Rna | Region::FivePrimeUtr => RnaPos::new(b),
         Region::ThreePrimeUtr => RnaPos::utr3(b),
         _ => unreachable!("non-r. region {:?} on RnaVariant", region),
     });
