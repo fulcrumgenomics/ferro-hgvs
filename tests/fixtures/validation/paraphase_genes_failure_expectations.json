@@ -1,0 +1,54 @@
+{
+  "kinds": {
+    "Parse error at position <N>: Expected ':' after accession": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Expected ':' after accession"
+    },
+    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })"
+    },
+    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: '32'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: '32'"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: '='": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: '='"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: '_3065dup'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: '_3065dup'"
+    },
+    "Parse error at position <N>: Unexpected trailing characters: '_70398dup'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unexpected trailing characters: '_70398dup'"
+    },
+    "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(80'": {
+      "category": "needs_triage",
+      "reason": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(80'"
+    }
+  },
+  "expected_failures": {
+    "LRG_555:(80027_96047)_(99154_121150)del": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(80'",
+    "LRG_555:g.70398_70399insL170382_70398dup": "Parse error at position <N>: Unexpected trailing characters: '_70398dup'",
+    "LRG_555t1:c.3065_3066insL13054_3065dup": "Parse error at position <N>: Unexpected trailing characters: '_3065dup'",
+    "NG_011403.2:g.70398_70399insL170382_70398dup": "Parse error at position <N>: Unexpected trailing characters: '_70398dup'",
+    "NM_000132.4:c.3065_3066insL13054_3065dup": "Parse error at position <N>: Unexpected trailing characters: '_3065dup'",
+    "NM_000500.9:c.[-103A>G;-110T>C-113G>A-126C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_000500.9:c.[-4C>T;1360C>T317C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_000535.7:c.[1556A>G;1559C>T1567T>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_001005741.2:c.[535G>C;c.1093G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_016124.4:c.[186G>T;410C>T455A>C667T>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_016124.4:c.[410C>T;455A>C509T>C667T>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NM_016124.6:c.[186G>T;410C>T455A>C602C>G604G>A733G>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
+    "NP_000508.1:p.Ter143Glnext32": "Parse error at position <N>: Unexpected trailing characters: '32'",
+    "NP_000561.3:p.Ser=": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })",
+    "NP_004534?.2:p.Arg2478_Asp2512del": "Parse error at position <N>: Expected ':' after accession",
+    "NP_065231.3:p.Trp16Trp=": "Parse error at position <N>: Unexpected trailing characters: '='"
+  }
+}
