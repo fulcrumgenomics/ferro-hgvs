@@ -1309,6 +1309,63 @@ pub fn should_canonicalize(edit: &NaEdit) -> bool {
     }
 }
 
+/// Canonicalize a `con` (conversion) edit to its SVD-WG009 `delins` equivalent.
+///
+/// Per HGVS Nomenclature DNA delins recommendations and Community
+/// Consultation SVD-WG009 (accepted Nov 2020), the `con` form is "no longer
+/// used" and should be described as `delins`. This helper performs the
+/// purely-syntactic rewrite:
+///
+/// - Same-reference position-only source (e.g. `42536337_42536382`):
+///   emits `Delins{PositionRange{start, end}}`, displayed as
+///   `delins42536337_42536382`.
+/// - Cross-reference source (anything else, e.g. `NM_000089.1:c.789_1011`):
+///   emits `Delins{Reference(source)}`, displayed as
+///   `delins[NM_000089.1:c.789_1011]`. The square brackets and source
+///   reference-type prefix are required by SVD-WG009.
+///
+/// Returns `None` for any non-`Conversion` edit so callers can use it as
+/// an early-return probe.
+///
+/// This is a pure transformation; it does not require reference data and
+/// does not validate the source. Validation is delegated to the existing
+/// `delins`-source parser on any subsequent round-trip.
+pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
+    use crate::hgvs::edit::InsertedSequence;
+
+    let source = match edit {
+        NaEdit::Conversion { source } => source,
+        _ => return None,
+    };
+
+    // Try same-reference position-only form: `<digits>_<digits>`.
+    // HGVS positions are 1-based and ordered, so only emit a PositionRange
+    // when both endpoints are >= 1 and start <= end. Anything else falls
+    // through to Reference so we don't fabricate a structurally-invalid
+    // delins range (e.g. `0_0`, reversed `10_2`).
+    if let Some((s, e)) = source.split_once('_') {
+        if !s.is_empty()
+            && !e.is_empty()
+            && s.bytes().all(|b| b.is_ascii_digit())
+            && e.bytes().all(|b| b.is_ascii_digit())
+        {
+            if let (Ok(start), Ok(end)) = (s.parse::<u64>(), e.parse::<u64>()) {
+                if start >= 1 && end >= 1 && start <= end {
+                    return Some(NaEdit::Delins {
+                        sequence: InsertedSequence::PositionRange { start, end },
+                    });
+                }
+            }
+        }
+    }
+
+    // Cross-reference source (or anything that isn't a clean integer pair):
+    // wrap in `Reference`, which displays as `[<source>]`.
+    Some(NaEdit::Delins {
+        sequence: InsertedSequence::Reference(source.clone()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2554,6 +2611,121 @@ mod tests {
                 sub_at(3, 'C', 'G'),
                 sub_at(4, 'C', 'T'),
             ])
+        );
+    }
+
+    #[test]
+    fn canonicalize_conversion_same_reference_emits_position_range() {
+        use crate::hgvs::edit::InsertedSequence;
+        let edit = NaEdit::Conversion {
+            source: "42536337_42536382".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        match got {
+            NaEdit::Delins {
+                sequence: InsertedSequence::PositionRange { start, end },
+            } => {
+                assert_eq!(start, 42536337);
+                assert_eq!(end, 42536382);
+            }
+            other => panic!("expected Delins{{PositionRange}}, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn canonicalize_conversion_cross_reference_emits_bracketed_reference() {
+        use crate::hgvs::edit::InsertedSequence;
+        let edit = NaEdit::Conversion {
+            source: "NM_000089.1:c.789_1011".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        match &got {
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(s),
+            } => {
+                assert_eq!(s, "NM_000089.1:c.789_1011");
+            }
+            other => panic!("expected Delins{{Reference}}, got {:?}", other),
+        }
+        // Display of Reference adds the SVD-WG009 brackets.
+        assert_eq!(format!("{}", got), "delins[NM_000089.1:c.789_1011]");
+    }
+
+    #[test]
+    fn canonicalize_conversion_returns_none_for_non_conversion() {
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        assert!(canonicalize_conversion_to_delins(&edit).is_none());
+    }
+
+    #[test]
+    fn canonicalize_conversion_overflow_falls_back_to_reference() {
+        use crate::hgvs::edit::InsertedSequence;
+        // 21-digit number overflows u64. Falls back to Reference.
+        let edit = NaEdit::Conversion {
+            source: "123456789012345678901_2".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        assert!(matches!(
+            got,
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn canonicalize_conversion_zero_position_falls_back_to_reference() {
+        use crate::hgvs::edit::InsertedSequence;
+        // HGVS positions are 1-based; `0_0` is not a valid range, so we must
+        // not emit a `PositionRange`. Preserve the original numeric source as
+        // a `Reference` so the parser sees the same string on round-trip.
+        let edit = NaEdit::Conversion {
+            source: "0_0".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        match got {
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(s),
+            } => assert_eq!(s, "0_0"),
+            other => panic!("expected Delins{{Reference}} for 0_0, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn canonicalize_conversion_reversed_range_falls_back_to_reference() {
+        use crate::hgvs::edit::InsertedSequence;
+        // `10_2` violates `start <= end`. Don't promote it to PositionRange.
+        let edit = NaEdit::Conversion {
+            source: "10_2".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        match got {
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(s),
+            } => assert_eq!(s, "10_2"),
+            other => panic!("expected Delins{{Reference}} for 10_2, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn canonicalize_conversion_zero_start_falls_back_to_reference() {
+        use crate::hgvs::edit::InsertedSequence;
+        // `0_5`: start < 1 violates HGVS 1-based position rule.
+        let edit = NaEdit::Conversion {
+            source: "0_5".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        assert!(
+            matches!(
+                got,
+                NaEdit::Delins {
+                    sequence: InsertedSequence::Reference(_)
+                }
+            ),
+            "expected Delins{{Reference}} fallback for 0_5"
         );
     }
 }

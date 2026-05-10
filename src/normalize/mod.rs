@@ -46,7 +46,10 @@ use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
-use rules::{canonicalize_edit, needs_normalization, should_canonicalize, DelinsSubedit};
+use rules::{
+    canonicalize_conversion_to_delins, canonicalize_edit, needs_normalization, should_canonicalize,
+    DelinsSubedit,
+};
 use shuffle::shuffle;
 
 /// Check if a CDS position has an unknown (?) offset sentinel value
@@ -409,6 +412,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Genome(variant.clone()), vec![])),
         };
 
+        // SVD-WG009: rewrite `con` to `delins` before any further work.
+        // Pure-syntax; no reference data needed.
+        if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+            let new_variant = GenomeVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                ),
+            };
+            return Ok((HV::Genome(new_variant), vec![]));
+        }
+
         // Only normalize indels
         if !needs_normalization(edit) {
             return Ok((HV::Genome(variant.clone()), vec![]));
@@ -499,6 +516,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(e) => e,
             None => return Ok((HV::Cds(variant.clone()), vec![])),
         };
+
+        // SVD-WG009: rewrite `con` to `delins`.
+        if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+            let new_variant = CdsVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                ),
+            };
+            return Ok((HV::Cds(new_variant), vec![]));
+        }
 
         // Only normalize indels
         if !needs_normalization(edit) {
@@ -600,6 +630,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(e) => e,
             None => return Ok((HV::Tx(variant.clone()), vec![])),
         };
+
+        // SVD-WG009: rewrite `con` to `delins`.
+        if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+            let new_variant = TxVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                ),
+            };
+            return Ok((HV::Tx(new_variant), vec![]));
+        }
 
         // Only normalize indels
         if !needs_normalization(edit) {
@@ -923,6 +966,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
+        // SVD-WG009: rewrite `con` to `delins`.
+        if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+            let new_variant = RnaVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                ),
+            };
+            return Ok((HV::Rna(new_variant), vec![]));
+        }
+
         // Only normalize indels
         if !needs_normalization(edit) {
             return Ok((HV::Rna(variant.clone()), vec![]));
@@ -1085,14 +1141,28 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &crate::hgvs::variant::MtVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        // MT variants are similar to genomic. Full window-based normalization
-        // and the per-edit canonicalization that runs inside normalize_na_edit
-        // for g./c./n./r. is not yet wired up for m. (would also need circular
-        // genome handling) — that gap is pre-existing and out of scope here.
-        // Issue #160 only requires that a delins whose ref/alt span contains
-        // an inv-eligible sub-span decomposes for m. the same way it does for
-        // g.; route through apply_inv_split so user-typed and merged Mt
-        // delins both reach the split path.
+        // MT variants are similar to genomic. We canonicalize `con` -> `delins`
+        // (SVD-WG009) up front, then route through apply_inv_split so any
+        // delins whose ref/alt span contains an inv-eligible sub-span
+        // decomposes the same way it does for g. (issue #160). Full
+        // window-based normalization and the per-edit canonicalization that
+        // runs inside normalize_na_edit for g./c./n./r. is not yet wired up
+        // for m. (would also need circular genome handling) — that gap is
+        // pre-existing and out of scope here.
+        if let Some(edit) = variant.loc_edit.edit.inner() {
+            if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+                let new_variant = MtVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(
+                        variant.loc_edit.location.clone(),
+                        variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                    ),
+                };
+                let split = self.apply_inv_split(HV::Mt(new_variant));
+                return Ok((wrap_allele_if_split(split), vec![]));
+            }
+        }
         let split = self.apply_inv_split(HV::Mt(variant.clone()));
         Ok((wrap_allele_if_split(split), vec![]))
     }
