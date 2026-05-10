@@ -42,6 +42,7 @@ pub mod accessions;
 pub mod arbitration;
 pub mod biocommons;
 pub mod cache;
+pub mod cli;
 pub mod collate;
 pub mod compare;
 pub mod extract;

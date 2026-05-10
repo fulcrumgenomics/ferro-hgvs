@@ -84,6 +84,66 @@ fn test_normalize_accepts_allow_network_flag() {
     );
 }
 
+/// `parse all ...` must be rejected at the CLI boundary — the runtime
+/// rejects it later, but tightening the parser keeps invalid commands
+/// from ever parsing.
+#[test]
+fn test_parse_rejects_all_tool() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "parse",
+        "all",
+        "-i",
+        "patterns.txt",
+        "-o",
+        "out.json",
+    ]);
+    assert!(
+        result.is_err(),
+        "Parser should reject 'all' on parse subcommand"
+    );
+}
+
+/// `--detailed` was a no-op on `generate summary` (destructured and
+/// dropped). The flag has been removed; the parser must now reject it.
+#[test]
+fn test_generate_summary_rejects_detailed_flag() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "generate",
+        "summary",
+        "--parsing",
+        "p.json",
+        "--normalization",
+        "n.json",
+        "-o",
+        "out.json",
+        "--detailed",
+    ]);
+    assert!(
+        result.is_err(),
+        "Parser should reject --detailed on generate summary"
+    );
+}
+
+/// `normalize all ...` must be rejected at the CLI boundary.
+#[test]
+fn test_normalize_rejects_all_tool() {
+    let result = Cli::try_parse_from([
+        "ferro-benchmark",
+        "normalize",
+        "all",
+        "-i",
+        "patterns.txt",
+        "-o",
+        "out.json",
+    ]);
+    assert!(
+        result.is_err(),
+        "Parser should reject 'all' on normalize subcommand"
+    );
+}
+
 /// Test that network mode is slower than cache mode
 ///
 /// This test requires:
