@@ -802,7 +802,6 @@ mod render {
     struct Document<'a> {
         description: &'a str,
         spec: SpecBlock<'a>,
-        ferro_version: &'a str,
         generated_utc: String,
         summary: Summary,
         rows: &'a [runner::Row],
@@ -865,7 +864,6 @@ mod render {
                 tag: "21.0.0",
                 commit_sha,
             },
-            ferro_version: env!("CARGO_PKG_VERSION"),
             generated_utc: "fixture-byte-stable".to_string(),
             summary,
             rows,
