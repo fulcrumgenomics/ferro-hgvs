@@ -546,14 +546,23 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             code: "W2003",
             name: "ExtraWhitespace",
             summary: "Extra whitespace in description.",
-            explanation: "HGVS expressions should not contain spaces (except in gene symbols). \
-                Extra spaces are removed in lenient/silent modes.",
+            explanation: "HGVS expressions should not contain spaces (the spec is explicit \
+                that the format `reference:description` has spaces \"added for clarity only\"). \
+                Leading, trailing, and embedded whitespace — and zero-width invisible \
+                characters (U+200B ZERO WIDTH SPACE, U+200C ZERO WIDTH NON-JOINER, \
+                U+200D ZERO WIDTH JOINER, U+FEFF BOM/ZWNBSP) — are stripped in \
+                lenient/silent modes.",
             category: CodeCategory::Character,
-            bad_examples: &["c.100 A>G", "NM_000088.3 : c.459A>G"],
+            bad_examples: &[
+                "c.100 A>G",
+                "NM_000088.3 : c.459A>G",
+                "c.[100A>G ; 200T>C]",
+                "NM_000088.3\u{200B}:c.100A>G",
+            ],
             good_examples: &["c.100A>G", "NM_000088.3:c.459A>G"],
             mode_behavior: Some(ModeBehavior::standard_correctable()),
-            hgvs_spec_url: None,
-            related_codes: &[],
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["W2001", "W2004"],
         },
     );
 

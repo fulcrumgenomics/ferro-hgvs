@@ -135,81 +135,70 @@ pub fn correct_quote_characters(input: &str) -> (String, Vec<DetectedCorrection>
     (result, corrections)
 }
 
+/// Return true if the character is whitespace per Rust's `char::is_whitespace`,
+/// or one of the common zero-width invisible characters that users frequently
+/// paste from PDFs and rich-text sources:
+/// - U+200B ZERO WIDTH SPACE
+/// - U+200C ZERO WIDTH NON-JOINER
+/// - U+200D ZERO WIDTH JOINER
+/// - U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM)
+///
+/// HGVS expressions never contain any of these; we treat them all as
+/// `ExtraWhitespace` (W2003) and strip them under the same soft-warn contract.
+#[inline]
+fn is_invisible_whitespace(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}')
+}
+
 /// Normalize extra whitespace in the input.
 ///
-/// This removes leading/trailing whitespace and collapses internal
-/// whitespace around significant characters.
+/// HGVS expressions are not permitted to contain whitespace (the spec is
+/// explicit that the format `reference:description` has spaces "added for
+/// clarity only"). This function therefore removes all whitespace from the
+/// input — leading, trailing, and embedded — along with the zero-width
+/// invisible characters U+200B/U+200C/U+200D/U+FEFF that are functionally
+/// indistinguishable from whitespace. Each contiguous run of stripped
+/// characters is recorded as a single [`DetectedCorrection`] of type
+/// [`ErrorType::ExtraWhitespace`].
+///
+/// In strict mode the preprocessor will turn those corrections into a hard
+/// rejection; in lenient/silent modes they become warnings (or are applied
+/// silently). The function is idempotent on its own output. See issue #128.
 ///
 /// Returns the corrected string and a list of corrections made.
 pub fn correct_whitespace(input: &str) -> (String, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
-    let trimmed = input.trim();
+    let mut result = String::with_capacity(input.len());
+    let mut run_start: Option<usize> = None;
 
-    // Track if we trimmed leading/trailing whitespace
-    if input != trimmed {
-        let leading = input.len() - input.trim_start().len();
-        let trailing = input.trim_end().len();
-        if leading > 0 || trailing < input.len() {
-            corrections.push(DetectedCorrection::new(
-                ErrorType::ExtraWhitespace,
-                input.to_string(),
-                trimmed.to_string(),
-                0,
-                input.len(),
-            ));
-        }
-    }
-
-    // Remove spaces around significant HGVS characters
-    let mut result = String::with_capacity(trimmed.len());
-    let mut prev_space = false;
-    let mut chars = trimmed.char_indices().peekable();
-
-    while let Some((i, c)) = chars.next() {
-        if c.is_whitespace() {
-            // Check if next char is a significant HGVS character
-            if let Some(&(_, next_c)) = chars.peek() {
-                // Don't add space before these characters
-                if matches!(
-                    next_c,
-                    '.' | ':' | '>' | '<' | '+' | '-' | '_' | '(' | ')' | '[' | ']'
-                ) {
-                    if corrections.is_empty()
-                        || corrections.last().unwrap().error_type != ErrorType::ExtraWhitespace
-                    {
-                        corrections.push(DetectedCorrection::new(
-                            ErrorType::ExtraWhitespace,
-                            " ".to_string(),
-                            "".to_string(),
-                            i,
-                            i + 1,
-                        ));
-                    }
-                    prev_space = false;
-                    continue;
-                }
+    for (i, c) in input.char_indices() {
+        if is_invisible_whitespace(c) {
+            if run_start.is_none() {
+                run_start = Some(i);
             }
-            prev_space = true;
         } else {
-            // Check if previous char was space and current is significant
-            if prev_space
-                && matches!(
-                    c,
-                    '.' | ':' | '>' | '<' | '+' | '-' | '_' | '(' | ')' | '[' | ']'
-                )
-            {
-                // Don't add space before this character
-                prev_space = false;
-                result.push(c);
-                continue;
-            }
-
-            if prev_space {
-                result.push(' ');
-                prev_space = false;
+            if let Some(start) = run_start.take() {
+                corrections.push(DetectedCorrection::new(
+                    ErrorType::ExtraWhitespace,
+                    input[start..i].to_string(),
+                    String::new(),
+                    start,
+                    i,
+                ));
             }
             result.push(c);
         }
+    }
+
+    // Trailing whitespace run, if any.
+    if let Some(start) = run_start {
+        corrections.push(DetectedCorrection::new(
+            ErrorType::ExtraWhitespace,
+            input[start..].to_string(),
+            String::new(),
+            start,
+            input.len(),
+        ));
     }
 
     (result, corrections)
@@ -1367,6 +1356,67 @@ mod tests {
         assert_eq!(corrected, "c.100A>G");
         // May have corrections detected but result should be same
         assert_eq!(corrected, "c.100A>G");
+    }
+
+    #[test]
+    fn test_correct_whitespace_strips_zero_width_chars() {
+        // U+200B ZERO WIDTH SPACE, U+FEFF ZWNBSP/BOM, U+200C ZWNJ, U+200D ZWJ
+        // are functionally invisible; users frequently paste them from PDFs/web.
+        // Treat them like whitespace under W2003.
+        let input = "NM_000088.3:c.100\u{200B}A>G";
+        let (corrected, corrections) = correct_whitespace(input);
+        assert_eq!(corrected, "NM_000088.3:c.100A>G");
+        assert_eq!(corrections.len(), 1, "should record one correction");
+        assert_eq!(corrections[0].error_type, ErrorType::ExtraWhitespace);
+
+        let input = "\u{FEFF}NM_000088.3:c.100A>G";
+        let (corrected, _) = correct_whitespace(input);
+        assert_eq!(corrected, "NM_000088.3:c.100A>G");
+
+        let input = "c.100\u{200C}A>G";
+        let (corrected, _) = correct_whitespace(input);
+        assert_eq!(corrected, "c.100A>G");
+
+        let input = "c.100\u{200D}A>G";
+        let (corrected, _) = correct_whitespace(input);
+        assert_eq!(corrected, "c.100A>G");
+    }
+
+    #[test]
+    fn test_correct_whitespace_embedded_single_run_one_warning() {
+        // Multiple whitespace chars in one contiguous run = ONE correction.
+        let (corrected, corrections) = correct_whitespace("c.100   A>G");
+        assert_eq!(corrected, "c.100A>G");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].original, "   ");
+        assert_eq!(corrections[0].start, 5);
+        assert_eq!(corrections[0].end, 8);
+    }
+
+    #[test]
+    fn test_correct_whitespace_multiple_runs_count() {
+        // Three separate whitespace runs = THREE corrections.
+        let (corrected, corrections) = correct_whitespace(" c.100 A> G");
+        assert_eq!(corrected, "c.100A>G");
+        assert_eq!(corrections.len(), 3);
+    }
+
+    #[test]
+    fn test_correct_whitespace_idempotent() {
+        // Re-normalizing a corrected output produces zero corrections.
+        let (first, _) = correct_whitespace("  c. 100 A>G  ");
+        let (second, corrections) = correct_whitespace(&first);
+        assert_eq!(first, second);
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_whitespace_mixed_unicode_whitespace() {
+        // Tab, NBSP, em-space, vertical tab — all stripped, one run = one warning.
+        let input = "c.100\t\u{00A0}\u{2003}\u{000B}A>G";
+        let (corrected, corrections) = correct_whitespace(input);
+        assert_eq!(corrected, "c.100A>G");
+        assert_eq!(corrections.len(), 1);
     }
 
     // Position zero detection tests

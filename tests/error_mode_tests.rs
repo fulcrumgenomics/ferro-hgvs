@@ -171,16 +171,244 @@ mod w2003_extra_whitespace {
         assert!(!config.should_warn(ErrorType::ExtraWhitespace));
     }
 
-    // Note: Whitespace removal is not yet fully implemented in the preprocessor.
-    // This test is commented out until that feature is added.
-    // #[test]
-    // fn test_lenient_removes_whitespace() {
-    //     let config = ErrorConfig::lenient();
-    //     let preprocessor = config.preprocessor();
-    //     let result = preprocessor.preprocess("NM_000088.3: c.100A>G");
-    //     assert!(result.success);
-    //     assert_eq!(result.preprocessed, "NM_000088.3:c.100A>G");
-    // }
+    #[test]
+    fn test_lenient_removes_whitespace_around_colon() {
+        let config = ErrorConfig::lenient();
+        let preprocessor = config.preprocessor();
+        let result = preprocessor.preprocess("NM_000088.3: c.100A>G");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.100A>G");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::ExtraWhitespace));
+    }
+
+    // Mid-expression whitespace (between digits and a base letter, between
+    // underscore and the second coordinate, around `;` in an allele list, etc.)
+    // is non-canonical per the HGVS spec but lenient mode should accept-and-warn
+    // rather than hard-reject. See #128.
+
+    #[test]
+    fn test_lenient_strips_whitespace_between_position_and_base() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.100 A>G");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept embedded whitespace: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert!(parsed
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::ExtraWhitespace));
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_between_underscore_and_position() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.100_ 200del");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace after `_`: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.100_200del");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_around_allele_separator() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.[100A>G ; 200T>C]");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace around `;`: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.[100A>G;200T>C]");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_inside_brackets() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.[ 100A>G;200T>C ]");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace inside `[ ]`: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.[100A>G;200T>C]");
+    }
+
+    #[test]
+    fn test_silent_strips_embedded_whitespace_without_warning() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_silent;
+        let result = parse_hgvs_silent("NM_000088.3:c.100 A>G");
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert!(!parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    #[test]
+    fn test_strict_still_rejects_embedded_whitespace() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
+        let config = ErrorConfig::strict();
+        let result = parse_hgvs_with_config("NM_000088.3:c.100 A>G", config);
+        assert!(
+            result.is_err(),
+            "strict mode must continue to reject embedded whitespace"
+        );
+    }
+
+    // Coverage for additional HGVS contexts brainstormed alongside #128:
+    // protein, accession-internal, repeat, uncertain-position, compact allele,
+    // zero-width invisible characters, multi-run warning counts, idempotency.
+
+    #[test]
+    fn test_lenient_strips_whitespace_in_protein() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NP_000079.2:p.Arg 97 Trp");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace in protein: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NP_000079.2:p.Arg97Trp");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_around_accession_dot() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088 .3:c.459A>G");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace around accession dot: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.459A>G");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_in_repeat_block() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.123_125 CAG[10]");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace in repeat: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.123_125CAG[10]");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_inside_uncertain_position() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c.( 123 _ 127 )delA");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace inside uncertain position: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.(123_127)delA");
+    }
+
+    #[test]
+    fn test_lenient_strips_whitespace_in_compact_allele() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        let result = parse_hgvs_lenient("NM_000088.3:c. [ 100A>G ; 200T>C ]");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept whitespace in compact allele: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.[100A>G;200T>C]");
+    }
+
+    #[test]
+    fn test_lenient_strips_zero_width_space() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        // Zero-width space pasted between accession and colon.
+        let result = parse_hgvs_lenient("NM_000088.3\u{200B}:c.100A>G");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept zero-width space: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    #[test]
+    fn test_lenient_strips_byte_order_mark() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        // BOM/ZWNBSP at start of input — common when copy-pasting from a
+        // UTF-8-with-BOM file.
+        let result = parse_hgvs_lenient("\u{FEFF}NM_000088.3:c.100A>G");
+        assert!(
+            result.is_ok(),
+            "lenient parse should accept leading BOM: {:?}",
+            result
+        );
+        let parsed = result.unwrap();
+        assert!(parsed.has_warnings());
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    #[test]
+    fn test_lenient_one_warning_per_run_not_per_char() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        // Three runs of whitespace -> exactly three W2003 warnings.
+        let result = parse_hgvs_lenient(" NM_000088.3 :c.100 A>G").unwrap();
+        let ws_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.error_type == ErrorType::ExtraWhitespace)
+            .collect();
+        assert_eq!(
+            ws_warnings.len(),
+            3,
+            "expected one W2003 per run, got: {:?}",
+            result.warnings
+        );
+        assert_eq!(result.preprocessed_input, "NM_000088.3:c.100A>G");
+    }
+
+    #[test]
+    fn test_lenient_idempotent_on_canonical_form() {
+        use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+        // Canonical input -> no whitespace warnings emitted.
+        let result = parse_hgvs_lenient("NM_000088.3:c.100A>G").unwrap();
+        let ws_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.error_type == ErrorType::ExtraWhitespace)
+            .collect();
+        assert!(
+            ws_warnings.is_empty(),
+            "canonical input must not generate W2003"
+        );
+    }
 }
 
 mod w4002_position_zero {
