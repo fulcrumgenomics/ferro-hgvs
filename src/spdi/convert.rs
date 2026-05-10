@@ -423,6 +423,181 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
     }))
 }
 
+/// Convert an SPDI variant to HGVS, using a reference provider to recover
+/// duplication form for SPDI insertions whose inserted sequence equals the
+/// immediately-5' reference flank.
+///
+/// SPDI is a canonical/positional format and represents duplications as
+/// insertions of the duplicated sequence. This function performs the inverse
+/// recovery for HGVS round-trips: given an SPDI insertion, if the
+/// `inserted.len()` reference bases ending at the insertion point equal the
+/// inserted sequence (case-insensitive), the change is a tandem duplication
+/// per the HGVS spec
+/// (`assets/hgvs-nomenclature/docs/recommendations/DNA/duplication.md`) and
+/// is rendered as HGVS `dup` rather than `ins`.
+///
+/// All other SPDI shapes (substitution, deletion, delins, identity) are
+/// returned unchanged from [`spdi_to_hgvs`].
+///
+/// SPDI itself is canonical and places the insertion at its rightmost
+/// shiftable offset, so the matched 5' flank is already the most-3' position;
+/// no separate 3' shift is performed.
+///
+/// SPDI→HGVS only produces genomic (`g.`) variants, so dup recovery applies
+/// uniformly to genomic and mitochondrial accessions but does not extend to
+/// `c.`, `n.`, or `r.` coordinate systems via this function.
+///
+/// # Arguments
+///
+/// * `spdi` - The SPDI variant to convert.
+/// * `reference` - Reference provider used to fetch the 5'-flanking bases
+///   for dup detection. The function tries
+///   [`ReferenceProvider::get_genomic_sequence`] first and falls back to
+///   [`ReferenceProvider::get_sequence`] for providers that only expose
+///   sequences via the transcript path.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::MissingReferenceData`] when the reference
+/// provider returns an error fetching the 5' flank. Returns the same errors
+/// as [`spdi_to_hgvs`] for other failure modes. A short fetch (truncated near
+/// a contig boundary) or a non-matching flank silently falls back to the
+/// ins-form result, matching the spec recommendation that, absent evidence
+/// of tandem flanking, the change is described as an insertion.
+///
+/// [`ReferenceProvider`]: crate::reference::provider::ReferenceProvider
+/// [`ReferenceProvider::get_genomic_sequence`]: crate::reference::provider::ReferenceProvider::get_genomic_sequence
+/// [`ReferenceProvider::get_sequence`]: crate::reference::provider::ReferenceProvider::get_sequence
+pub fn spdi_to_hgvs_with_ref<R>(
+    spdi: &SpdiVariant,
+    reference: &R,
+) -> Result<HgvsVariant, ConversionError>
+where
+    R: crate::reference::provider::ReferenceProvider + ?Sized,
+{
+    // Build the base HGVS variant using the existing reference-free path.
+    let base = spdi_to_hgvs(spdi)?;
+
+    // Only insertions are candidates for dup recovery. Everything else
+    // (substitution, deletion, delins, identity) passes through unchanged.
+    if !spdi.is_insertion() {
+        return Ok(base);
+    }
+
+    // Try to recover dup form. If the inserted sequence does not match the
+    // 5' flank, fall through and return the original `ins`-form variant.
+    if let Some(dup_variant) = recover_dup_from_insertion(spdi, reference, &base)? {
+        return Ok(dup_variant);
+    }
+    Ok(base)
+}
+
+/// If the SPDI insertion's inserted sequence equals the immediately-5'
+/// reference flank (case-insensitive), return an `HgvsVariant` whose edit is
+/// `NaEdit::Duplication` over the corresponding 1-based interval. Returns
+/// `Ok(None)` when the bases do not match or there are not enough preceding
+/// bases. Returns `Err` only when the reference provider returns a hard
+/// fetch error (which is propagated as `MissingReferenceData`).
+///
+/// `base` is the already-built `ins`-form `HgvsVariant`; we reuse its
+/// accession and gene_symbol when constructing the dup-form result.
+fn recover_dup_from_insertion<R>(
+    spdi: &SpdiVariant,
+    reference: &R,
+    base: &HgvsVariant,
+) -> Result<Option<HgvsVariant>, ConversionError>
+where
+    R: crate::reference::provider::ReferenceProvider + ?Sized,
+{
+    debug_assert!(spdi.is_insertion());
+
+    let ins = &spdi.insertion;
+    let ins_len = ins.len() as u64;
+    if ins_len == 0 {
+        return Ok(None);
+    }
+
+    // Need `ins_len` bases of preceding reference. Under ferro's SPDI
+    // insertion convention, `spdi.position` is the 0-based offset of the
+    // 1-based base immediately 5' of the insertion point, so the
+    // 5'-flanking window is the 0-based half-open interval
+    // `[spdi.position + 1 - ins_len, spdi.position + 1)`.
+    let flank_end =
+        spdi.position
+            .checked_add(1)
+            .ok_or_else(|| ConversionError::InvalidPosition {
+                description: format!("SPDI position {} overflows on +1", spdi.position),
+            })?;
+    if flank_end < ins_len {
+        // Not enough preceding bases (insertion is too close to contig 5' end).
+        return Ok(None);
+    }
+    let flank_start = flank_end - ins_len;
+
+    // Fetch the flanking sequence. Try `get_genomic_sequence` first (the
+    // SPDI accession is genomic), then fall back to `get_sequence` for
+    // providers that store contigs as transcripts.
+    let flank = match reference.get_genomic_sequence(&spdi.sequence, flank_start, flank_end) {
+        Ok(s) => s,
+        Err(_) => match reference.get_sequence(&spdi.sequence, flank_start, flank_end) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(ConversionError::MissingReferenceData {
+                    description: format!(
+                        "could not fetch 5' flank for {}:{}-{}: {}",
+                        spdi.sequence, flank_start, flank_end, e
+                    ),
+                });
+            }
+        },
+    };
+
+    // The fetched window must match `ins` (case-insensitive) and must be
+    // exactly `ins_len` bases. A short fetch (e.g., truncated near a contig
+    // boundary) means we cannot prove tandem dup → fall back to ins.
+    if flank.len() as u64 != ins_len {
+        return Ok(None);
+    }
+    if !flank.eq_ignore_ascii_case(ins) {
+        return Ok(None);
+    }
+
+    // Build the dup edit. 1-based interval: end = spdi.position + 1,
+    // start = end + 1 - ins_len.
+    let end_one_based = flank_end; // == spdi.position + 1
+    let start_one_based = end_one_based + 1 - ins_len;
+
+    let dup_seq = string_to_sequence(ins)?;
+    let interval = if ins_len == 1 {
+        Interval::point(GenomePos::new(end_one_based))
+    } else {
+        Interval::new(
+            GenomePos::new(start_one_based),
+            GenomePos::new(end_one_based),
+        )
+    };
+    let edit = NaEdit::Duplication {
+        sequence: Some(dup_seq),
+        length: None,
+        uncertain_extent: None,
+    };
+
+    // Reuse the accession (and gene_symbol, which is None for SPDI inputs)
+    // from the base ins-form variant. SPDI→HGVS only produces Genome
+    // variants, so we expect HgvsVariant::Genome here.
+    let HgvsVariant::Genome(g) = base else {
+        // Defensive: SPDI→HGVS should always produce Genome. If it doesn't,
+        // do not attempt dup recovery.
+        return Ok(None);
+    };
+
+    Ok(Some(HgvsVariant::Genome(GenomeVariant {
+        accession: g.accession.clone(),
+        gene_symbol: g.gene_symbol.clone(),
+        loc_edit: LocEdit::new(interval, edit),
+    })))
+}
+
 /// Helper to convert a string to a Sequence.
 fn string_to_sequence(s: &str) -> Result<Sequence, ConversionError> {
     s.parse().map_err(|_| ConversionError::InvalidPosition {
@@ -1153,5 +1328,236 @@ mod tests {
         // Empty identity
         let spdi3 = SpdiVariant::new("NC_000001.11", 100, "", "");
         assert!(spdi3.is_identity());
+    }
+
+    // =========================================================================
+    // Issue #119: SPDI→HGVS dup recovery
+    // =========================================================================
+
+    /// Build a MockProvider with a single genomic sequence registered for
+    /// `NC_000001.11`. The string `seq` is the full contig sequence, indexed
+    /// from 0-based position 0.
+    fn provider_with_genomic(seq: &str) -> crate::reference::mock::MockProvider {
+        let mut p = crate::reference::mock::MockProvider::new();
+        p.add_genomic_sequence("NC_000001.11", seq);
+        p
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_recovers_multi_base_dup() {
+        // Reference: positions 1-based 100..102 = "ATG"
+        // Build a contig where 0-based offsets 99, 100, 101 = 'A', 'T', 'G'
+        // We pad with 'N' before and after so the reference fetch works.
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATG"); // 0-based 99..102 (1-based 100..102)
+        contig.push_str(&"N".repeat(50));
+        let provider = provider_with_genomic(&contig);
+
+        // SPDI 101::ATG (the canonical SPDI form of g.100_102dupATG per ferro
+        // convention; verified by test_hgvs_to_spdi_duplication_with_seq).
+        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100_102dupATG");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_recovers_single_base_dup() {
+        // 1-based base 100 = 'A' → SPDI insertion at 99::A is a single-base dup.
+        let mut contig = "N".repeat(99);
+        contig.push('A'); // 0-based 99 = 1-based 100
+        contig.push_str(&"N".repeat(20));
+        let provider = provider_with_genomic(&contig);
+
+        // g.100dupA → SPDI 99::A (5' base is 1-based 100 = 0-based 99).
+        let spdi = SpdiVariant::insertion("NC_000001.11", 99, "A");
+
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100dupA");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_keeps_ins_when_no_match() {
+        // 5' flank of length 3 ending at SPDI position 101 = 1-based bases
+        // 100..102 = "CCC" — does NOT equal the inserted "ATG".
+        let mut contig = "N".repeat(99);
+        contig.push_str("CCC"); // 1-based 100..102 = "CCC"
+        contig.push_str(&"N".repeat(20));
+        let provider = provider_with_genomic(&contig);
+
+        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+
+        // Should fall through to ins-form. Existing spdi_to_hgvs renders an
+        // insertion as `g.{pos}_{pos+1}insATG` where pos = HGVS 1-based of
+        // SPDI position (102 here, since SPDI 101 → 1-based 102). The
+        // ins-form HGVS is therefore g.102_103insATG.
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.102_103insATG");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_keeps_ins_at_contig_start() {
+        // SPDI position 0 with a 3-base insertion: there are no preceding
+        // bases at all (flank_end=1, ins_len=3, flank_end < ins_len).
+        let provider = provider_with_genomic("ATGCATGCATGC");
+
+        let spdi = SpdiVariant::insertion("NC_000001.11", 0, "ATG");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        // ins-form: SPDI 0 → 1-based 1 → g.1_2insATG
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.1_2insATG");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_substitution_unchanged() {
+        let provider = provider_with_genomic(&"N".repeat(20000));
+        let spdi = SpdiVariant::new("NC_000001.11", 12344, "A", "G");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.12345A>G");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_deletion_unchanged() {
+        let provider = provider_with_genomic(&"N".repeat(2000));
+        let spdi = SpdiVariant::deletion("NC_000001.11", 99, "ATG");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100_102delATG");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_delins_unchanged() {
+        let provider = provider_with_genomic(&"N".repeat(2000));
+        let spdi = SpdiVariant::delins("NC_000001.11", 99, "ATG", "TTCC");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100_102delinsTTCC");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_identity_unchanged() {
+        let provider = provider_with_genomic(&"N".repeat(2000));
+        let spdi = SpdiVariant::new("NC_000001.11", 99, "A", "A");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100A=");
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_propagates_ref_error() {
+        // MockProvider with NO genomic_sequences registered for the
+        // requested accession. The fetch returns
+        // FerroError::GenomicReferenceNotAvailable for get_genomic_sequence
+        // AND no transcript by that name for get_sequence. Both fail, so
+        // the helper should return ConversionError::MissingReferenceData.
+        let provider = crate::reference::mock::MockProvider::new();
+        let spdi = SpdiVariant::insertion("NC_000999.99", 101, "ATG");
+
+        let result = spdi_to_hgvs_with_ref(&spdi, &provider);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+    }
+
+    #[test]
+    fn dup_hgvs_to_spdi_to_hgvs_with_ref_roundtrip_multi_base() {
+        // Build a contig with 1-based 100..102 = "ATG"
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATG");
+        contig.push_str(&"N".repeat(20));
+        let provider = provider_with_genomic(&contig);
+
+        // Forward: HGVS dup → SPDI ins
+        let original = "NC_000001.11:g.100_102dupATG";
+        let hgvs = parse_hgvs(original).unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.to_string(), "NC_000001.11:101::ATG");
+
+        // Reverse with reference: SPDI ins → HGVS dup
+        let recovered = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(recovered.to_string(), original);
+    }
+
+    #[test]
+    fn dup_hgvs_to_spdi_to_hgvs_with_ref_roundtrip_single_base() {
+        let mut contig = "N".repeat(99);
+        contig.push('A');
+        contig.push_str(&"N".repeat(20));
+        let provider = provider_with_genomic(&contig);
+
+        let original = "NC_000001.11:g.100dupA";
+        let hgvs = parse_hgvs(original).unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.to_string(), "NC_000001.11:99::A");
+
+        let recovered = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(recovered.to_string(), original);
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_does_not_false_detect_non_tandem_insertion() {
+        // Spec FAQ: ATCGATCGATCG-A-GGGTCCC → ATCGATCGATCG-A-ATCGATCGATCG-GGGTCCC.
+        // The 12-base ATCGATCGATCG sequence appears in the reference at
+        // 1-based 1..12, but the insertion point (between 1-based 13 and 14,
+        // i.e., SPDI position 13) has a 5' flank "TCGATCGATCGA" — NOT
+        // matching the inserted "ATCGATCGATCG". Per the spec FAQ this MUST
+        // remain ins.
+        let contig = "ATCGATCGATCGAGGGTCCC".to_string();
+        let provider = provider_with_genomic(&contig);
+
+        // SPDI position 13 = 0-based 13 = inserts between 1-based 13 and 14.
+        let spdi = SpdiVariant::insertion("NC_000001.11", 13, "ATCGATCGATCG");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        // Expect ins, not dup. Confirm the rendered string contains "ins"
+        // and not "dup".
+        let s = hgvs.to_string();
+        assert!(s.contains("ins"), "expected ins-form, got {}", s);
+        assert!(!s.contains("dup"), "expected not dup, got {}", s);
+    }
+
+    #[test]
+    fn audit_pin_no_ref_spdi_to_hgvs_renders_dup_shape_as_ins() {
+        // Pins issue #119 documented behavior: without a reference,
+        // spdi_to_hgvs cannot prove tandem dup, so the dup-shaped SPDI
+        // 101::ATG (which round-tripped from g.100_102dupATG) is rendered
+        // as g.102_103insATG. If a future change attempts to "fix" the
+        // round-trip without a reference, this audit pin will fail and
+        // demand explicit reconsideration.
+        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+        let hgvs = spdi_to_hgvs(&spdi).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.102_103insATG");
+    }
+
+    #[test]
+    fn dup_recovery_is_idempotent_through_two_roundtrips() {
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATG");
+        contig.push_str(&"N".repeat(20));
+        let provider = provider_with_genomic(&contig);
+
+        let original = "NC_000001.11:g.100_102dupATG";
+        let hgvs1 = parse_hgvs(original).unwrap();
+        let spdi1 = hgvs_to_spdi_simple(&hgvs1).unwrap();
+        let hgvs2 = spdi_to_hgvs_with_ref(&spdi1, &provider).unwrap();
+        let spdi2 = hgvs_to_spdi_simple(&hgvs2).unwrap();
+        let hgvs3 = spdi_to_hgvs_with_ref(&spdi2, &provider).unwrap();
+
+        assert_eq!(spdi1, spdi2);
+        assert_eq!(hgvs2.to_string(), hgvs3.to_string());
+        assert_eq!(hgvs3.to_string(), original);
+    }
+
+    #[test]
+    fn spdi_to_hgvs_with_ref_recovers_dup_for_mito_accession() {
+        // Mock contig for NC_012920.1 with 1-based bases 100..102 = "ATG".
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATG");
+        contig.push_str(&"N".repeat(20));
+
+        let mut provider = crate::reference::mock::MockProvider::new();
+        provider.add_genomic_sequence("NC_012920.1", &contig);
+
+        let spdi = SpdiVariant::insertion("NC_012920.1", 101, "ATG");
+        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        // Even for mito, the SPDI→HGVS path produces a g. variant; this
+        // matches the existing convention in this module.
+        assert_eq!(hgvs.to_string(), "NC_012920.1:g.100_102dupATG");
     }
 }
