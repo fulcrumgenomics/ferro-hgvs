@@ -946,6 +946,10 @@ class ErrorType(IntEnum):
     MissingCoordinatePrefix = 14
     OldAlleleFormat = 15
     RefSeqMismatch = 16
+    DeprecatedStopCodonStar = 17
+    DeprecatedStopCodonX = 18
+    DeprecatedFrameshiftStar = 19
+    DeprecatedFrameshiftX = 20
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

@@ -5,9 +5,10 @@
 
 use super::corrections::{
     correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
-    correct_missing_coordinate_prefix, correct_old_allele_format, correct_protein_arrow,
-    correct_quote_characters, correct_single_letter_aa_in_protein, correct_whitespace,
-    detect_missing_versions, detect_position_zero, strip_trailing_annotation, DetectedCorrection,
+    correct_deprecated_protein_forms, correct_missing_coordinate_prefix, correct_old_allele_format,
+    correct_protein_arrow, correct_quote_characters, correct_single_letter_aa_in_protein,
+    correct_whitespace, detect_missing_versions, detect_position_zero, strip_trailing_annotation,
+    DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -435,7 +436,76 @@ impl InputPreprocessor {
             }
         }
 
-        // Phase 6b: Expand single-letter amino-acid codes to canonical
+        // Phase 6b: Rewrite deprecated stop-codon and frameshift forms in protein
+        // descriptions (SVA-003..SVA-006, issue #125):
+        //   p.Arg97*       → p.Arg97Ter         (W3007 DeprecatedStopCodonStar)
+        //   p.Arg97X       → p.Arg97Ter         (W3008 DeprecatedStopCodonX)
+        //   p.Arg97fs*23   → p.Arg97fsTer23     (W3009 DeprecatedFrameshiftStar)
+        //   p.Arg97fsX23   → p.Arg97fsTer23     (W3010 DeprecatedFrameshiftX)
+        //
+        // Must run BEFORE Phase 6c (single-letter expansion): otherwise the
+        // `X` in `p.Arg97X` would be expanded to `Xaa` ("any amino acid") and
+        // the deprecated-stop-codon signal would be lost.
+        //
+        // Each detection's action is resolved independently and applied
+        // per-correction, so mixing `Accept` with `WarnCorrect`/`SilentCorrect`
+        // overrides across the four W-codes yields a partial rewrite —
+        // Accept-marked tokens are preserved even when sibling detections in
+        // the same input are rewritten.
+        let (corrected_full, corrections) = correct_deprecated_protein_forms(&current);
+        if !corrections.is_empty() {
+            // Reject is sticky: any `Reject` detection fails the whole input,
+            // and the suggestion shows the fully-rewritten canonical form.
+            for c in &corrections {
+                if matches!(self.action_for(c.error_type), ResolvedAction::Reject) {
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            c.start,
+                            format!(
+                                "Deprecated protein notation '{}', use '{}'",
+                                c.original, c.corrected
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(c.start, c.end))
+                                .with_source(input)
+                                .with_suggestion(corrected_full.clone())
+                                .with_hint(
+                                    "HGVS uses 'Ter' (or 'fsTerN') for translation termination; \
+                                    'X' and '*' are deprecated alternatives.",
+                                ),
+                        ),
+                    );
+                }
+            }
+
+            // Walk the original input and apply each non-Accept correction in
+            // place. `corrections` is already in left-to-right byte order.
+            let mut rebuilt = String::with_capacity(current.len());
+            let mut cursor = 0usize;
+            for c in &corrections {
+                rebuilt.push_str(&current[cursor..c.start]);
+                match self.action_for(c.error_type) {
+                    ResolvedAction::Accept => {
+                        rebuilt.push_str(&current[c.start..c.end]);
+                    }
+                    ResolvedAction::WarnCorrect => {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                        rebuilt.push_str(&c.corrected);
+                    }
+                    ResolvedAction::SilentCorrect => {
+                        rebuilt.push_str(&c.corrected);
+                    }
+                    ResolvedAction::Reject => unreachable!("rejected above"),
+                }
+                cursor = c.end;
+            }
+            rebuilt.push_str(&current[cursor..]);
+            current = rebuilt;
+        }
+
+        // Phase 6c: Expand single-letter amino-acid codes to canonical
         // three-letter form within the protein description (W1002).
         let (corrected, corrections) = correct_single_letter_aa_in_protein(&current);
         if !corrections.is_empty() {
@@ -856,5 +926,222 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.preprocessed, "NC_000017.11:g.12345A>G");
         assert!(!result.has_warnings());
+    }
+
+    // ----------------------------------------------------------------------
+    // Deprecated stop-codon and frameshift forms (issue #125, SVA-003..006).
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn test_preprocessor_strict_rejects_deprecated_stop_star() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_preprocessor_strict_rejects_deprecated_stop_x() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97X");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_strict_rejects_deprecated_frameshift_star() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_strict_rejects_deprecated_frameshift_x() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_deprecated_stop_star() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedStopCodonStar
+        );
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_deprecated_stop_x() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97X");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedStopCodonX
+        );
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_deprecated_frameshift_star() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fsTer23");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedFrameshiftStar
+        );
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_deprecated_frameshift_x() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fsTer23");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedFrameshiftX
+        );
+    }
+
+    #[test]
+    fn test_preprocessor_silent_corrects_deprecated_without_warnings() {
+        let preprocessor = InputPreprocessor::silent();
+        for input in [
+            "NP_000079.2:p.Arg97*",
+            "NP_000079.2:p.Arg97X",
+            "NP_000079.2:p.Arg97fs*23",
+            "NP_000079.2:p.Arg97fsX23",
+        ] {
+            let result = preprocessor.preprocess(input);
+            assert!(result.success, "expected success for {}", input);
+            assert!(!result.has_warnings(), "expected no warnings for {}", input);
+            assert!(
+                result.preprocessed.contains("Ter"),
+                "expected Ter in {}",
+                result.preprocessed
+            );
+        }
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_canonical_no_warnings() {
+        let preprocessor = InputPreprocessor::lenient();
+        for input in [
+            "NP_000079.2:p.Arg97Ter",
+            "NP_000079.2:p.Arg97ProfsTer23",
+            "NP_000079.2:p.Tyr180fs",
+            "NP_000079.2:p.Val600Glu",
+            "NP_000079.2:p.Arg782Xaa",
+        ] {
+            let result = preprocessor.preprocess(input);
+            assert!(result.success, "expected success for {}", input);
+            assert_eq!(
+                result.preprocessed, input,
+                "expected unchanged for {}",
+                input
+            );
+            assert!(
+                !result.has_warnings(),
+                "expected no warnings for {}, got {:?}",
+                input,
+                result.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_compound_protein_allele_two_warnings() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97Ter;Arg100Ter]");
+        assert_eq!(result.warnings.len(), 2);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedStopCodonStar
+        );
+        assert_eq!(
+            result.warnings[1].error_type,
+            ErrorType::DeprecatedStopCodonX
+        );
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_idempotent_on_corrected_output() {
+        // Re-running the preprocessor on its own output yields no further
+        // deprecated-form warnings.
+        let preprocessor = InputPreprocessor::lenient();
+        let first = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        let second = preprocessor.preprocess(&first.preprocessed);
+        assert_eq!(second.preprocessed, first.preprocessed);
+        assert!(!second.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_override_accept_keeps_deprecated_form() {
+        // When the override is Accept, the deprecated form passes through
+        // unchanged with no warning.
+        let config = ErrorConfig::lenient()
+            .with_override(ErrorType::DeprecatedStopCodonStar, ErrorOverride::Accept);
+        let preprocessor = InputPreprocessor::new(config);
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97*");
+        assert!(!result.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_override_silent_in_strict_mode() {
+        // SilentCorrect override in strict mode rewrites without warning.
+        let config = ErrorConfig::strict().with_override(
+            ErrorType::DeprecatedFrameshiftStar,
+            ErrorOverride::SilentCorrect,
+        );
+        let preprocessor = InputPreprocessor::new(config);
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fsTer23");
+        assert!(!result.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_does_not_affect_cds_utr_position() {
+        // c.*5A>G is a 3'UTR position, not a deprecated stop codon. Must NOT
+        // be rewritten.
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NM_000088.3:c.*5A>G");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.*5A>G");
+        assert!(!result.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_partial_accept_only_rewrites_non_accept_codes() {
+        // With DeprecatedStopCodonStar = Accept and DeprecatedStopCodonX left
+        // at the lenient default (WarnCorrect), the `*` must remain literal
+        // while the `X` is rewritten to `Ter`. Per-correction action
+        // resolution — without it, the Accept override is silently ignored
+        // when any sibling detection is non-Accept.
+        let config = ErrorConfig::lenient()
+            .with_override(ErrorType::DeprecatedStopCodonStar, ErrorOverride::Accept);
+        let preprocessor = InputPreprocessor::new(config);
+        let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97*;Arg100Ter]");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ErrorType::DeprecatedStopCodonX
+        );
     }
 }

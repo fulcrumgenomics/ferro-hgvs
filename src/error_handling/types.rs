@@ -124,6 +124,37 @@ pub enum ErrorType {
     /// This format was used in older databases but is not valid per current HGVS spec.
     OldAlleleFormat,
 
+    /// Deprecated `*` for stop codon in protein substitution position.
+    ///
+    /// Per HGVS checklist (`recommendations/checklist.md`), `Ter` and `*` may
+    /// both indicate a translation stop codon, but the three-letter `Ter` is
+    /// preferred. Example: `p.Arg97*` (corrected to `p.Arg97Ter`).
+    DeprecatedStopCodonStar,
+
+    /// Deprecated `X` for stop codon in protein substitution position.
+    ///
+    /// Per HGVS checklist (`recommendations/checklist.md`), "the X should not
+    /// be used" to indicate a translation stop codon. The single-letter `X`
+    /// is also reserved for the "any amino acid" symbol Xaa
+    /// (`recommendations/protein/substitution.md`), making `p.Arg97X` ambiguous.
+    /// Corrected to `p.Arg97Ter`.
+    DeprecatedStopCodonX,
+
+    /// Deprecated `fs*N` frameshift termination notation.
+    ///
+    /// Per HGVS frameshift recommendation (`recommendations/protein/frameshift.md`),
+    /// the canonical form is `fsTerN` (e.g. `p.Arg123LysfsTer34`). The `fs*N`
+    /// form is permitted as an alternative but `fsTerN` is preferred.
+    /// Example: `p.Arg97fs*23` (corrected to `p.Arg97fsTer23`).
+    DeprecatedFrameshiftStar,
+
+    /// Deprecated `fsXN` frameshift termination notation.
+    ///
+    /// Per HGVS frameshift recommendation, neither `X` nor `Xaa` is used in
+    /// frameshift termination; the canonical form is `fsTerN`. Example:
+    /// `p.Arg97fsX23` (corrected to `p.Arg97fsTer23`).
+    DeprecatedFrameshiftX,
+
     // === Normalization Error Types ===
     /// Reference sequence mismatch during normalization.
     ///
@@ -154,6 +185,10 @@ impl ErrorType {
             ErrorType::OldAlleleFormat => "W3004",
             ErrorType::TrailingAnnotation => "W3005",
             ErrorType::MissingCoordinatePrefix => "W3006",
+            ErrorType::DeprecatedStopCodonStar => "W3007",
+            ErrorType::DeprecatedStopCodonX => "W3008",
+            ErrorType::DeprecatedFrameshiftStar => "W3009",
+            ErrorType::DeprecatedFrameshiftX => "W3010",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
             ErrorType::RefSeqMismatch => "W5001",
@@ -179,6 +214,14 @@ impl ErrorType {
             ErrorType::TrailingAnnotation => "trailing protein annotation",
             ErrorType::MissingCoordinatePrefix => "missing coordinate type prefix",
             ErrorType::OldAlleleFormat => "old/deprecated allele format",
+            ErrorType::DeprecatedStopCodonStar => "deprecated '*' for stop codon (use 'Ter')",
+            ErrorType::DeprecatedStopCodonX => "deprecated 'X' for stop codon (use 'Ter')",
+            ErrorType::DeprecatedFrameshiftStar => {
+                "deprecated 'fs*N' frameshift notation (use 'fsTerN')"
+            }
+            ErrorType::DeprecatedFrameshiftX => {
+                "deprecated 'fsXN' frameshift notation (use 'fsTerN')"
+            }
             ErrorType::RefSeqMismatch => "reference sequence mismatch",
         }
     }
@@ -223,6 +266,10 @@ impl ErrorType {
                 "NM_000088.3:[c.100A>G;c.200C>T]",
                 "NM_000088.3:c.[100A>G;200C>T]",
             ),
+            ErrorType::DeprecatedStopCodonStar => ("p.Arg97*", "p.Arg97Ter"),
+            ErrorType::DeprecatedStopCodonX => ("p.Arg97X", "p.Arg97Ter"),
+            ErrorType::DeprecatedFrameshiftStar => ("p.Arg97fs*23", "p.Arg97fsTer23"),
+            ErrorType::DeprecatedFrameshiftX => ("p.Arg97fsX23", "p.Arg97fsTer23"),
             ErrorType::RefSeqMismatch => ("c.100G>A (ref is T)", "c.100T>A (corrected)"),
         }
     }
@@ -413,6 +460,10 @@ mod tests {
         assert_eq!(ErrorType::SingleLetterAminoAcid.code(), "W1002");
         assert_eq!(ErrorType::WrongDashCharacter.code(), "W2001");
         assert_eq!(ErrorType::MissingVersion.code(), "W3001");
+        assert_eq!(ErrorType::DeprecatedStopCodonStar.code(), "W3007");
+        assert_eq!(ErrorType::DeprecatedStopCodonX.code(), "W3008");
+        assert_eq!(ErrorType::DeprecatedFrameshiftStar.code(), "W3009");
+        assert_eq!(ErrorType::DeprecatedFrameshiftX.code(), "W3010");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");

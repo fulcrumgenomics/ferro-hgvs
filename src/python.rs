@@ -1722,6 +1722,10 @@ pub enum PyErrorType {
     MissingCoordinatePrefix = 14,
     OldAlleleFormat = 15,
     RefSeqMismatch = 16,
+    DeprecatedStopCodonStar = 17,
+    DeprecatedStopCodonX = 18,
+    DeprecatedFrameshiftStar = 19,
+    DeprecatedFrameshiftX = 20,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -1744,6 +1748,10 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::MissingCoordinatePrefix => PyErrorType::MissingCoordinatePrefix,
             ErrorType::OldAlleleFormat => PyErrorType::OldAlleleFormat,
             ErrorType::RefSeqMismatch => PyErrorType::RefSeqMismatch,
+            ErrorType::DeprecatedStopCodonStar => PyErrorType::DeprecatedStopCodonStar,
+            ErrorType::DeprecatedStopCodonX => PyErrorType::DeprecatedStopCodonX,
+            ErrorType::DeprecatedFrameshiftStar => PyErrorType::DeprecatedFrameshiftStar,
+            ErrorType::DeprecatedFrameshiftX => PyErrorType::DeprecatedFrameshiftX,
         }
     }
 }
@@ -1768,6 +1776,10 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::MissingCoordinatePrefix => ErrorType::MissingCoordinatePrefix,
             PyErrorType::OldAlleleFormat => ErrorType::OldAlleleFormat,
             PyErrorType::RefSeqMismatch => ErrorType::RefSeqMismatch,
+            PyErrorType::DeprecatedStopCodonStar => ErrorType::DeprecatedStopCodonStar,
+            PyErrorType::DeprecatedStopCodonX => ErrorType::DeprecatedStopCodonX,
+            PyErrorType::DeprecatedFrameshiftStar => ErrorType::DeprecatedFrameshiftStar,
+            PyErrorType::DeprecatedFrameshiftX => ErrorType::DeprecatedFrameshiftX,
         }
     }
 }
