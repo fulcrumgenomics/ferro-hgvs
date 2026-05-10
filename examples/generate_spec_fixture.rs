@@ -589,6 +589,10 @@ mod runner {
         /// the override file.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub requires_reference: Option<bool>,
+        /// Warning codes ferro currently emits for this row, sorted alphabetically.
+        /// Empty for rows with no warnings.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub expected_warnings: Vec<String>,
     }
 
     fn source_kind_priority(k: sources::SourceKind) -> u8 {
@@ -679,7 +683,8 @@ mod runner {
             // spec_expected default (the spec wrote the bare form as
             // shorthand for the prefixed form).
             let target = input_prefixed.as_deref().unwrap_or(&input);
-            let (current, parse_ok, normalize_ok) = run_ferro(&normalizer, target);
+            let (current, parse_ok, normalize_ok, expected_warnings) =
+                run_ferro(&normalizer, target);
 
             // spec_expected resolution. Source order: override > structural
             // extraction > default-to-target.
@@ -740,6 +745,7 @@ mod runner {
                 working_group: agg.wg,
                 todo,
                 requires_reference: ov.and_then(|o| o.requires_reference),
+                expected_warnings,
             });
         }
 
@@ -767,12 +773,21 @@ mod runner {
         Ok(rows)
     }
 
-    fn run_ferro(normalizer: &Normalizer<MockProvider>, input: &str) -> (String, bool, bool) {
+    fn run_ferro(
+        normalizer: &Normalizer<MockProvider>,
+        input: &str,
+    ) -> (String, bool, bool, Vec<String>) {
         match parse_hgvs(input) {
-            Err(e) => (format!("parse error: {e}"), false, false),
-            Ok(v) => match normalizer.normalize(&v) {
-                Err(e) => (format!("normalize error: {e}"), true, false),
-                Ok(n) => (format!("{}", n), true, true),
+            Err(e) => (format!("parse error: {e}"), false, false, Vec::new()),
+            Ok(v) => match normalizer.normalize_with_warnings(&v) {
+                Err(e) => (format!("normalize error: {e}"), true, false, Vec::new()),
+                Ok(n) => {
+                    let mut codes: Vec<String> =
+                        n.warnings.iter().map(|w| w.code().to_string()).collect();
+                    codes.sort();
+                    codes.dedup();
+                    (format!("{}", n.result), true, true, codes)
+                }
             },
         }
     }

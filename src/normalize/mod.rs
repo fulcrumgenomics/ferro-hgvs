@@ -26,6 +26,7 @@
 pub mod boundary;
 pub mod config;
 pub(crate) mod merge;
+mod overlap;
 pub mod rules;
 pub mod shuffle;
 pub mod validate;
@@ -84,21 +85,61 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     )
 }
 
-/// Warning generated during normalization
+/// Warning generated during normalization.
+///
+/// This enum is open-ended: each variant owns the fields its code needs.
+/// Future warning codes add new variants without touching existing emit sites.
 #[derive(Debug, Clone)]
-pub struct NormalizationWarning {
-    /// Warning code (e.g., "REFSEQ_MISMATCH")
-    pub code: String,
-    /// Human-readable description
-    pub message: String,
-    /// What the input claimed as reference
-    pub stated_ref: String,
-    /// What the actual reference sequence has
-    pub actual_ref: String,
-    /// Position info
-    pub position: String,
-    /// Whether the mismatch was auto-corrected
-    pub corrected: bool,
+pub enum NormalizationWarning {
+    /// Reference sequence mismatch. Stated ref bases in the HGVS expression
+    /// do not match the actual reference sequence. Code: `REFSEQ_MISMATCH`.
+    RefSeqMismatch {
+        /// Human-readable description
+        message: String,
+        /// What the input claimed as reference
+        stated_ref: String,
+        /// What the actual reference sequence has
+        actual_ref: String,
+        /// Position info
+        position: String,
+        /// Whether the mismatch was auto-corrected
+        corrected: bool,
+    },
+
+    /// Two or more cis-allele edits share identical reference bounds.
+    /// The HGVS spec does not define a canonical form for this case;
+    /// ferro preserves the input verbatim and emits this warning.
+    /// Code: `OVERLAP_CONFLICTING_EDITS`.
+    OverlapConflict {
+        /// Human-readable description
+        message: String,
+        /// Accession of the reference sequence
+        accession: String,
+        /// Coordinate system: "g" | "c" | "n" | "r" | "m"
+        coordinate_system: String,
+        /// Canonical span text, e.g. "100" or "100_103"
+        location: String,
+        /// Edit kinds, e.g. ["sub", "sub"] or ["del", "inv"]
+        edit_kinds: Vec<String>,
+    },
+}
+
+impl NormalizationWarning {
+    /// The warning's user-facing code string.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
+            Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
+        }
+    }
+
+    /// Human-readable message for the warning.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::RefSeqMismatch { message, .. } => message,
+            Self::OverlapConflict { message, .. } => message,
+        }
+    }
 }
 
 /// Result of normalization with optional warnings
@@ -136,7 +177,9 @@ impl NormalizeResultWithWarnings {
 
     /// Check if there's a reference mismatch warning
     pub fn has_ref_mismatch(&self) -> bool {
-        self.warnings.iter().any(|w| w.code == "REFSEQ_MISMATCH")
+        self.warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::RefSeqMismatch { .. }))
     }
 }
 
@@ -172,14 +215,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         let result = self.normalize_with_warnings(variant)?;
 
-        // In strict mode, reject if there were reference mismatches
-        if self.config.should_reject_ref_mismatch() && result.has_ref_mismatch() {
-            if let Some(warning) = result.warnings.iter().find(|w| w.code == "REFSEQ_MISMATCH") {
-                return Err(FerroError::ReferenceMismatch {
-                    location: warning.position.clone(),
-                    expected: warning.stated_ref.clone(),
-                    found: warning.actual_ref.clone(),
-                });
+        // In strict mode, reject if there were reference mismatches.
+        if self.config.should_reject_ref_mismatch() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::RefSeqMismatch {
+                    position,
+                    stated_ref,
+                    actual_ref,
+                    ..
+                } => Some(FerroError::ReferenceMismatch {
+                    location: position.clone(),
+                    expected: stated_ref.clone(),
+                    found: actual_ref.clone(),
+                }),
+                _ => None,
+            }) {
+                return Err(err);
             }
         }
 
@@ -245,6 +296,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if self.config.prevent_overlap {
             normalized = self.resolve_overlaps(normalized)?;
         }
+
+        // Detect coincident-bounds conflicts (issue #81 A8). Runs after per-variant
+        // normalization so post-shift collisions are caught the same as input-time
+        // ones; emits OVERLAP_CONFLICTING_EDITS warnings, leaves output unchanged.
+        all_warnings.extend(crate::normalize::overlap::detect_overlap_conflicts(
+            &normalized,
+            allele.phase,
+        ));
 
         // HGVS requires consecutive edits in cis to render as a single delins.
         // Track input length so we only unwrap when a merge actually collapsed
@@ -1710,8 +1769,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Validate reference allele before normalization
         let validation = validate::validate_reference(edit, ref_seq, start, end);
         if !validation.valid {
-            warnings.push(NormalizationWarning {
-                code: "REFSEQ_MISMATCH".to_string(),
+            warnings.push(NormalizationWarning::RefSeqMismatch {
                 message: validation.warning.unwrap_or_default(),
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),

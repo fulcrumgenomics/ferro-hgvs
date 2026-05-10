@@ -302,8 +302,16 @@
       "description": "RefSeqMismatch — stated reference base mismatches actual reference (warning sibling of E3002).",
       "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
-      "status": "registered",
-      "spec_section_notes": "Referenced from src/normalize/config.rs as a per-code policy override (with_override(ErrorType::RefSeqMismatch, ...)) but no normalize/, reference/, or convert/ site emits this warning when a mismatch is observed. With no reference data loaded (the common CLI case) parsing succeeds and no warning fires; with reference data the sibling error E3002 is raised instead. The spec rule is partially enforced by E3002; W5001 has no distinct emission path."
+      "status": "partial",
+      "spec_section_notes": "Emitted as NormalizationWarning::RefSeqMismatch from src/normalize/mod.rs when validate_reference detects a mismatch during normalization. Coverage is partial because emission requires loaded reference data; without reference data (the common CLI case) parsing succeeds with no warning. With reference data the sibling error E3002 is raised in strict mode instead."
+    },
+    {
+      "code": "W5002",
+      "description": "OverlapConflictingEdits — two or more cis-allele edits share identical reference bounds (e.g. g.[100G>A;100A>C]).",
+      "spec_section": "recommendations/DNA/alleles.md (cis-allele variant descriptions); recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/alleles/",
+      "status": "enforced",
+      "spec_section_notes": "Detected in src/normalize/overlap.rs by detect_overlap_conflicts and wired into normalize_allele after per-variant normalization. Variant output is preserved; the warning is advisory."
     }
   ]
 }

@@ -10,6 +10,29 @@ fn normalize_to_string(input: &str) -> String {
     format!("{}", normalized)
 }
 
+fn normalize_to_string_and_warning_codes(input: &str) -> (String, Vec<String>) {
+    let normalizer = Normalizer::new(MockProvider::new());
+    let parsed = parse_hgvs(input).expect("parse");
+    let r = normalizer
+        .normalize_with_warnings(&parsed)
+        .expect("normalize");
+    let codes: Vec<String> = r.warnings.iter().map(|w| w.code().to_string()).collect();
+    (r.result.to_string(), codes)
+}
+
+fn normalize_with_provider_and_warning_codes(
+    provider: MockProvider,
+    input: &str,
+) -> (String, Vec<String>) {
+    let normalizer = Normalizer::new(provider);
+    let parsed = parse_hgvs(input).expect("parse");
+    let r = normalizer
+        .normalize_with_warnings(&parsed)
+        .expect("normalize");
+    let codes: Vec<String> = r.warnings.iter().map(|w| w.code().to_string()).collect();
+    (r.result.to_string(), codes)
+}
+
 #[test]
 fn test_merge_consecutive_subs_genome() {
     // Issue #72 example: two adjacent SNVs collapse to a single delins.
@@ -397,13 +420,17 @@ fn test_merge_long_chain_mixed_types() {
 
 #[test]
 fn test_merge_same_position_twice_no_merge() {
-    // Two edits at the SAME position (zero gap, but overlap not adjacency)
-    // must not collapse into a single delins.
-    let result = normalize_to_string("NC_000001.11:g.[100G>A;100A>C]");
-    // The output should still contain both — we don't synthesize a "double mutation" form.
-    assert!(result.contains("100G>A"), "got {}", result);
-    assert!(result.contains("100A>C"), "got {}", result);
-    assert!(!result.contains("delins"), "got {}", result);
+    // Two SUBs at the SAME position (zero gap, but overlap not adjacency)
+    // must not collapse into a single delins. Emit OVERLAP_CONFLICTING_EDITS.
+    let (text, codes) = normalize_to_string_and_warning_codes("NC_000001.11:g.[100G>A;100A>C]");
+    assert!(text.contains("100G>A"), "got {}", text);
+    assert!(text.contains("100A>C"), "got {}", text);
+    assert!(!text.contains("delins"), "got {}", text);
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "expected OVERLAP_CONFLICTING_EDITS, got {:?}",
+        codes
+    );
 }
 
 #[test]
@@ -797,4 +824,125 @@ fn test_no_merge_3utr_cds_boundary() {
     assert!(result.contains("40C>T"), "got {}", result);
     assert!(result.contains("*1A>G"), "got {}", result);
     assert!(!result.contains("delins"), "got {}", result);
+}
+
+// =====================================================================
+// Scope-C: Coincident-bounds overlap warning tests.
+//
+// These tests verify that edits with identical boundaries (or same
+// single position) emit OVERLAP_CONFLICTING_EDITS when they are
+// conflicting cis edits on the same allele.
+// =====================================================================
+
+#[test]
+fn test_overlap_sub_then_del_at_same_base() {
+    let (text, codes) = normalize_to_string_and_warning_codes("NC_000001.11:g.[100A>C;100del]");
+    assert!(text.contains("100A>C"), "got {}", text);
+    assert!(text.contains("100del"), "got {}", text);
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_overlap_del_then_sub_at_same_base() {
+    let (text, codes) = normalize_to_string_and_warning_codes("NC_000001.11:g.[100del;100A>C]");
+    assert!(text.contains("100del"), "got {}", text);
+    assert!(text.contains("100A>C"), "got {}", text);
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_overlap_two_dels_at_same_base() {
+    let (text, codes) = normalize_to_string_and_warning_codes("NC_000001.11:g.[100del;100del]");
+    assert_eq!(
+        text.matches("100del").count(),
+        2,
+        "expected both dels preserved, got {}",
+        text
+    );
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_overlap_coincident_range_del_inv() {
+    let (text, codes) = normalize_with_provider_and_warning_codes(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:c.[100_103del;100_103inv]",
+    );
+    assert!(text.contains("100_103del"), "got {}", text);
+    assert!(text.contains("100_103inv"), "got {}", text);
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_overlap_coincident_range_two_dels() {
+    let (text, codes) =
+        normalize_to_string_and_warning_codes("NC_000001.11:g.[100_103del;100_103del]");
+    assert_eq!(text.matches("100_103del").count(), 2, "got {}", text);
+    assert!(
+        codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_no_overlap_warning_for_spec_legal_del_dup() {
+    // The spec preserves this overlapping del+dup form (non-identical bounds).
+    let (_text, codes) = normalize_with_provider_and_warning_codes(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:c.[762_768del;767_774dup]",
+    );
+    assert!(
+        !codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "spec-legal overlap must not emit OVERLAP_CONFLICTING_EDITS, got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_no_overlap_warning_for_trans_alleles() {
+    let (_text, codes) =
+        normalize_to_string_and_warning_codes("[NC_000001.11:g.100A>C];[NC_000001.11:g.100A>G]");
+    assert!(
+        !codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "trans alleles must not emit OVERLAP_CONFLICTING_EDITS, got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_no_overlap_warning_for_multi_accession_cis() {
+    let (_text, codes) =
+        normalize_to_string_and_warning_codes("[NC_000001.11:g.100A>C;NC_000002.11:g.100A>G]");
+    assert!(
+        !codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "multi-accession cis must not emit OVERLAP_CONFLICTING_EDITS, got {:?}",
+        codes
+    );
+}
+
+#[test]
+fn test_no_overlap_warning_for_adjacency() {
+    let (_text, codes) = normalize_to_string_and_warning_codes("NC_000001.11:g.[100A>C;101A>G]");
+    assert!(
+        !codes.contains(&"OVERLAP_CONFLICTING_EDITS".to_string()),
+        "adjacency must not emit OVERLAP_CONFLICTING_EDITS, got {:?}",
+        codes
+    );
 }

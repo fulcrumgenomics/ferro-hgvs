@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(normalize)* detect cis-allele edits with coincident reference bounds (e.g. `g.[100G>A;100A>C]`) and emit an advisory `OVERLAP_CONFLICTING_EDITS` (`W5002`) warning. Variant output is preserved unchanged. Addresses [#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) item A8.
+- *(test)* `expected_warnings` field on the HGVS v21.0 spec-fixture row schema, pinning the warning set ferro emits per row.
+
 ### Fixed
 
 - *(normalize)* recognize a reverse-complement sub-span within a `delins` (synthesized by cis-allele merge OR user-typed) and emit the spec-canonical `inv`, splitting the surrounding span into `[…; inv; …]`. The HGVS edit-priority rule places `inv` above `delins` in the priority order (`general.md:56`) and defines `delins` as the residual when no higher-priority form applies (`delins.md`). For example, `g.[1150T>G;1151C>A;1152C>G]` (over `TCC`) now normalizes to `g.[1150_1151inv;1152C>G]` instead of `g.1150_1152delinsGAG`; `g.[1092G>C;1093G>C]` (over `GG`) normalizes to `g.1092_1093inv` instead of `g.1092_1093delinsCC`. The same rule fires for a user-typed `g.1150_1152delinsGAG`, since the canonical form depends on `(ref, position, alt)` and not on input shape. Applies across all NA coord systems: `g.`, `m.`, `c.` (CDS-proper positions), `n.`, `r.` (T/U-equivalent comparison so `r.` alts with `U` align with transcript ref bytes that contain `T`). Sub-only decomposition (rewriting a non-inv multi-sub `delinsXY` to `[X>...; Y>...]`) is intentionally left out of scope and is a separate spec interpretation question. The codon-frame `c.` merge from issue [#79](https://github.com/fulcrumgenomics/ferro-hgvs/issues/79) is preserved automatically — the synthesized middle base in a codon-frame-merged delins makes a length-2 inv across the middle mathematically impossible. Closes issue [#160](https://github.com/fulcrumgenomics/ferro-hgvs/issues/160).
@@ -21,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `insertion_to_repeat`, `duplication_to_repeat`, and `normalize_repeat` in `ferro_hgvs::normalize::rules` gain an `is_coding: bool` parameter to drive the codon-frame gate. (`deletion_to_repeat` is `pub(crate)` and gains the same parameter as an internal change.)
 - `RepeatNormResult::Insertion { start, end, sequence }` and `DupToRepeatResult::GatedInsertion { start, end, sequence }` variants added so the rule layer can route gated rewrites to the spec-canonical literal `ins` form.
+- *(normalize)* `NormalizationWarning` is now a sum type (`RefSeqMismatch` / `OverlapConflict`). Each warning code carries only the fields relevant to it. Read sites migrate from `.code` field access to `.code()` method and pattern-matching on the variant.
 
 ### Changed
 

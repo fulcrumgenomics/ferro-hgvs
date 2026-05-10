@@ -331,6 +331,7 @@ use crate::benchmark::types::{
 };
 use crate::error_handling::{ErrorConfig, ErrorMode, InputPreprocessor};
 use crate::hgvs::parser::parse_hgvs_lenient;
+use crate::normalize::NormalizationWarning;
 use crate::normalize::NormalizeConfig;
 use crate::reference::ReferenceProvider;
 use crate::{FerroError, MockProvider, MultiFastaProvider, Normalizer};
@@ -1479,16 +1480,21 @@ fn run_ferro_normalize(
                     match normalizer.normalize_with_warnings(&parse_result.result) {
                         Ok(norm_result) => {
                             // Check if there were reference mismatches
-                            let ref_mismatch = norm_result
-                                .warnings
-                                .iter()
-                                .find(|w| w.code == "REFSEQ_MISMATCH")
-                                .map(|w| RefMismatchInfo {
-                                    stated_ref: w.stated_ref.clone(),
-                                    actual_ref: w.actual_ref.clone(),
-                                    position: w.position.clone(),
-                                    corrected: w.corrected,
-                                });
+                            let ref_mismatch = norm_result.warnings.iter().find_map(|w| match w {
+                                NormalizationWarning::RefSeqMismatch {
+                                    stated_ref,
+                                    actual_ref,
+                                    position,
+                                    corrected,
+                                    ..
+                                } => Some(RefMismatchInfo {
+                                    stated_ref: stated_ref.clone(),
+                                    actual_ref: actual_ref.clone(),
+                                    position: position.clone(),
+                                    corrected: *corrected,
+                                }),
+                                _ => None,
+                            });
 
                             ParseResult {
                                 input: pattern.clone(),

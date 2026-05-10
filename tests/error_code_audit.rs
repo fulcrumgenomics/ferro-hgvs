@@ -41,8 +41,9 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/error_code_audit.json")
 }
 
-/// Source-tree subset where `ErrorType::<Variant>` references *should* count as
-/// "this variant is emitted as a warning at runtime."
+/// Source-tree subset where `ErrorType::<Variant>` or
+/// `NormalizationWarning::<Variant>` references *should* count as "this
+/// variant is emitted as a warning at runtime."
 ///
 /// Excluded files are bookkeeping shims that map every variant by definition
 /// (`config.rs`, `python.rs`, `bin/ferro.rs`, `error_handling/types.rs`,
@@ -50,11 +51,13 @@ fn fixture_path() -> PathBuf {
 /// surfaces (`error_handling/mod.rs`, `normalize/config.rs`) that only set
 /// per-code policy without raising the warning. The remaining set captures
 /// the real emission path: preprocessor invocations of correction functions
-/// that return `ErrorType::*` along with corrections, and any future emission
-/// site under `src/hgvs/`, `src/normalize/`, etc.
+/// that return `ErrorType::*`, post-normalization advisory emissions through
+/// `NormalizationWarning::*`, and any future emission site.
 const EMISSION_SCAN_PATHS: &[&str] = &[
     "src/error_handling/preprocessor.rs",
     "src/hgvs",
+    "src/normalize/mod.rs",
+    "src/normalize/overlap.rs",
     "src/normalize/rules.rs",
     "src/normalize/shuffle.rs",
     "src/convert",
@@ -63,13 +66,20 @@ const EMISSION_SCAN_PATHS: &[&str] = &[
     "src/vcf",
 ];
 
+/// Map from a `NormalizationWarning::<Variant>` name to the registry's
+/// `name` field (the `ErrorType::*` variant name the audit row identifies
+/// the code by). Use when the emission variant and the registry name diverge.
+const NORMALIZATION_WARNING_TO_REGISTRY_NAME: &[(&str, &str)] = &[
+    // W5001 — both names match, so no mapping entry needed.
+    ("OverlapConflict", "OverlapConflictingEdits"),
+];
+
 /// Scan [`EMISSION_SCAN_PATHS`] under `CARGO_MANIFEST_DIR` for distinct
-/// `ErrorType::<Variant>` variant names actually used to drive warning
-/// emission. The match is a substring scan; because the bookkeeping files
-/// are excluded the false-positive surface is small.
-///
-/// Returns variant names like `"WrongDashCharacter"` (without the
-/// `ErrorType::` prefix) for set-membership checks.
+/// variant names actually used to drive warning emission. Recognizes both
+/// `ErrorType::<Variant>` (preprocessor-style emission) and
+/// `NormalizationWarning::<Variant>` (post-normalization emission), mapping
+/// the latter through [`NORMALIZATION_WARNING_TO_REGISTRY_NAME`] so the
+/// returned set keys on the registry's `name` field.
 fn emitted_error_type_variants() -> BTreeSet<String> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut found = BTreeSet::new();
@@ -87,6 +97,7 @@ fn scan_for_variants(path: &std::path::Path, out: &mut BTreeSet<String>) {
         if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             if let Ok(text) = std::fs::read_to_string(path) {
                 extract_error_type_variants(&text, out);
+                extract_normalization_warning_variants(&text, out);
             }
         }
         return;
@@ -95,6 +106,29 @@ fn scan_for_variants(path: &std::path::Path, out: &mut BTreeSet<String>) {
         for entry in rd.flatten() {
             scan_for_variants(&entry.path(), out);
         }
+    }
+}
+
+fn extract_normalization_warning_variants(text: &str, out: &mut BTreeSet<String>) {
+    let needle = "NormalizationWarning::";
+    let mut i = 0;
+    while let Some(pos) = text[i..].find(needle) {
+        let start = i + pos + needle.len();
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(rest.len());
+        if end > 0 {
+            let name = &rest[..end];
+            if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                let mapped = NORMALIZATION_WARNING_TO_REGISTRY_NAME
+                    .iter()
+                    .find_map(|(emit, reg)| (*emit == name).then_some(*reg))
+                    .unwrap_or(name);
+                out.insert(mapped.to_string());
+            }
+        }
+        i = start + end.max(1);
     }
 }
 
