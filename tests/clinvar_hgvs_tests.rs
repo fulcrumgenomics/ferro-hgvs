@@ -317,6 +317,15 @@ mod per_type_floor_tests {
 // 4.2M Unique Variants Tests (Extended)
 // ============================================================================
 
+/// Exhaustive parse over the 4.2M unique ClinVar HGVS strings — the broadest
+/// single fixture, including the long tail that the 500K stratified sample
+/// drops and inputs outside the CMRG/paraphase gene scopes. Asserts a >99%
+/// pass-rate floor; matches the shape of `cmrg_exhaustive_tests` and
+/// `paraphase_exhaustive_tests`.
+///
+/// A per-input expectations framework (golden snapshot of which inputs are
+/// expected to fail and why) is tracked as follow-up work that will replace
+/// the coarse >99% threshold with per-input regression detection.
 #[test]
 fn test_clinvar_hgvs_unique_benchmark() {
     let buf = match load_fixture_bytes("clinvar_hgvs_unique.json.gz") {
@@ -336,20 +345,24 @@ fn test_clinvar_hgvs_unique_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    let mut passed = 0;
+    #[cfg(feature = "parallel")]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .par_iter()
+        .map(|case| parse_hgvs(case.input).is_ok())
+        .collect();
+    #[cfg(not(feature = "parallel"))]
+    let oks: Vec<bool> = fixture
+        .test_cases
+        .iter()
+        .map(|case| parse_hgvs(case.input).is_ok())
+        .collect();
+
+    let mut passed = 0usize;
     let mut by_type: HashMap<&str, (usize, usize)> = HashMap::new();
-
-    for (i, case) in fixture.test_cases.iter().enumerate() {
-        if i % 500000 == 0 && i > 0 {
-            let elapsed = start.elapsed();
-            let rate = i as f64 / elapsed.as_secs_f64();
-            eprintln!("  Progress: {}/{} ({:.0}/sec)", i, total, rate);
-        }
-
-        let result = parse_hgvs(case.input);
+    for (case, ok) in fixture.test_cases.iter().zip(oks.iter()) {
         let entry = by_type.entry(case.coord_type).or_insert((0, 0));
-
-        if result.is_ok() {
+        if *ok {
             passed += 1;
             entry.0 += 1;
         } else {
@@ -376,4 +389,10 @@ fn test_clinvar_hgvs_unique_benchmark() {
     }
 
     eprintln!("\n========================================\n");
+
+    assert!(
+        pass_rate > 99.0,
+        "ClinVar unique-variants exhaustive pass rate should be >99%, got {:.2}%",
+        pass_rate
+    );
 }
