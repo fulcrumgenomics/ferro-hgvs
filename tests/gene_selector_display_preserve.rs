@@ -311,10 +311,15 @@ fn display_preserves_gene_selector_in_trans_allele_same_acc_same_gene() {
 
 #[test]
 fn display_preserves_gene_selector_in_trans_allele_expanded_form() {
-    // Force the expanded form by parsing the explicit `[v1];[v2]` notation.
-    // Each sub-variant carries its own selector via per-variant Display; this
-    // test pins that path directly so a regression in the per-kind helper is
-    // caught even when the compact-trans path would have hidden it.
+    // Parse the expanded `[v1];[v2]` notation; each sub-variant captures the
+    // gene_symbol independently. Because both sub-variants share accession and
+    // gene_symbol, `all_share_accession_and_type` permits the compact-trans
+    // output `ACC(GENE):c.[a];[b]`, so this test does NOT exercise the
+    // per-kind expanded-form Display path (that case lives in
+    // `display_preserves_independent_gene_selectors_in_mixed_acc_trans`, where
+    // mismatched accessions force the expanded path). What this test pins is
+    // sub-variant `gene_symbol` capture under the expanded-input → compact-
+    // trans-output normalization, plus byte-stable re-parse of the output.
     let input = "[NM_000088.3(COL1A1):c.100A>G];[NM_000088.3(COL1A1):c.200C>T]";
     let v = parse_hgvs(input).unwrap();
     let s = v.to_string();
