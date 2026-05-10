@@ -276,6 +276,42 @@
       "status": "enforced"
     },
     {
+      "code": "W3007",
+      "description": "DeprecatedStopCodonStar — 'p.Arg97*' rewritten to 'p.Arg97Ter' (Ter is the preferred stop-codon form).",
+      "spec_section": "recommendations/checklist.md (HGVS checklist: 'Ter' is the preferred form for the translation stop codon; '*' is permitted but discouraged)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/checklist/",
+      "status": "enforced",
+      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedStopCodonStar; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
+      "follow_up_issues": [125]
+    },
+    {
+      "code": "W3008",
+      "description": "DeprecatedStopCodonX — 'p.Arg97X' rewritten to 'p.Arg97Ter' ('X' is reserved for Xaa 'any amino acid', not for stop).",
+      "spec_section": "recommendations/checklist.md ('the X should not be used' for the translation stop codon); recommendations/protein/variant/substitution.md (canonical 'Ter')",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/substitution/",
+      "status": "enforced",
+      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedStopCodonX; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
+      "follow_up_issues": [125]
+    },
+    {
+      "code": "W3009",
+      "description": "DeprecatedFrameshiftStar — 'p.Arg97fs*23' rewritten to 'p.Arg97fsTer23'.",
+      "spec_section": "recommendations/protein/variant/frameshift.md (canonical 'fsTerN'; 'fs*N' is permitted but discouraged)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
+      "status": "enforced",
+      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedFrameshiftStar; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
+      "follow_up_issues": [125]
+    },
+    {
+      "code": "W3010",
+      "description": "DeprecatedFrameshiftX — 'p.Arg97fsX23' rewritten to 'p.Arg97fsTer23'.",
+      "spec_section": "recommendations/protein/variant/frameshift.md (canonical 'fsTerN'; 'X' is not used for HGVS frameshift termination)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
+      "status": "enforced",
+      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedFrameshiftX; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
+      "follow_up_issues": [125]
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
