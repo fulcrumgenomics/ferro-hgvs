@@ -1,0 +1,309 @@
+{
+  "_comment": "Machine-checkable companion to docs/spec/error_code_audit.md. Maps every code in src/error_handling/registry.rs to the HGVS spec section it enforces. Tracking issue: fulcrumgenomics/ferro-hgvs#81 item L1. Follow-up gaps: fulcrumgenomics/ferro-hgvs#115. Tests in tests/error_code_audit.rs assert registry and fixture stay in sync.",
+  "_status_legend": {
+    "enforced": "Code reliably surfaces every input that violates the cited spec rule.",
+    "partial": "Code surfaces a subset of violating inputs; gap noted in spec_section_notes.",
+    "registered": "Code is present in src/error_handling/registry.rs and the ErrorType enum but no preprocessor or parser site emits it. The spec rule is unenforced at runtime.",
+    "missing": "Code is documented in the audit but does not exist in the registry yet. (No rows currently use this status; reserved for audits where the registry should grow.)",
+    "infra": "Infrastructure code (I/O, missing reference data); no spec section applies."
+  },
+  "codes": [
+    {
+      "code": "E1001",
+      "description": "InvalidAccession — accession does not match a recognized RefSeq/Ensembl/LRG prefix.",
+      "spec_section": "background/refseq.md (lines 45-57: NC_, NT_, NW_, NG_, NM_, NR_, NP_, LRG_)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1002",
+      "description": "UnknownVariantType — coordinate-type prefix (g./c./n./r./p./m./o.) missing or invalid.",
+      "spec_section": "background/refseq.md (lines 64, 81-141); recommendations/general.md (lines 20-28)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1003",
+      "description": "InvalidPosition — position is not a valid integer or offset position.",
+      "spec_section": "background/numbering.md (lines 16-28: c. numbering rules)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1004",
+      "description": "InvalidEdit — edit type or format is invalid.",
+      "spec_section": "recommendations/DNA/{substitution,deletion,insertion,duplication,inversion,delins}.md",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1005",
+      "description": "UnexpectedEnd — input ended before description was complete.",
+      "spec_section": "recommendations/grammar.md (full grammar rules)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1006",
+      "description": "UnexpectedChar — invalid character at this parser position.",
+      "spec_section": "recommendations/grammar.md; also catches retracted c.IVS notation per background/numbering.md line 32",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "partial",
+      "spec_section_notes": "Generic UnexpectedChar is also raised for the retracted c.IVS notation; a dedicated code with an actionable hint is filed in #115 item 2.",
+      "follow_up_issues": [115]
+    },
+    {
+      "code": "E1007",
+      "description": "InvalidBase — invalid nucleotide base (must be A/C/G/T/U or IUPAC code).",
+      "spec_section": "background/standards.md (line 15: NC-IUB / IUBMB nucleotide codes)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/standards/",
+      "status": "enforced"
+    },
+    {
+      "code": "E1008",
+      "description": "InvalidAminoAcid — invalid amino acid (must be valid 1- or 3-letter IUPAC code).",
+      "spec_section": "background/standards.md — Amino Acid Descriptions (lines 210-214: IUPAC-IUB amino acid table)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/standards/",
+      "status": "enforced"
+    },
+    {
+      "code": "E2001",
+      "description": "ReferenceNotFound — accession not present in loaded reference data.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure: depends on which reference set is loaded."
+    },
+    {
+      "code": "E2002",
+      "description": "SequenceNotFound — sequence data unavailable for accession with metadata.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure."
+    },
+    {
+      "code": "E2003",
+      "description": "ChromosomeNotFound — chromosome / contig not in reference.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure."
+    },
+    {
+      "code": "E3001",
+      "description": "PositionOutOfBounds — position beyond the length of the reference sequence.",
+      "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced"
+    },
+    {
+      "code": "E3002",
+      "description": "ReferenceMismatch — stated reference base does not match the actual reference.",
+      "spec_section": "recommendations/general.md line 15; recommendations/DNA/substitution.md (substitution semantics)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced"
+    },
+    {
+      "code": "E3003",
+      "description": "InvalidRange — start > end or otherwise invalid coordinate range.",
+      "spec_section": "recommendations/general.md line 65: '_ (underscore) is used to indicate a range' (range semantics imply start <= end)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced"
+    },
+    {
+      "code": "E3004",
+      "description": "ExonIntronBoundary — variant spans an exon/intron junction.",
+      "spec_section": "background/numbering.md (lines 21-28: intronic offsets per-side); recommendations/DNA/deletion.md (boundary cases)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced"
+    },
+    {
+      "code": "E3005",
+      "description": "UtrCdsBoundary — variant spans the UTR/CDS boundary.",
+      "spec_section": "background/numbering.md (UTR uses -/* markers, CDS uses bare integers; boundary requires special handling)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced"
+    },
+    {
+      "code": "E4001",
+      "description": "IntronicVariant — intronic variant cannot be normalized without genomic context.",
+      "spec_section": "background/numbering.md line 28: 'a coding DNA reference sequence does not contain intron sequences and can therefore not be used as a reference'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced"
+    },
+    {
+      "code": "E4002",
+      "description": "UnsupportedVariant — variant type not supported for this operation.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Implementation limit; surfaces incomplete coverage rather than a spec rule."
+    },
+    {
+      "code": "E5001",
+      "description": "ConversionFailed — coordinate conversion between reference systems failed.",
+      "spec_section": "background/refseq.md (cross-reference c./g./n./p. relations)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "enforced"
+    },
+    {
+      "code": "E5002",
+      "description": "NoOverlappingTranscript — no transcript overlaps the genomic position.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure: depends on transcript set loaded."
+    },
+    {
+      "code": "E9001",
+      "description": "IoError — file I/O failure.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure."
+    },
+    {
+      "code": "E9002",
+      "description": "JsonError — JSON parse failure.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure."
+    },
+    {
+      "code": "W1001",
+      "description": "LowercaseAminoAcid — 'val' instead of 'Val'.",
+      "spec_section": "recommendations/protein/substitution.md; background/standards.md (3-letter code preferred); recommendations/general.md lines 41-43",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/substitution/",
+      "status": "registered",
+      "spec_section_notes": "correct_amino_acid_case in src/error_handling/corrections.rs returns ErrorType::LowercaseAminoAcid but is never invoked from the preprocessor or parser. Empirically, NP_003997.1:p.val600glu is auto-normalized to NP_003997.1:p.Val600Glu in lenient mode with an empty corrections list. Tracked in #124 (#81 L2 SVA-001).",
+      "follow_up_issues": [124]
+    },
+    {
+      "code": "W1002",
+      "description": "SingleLetterAminoAcid — 'V600E' instead of 'Val600Glu'.",
+      "spec_section": "recommendations/general.md lines 41-43: 'three-letter amino acid code is preferred'; recommendations/protein/substitution.md",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "registered",
+      "spec_section_notes": "Empirically, NP_003997.1:p.V600E is auto-expanded to NP_003997.1:p.Val600Glu in lenient mode with no W1002 in the corrections list (the preprocessor does not invoke a single-to-three-letter corrector). Tracked in #124 (#81 L2 SVA-002).",
+      "follow_up_issues": [124]
+    },
+    {
+      "code": "W1003",
+      "description": "LowercaseAccessionPrefix — 'nm_000088.3' instead of 'NM_000088.3'.",
+      "spec_section": "background/refseq.md lines 45-57 (accession prefixes shown in uppercase)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "enforced"
+    },
+    {
+      "code": "W1004",
+      "description": "MixedCaseEditType — 'Del' / 'INS' instead of 'del' / 'ins'.",
+      "spec_section": "recommendations/general.md lines 87-104 (edit-type tokens shown in lowercase: del, ins, dup, inv, delins)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "registered",
+      "spec_section_notes": "correct_edit_type_case in src/error_handling/corrections.rs returns ErrorType::MixedCaseEditType but the preprocessor never calls it. Empirically, NM_000088.3:c.100Del produces a generic parse error in lenient mode with no W1004 emission."
+    },
+    {
+      "code": "W2001",
+      "description": "WrongDashCharacter — en-dash / em-dash instead of ASCII '-'.",
+      "spec_section": "recommendations/grammar.md (ASCII grammar); recommendations/general.md line 114 (minus sign semantics)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "enforced"
+    },
+    {
+      "code": "W2002",
+      "description": "WrongQuoteCharacter — smart quotes instead of ASCII '\"'.",
+      "spec_section": "recommendations/grammar.md (ASCII grammar)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "partial",
+      "spec_section_notes": "Emitted by correct_quote_characters in preprocessor Phase 3, so the warning fires when the input also contains valid HGVS syntax around the quotes. Standard HGVS does not use ASCII quotes inside any current production rule, so in practice the catch-all parse failure shadows W2002 for most realistic inputs."
+    },
+    {
+      "code": "W2003",
+      "description": "ExtraWhitespace — extraneous spaces in expression.",
+      "spec_section": "recommendations/grammar.md (no whitespace in production rules)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "enforced"
+    },
+    {
+      "code": "W2004",
+      "description": "InvalidUnicodeCharacter — generic non-ASCII character.",
+      "spec_section": "recommendations/grammar.md (ASCII grammar)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
+      "status": "registered",
+      "spec_section_notes": "Real coverage of non-ASCII inputs is via W2001 (en/em-dash) and W2002 (smart quotes). The generic catch-all is registered as ErrorType::InvalidUnicodeCharacter but no preprocessor or parser site emits it on its own — non-ASCII characters not matching the dash or quote correctors fall through to a generic parse error."
+    },
+    {
+      "code": "W3001",
+      "description": "MissingVersion — accession without '.N' version.",
+      "spec_section": "background/refseq.md line 20: 'variant descriptions lacking a version number are not valid'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "registered",
+      "spec_section_notes": "Empirically, NM_000088:c.100A>G (no .N version) parses successfully in lenient mode with an empty corrections list — no W3001 is emitted. Tracked in #124 (#81 L2 SVA-017).",
+      "follow_up_issues": [124]
+    },
+    {
+      "code": "W3002",
+      "description": "ProteinSubstitutionArrow — 'p.Val600>Glu' instead of 'p.Val600Glu'.",
+      "spec_section": "recommendations/protein/substitution.md (no '>' at protein level)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/substitution/",
+      "status": "enforced"
+    },
+    {
+      "code": "W3003",
+      "description": "OldSubstitutionSyntax — 'c.100_102>ATG' instead of 'c.100_102delinsATG'.",
+      "spec_section": "recommendations/DNA/substitution.md line 16: 'substitutions involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+      "status": "registered",
+      "spec_section_notes": "Empirically, c.100_102>ATG (no ref bases) hits a generic 'unexpected trailing characters' parse error in lenient mode (no W3003); c.79_80GC>TT (with explicit ref bases) is silently rewritten as c.79_80delinsTT with no warning. The ErrorType variant exists but no parse-time hook emits it. Wiring the emission for both forms is tracked in #115 item 3.",
+      "follow_up_issues": [115]
+    },
+    {
+      "code": "W3004",
+      "description": "OldAlleleFormat — '[c.100A>G;c.200C>T]' instead of 'c.[100A>G;200C>T]'.",
+      "spec_section": "recommendations/DNA/alleles.md (allele bracket placement)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/alleles/",
+      "status": "enforced"
+    },
+    {
+      "code": "W3005",
+      "description": "TrailingAnnotation — 'c.459A>G (p.Lys153=)' annotations stripped.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Defensive against ClinVar-style trailing protein annotations; tolerant input handling, not a spec rule."
+    },
+    {
+      "code": "W3006",
+      "description": "MissingCoordinatePrefix — 'NC_000001.11:12345A>G' missing 'g.'.",
+      "spec_section": "background/refseq.md line 64: 'It is mandatory to indicate the type of reference sequence file using a prefix'; recommendations/general.md lines 20-28",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "enforced"
+    },
+    {
+      "code": "W4001",
+      "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
+      "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "registered",
+      "spec_section_notes": "detect_swapped_positions and correct_swapped_positions in src/error_handling/corrections.rs return ErrorType::SwappedPositions, but the preprocessor's nine phases do not invoke them. Empirically, NM_000088.3:c.200_100del produces a generic parse error (nom Verify) in lenient mode with no W4001 emission."
+    },
+    {
+      "code": "W4002",
+      "description": "PositionZero — 'c.0A>G' rejected (no auto-correct).",
+      "spec_section": "background/numbering.md line 16: 'numbering starts with c.1 at the A of the ATG translation initiation codon'; lines 19-28 confirm there is no c.0",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "registered",
+      "spec_section_notes": "Position zero IS rejected at runtime — detect_position_zero runs in preprocessor Phase 1 and returns a failed PreprocessResult — but the diagnostic is raised under ErrorCode::InvalidPosition (E1003), not under W4002. The W4002 ErrorType variant is reachable only via the warning-code dispatch tables (config.rs, bin/ferro.rs); no emission path tags rejections with this specific code. The spec rule is enforced by E1003; W4002 is a duplicate identity that no caller emits."
+    },
+    {
+      "code": "W5001",
+      "description": "RefSeqMismatch — stated reference base mismatches actual reference (warning sibling of E3002).",
+      "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "registered",
+      "spec_section_notes": "Referenced from src/normalize/config.rs as a per-code policy override (with_override(ErrorType::RefSeqMismatch, ...)) but no normalize/, reference/, or convert/ site emits this warning when a mismatch is observed. With no reference data loaded (the common CLI case) parsing succeeds and no warning fires; with reference data the sibling error E3002 is raised instead. The spec rule is partially enforced by E3002; W5001 has no distinct emission path."
+    }
+  ]
+}
