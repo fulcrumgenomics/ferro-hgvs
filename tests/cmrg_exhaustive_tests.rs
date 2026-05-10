@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::Read;
 use std::time::Instant;
 
 // Slim deserialization shape: only the fields the test reads are
@@ -41,10 +41,18 @@ fn load_fixture() -> Option<CmrgFixture> {
     if !std::path::Path::new(path).exists() {
         return None;
     }
+    // Decompress to an in-memory Vec, then deser via `from_slice` rather
+    // than `from_reader` over a streaming gzip pipeline. Empirically ~5x
+    // faster on this fixture (34s -> 7s in debug mode) — `from_slice`
+    // skips per-byte UTF-8 validation and avoids the `Read` trait's
+    // per-call overhead. The transient ~1 GB buffer is fine on the CI
+    // runner (16 GB RAM).
     let file = File::open(path).expect("Failed to open cmrg_genes_exhaustive.json.gz");
-    let decoder = GzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-    Some(serde_json::from_reader(reader).expect("Failed to parse cmrg_genes_exhaustive.json.gz"))
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .expect("Failed to decompress cmrg_genes_exhaustive.json.gz");
+    Some(serde_json::from_slice(&buf).expect("Failed to parse cmrg_genes_exhaustive.json.gz"))
 }
 
 #[test]

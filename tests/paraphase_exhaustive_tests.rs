@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::Read;
 use std::time::Instant;
 
 // Slim deserialization shape: drop fields the test never reads.
@@ -39,13 +39,14 @@ fn load_fixture() -> Option<ParaphaseFixture> {
     if !std::path::Path::new(path).exists() {
         return None;
     }
+    // See cmrg_exhaustive_tests::load_fixture for why we decompress to
+    // a Vec and use `from_slice` rather than streaming via `from_reader`.
     let file = File::open(path).expect("Failed to open paraphase_genes_exhaustive.json.gz");
-    let decoder = GzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-    Some(
-        serde_json::from_reader(reader)
-            .expect("Failed to parse paraphase_genes_exhaustive.json.gz"),
-    )
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .expect("Failed to decompress paraphase_genes_exhaustive.json.gz");
+    Some(serde_json::from_slice(&buf).expect("Failed to parse paraphase_genes_exhaustive.json.gz"))
 }
 
 #[test]

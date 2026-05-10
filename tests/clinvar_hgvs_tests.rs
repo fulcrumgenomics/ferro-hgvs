@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
@@ -36,10 +36,14 @@ fn load_fixture(filename: &str) -> Option<ClinvarHgvsFixture> {
     if !std::path::Path::new(&path).exists() {
         return None;
     }
+    // See cmrg_exhaustive_tests::load_fixture for why we decompress to
+    // a Vec and use `from_slice` rather than streaming via `from_reader`.
     let file = File::open(&path).unwrap_or_else(|e| panic!("Failed to open {}: {}", filename, e));
-    let decoder = GzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-    Some(serde_json::from_reader(reader).unwrap_or_else(|e| {
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .unwrap_or_else(|e| panic!("Failed to decompress {}: {}", filename, e));
+    Some(serde_json::from_slice(&buf).unwrap_or_else(|e| {
         panic!(
             "Failed to parse {} (is Git LFS installed?): {}",
             filename, e
