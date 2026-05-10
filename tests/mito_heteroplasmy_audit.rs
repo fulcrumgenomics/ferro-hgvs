@@ -107,13 +107,19 @@ fn plain_clinvar_mt_substitutions_round_trip() {
 /// (the latter is an explicit spec exception in `refseq.md`).
 #[test]
 fn mt_indels_and_gene_suffixed_forms_round_trip() {
-    // (input, expected_emitted_form). Gene-symbol suffix is dropped on
-    // emission today; this pins that current behavior.
+    // (input, expected_emitted_form). The gene-symbol qualifier is
+    // preserved byte-for-byte on emission.
     let cases = [
         ("NC_012920.1:m.8470_8482del", "NC_012920.1:m.8470_8482del"),
         ("NC_012920.1:m.302_303insC", "NC_012920.1:m.302_303insC"),
-        ("NC_012920.1(MT-TL1):m.3243A>G", "NC_012920.1:m.3243A>G"),
-        ("NC_012920.1(MT-ND4):m.11778G>A", "NC_012920.1:m.11778G>A"),
+        (
+            "NC_012920.1(MT-TL1):m.3243A>G",
+            "NC_012920.1(MT-TL1):m.3243A>G",
+        ),
+        (
+            "NC_012920.1(MT-ND4):m.11778G>A",
+            "NC_012920.1(MT-ND4):m.11778G>A",
+        ),
     ];
     for (input, expected) in cases {
         let parsed =

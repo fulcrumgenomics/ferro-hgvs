@@ -529,26 +529,26 @@ fn audit_mt_utr_asterisk_position_rejected_today() {
 }
 
 // -----------------------------------------------------------------------------
-// Scenario 12 — gene-symbol drop on round-trip.
+// Scenario 12 — gene-symbol preserved on round-trip.
 //
 // `NC_012920.1(MT-ND1):m.3460G>A` (a row that exists in the spec
-// normalization fixture) parses today, but the rendered output drops
-// the `(MT-ND1)` qualifier. This is unrelated to wraparound but is
-// surfaced by the same input class — pinned here so any incidental
-// fix during F1 implementation surfaces as a visible diff.
+// normalization fixture) parses today and the rendered output
+// preserves the `(MT-ND1)` qualifier byte-for-byte. This is unrelated
+// to wraparound but is surfaced by the same input class — pinned here
+// so any future regression in `m.`-variant Display surfaces as a
+// visible diff.
 // -----------------------------------------------------------------------------
 
-/// Gene-symbol qualifier on `m.` is dropped on render today.
+/// Gene-symbol qualifier on `m.` is preserved on round-trip.
 #[test]
-fn audit_mt_gene_symbol_dropped_on_round_trip_today() {
+fn audit_mt_gene_symbol_preserved_on_round_trip() {
     let input = "NC_012920.1(MT-ND1):m.3460G>A";
     let variant = parse_hgvs(input).expect("parse should succeed");
     assert_eq!(
         format!("{}", variant),
-        "NC_012920.1:m.3460G>A",
-        "PINNED: the `(MT-ND1)` gene-symbol qualifier is dropped on \
-         render for m. variants today. Surfaced by the F1 audit but is \
-         a separate `m.`-display bug; F1 may or may not fix it."
+        input,
+        "PINNED: the `(MT-ND1)` gene-symbol qualifier is preserved on \
+         render for m. variants."
     );
 }
 

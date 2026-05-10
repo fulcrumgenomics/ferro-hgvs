@@ -11,10 +11,10 @@
     "total": 823,
     "by_status": {
       "correctly-rejected": 12,
-      "diverges": 147,
+      "diverges": 144,
       "false-acceptance": 22,
       "parse-error": 214,
-      "preserved": 428
+      "preserved": 431
     },
     "by_coordinate_system": {
       "c": 298,
@@ -5758,27 +5758,25 @@
     },
     {
       "input": "NC_012920.1(MT-ND1):m.3460G>A",
-      "current": "NC_012920.1:m.3460G>A",
+      "current": "NC_012920.1(MT-ND1):m.3460G>A",
       "spec_expected": "NC_012920.1(MT-ND1):m.3460G>A",
-      "status": "diverges",
+      "status": "preserved",
       "coordinate_system": "m",
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      ]
     },
     {
       "input": "NC_012920.1(MT-TL1):m.3243A>G",
-      "current": "NC_012920.1:m.3243A>G",
+      "current": "NC_012920.1(MT-TL1):m.3243A>G",
       "spec_expected": "NC_012920.1(MT-TL1):m.3243A>G",
-      "status": "diverges",
+      "status": "preserved",
       "coordinate_system": "m",
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      ]
     },
     {
       "input": "NC_012920.1:m.3243A>G",
@@ -5803,18 +5801,6 @@
       ]
     },
     {
-      "input": "NC_012920.1(MT-TL1):n.14A>G",
-      "current": "NC_012920.1:n.14A>G",
-      "spec_expected": "NC_012920.1(MT-TL1):n.14A>G",
-      "status": "diverges",
-      "coordinate_system": "n",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "n.",
       "input_prefixed": "NR_002196.1:n.",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
@@ -5826,6 +5812,17 @@
         "docs/background/refseq.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_012920.1(MT-TL1):n.14A>G",
+      "current": "NC_012920.1(MT-TL1):n.14A>G",
+      "spec_expected": "NC_012920.1(MT-TL1):n.14A>G",
+      "status": "preserved",
+      "coordinate_system": "n",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/refseq.md"
+      ]
     },
     {
       "input": "NP_003997.1:p.(Ser332_Ser333insX)",
