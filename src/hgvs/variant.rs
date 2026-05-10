@@ -119,6 +119,13 @@ impl Accession {
     ) -> Self {
         let prefix = Self::intern_prefix(prefix);
         let ensembl_style = Self::is_ensembl_prefix(&prefix);
+        // LRG accessions never carry a version per HGVS spec (SVD-WG008).
+        // Drop any provided version so Display canonicalizes to the spec form.
+        let version = if Self::is_lrg_prefix(&prefix) {
+            None
+        } else {
+            version
+        };
         Self {
             prefix,
             number: number.into(),
@@ -137,8 +144,15 @@ impl Accession {
         version: Option<u32>,
         ensembl_style: bool,
     ) -> Self {
+        let prefix = Self::intern_prefix(prefix);
+        // LRG accessions never carry a version per HGVS spec (SVD-WG008).
+        let version = if Self::is_lrg_prefix(&prefix) {
+            None
+        } else {
+            version
+        };
         Self {
-            prefix: Self::intern_prefix(prefix),
+            prefix,
             number: number.into(),
             version,
             ensembl_style,
@@ -184,6 +198,20 @@ impl Accession {
         self.ensembl_style || Self::is_ensembl_prefix(&self.prefix)
     }
 
+    /// Check if a prefix is the canonical LRG prefix (`"LRG"`, uppercase).
+    ///
+    /// Per HGVS spec the LRG prefix is case-sensitive (lowercase `lrg_` is not
+    /// recognized as an LRG accession; it parses as a generic chromosome
+    /// name). See `assets/hgvs-nomenclature/docs/background/refseq.md`.
+    pub fn is_lrg_prefix(prefix: &str) -> bool {
+        prefix == "LRG"
+    }
+
+    /// Check if this accession is an LRG accession.
+    pub fn is_lrg(&self) -> bool {
+        Self::is_lrg_prefix(&self.prefix)
+    }
+
     /// Validate Ensembl accession format
     /// Returns true if valid, false if invalid
     pub fn validate_ensembl(&self) -> bool {
@@ -195,7 +223,26 @@ impl Accession {
         (11..=15).contains(&digit_count) && self.number.chars().all(|c| c.is_ascii_digit())
     }
 
-    /// Infer the expected variant type from the accession prefix
+    /// Infer the *primary* expected variant coordinate type from the accession
+    /// prefix and (for LRG) the trailing discriminator inside `number`.
+    ///
+    /// This is informational, not a validator: it returns the canonical
+    /// coordinate type for the accession class. The accession may legally
+    /// appear with other coordinate types in the variant block — for
+    /// example, `NM_*` always returns `"c"` even though `NM_*:n.…` and
+    /// `NM_*:r.…` parse correctly, and `LRG_<N>t<M>` always returns `"c"`
+    /// even though `LRG_<N>t<M>:n.…` (non-coding) and
+    /// `LRG_<N>t<M>:r.…` (RNA) are valid per the HGVS spec.
+    ///
+    /// LRG accessions take three forms (see https://www.lrg-sequence.org/faq/
+    /// and `assets/hgvs-nomenclature/docs/background/refseq.md`):
+    /// - `LRG_<N>`        — the LRG genomic record itself; uses `g.` coordinates.
+    /// - `LRG_<N>t<M>`    — transcript M of LRG_N; primary `c.` (coding).
+    /// - `LRG_<N>p<M>`    — protein M of LRG_N; uses `p.` coordinates.
+    ///
+    /// The `t<M>` / `p<M>` discriminator is captured inside `self.number`
+    /// (e.g. `prefix="LRG"`, `number="1t1"`), so the dispatch must inspect the
+    /// trailing discriminator rather than only the prefix.
     pub fn inferred_variant_type(&self) -> Option<&'static str> {
         match &*self.prefix {
             // RefSeq genomic
@@ -212,13 +259,46 @@ impl Accession {
             "ENSG" => Some("g"),
             // Ensembl protein
             "ENSP" => Some("p"),
-            // LRG
-            "LRG" => Some("g"),
+            // LRG: dispatch on the t<M> / p<M> discriminator captured in `number`.
+            // See `is_lrg_prefix` / `is_lrg` for the prefix-class predicate.
+            p if Self::is_lrg_prefix(p) => Some(Self::lrg_inferred_variant_type(&self.number)),
             // UniProt protein (single letter prefix: O, P, Q, A-N, R-Z)
             p if p.len() == 1 && p.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
                 Some("p")
             }
             _ => None,
+        }
+    }
+
+    /// Map an LRG `number` field (e.g. `"1"`, `"1t1"`, `"1p1"`) to its variant type.
+    ///
+    /// The discriminator is `t<digits>` for transcripts (coding, `c.`) or
+    /// `p<digits>` for protein products (`p.`). A bare numeric `number`
+    /// (the LRG record itself) maps to genomic (`g.`). Any malformed input
+    /// falls back to `g`, matching the prior behavior for unrecognized shapes.
+    fn lrg_inferred_variant_type(number: &str) -> &'static str {
+        let bytes = number.as_bytes();
+        // Find the discriminator letter, if any. A valid LRG number is one or
+        // more digits, optionally followed by `t` or `p` and one or more digits.
+        let disc_pos = bytes.iter().position(|&b| b == b't' || b == b'p');
+        match disc_pos {
+            None => "g",
+            Some(pos) => {
+                // Validate: digits before, digits after, no further non-digits.
+                let before_ok = pos > 0 && bytes[..pos].iter().all(|b| b.is_ascii_digit());
+                let after = &bytes[pos + 1..];
+                let after_ok = !after.is_empty() && after.iter().all(|b| b.is_ascii_digit());
+                if before_ok && after_ok {
+                    if bytes[pos] == b't' {
+                        "c"
+                    } else {
+                        "p"
+                    }
+                } else {
+                    // Malformed discriminator — be conservative and treat as genomic.
+                    "g"
+                }
+            }
         }
     }
 
@@ -1796,6 +1876,27 @@ mod tests {
             Accession::new("LRG", "1", None).inferred_variant_type(),
             Some("g")
         );
+        // LRG transcript discriminator (`t<M>`) → coding (c.)
+        // The transcript discriminator is captured in `number` (e.g. "1t1"),
+        // so the dispatch must inspect it rather than only the prefix.
+        // See https://www.lrg-sequence.org/faq/ — `t<N>` is the transcript.
+        assert_eq!(
+            Accession::new("LRG", "1t1", None).inferred_variant_type(),
+            Some("c")
+        );
+        assert_eq!(
+            Accession::new("LRG", "292t1", None).inferred_variant_type(),
+            Some("c")
+        );
+        // LRG protein discriminator (`p<M>`) → protein (p.)
+        assert_eq!(
+            Accession::new("LRG", "1p1", None).inferred_variant_type(),
+            Some("p")
+        );
+        assert_eq!(
+            Accession::new("LRG", "673p1", None).inferred_variant_type(),
+            Some("p")
+        );
         // UniProt single-letter prefix
         assert_eq!(
             Accession::new("P", "12345", None).inferred_variant_type(),
@@ -1821,6 +1922,24 @@ mod tests {
         // Not UniProt - number wrong length
         let wrong_length = Accession::new("P", "123", None);
         assert!(!wrong_length.is_uniprot());
+    }
+
+    #[test]
+    fn test_accession_is_lrg_prefix() {
+        assert!(Accession::is_lrg_prefix("LRG"));
+        assert!(!Accession::is_lrg_prefix("lrg"));
+        assert!(!Accession::is_lrg_prefix("LRG_"));
+        assert!(!Accession::is_lrg_prefix("NM"));
+        assert!(!Accession::is_lrg_prefix(""));
+    }
+
+    #[test]
+    fn test_accession_is_lrg() {
+        assert!(Accession::new("LRG", "1", None).is_lrg());
+        assert!(Accession::new("LRG", "1t1", None).is_lrg());
+        assert!(Accession::new("LRG", "1p1", None).is_lrg());
+        assert!(!Accession::new("NM", "000088", Some(3)).is_lrg());
+        assert!(!Accession::new("NC", "000001", Some(11)).is_lrg());
     }
 
     #[test]
