@@ -206,3 +206,16 @@ harness = false
 [profile.release]
 lto = true
 codegen-units = 1
+
+# Optimize the heavy dependencies that the bulk-fixture parser tests
+# (clinvar_hgvs_*, cmrg_exhaustive, paraphase_exhaustive) hit hard:
+# gzip decoding (miniz_oxide via flate2) and JSON deserialization
+# (serde_json deserialize_seed paths). The test-crate code itself stays
+# at default debug optimization so build times for ferro-hgvs and the
+# test binaries are unaffected.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.serde_json]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
