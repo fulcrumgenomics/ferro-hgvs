@@ -1,450 +1,538 @@
 {
   "kinds": {
-    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })"
+    "[malformed_extra_underscore_in_intronic_offset]": {
+      "category": "malformed_input",
+      "reason": "Extra `_` between position and `+1` (`3708_+1` should be `3708+1`). Spec form per recommendations/uncertain.md is `(N+1_M-1)`."
     },
-    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })"
+    "[uncertain_range_to_3utr_end]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Compound uncertain range with 3'UTR `*` and unknown `?` end. Spec recommendations/uncertain.md."
     },
-    "Parse error at position <N>: Unexpected content after variant: '[(n)]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected content after variant: '[(n)]'"
+    "[uncertain_intronic_offset_to_3utr_paren_range]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Compound uncertain-intronic-offset (`-?`) to 3'UTR with paren range `*(1_?)`. Spec recommendations/uncertain.md describes uncertain offsets and 3'UTR; this combined form is not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(10_32)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(10_32)'"
+    "[malformed_5utr_paren_reversed_no_minus]": {
+      "category": "malformed_input",
+      "reason": "Same shape as the previous 5'UTR-paren-malformed entry."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(12_44)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(12_44)'"
+    "[deprecated_repeat_paren_no_brackets]": {
+      "category": "rejected_by_design",
+      "reason": "Deprecated `<seq>(N_M)`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(1584+1_1585-1)_(3468+1_3469-1)del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(1584+1_1585-1)_(3468+1_3469-1)del'"
+    "[ins_with_LINE1_coords_then_dup]": {
+      "category": "rejected_by_design",
+      "reason": "`insL1<coords>dup` chained TE-insertion notation."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(2_3)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(2_3)'"
+    "[leading_dot_before_prefix]": {
+      "category": "rejected_by_design",
+      "reason": "Leading `.` before `c.`. Spec prefix is just `c.` per recommendations/general.md."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(2_7)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(2_7)'"
+    "[chained_del_inv_del]": {
+      "category": "rejected_by_design",
+      "reason": "Chained `del<seq>inv<seq>del` notation. Current spec (recommendations/DNA/delins.md) uses `delins` for combined edits."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(360_370)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(360_370)'"
+    "[malformed_unbalanced_paren_three_positions]": {
+      "category": "malformed_input",
+      "reason": "Three positions in one paren."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(36_37)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(36_37)'"
+    "[insertion_dash_range_repeat_units]": {
+      "category": "rejected_by_design",
+      "reason": "Insertion content `(seq)N-M(seq)N-M(seq)N-M` with dash-range repeats. Dash range is deprecated; spec uses `[(N_M)]` (recommendations/DNA/repeated.md)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(38_68)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(38_68)'"
+    "[malformed_double_dot_separator]": {
+      "category": "malformed_input",
+      "reason": "`..` instead of `_` as range separator. Spec uses `_` per recommendations/uncertain.md."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(3_14)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(3_14)'"
+    "[malformed_four_positions_in_one_paren]": {
+      "category": "malformed_input",
+      "reason": "Four positions."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(400_760)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(400_760)'"
+    "[malformed_period_in_coordinate]": {
+      "category": "malformed_input",
+      "reason": "Period in coordinate (`100465.79`)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(55_200)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(55_200)'"
+    "[lowercase_n_placeholder_with_slash_mosaic]": {
+      "category": "rejected_by_design",
+      "reason": "Lowercase `(n)` placeholder for unknown count (spec uses `[?]`) combined with single `/` between alleles (spec mosaic uses `=/`). Multiple non-spec features."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(7_34)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(7_34)'"
+    "[malformed_unbalanced_paren_extra_open]": {
+      "category": "malformed_input",
+      "reason": "Unbalanced parens \u2014 second `(` has no closing `)`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(800_4500)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(800_4500)'"
+    "[exp_n_placeholders]": {
+      "category": "rejected_by_design",
+      "reason": "`[exp]` and `[n]` placeholder counts are not part of the current spec (recommendations/DNA/repeated.md)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '(Glu641fs)'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '(Glu641fs)'"
+    "[malformed_empty_position_after_underscore]": {
+      "category": "malformed_input",
+      "reason": "Second range `(54740716_)` has empty position after `_`. Spec form would be `(54740716_?)`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '+'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '+'"
+    "[bare_n_placeholder]": {
+      "category": "rejected_by_design",
+      "reason": "`[n]` lowercase placeholder for unknown count is not part of the current spec; also `[N_M]` without inner parens is not the canonical range form (`[(N_M)]`)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '+1075_c.936+1230inv'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '+1075_c.936+1230inv'"
+    "[malformed_no_prefix_unbalanced_parens]": {
+      "category": "malformed_input",
+      "reason": "Missing variant-type prefix AND unbalanced parens (extra `)`)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '...GCT'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '...GCT'"
+    "[exp_placeholder]": {
+      "category": "rejected_by_design",
+      "reason": "`[exp]` placeholder for unknown repeat count is not spec."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '.9KB'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '.9KB'"
+    "[chained_invdup_no_separator]": {
+      "category": "rejected_by_design",
+      "reason": "`invdup` chained without `;` is not a current-spec form. Spec uses compound `[a;b]` for combined edits."
     },
-    "Parse error at position <N>: Unexpected trailing characters: ';615521.0004'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: ';615521.0004'"
+    "[malformed_extra_question_after_close_paren]": {
+      "category": "malformed_input",
+      "reason": "Stray `?` between `)` and `del`. Spec form is `(?_X)_(Y_?)del`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'"
+    "[malformed_missing_underscore_between_ranges]": {
+      "category": "malformed_input",
+      "reason": "Missing `_` between the two paren ranges."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '='": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '='"
+    "[malformed_commas_in_coordinates]": {
+      "category": "malformed_input",
+      "reason": "Commas inside coordinates. Coordinates are bare integers per recommendations/background/numbering.md."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'GCCCA'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'GCCCA'"
+    "[trans_compound_with_uncertain_first_and_repeat_second]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans-phase compound `[a];[b]` (recommendations/DNA/alleles.md) where the first allele is an uncertain-range del (recommendations/uncertain.md) and the second has a bracketed repeat. Each form is spec-valid; the combination is not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'X25'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'X25'"
+    "[malformed_dash_inside_paren_range]": {
+      "category": "malformed_input",
+      "reason": "Dash `-` between coordinates inside paren. Spec uses `_`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'X45'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'X45'"
+    "[repeat_uncertain_upper_bound_at_least_N]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Repeat with uncertain upper bound `[(N_?)]` (\"at least N\"). Extension of recommendations/DNA/repeated.md `[(N_M)]` form to the unknown-upper-bound case. Spec-plausible but not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[(100-833)]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[(100-833)]'"
+    "[malformed_second_accession_glued_in]": {
+      "category": "malformed_input",
+      "reason": "Second accession glued into the variant string \u2014 annotation-pipeline artifact, not HGVS."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[(3)]CTG[(317_330)]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[(3)]CTG[(317_330)]'"
+    "[malformed_size_suffix_KB]": {
+      "category": "malformed_input",
+      "reason": "`42.9KB` size suffix is annotation, not HGVS. Spec delins is `delins<sequence>`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[(54-68)]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[(54-68)]'"
+    "[malformed_dash_separator_no_edit_type]": {
+      "category": "malformed_input",
+      "reason": "Dash `-` as range separator AND no edit-type suffix (`del`/`dup`/etc)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[(?)]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[18]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[(?)]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[18]'"
+    "[missing_dot_after_g_prefix]": {
+      "category": "rejected_by_design",
+      "reason": "`g(` instead of `g.(` \u2014 missing `.` after the `g` prefix. Spec prefix is `g.` per recommendations/general.md."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[(n)]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[(n)]'"
+    "[malformed_de_typo_for_del]": {
+      "category": "malformed_input",
+      "reason": "`de.` typo (probably `del`)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[29-32]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[29-32]'"
+    "[deprecated_repeat_paren_after_delins]": {
+      "category": "rejected_by_design",
+      "reason": "Deprecated `<seq>(N_M)` repeat notation appended to `delTinsC`. Spec uses bracketed `<seq>[(N_M)]`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[42-74]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[42-74]'"
+    "[malformed_paren_dash_instead_of_underscore]": {
+      "category": "malformed_input",
+      "reason": "Dash `-` instead of `_` as range separator inside paren."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[exp]TAAAA[exp]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[exp]TAAAA[exp]'"
+    "[malformed_unclosed_compound_bracket]": {
+      "category": "malformed_input",
+      "reason": "Unclosed compound bracket."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTCA[exp]TTTTA[n]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTCA[exp]TTTTA[n]'"
+    "[deprecated_dash_range_repeat]": {
+      "category": "rejected_by_design",
+      "reason": "Deprecated `[N-M]` dash range repeat on protein."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTTA[exp]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTTA[exp]'"
+    "[deprecated_dash_range_inside_brackets]": {
+      "category": "rejected_by_design",
+      "reason": "Deprecated `[(N-M)]` dash range inside brackets."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '[n]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '[n]'"
+    "[ins_inside_compound_brackets_unusual]": {
+      "category": "rejected_by_design",
+      "reason": "`[ins<coords>;<seq>]` \u2014 compound brackets used to combine insertion-with-coords and a literal sequence. Not a current-spec form."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_(*_?)del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_(*_?)del'"
+    "[complex_ins_inside_compound]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Three-allele cis compound `[a;b;c]` whose middle allele uses complex-insertion payload `ins[<seq>;<refrange>]` (multi-segment insertion concatenation per recommendations/DNA/insertion.md). Each form is spec-valid; the combined nested structure is not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_(1584_+1_1585-1)del(2619+1_2620-1)_(2988+1_2989-1)del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_(1584_+1_1585-1)del(2619+1_2620-1)_(2988+1_2989-1)del'"
+    "[redundant_g_prefix_inside_compound]": {
+      "category": "rejected_by_design",
+      "reason": "Redundant `g.` prefix on second allele inside compound bracket."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_(534+1_535_-1)del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_(534+1_535_-1)del'"
+    "[ins_with_TE_coords_then_dup]": {
+      "category": "rejected_by_design",
+      "reason": "AluY insertion."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_*919_?dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_*919_?dup'"
+    "[chained_delins_inv_seq]": {
+      "category": "rejected_by_design",
+      "reason": "`delins<coords>inv<seq>` chained edit notation."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_1040dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_1040dup'"
+    "[gom_lom_methylation_extension]": {
+      "category": "rejected_by_design",
+      "reason": "`gom`/`lom` (gain/loss of methylation) are not part of the current HGVS spec \u2014 they're an LOVD/site-specific extension."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_12590dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_12590dup'"
+    "[malformed_extra_underscore_before_del]": {
+      "category": "malformed_input",
+      "reason": "Extra `_` between second `)` and `del`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_15976inv15975_15988del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_15976inv15975_15988del'"
+    "[prefix_inside_parens]": {
+      "category": "rejected_by_design",
+      "reason": "Variant-type prefix `g.` inside parens. Spec prefix is outside."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_192dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_192dup'"
+    "[lowercase_n_placeholder]": {
+      "category": "rejected_by_design",
+      "reason": "`[(n)]` lowercase placeholder is not spec; spec uses `[?]`. First bracket `[(7_?)]` is also non-canonical (\"at least 7\")."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_2185dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_2185dup'"
+    "[redundant_c_prefix_inside_paren]": {
+      "category": "rejected_by_design",
+      "reason": "Redundant `c.` prefix on inner positions."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_3065dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_3065dup'"
+    "[malformed_compound_missing_semicolon]": {
+      "category": "malformed_input",
+      "reason": "Compound missing `;`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_308481dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_308481dup'"
+    "[trans_compound_with_mosaic]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans-phase compound `[a];[b]` with mosaic `=/` in each allele. Spec form per recommendations/DNA/alleles.md (compound) and deletion.md (mosaic `=/`)."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_4008-1)del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_4008-1)del'"
+    "[redundant_c_prefix_inside_compound]": {
+      "category": "rejected_by_design",
+      "reason": "Redundant `c.` on second compound allele."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '_70398dup'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '_70398dup'"
+    "[uncertain_intronic_offset_paren_range]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Intronic offset with paren range (`995+(3_5)` = position 995 with intronic offset between 3 and 5). Spec recommendations/uncertain.md describes uncertain offsets; this combined shorthand is not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'butlastnucleotideofexon.'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'butlastnucleotideofexon.'"
+    "[redundant_c_prefix_inside_range]": {
+      "category": "rejected_by_design",
+      "reason": "Redundant `c.` on second position."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'del'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'del'"
+    "[malformed_typo_and_chained_del]": {
+      "category": "malformed_input",
+      "reason": "Extra `_` in `1584_+1` AND chained second `del`."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'fs'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'fs'"
+    "[chained_del_no_separator]": {
+      "category": "rejected_by_design",
+      "reason": "Two chained `del` expressions with no `;`/`[a;b]` separator."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'ition'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'ition'"
+    "[malformed_ellipsis_in_sequence]": {
+      "category": "malformed_input",
+      "reason": "Ellipsis `...` is annotation shorthand, not a spec sequence form."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'ln[49_55]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'ln[49_55]'"
+    "[malformed_leading_plus_in_position]": {
+      "category": "malformed_input",
+      "reason": "Leading `+` in position (`c.+219`). Spec uses `c.<N>+<offset>` for intronic, `c.*<N>` for 3'UTR, `c.-<N>` for 5'UTR."
     },
-    "Parse error at position <N>: Unexpected trailing characters: 'p'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: 'p'"
+    "[malformed_extra_close_paren]": {
+      "category": "malformed_input",
+      "reason": "Extra `)` after `4008-1`."
     },
-    "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(?_'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(?_'"
+    "[malformed_position_shorthand_inside_compound]": {
+      "category": "malformed_input",
+      "reason": "`1969+1_+4` shorthand inside compound \u2014 `+4` should be `1969+4`. Spec uses full positions on each end of a range."
     },
-    "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(g.'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(g.'"
+    "[malformed_unclosed_inner_bracket]": {
+      "category": "malformed_input",
+      "reason": "Unclosed `[` inside second compound allele."
     },
-    "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '.c.'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '.c.'"
+    "[uncertain_range_with_3utr_and_question]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Compound uncertain range `(?_1)_(*_?)del` with 3'UTR `*`. Spec form per recommendations/uncertain.md."
     },
-    "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'g(3'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'g(3'"
+    "[non_spec_uncertain_count_paren]": {
+      "category": "rejected_by_design",
+      "reason": "`[(?)]` for unknown count is not spec; spec uses `[?]` (recommendations/DNA/repeated.md)."
+    },
+    "[malformed_compound_dup_no_paren_grouping]": {
+      "category": "malformed_input",
+      "reason": "Compound dup with multiple positions but no paren grouping (`(A_B)_(C_D)dup` is the spec form per recommendations/uncertain.md)."
+    },
+    "[malformed_extra_underscore_before_minus]": {
+      "category": "malformed_input",
+      "reason": "Extra `_` between `535` and `-1` (`535_-1` should be `535-1`)."
+    },
+    "[malformed_dash_range_inside_paren]": {
+      "category": "malformed_input",
+      "reason": "`-` between coordinates inside paren (`5074+1-5075-1`). Spec uses `_`."
+    },
+    "[trans_compound_del_then_repeat]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans `[a];[b]` of del + bracket-repeat. Each form is spec; the combination is not yet parsed."
+    },
+    "[chimeric_compound_comma]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Chimeric compound `[a,b]`."
+    },
+    "[trans_compound_with_internal_cis]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans `[a];[b;c]` \u2014 first allele a single del, second allele a cis pair. Spec recommendations/DNA/alleles.md."
+    },
+    "[trans_compound_substitution_then_repeat]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans `[a];[b]` sub + bracket-repeat."
+    },
+    "[malformed_trailing_word_annotation]": {
+      "category": "malformed_input",
+      "reason": "Trailing word `transition` is annotation, not HGVS."
+    },
+    "[redundant_c_prefix_inside_compound_trans]": {
+      "category": "rejected_by_design",
+      "reason": "Trans `[a];[c.b]` \u2014 second allele has redundant `c.` prefix."
+    },
+    "[trans_compound_repeat_then_substitution]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans `[a];[b]` bracket-repeat + sub."
+    },
+    "[malformed_omim_id_appended]": {
+      "category": "malformed_input",
+      "reason": "OMIM id `615521.0004` glued onto variant string."
+    },
+    "[malformed_intronic_offset_no_number]": {
+      "category": "malformed_input",
+      "reason": "Intronic offset has no number (`997-G>T` should be e.g. `997-1G>T`)."
+    },
+    "[chained_delins_inv_with_redundant_prefix]": {
+      "category": "rejected_by_design",
+      "reason": "Chained `delins<coords>inv` AND redundant `c.` prefix on inner position."
+    },
+    "[trailing_plus_after_protein_del]": {
+      "category": "rejected_by_design",
+      "reason": "Trailing `+` after protein deletion."
+    },
+    "[parenthetical_alternate_frameshift]": {
+      "category": "rejected_by_design",
+      "reason": "Parenthetical alternate annotation `(Glu641fs)` is non-spec."
+    },
+    "[silent_with_repeated_aa]": {
+      "category": "rejected_by_design",
+      "reason": "Silent variant should be `p.<aa><pos>=` not `p.<aa><pos><aa>=`. Spec form per recommendations/protein/substitution.md."
+    },
+    "[trailing_fs_after_delins]": {
+      "category": "rejected_by_design",
+      "reason": "Trailing bare `fs` after delins."
+    },
+    "[malformed_position_before_aa_name]": {
+      "category": "malformed_input",
+      "reason": "Position before amino-acid name (`488Gln` should be `Gln488`). Spec form per recommendations/protein/repeated.md."
+    },
+    "[deprecated_fsX_frameshift]": {
+      "category": "rejected_by_design",
+      "reason": "Deprecated `fsX<N>` frameshift."
+    },
+    "[malformed_unclosed_paren]": {
+      "category": "malformed_input",
+      "reason": "Unclosed `(`."
+    },
+    "[malformed_clinical_comment_text]": {
+      "category": "malformed_input",
+      "reason": "Clinical comment text glued onto variant string."
+    },
+    "[non_canonical_paren_around_single_count]": {
+      "category": "rejected_by_design",
+      "reason": "`[(3)]` paren around single count is non-canonical; spec form is `[3]` for fixed and `[(N_M)]` for ranges."
     }
   },
   "expected_failures": {
-    "LRG_214t1:c.(3708_+1_3709-1)_(3974+1_3975-1)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "LRG_274t1:c.(1845+1_1846-1)_(*_?)del": "Parse error at position <N>: Unexpected trailing characters: '_(*_?)del'",
-    "LRG_274t1:c.(2389+1_2390-1)_(*_?)del": "Parse error at position <N>: Unexpected trailing characters: '_(*_?)del'",
-    "LRG_308t1:c.3202-?_*(1_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })",
-    "LRG_311t1:c.-(1087_1062)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })",
-    "LRG_311t1:c.-(903_882)dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Digit })",
-    "LRG_485:g.4900_4911CCCCGCCCCGCG(2_3)": "Parse error at position <N>: Unexpected trailing characters: '(2_3)'",
-    "LRG_486:g.37978T(27_30)": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "LRG_501:g.[83418_83419insN;83419_83420ins[TAGCTTTGCTAGGTGTTAAATAGTAATGTAATTATATTTCCTATAATACAGCAATATA;84466_84575];83423_83424insAT]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "LRG_555:g.70398_70399insL170382_70398dup": "Parse error at position <N>: Unexpected trailing characters: '_70398dup'",
-    "LRG_555t1:c.3065_3066insL13054_3065dup": "Parse error at position <N>: Unexpected trailing characters: '_3065dup'",
-    "LRG_556t1:.c.(391+1_392-1)insN[?]": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '.c.'",
-    "LRG_672:g.14126_15974del15826_15976inv15975_15988del": "Parse error at position <N>: Unexpected trailing characters: '_15976inv15975_15988del'",
-    "NC_000001.10:g.(?_156834818_156837900del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000001.10:g.57832716_57832797ins[(ATTTT)60-79(ATTTC)31-75(ATTTT)58-90]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000001.11:g.(?_241497603..241519755_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000002.10:g.(50704258_51001003_51113677_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000002.11:g.(?_50214717_50293739_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000002.12:g.(111929541_111944959)_(112028.865_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000002.12:g.(?_202376327_202567749_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000002.12:g.96197067AAAAT[(n)]/AAATG[(n)]": "Parse error at position <N>: Unexpected content after variant: '[(n)]'",
-    "NC_000003.12:g.(?_167683298_(167734892_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000004.11:g.160263679_160263768TTTTA[exp]TTTCA[exp]TTTTA[n]": "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTCA[exp]TTTTA[n]'",
-    "NC_000004.12:g.(?_54229292)_(54740716_)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000004.12:g.39348425AAAGG[10_25]AAGGG[n]": "Parse error at position <N>: Unexpected trailing characters: '[n]'",
-    "NC_000005.10:(?_177131798)_(177300213_)?)del": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(?_'",
-    "NC_000005.9:g.(?_112111326_112179823del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000005.9:g.(?_70219768_70249839dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000006.11:g.(?_129660158_129663613dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000006.11:g.(?_35423579_35424285del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000006.11:g.(?_39892062_39895188del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000007.13:g.(?_6013020_6031698del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000008.10:g.(?_31014911_31015491del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000008.11:g.118366816_118366918TGAAA[exp]TAAAA[exp]": "Parse error at position <N>: Unexpected trailing characters: '[exp]TAAAA[exp]'",
-    "NC_000009.11:g.(?_101124992_101125835del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000009.11:g.(?_79851768_79854605del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000009.11:g.71705804_71974823invdup": "Parse error at position <N>: Unexpected trailing characters: 'p'",
-    "NC_000010.10:g.(?_88669791_88681457del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000011.9:g.(?_108156908_108160358del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000011.9:g.(?_47363401_47367757del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000011.9:g.(?_5239576_5247294del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000011.9:g.(?_5247493_5248852del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000012.11:g.(?_110012646_110013970del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000012.11:g.(?_133222176_133226475del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000013.10:g.(?_32936842_32938734del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000013.10:g.(?_52548990_52552030del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000014.8:g.(?_88391503_88423172del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000015.10:g.(?_43906612)_(43906674_)?del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000015.9:g.(?_77310868_77315342del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000016.10:g.(?_88638115)(88648115_88650955)del": "Parse error at position <N>: Unexpected trailing characters: 'del'",
-    "NC_000016.9:g.(?_28484798_28497560del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000016.9:g.(?_30196531_30199897del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000016.9:g.(?_68857535_68864666del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000016.9:g.(?_89986211_89987210del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000016.9:g.24624761_24624850TTTTA[22]TTTCA[exp]TTTTA[exp]": "Parse error at position <N>: Unexpected trailing characters: '[exp]TTTTA[exp]'",
-    "NC_000017.10:g.(?_34,822,466)_(36,410,720_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000017.10:g.(?_48243138_48245027del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000017.10:g.(?_59878633_59883038del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000017.10:g.[(729319_882558)_(882998_?)del];[704262_704264[1]]": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'",
-    "NC_000017.11:g.(?_14180000-15550000_?)dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000018.9:g.(?_55710610_56069772del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000019.10:g.(?_45485294_45497047_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000019.9:g.(?_42759120_42759196del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000019.9:g.(?_47255735_47259271del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000019.9:g.(?_50909693_50912034del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000020.10:g.(?_62081939_62119720del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000020.10:g.GGCCTG[(650_?)]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000021.7:g.45754433_NC_000021.7:g.45754434del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000021.8:g.(?_34923768_34933642del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000021.8:g.(?_47533070_47584395del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000022.10:g.(33756233_33756918)_(33759931_33760459)delins42.9KB": "Parse error at position <N>: Unexpected trailing characters: '.9KB'",
-    "NC_000022.10:g.(?_30051485_30051628del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000022.10:g.24171601-(24180196_?)": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.10:g.(?_153002694_153020558del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.10:g.(?_153296154_153302832del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.10:g.(?_22186468_22186740del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.10:g.(?_32429859_32663279del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.10:g.(?_32827600_33229483dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.11:g(32501843_32518007)_(32518132_32545158)del": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'g(3'",
-    "NC_000023.11:g.(41853228_41922929)(41923555_?)del": "Parse error at position <N>: Unexpected trailing characters: 'del'",
-    "NC_000023.11:g.(?_134460165)_(134500668_?)de.": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.11:g.(?_18641623)_(18641623_18644.669)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000023.11:g.(?_30304206_30309390_?)dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_012920.1:m.961delTinsC(2_7)": "Parse error at position <N>: Unexpected trailing characters: '(2_7)'",
-    "NG_000007.12:g.(108290244-?)_(?-114759023)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_007563.1:g.[66203T>C;66207G>A": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_008005.1:g.8384_8763AACATGCAGGNGGAGGAGGGTGAGAGTTCGTG[29-32]": "Parse error at position <N>: Unexpected trailing characters: '[29-32]'",
-    "NG_008047.1:g.17267CAG[(54-68)]": "Parse error at position <N>: Unexpected trailing characters: '[(54-68)]'",
-    "NG_008233.1:g.17226_17227[ins17227_48142;GTTTGCATAGGCACAGAATGTAT]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_008872.1:g.[16740_20819del;g.20987_21000del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_009031.1:g.12577_12578insAlu12579_12590dup": "Parse error at position <N>: Unexpected trailing characters: '_12590dup'",
-    "NG_009627.1:g.[6039G>T;6048G>T": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_011593.1:g.55397_56585delins59701_59837invGCCCA": "Parse error at position <N>: Unexpected trailing characters: 'GCCCA'",
-    "NG_011735.4:g.308479_308480insAlu308464_308481dup": "Parse error at position <N>: Unexpected trailing characters: '_308481dup'",
-    "NG_016194.2:g.[6012_6117gom;19440_19569lom]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_033179.1:g.(5183_64397)_(64560_68128)_del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NG_042181.1:(g.89607_91434)_(105703_107097)del": "Parse error at position <N>: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '(g.'",
-    "NG_054747.1:g.(19392_19426)TTTTA[(7_?)]TTTCA[(n)]": "Parse error at position <N>: Unexpected trailing characters: '[(n)]'",
-    "NM_000038.5:c.(-19+1_c.-18-1)_(933+1_934-1)dup": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000041.4:c.[388=;460C>A526=]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000044.3:c.172_174CAG(36_37)": "Parse error at position <N>: Unexpected trailing characters: '(36_37)'",
-    "NM_000044.3:c.172_174CAG(38_68)": "Parse error at position <N>: Unexpected trailing characters: '(38_68)'",
-    "NM_000044.3:c.172_174CAG(7_34)": "Parse error at position <N>: Unexpected trailing characters: '(7_34)'",
-    "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000106.6:c.[1457G>C;320C>T886C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000141.5:c.1040_1041insAluYb1026_1040dup": "Parse error at position <N>: Unexpected trailing characters: '_1040dup'",
-    "NM_000155.3:c.[652C>T;c.940A>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000190.4:c.192_193insAluYa5180_192dup": "Parse error at position <N>: Unexpected trailing characters: '_192dup'",
-    "NM_000275.3:c.[-22+132=;-22+5657T>G-22+8550=]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000383.3:c.995+(3_5)delGAGinsTAT": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000492.2:c.2908+1085_c.3367+260del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000492.3:c.(164+1_165-1)_(1584_+1_1585-1)del(2619+1_2620-1)_(2988+1_2989-1)del": "Parse error at position <N>: Unexpected trailing characters: '_(1584_+1_1585-1)del(2619+1_2620-1)_(2988+1_2989-1)del'",
-    "NM_000492.3:c.(273+1_274-1)_(1116+1_1117-1)del(1584+1_1585-1)_(3468+1_3469-1)del": "Parse error at position <N>: Unexpected trailing characters: '(1584+1_1585-1)_(3468+1_3469-1)del'",
-    "NM_000492.4:c.[1327G>T;1727G>C2002C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000500.9:c.[-103A>G;-110T>C-113G>A-126C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000500.9:c.[-4C>T;1360C>T317C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000535.7:c.[1556A>G;1559C>T1567T>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000540.3:c.[10097G>A;11798A>G4711A>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000557.5:c.[1309_1311del;1315T>A1319A>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000769.4:c.[-13G>A;10T>C7C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000953.3:c.[-197=;-441T>C-549=]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_000969.5:c.[189+267G>C;189+288A>G189+309A>G189+364G>A189+387A>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001005741.2:c.[535G>C;c.1093G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001006658.2:c.[-71T>C;1776G>A1916G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001009944.3:c.[8279T>C;8282G>C8291T>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001018115.3:g.(10043865_100465.79)_(10049506_10052386)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001110792.2:c.[1046_1072del;1123AAG[1]1152_1282del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001166110.1:c.125_139delCCT...GCT": "Parse error at position <N>: Unexpected trailing characters: '...GCT'",
-    "NM_001360016.2:c.[1264C>G;202G>A376A>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001360016.2:c.[202G>A;376A>G563C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001360016.2:c.[375G>T;379G>T383T>C384C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001625.2:c.+219G>C": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_001709.5:c.[*1785G>T;-21-14109C>G196G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_002024.5:c.-128GGC(55_200)": "Parse error at position <N>: Unexpected trailing characters: '(55_200)'",
-    "NM_002116.8:c.[1029T>C;1033A>T1072G>A1077C>T180C>T282G>C299T>A301G>A302A>G307G>C311C>T313C>G314T>C317G>T319G>C363A>G385T>C397T>C413G>A41C>T448C>T502A>C524A>G527A>T555T>G622C>G633A>G642C>T649C>G651C>T652A>G691G>A762C>T808G>T829G>C899T>C945G>A952C>T961G>A964A>T967A>G987C>T992T>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_002645.3:c.(?_1-1)_4007+1_4008-1)del": "Parse error at position <N>: Unexpected trailing characters: '_4008-1)del'",
-    "NM_002863.3:c.[1964_1969invAAAAAG;1969+1_+4delGTAC]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_003120.3:c.[147_155del;157T>G159C>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_003331.4:c.[-1307T>A;-1308G>A-316G>A-317G>A-378A>G-482A>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_003465.3:c.[1060G>A;1155G>A1156+6_1156+9del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_003661.4:c.[1024A>G];[1152T>G[1164_1169del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_003977.2:c.(?_1)_(*_?)del": "Parse error at position <N>: Unexpected trailing characters: '_(*_?)del'",
-    "NM_004409.4:c.*224_*283CTG[329]NNN[(?)]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[18]": "Parse error at position <N>: Unexpected trailing characters: '[(?)]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[18]'",
-    "NM_004483.5:c.292+1_293-1_*919_?dup": "Parse error at position <N>: Unexpected trailing characters: '_*919_?dup'",
-    "NM_004562.3:c.(171+1_172-1)_(534+1_535_-1)del": "Parse error at position <N>: Unexpected trailing characters: '_(534+1_535_-1)del'",
-    "NM_004795.4:c.[1054T>G;1109G>C1155G>A1330+143T>G820-46C>G820-79C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_004990.3:c.[1031A>G];[1177G>A[1700C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_004993.5:c.886_888CAG(12_44)": "Parse error at position <N>: Unexpected trailing characters: '(12_44)'",
-    "NM_005458.8:c.[1662+5118G>A;1893+21406=360=631-18885A>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_005458.8:c.[1662+5118G>A;1893+21406C>T360=631-18885=]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_006392.3:c.3+71_3+76GGCCTG(3_14)": "Parse error at position <N>: Unexpected trailing characters: '(3_14)'",
-    "NM_006885.4:c.10519GGC[42-74]": "Parse error at position <N>: Unexpected trailing characters: '[42-74]'",
-    "NM_007294.3:c.(5074+1-5075-1)_(5193+1_5194-1)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_007294.4:c.(19_?80_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_007294.4:c.(442_?547_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_012213.3:c.[*130G>T;*220A>G*286G>T*504C>A*82C>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_013236.2:c.1173+54822_1173+54826ATTCT(10_32)": "Parse error at position <N>: Unexpected trailing characters: '(10_32)'",
-    "NM_013236.2:c.1173+54822_1173+54826ATTCT(360_370)": "Parse error at position <N>: Unexpected trailing characters: '(360_370)'",
-    "NM_013236.2:c.1173+54822_1173+54826ATTCT(400_760)": "Parse error at position <N>: Unexpected trailing characters: '(400_760)'",
-    "NM_013236.2:c.1173+54822_1173+54826ATTCT(800_4500)": "Parse error at position <N>: Unexpected trailing characters: '(800_4500)'",
-    "NM_014149.4:c.[588_589del];[857_858AG[1]]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_014762.3:c.[881A>C,918G>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_016124.4:c.[186G>T;410C>T455A>C667T>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_016124.4:c.[410C>T;455A>C509T>C667T>G]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_016124.6:c.[186G>T;410C>T455A>C602C>G604G>A733G>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_017613.3:c.[1466A>C;786-33A>G82A>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_017917.4:c.[1174-1G>A];[1262CCA[1]]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[1061del;467C>T989T>C]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[15dup;297A>C526C>G657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[1_5dup;297A>C526C>G657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[297A>G;526C>G657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_021095.4:c.1285A>Gtransition": "Parse error at position <N>: Unexpected trailing characters: 'ition'",
-    "NM_022154.5:c.[97G>A;1004G>C];[c.610G>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_022455.4:c.5623-?_c.8091+?del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_024339.5:c.[298T>A;700G>C824G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_025114.4:c.[3904C>T];[4655AAG[2]]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_025114.4:c.[4655AAG[2]];[6012-12T>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_145064.2:c.763_766delCTCT;615521.0004": "Parse error at position <N>: Unexpected trailing characters: ';615521.0004'",
-    "NM_145064.2:c.997-G>T": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_145698.4:c.626-689_937-234delins936+1075_c.936+1230inv": "Parse error at position <N>: Unexpected trailing characters: '+1075_c.936+1230inv'",
-    "NM_173483.4:c.(367+100_c.368-86)_(c.*86_?)del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_201253.3:c.2185_2186insAluY2174_2185dup": "Parse error at position <N>: Unexpected trailing characters: '_2185dup'",
-    "NP_000081.1:p.Gly1122_Arg1139del+": "Parse error at position <N>: Unexpected trailing characters: '+'",
-    "NP_000081.1:p.Gly333_Lys350del+": "Parse error at position <N>: Unexpected trailing characters: '+'",
-    "NP_000089.1:p.Lys642ThrfsTer6(Glu641fs)": "Parse error at position <N>: Unexpected trailing characters: '(Glu641fs)'",
-    "NP_000154.1:p.Glu198Glu=": "Parse error at position <N>: Unexpected trailing characters: '='",
-    "NP_000539.2:p.Cys189_Tyr190delinsCysPheThrfs": "Parse error at position <N>: Unexpected trailing characters: 'fs'",
-    "NP_001007027.1:p.488Gln[49_55]": "Parse error at position <N>: Unexpected trailing characters: 'ln[49_55]'",
-    "NP_001007027.1:p.Gln488[(6-35)]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NP_001007027.1:p.Gln488[(90-93)]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NP_002102.4:p.Gln18[36-39]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NP_004619.3:p.Ile223MetfsX45": "Parse error at position <N>: Unexpected trailing characters: 'X45'",
-    "NP_004619.3:p.Val548AlafsX25": "Parse error at position <N>: Unexpected trailing characters: 'X25'",
-    "NP_004984.2:p.Gln296(60_86": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NP_009225.1:p.Phe1036_Lys1037delinsPheTerArgfs": "Parse error at position <N>: Unexpected trailing characters: 'fs'",
-    "NP_612422.2:p.Ala278Alabutlastnucleotideofexon.": "Parse error at position <N>: Unexpected trailing characters: 'butlastnucleotideofexon.'",
-    "NR_002717.2:n.894CTA[(3)]CTG[(317_330)]": "Parse error at position <N>: Unexpected trailing characters: '[(3)]CTG[(317_330)]'",
-    "NW_019805500.1:g.472169CCG[(100-833)]": "Parse error at position <N>: Unexpected trailing characters: '[(100-833)]'"
+    "LRG_214t1:c.(3708_+1_3709-1)_(3974+1_3975-1)del": "[malformed_extra_underscore_in_intronic_offset]",
+    "LRG_274t1:c.(1845+1_1846-1)_(*_?)del": "[uncertain_range_to_3utr_end]",
+    "LRG_274t1:c.(2389+1_2390-1)_(*_?)del": "[uncertain_range_to_3utr_end]",
+    "LRG_308t1:c.3202-?_*(1_?)del": "[uncertain_intronic_offset_to_3utr_paren_range]",
+    "LRG_311t1:c.-(1087_1062)del": "[malformed_5utr_paren_reversed_no_minus]",
+    "LRG_311t1:c.-(903_882)dup": "[malformed_5utr_paren_reversed_no_minus]",
+    "LRG_485:g.4900_4911CCCCGCCCCGCG(2_3)": "[deprecated_repeat_paren_no_brackets]",
+    "LRG_486:g.37978T(27_30)": "[deprecated_repeat_paren_no_brackets]",
+    "LRG_501:g.[83418_83419insN;83419_83420ins[TAGCTTTGCTAGGTGTTAAATAGTAATGTAATTATATTTCCTATAATACAGCAATATA;84466_84575];83423_83424insAT]": "[complex_ins_inside_compound]",
+    "LRG_555:g.70398_70399insL170382_70398dup": "[ins_with_LINE1_coords_then_dup]",
+    "LRG_555t1:c.3065_3066insL13054_3065dup": "[ins_with_LINE1_coords_then_dup]",
+    "LRG_556t1:.c.(391+1_392-1)insN[?]": "[leading_dot_before_prefix]",
+    "LRG_672:g.14126_15974del15826_15976inv15975_15988del": "[chained_del_inv_del]",
+    "NC_000001.10:g.(?_156834818_156837900del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000001.10:g.57832716_57832797ins[(ATTTT)60-79(ATTTC)31-75(ATTTT)58-90]": "[insertion_dash_range_repeat_units]",
+    "NC_000001.11:g.(?_241497603..241519755_?)del": "[malformed_double_dot_separator]",
+    "NC_000002.10:g.(50704258_51001003_51113677_?)del": "[malformed_four_positions_in_one_paren]",
+    "NC_000002.11:g.(?_50214717_50293739_?)del": "[malformed_four_positions_in_one_paren]",
+    "NC_000002.12:g.(111929541_111944959)_(112028.865_?)del": "[malformed_period_in_coordinate]",
+    "NC_000002.12:g.(?_202376327_202567749_?)del": "[malformed_four_positions_in_one_paren]",
+    "NC_000002.12:g.96197067AAAAT[(n)]/AAATG[(n)]": "[lowercase_n_placeholder_with_slash_mosaic]",
+    "NC_000003.12:g.(?_167683298_(167734892_?)del": "[malformed_unbalanced_paren_extra_open]",
+    "NC_000004.11:g.160263679_160263768TTTTA[exp]TTTCA[exp]TTTTA[n]": "[exp_n_placeholders]",
+    "NC_000004.12:g.(?_54229292)_(54740716_)del": "[malformed_empty_position_after_underscore]",
+    "NC_000004.12:g.39348425AAAGG[10_25]AAGGG[n]": "[bare_n_placeholder]",
+    "NC_000005.10:(?_177131798)_(177300213_)?)del": "[malformed_no_prefix_unbalanced_parens]",
+    "NC_000005.9:g.(?_112111326_112179823del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000005.9:g.(?_70219768_70249839dup": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000006.11:g.(?_129660158_129663613dup": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000006.11:g.(?_35423579_35424285del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000006.11:g.(?_39892062_39895188del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000007.13:g.(?_6013020_6031698del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000008.10:g.(?_31014911_31015491del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000008.11:g.118366816_118366918TGAAA[exp]TAAAA[exp]": "[exp_placeholder]",
+    "NC_000009.11:g.(?_101124992_101125835del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000009.11:g.(?_79851768_79854605del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000009.11:g.71705804_71974823invdup": "[chained_invdup_no_separator]",
+    "NC_000010.10:g.(?_88669791_88681457del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000011.9:g.(?_108156908_108160358del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000011.9:g.(?_47363401_47367757del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000011.9:g.(?_5239576_5247294del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000011.9:g.(?_5247493_5248852del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000012.11:g.(?_110012646_110013970del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000012.11:g.(?_133222176_133226475del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000013.10:g.(?_32936842_32938734del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000013.10:g.(?_52548990_52552030del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000014.8:g.(?_88391503_88423172del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000015.10:g.(?_43906612)_(43906674_)?del": "[malformed_extra_question_after_close_paren]",
+    "NC_000015.9:g.(?_77310868_77315342del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000016.10:g.(?_88638115)(88648115_88650955)del": "[malformed_missing_underscore_between_ranges]",
+    "NC_000016.9:g.(?_28484798_28497560del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000016.9:g.(?_30196531_30199897del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000016.9:g.(?_68857535_68864666del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000016.9:g.(?_89986211_89987210del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000016.9:g.24624761_24624850TTTTA[22]TTTCA[exp]TTTTA[exp]": "[exp_placeholder]",
+    "NC_000017.10:g.(?_34,822,466)_(36,410,720_?)del": "[malformed_commas_in_coordinates]",
+    "NC_000017.10:g.(?_48243138_48245027del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000017.10:g.(?_59878633_59883038del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000017.10:g.[(729319_882558)_(882998_?)del];[704262_704264[1]]": "[trans_compound_with_uncertain_first_and_repeat_second]",
+    "NC_000017.11:g.(?_14180000-15550000_?)dup": "[malformed_dash_inside_paren_range]",
+    "NC_000018.9:g.(?_55710610_56069772del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000019.10:g.(?_45485294_45497047_?)del": "[malformed_four_positions_in_one_paren]",
+    "NC_000019.9:g.(?_42759120_42759196del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000019.9:g.(?_47255735_47259271del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000019.9:g.(?_50909693_50912034del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000020.10:g.(?_62081939_62119720del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000020.10:g.GGCCTG[(650_?)]": "[repeat_uncertain_upper_bound_at_least_N]",
+    "NC_000021.7:g.45754433_NC_000021.7:g.45754434del": "[malformed_second_accession_glued_in]",
+    "NC_000021.8:g.(?_34923768_34933642del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000021.8:g.(?_47533070_47584395del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000022.10:g.(33756233_33756918)_(33759931_33760459)delins42.9KB": "[malformed_size_suffix_KB]",
+    "NC_000022.10:g.(?_30051485_30051628del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000022.10:g.24171601-(24180196_?)": "[malformed_dash_separator_no_edit_type]",
+    "NC_000023.10:g.(?_153002694_153020558del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000023.10:g.(?_153296154_153302832del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000023.10:g.(?_22186468_22186740del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000023.10:g.(?_32429859_32663279del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000023.10:g.(?_32827600_33229483dup": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000023.11:g(32501843_32518007)_(32518132_32545158)del": "[missing_dot_after_g_prefix]",
+    "NC_000023.11:g.(41853228_41922929)(41923555_?)del": "[malformed_missing_underscore_between_ranges]",
+    "NC_000023.11:g.(?_134460165)_(134500668_?)de.": "[malformed_de_typo_for_del]",
+    "NC_000023.11:g.(?_18641623)_(18641623_18644.669)del": "[malformed_period_in_coordinate]",
+    "NC_000023.11:g.(?_30304206_30309390_?)dup": "[malformed_four_positions_in_one_paren]",
+    "NC_012920.1:m.961delTinsC(2_7)": "[deprecated_repeat_paren_after_delins]",
+    "NG_000007.12:g.(108290244-?)_(?-114759023)del": "[malformed_paren_dash_instead_of_underscore]",
+    "NG_007563.1:g.[66203T>C;66207G>A": "[malformed_unclosed_compound_bracket]",
+    "NG_008005.1:g.8384_8763AACATGCAGGNGGAGGAGGGTGAGAGTTCGTG[29-32]": "[deprecated_dash_range_repeat]",
+    "NG_008047.1:g.17267CAG[(54-68)]": "[deprecated_dash_range_inside_brackets]",
+    "NG_008233.1:g.17226_17227[ins17227_48142;GTTTGCATAGGCACAGAATGTAT]": "[ins_inside_compound_brackets_unusual]",
+    "NG_008872.1:g.[16740_20819del;g.20987_21000del]": "[redundant_g_prefix_inside_compound]",
+    "NG_009031.1:g.12577_12578insAlu12579_12590dup": "[ins_with_TE_coords_then_dup]",
+    "NG_009627.1:g.[6039G>T;6048G>T": "[malformed_unclosed_compound_bracket]",
+    "NG_011593.1:g.55397_56585delins59701_59837invGCCCA": "[chained_delins_inv_seq]",
+    "NG_011735.4:g.308479_308480insAlu308464_308481dup": "[ins_with_TE_coords_then_dup]",
+    "NG_016194.2:g.[6012_6117gom;19440_19569lom]": "[gom_lom_methylation_extension]",
+    "NG_033179.1:g.(5183_64397)_(64560_68128)_del": "[malformed_extra_underscore_before_del]",
+    "NG_042181.1:(g.89607_91434)_(105703_107097)del": "[prefix_inside_parens]",
+    "NG_054747.1:g.(19392_19426)TTTTA[(7_?)]TTTCA[(n)]": "[lowercase_n_placeholder]",
+    "NM_000038.5:c.(-19+1_c.-18-1)_(933+1_934-1)dup": "[redundant_c_prefix_inside_paren]",
+    "NM_000041.4:c.[388=;460C>A526=]": "[malformed_compound_missing_semicolon]",
+    "NM_000044.3:c.172_174CAG(36_37)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_000044.3:c.172_174CAG(38_68)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_000044.3:c.172_174CAG(7_34)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "[trans_compound_with_mosaic]",
+    "NM_000106.6:c.[1457G>C;320C>T886C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000141.5:c.1040_1041insAluYb1026_1040dup": "[ins_with_TE_coords_then_dup]",
+    "NM_000155.3:c.[652C>T;c.940A>G]": "[redundant_c_prefix_inside_compound]",
+    "NM_000190.4:c.192_193insAluYa5180_192dup": "[ins_with_TE_coords_then_dup]",
+    "NM_000275.3:c.[-22+132=;-22+5657T>G-22+8550=]": "[malformed_compound_missing_semicolon]",
+    "NM_000383.3:c.995+(3_5)delGAGinsTAT": "[uncertain_intronic_offset_paren_range]",
+    "NM_000492.2:c.2908+1085_c.3367+260del": "[redundant_c_prefix_inside_range]",
+    "NM_000492.3:c.(164+1_165-1)_(1584_+1_1585-1)del(2619+1_2620-1)_(2988+1_2989-1)del": "[malformed_typo_and_chained_del]",
+    "NM_000492.3:c.(273+1_274-1)_(1116+1_1117-1)del(1584+1_1585-1)_(3468+1_3469-1)del": "[chained_del_no_separator]",
+    "NM_000492.4:c.[1327G>T;1727G>C2002C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000500.9:c.[-103A>G;-110T>C-113G>A-126C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000500.9:c.[-4C>T;1360C>T317C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000535.7:c.[1556A>G;1559C>T1567T>A]": "[malformed_compound_missing_semicolon]",
+    "NM_000540.3:c.[10097G>A;11798A>G4711A>G]": "[malformed_compound_missing_semicolon]",
+    "NM_000557.5:c.[1309_1311del;1315T>A1319A>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000769.4:c.[-13G>A;10T>C7C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_000953.3:c.[-197=;-441T>C-549=]": "[malformed_compound_missing_semicolon]",
+    "NM_000969.5:c.[189+267G>C;189+288A>G189+309A>G189+364G>A189+387A>T]": "[malformed_compound_missing_semicolon]",
+    "NM_001005741.2:c.[535G>C;c.1093G>A]": "[redundant_c_prefix_inside_compound]",
+    "NM_001006658.2:c.[-71T>C;1776G>A1916G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_001009944.3:c.[8279T>C;8282G>C8291T>C]": "[malformed_compound_missing_semicolon]",
+    "NM_001018115.3:g.(10043865_100465.79)_(10049506_10052386)del": "[malformed_period_in_coordinate]",
+    "NM_001110792.2:c.[1046_1072del;1123AAG[1]1152_1282del]": "[malformed_compound_missing_semicolon]",
+    "NM_001166110.1:c.125_139delCCT...GCT": "[malformed_ellipsis_in_sequence]",
+    "NM_001360016.2:c.[1264C>G;202G>A376A>G]": "[malformed_compound_missing_semicolon]",
+    "NM_001360016.2:c.[202G>A;376A>G563C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_001360016.2:c.[375G>T;379G>T383T>C384C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_001625.2:c.+219G>C": "[malformed_leading_plus_in_position]",
+    "NM_001709.5:c.[*1785G>T;-21-14109C>G196G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_002024.5:c.-128GGC(55_200)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_002116.8:c.[1029T>C;1033A>T1072G>A1077C>T180C>T282G>C299T>A301G>A302A>G307G>C311C>T313C>G314T>C317G>T319G>C363A>G385T>C397T>C413G>A41C>T448C>T502A>C524A>G527A>T555T>G622C>G633A>G642C>T649C>G651C>T652A>G691G>A762C>T808G>T829G>C899T>C945G>A952C>T961G>A964A>T967A>G987C>T992T>G]": "[malformed_compound_missing_semicolon]",
+    "NM_002645.3:c.(?_1-1)_4007+1_4008-1)del": "[malformed_extra_close_paren]",
+    "NM_002863.3:c.[1964_1969invAAAAAG;1969+1_+4delGTAC]": "[malformed_position_shorthand_inside_compound]",
+    "NM_003120.3:c.[147_155del;157T>G159C>G]": "[malformed_compound_missing_semicolon]",
+    "NM_003331.4:c.[-1307T>A;-1308G>A-316G>A-317G>A-378A>G-482A>C]": "[malformed_compound_missing_semicolon]",
+    "NM_003465.3:c.[1060G>A;1155G>A1156+6_1156+9del]": "[malformed_compound_missing_semicolon]",
+    "NM_003661.4:c.[1024A>G];[1152T>G[1164_1169del]": "[malformed_unclosed_inner_bracket]",
+    "NM_003977.2:c.(?_1)_(*_?)del": "[uncertain_range_with_3utr_and_question]",
+    "NM_004409.4:c.*224_*283CTG[329]NNN[(?)]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[1]CCG[1]CTG[4]CCG[1]CTG[1]CCG[1]CTG[18]": "[non_spec_uncertain_count_paren]",
+    "NM_004483.5:c.292+1_293-1_*919_?dup": "[malformed_compound_dup_no_paren_grouping]",
+    "NM_004562.3:c.(171+1_172-1)_(534+1_535_-1)del": "[malformed_extra_underscore_before_minus]",
+    "NM_004795.4:c.[1054T>G;1109G>C1155G>A1330+143T>G820-46C>G820-79C>T]": "[malformed_compound_missing_semicolon]",
+    "NM_004990.3:c.[1031A>G];[1177G>A[1700C>T]": "[malformed_unclosed_inner_bracket]",
+    "NM_004993.5:c.886_888CAG(12_44)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_005458.8:c.[1662+5118G>A;1893+21406=360=631-18885A>G]": "[malformed_compound_missing_semicolon]",
+    "NM_005458.8:c.[1662+5118G>A;1893+21406C>T360=631-18885=]": "[malformed_compound_missing_semicolon]",
+    "NM_006392.3:c.3+71_3+76GGCCTG(3_14)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_006885.4:c.10519GGC[42-74]": "[deprecated_dash_range_repeat]",
+    "NM_007294.3:c.(5074+1-5075-1)_(5193+1_5194-1)del": "[malformed_dash_range_inside_paren]",
+    "NM_007294.4:c.(19_?80_?)del": "[malformed_unbalanced_paren_three_positions]",
+    "NM_007294.4:c.(442_?547_?)del": "[malformed_unbalanced_paren_three_positions]",
+    "NM_012213.3:c.[*130G>T;*220A>G*286G>T*504C>A*82C>G]": "[malformed_compound_missing_semicolon]",
+    "NM_013236.2:c.1173+54822_1173+54826ATTCT(10_32)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_013236.2:c.1173+54822_1173+54826ATTCT(360_370)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_013236.2:c.1173+54822_1173+54826ATTCT(400_760)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_013236.2:c.1173+54822_1173+54826ATTCT(800_4500)": "[deprecated_repeat_paren_no_brackets]",
+    "NM_014149.4:c.[588_589del];[857_858AG[1]]": "[trans_compound_del_then_repeat]",
+    "NM_014762.3:c.[881A>C,918G>C]": "[chimeric_compound_comma]",
+    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "[trans_compound_with_internal_cis]",
+    "NM_016124.4:c.[186G>T;410C>T455A>C667T>G]": "[malformed_compound_missing_semicolon]",
+    "NM_016124.4:c.[410C>T;455A>C509T>C667T>G]": "[malformed_compound_missing_semicolon]",
+    "NM_016124.6:c.[186G>T;410C>T455A>C602C>G604G>A733G>C]": "[malformed_compound_missing_semicolon]",
+    "NM_017613.3:c.[1466A>C;786-33A>G82A>C]": "[malformed_compound_missing_semicolon]",
+    "NM_017917.4:c.[1174-1G>A];[1262CCA[1]]": "[trans_compound_substitution_then_repeat]",
+    "NM_020469.3:c.[1061del;467C>T989T>C]": "[malformed_compound_missing_semicolon]",
+    "NM_020469.3:c.[15dup;297A>C526C>G657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_020469.3:c.[1_5dup;297A>C526C>G657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_020469.3:c.[297A>G;526C>G657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_021095.4:c.1285A>Gtransition": "[malformed_trailing_word_annotation]",
+    "NM_022154.5:c.[97G>A;1004G>C];[c.610G>T]": "[redundant_c_prefix_inside_compound_trans]",
+    "NM_022455.4:c.5623-?_c.8091+?del": "[redundant_c_prefix_inside_range]",
+    "NM_024339.5:c.[298T>A;700G>C824G>A]": "[malformed_compound_missing_semicolon]",
+    "NM_025114.4:c.[3904C>T];[4655AAG[2]]": "[trans_compound_substitution_then_repeat]",
+    "NM_025114.4:c.[4655AAG[2]];[6012-12T>A]": "[trans_compound_repeat_then_substitution]",
+    "NM_145064.2:c.763_766delCTCT;615521.0004": "[malformed_omim_id_appended]",
+    "NM_145064.2:c.997-G>T": "[malformed_intronic_offset_no_number]",
+    "NM_145698.4:c.626-689_937-234delins936+1075_c.936+1230inv": "[chained_delins_inv_with_redundant_prefix]",
+    "NM_173483.4:c.(367+100_c.368-86)_(c.*86_?)del": "[redundant_c_prefix_inside_paren]",
+    "NM_201253.3:c.2185_2186insAluY2174_2185dup": "[ins_with_TE_coords_then_dup]",
+    "NP_000081.1:p.Gly1122_Arg1139del+": "[trailing_plus_after_protein_del]",
+    "NP_000081.1:p.Gly333_Lys350del+": "[trailing_plus_after_protein_del]",
+    "NP_000089.1:p.Lys642ThrfsTer6(Glu641fs)": "[parenthetical_alternate_frameshift]",
+    "NP_000154.1:p.Glu198Glu=": "[silent_with_repeated_aa]",
+    "NP_000539.2:p.Cys189_Tyr190delinsCysPheThrfs": "[trailing_fs_after_delins]",
+    "NP_001007027.1:p.488Gln[49_55]": "[malformed_position_before_aa_name]",
+    "NP_001007027.1:p.Gln488[(6-35)]": "[deprecated_dash_range_repeat]",
+    "NP_001007027.1:p.Gln488[(90-93)]": "[deprecated_dash_range_repeat]",
+    "NP_002102.4:p.Gln18[36-39]": "[deprecated_dash_range_repeat]",
+    "NP_004619.3:p.Ile223MetfsX45": "[deprecated_fsX_frameshift]",
+    "NP_004619.3:p.Val548AlafsX25": "[deprecated_fsX_frameshift]",
+    "NP_004984.2:p.Gln296(60_86": "[malformed_unclosed_paren]",
+    "NP_009225.1:p.Phe1036_Lys1037delinsPheTerArgfs": "[trailing_fs_after_delins]",
+    "NP_612422.2:p.Ala278Alabutlastnucleotideofexon.": "[malformed_clinical_comment_text]",
+    "NR_002717.2:n.894CTA[(3)]CTG[(317_330)]": "[non_canonical_paren_around_single_count]",
+    "NW_019805500.1:g.472169CCG[(100-833)]": "[deprecated_dash_range_inside_brackets]"
   }
 }

@@ -1,24 +1,36 @@
 {
   "kinds": {
-    "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })"
+    "[malformed_unbalanced_paren_three_positions]": {
+      "category": "malformed_input",
+      "reason": "Three positions in one open paren."
     },
-    "Parse error at position <N>: Unexpected trailing characters: '+'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: '+'"
+    "[trans_compound_with_uncertain_first_and_repeat_second]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans-phase compound `[a];[b]` (recommendations/DNA/alleles.md) where the first allele is an uncertain-range del (recommendations/uncertain.md) and the second has a bracketed repeat. Each form is spec-valid; the combination is not yet parsed."
     },
-    "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'": {
-      "category": "needs_triage",
-      "reason": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'"
+    "[trans_compound_with_mosaic]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans-phase compound `[a];[b]` with mosaic `=/` in each allele. Spec form per recommendations/DNA/alleles.md (compound) and deletion.md (mosaic `=/`)."
+    },
+    "[trans_compound_with_internal_cis]": {
+      "category": "spec_not_yet_supported",
+      "reason": "Trans `[a];[b;c]` \u2014 first allele a single del, second allele a cis pair. Spec recommendations/DNA/alleles.md."
+    },
+    "[malformed_compound_missing_semicolon]": {
+      "category": "malformed_input",
+      "reason": "Compound missing `;`."
+    },
+    "[trailing_plus_after_protein_del]": {
+      "category": "rejected_by_design",
+      "reason": "Trailing `+` after protein deletion."
     }
   },
   "expected_failures": {
-    "NC_000005.9:g.(?_13922436_13923774del": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NC_000017.10:g.[(729319_882558)_(882998_?)del];[704262_704264[1]]": "Parse error at position <N>: Unexpected trailing characters: ';[704262_704264[1]]'",
-    "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "Parse error at position <N>: Failed to parse variant: Error(Error { input: \"<remainder>\", code: Tag })",
-    "NP_000081.1:p.Gly333_Lys350del+": "Parse error at position <N>: Unexpected trailing characters: '+'"
+    "NC_000005.9:g.(?_13922436_13923774del": "[malformed_unbalanced_paren_three_positions]",
+    "NC_000017.10:g.[(729319_882558)_(882998_?)del];[704262_704264[1]]": "[trans_compound_with_uncertain_first_and_repeat_second]",
+    "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "[trans_compound_with_mosaic]",
+    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "[trans_compound_with_internal_cis]",
+    "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
+    "NP_000081.1:p.Gly333_Lys350del+": "[trailing_plus_after_protein_del]"
   }
 }
