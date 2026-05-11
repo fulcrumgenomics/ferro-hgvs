@@ -2205,6 +2205,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         }
                     }
 
+                    // Check for cyclic-rotation single-copy duplication (issue #132).
+                    // When the inserted alt is a phase-mismatched cyclic rotation of an
+                    // adjacent reference repeat unit, shuffle's first-base check fails
+                    // (`alt[0] != ref[ins_point]`) and the variant never moves. The
+                    // 2+-copy path (`insertion_to_repeat`, above) already iterates
+                    // rotations; do the same for the single-copy case here so the
+                    // variant canonicalizes to the most-3' rotation-aligned dup slot.
+                    //
+                    // Use the ORIGINAL position (start, 1-based HGVS), not the post-shuffle
+                    // result.start, because rotation iteration relies on the unmoved
+                    // insertion point. This is symmetric with the call to
+                    // `insertion_to_repeat` above.
+                    let original_pos_idx = hgvs_pos_to_index(start) as u64;
+                    if let Some(rules::InsToDupResult {
+                        unit: _,
+                        start: dup_start,
+                        end: dup_end,
+                    }) = rules::insertion_to_duplication(ref_seq, original_pos_idx, &seq_bytes)
+                    {
+                        return Ok((
+                            dup_start,
+                            dup_end,
+                            NaEdit::Duplication {
+                                sequence: None,
+                                length: None,
+                                uncertain_extent: None,
+                            },
+                            warnings,
+                        ));
+                    }
+
                     // Check for simple duplication (single-base or matching adjacent)
                     // When shifting an insertion through a repeat region, the effective sequence
                     // rotates. For example, shifting "GGC" by 1 position gives "GCG".
