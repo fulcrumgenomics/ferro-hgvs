@@ -37,7 +37,9 @@
 pub mod convert;
 mod parser;
 
-pub use convert::{hgvs_to_spdi_simple, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError};
+pub use convert::{
+    hgvs_to_spdi, hgvs_to_spdi_simple, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError,
+};
 pub use parser::{parse_spdi, SpdiParseError};
 
 use serde::{Deserialize, Serialize};

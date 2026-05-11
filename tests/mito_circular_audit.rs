@@ -567,26 +567,22 @@ fn audit_mt_gene_symbol_preserved_on_round_trip() {
 // -----------------------------------------------------------------------------
 // Scenario 13 — SPDI conversion on `m.`.
 //
-// `hgvs_to_spdi_simple` rejects all non-`Genome` variants outright,
-// including `Mt`, with a `ConversionError::UnsupportedVariantType`.
-// VCF conversion silently treats `m.` as linear `g.` (see
-// `src/vcf/from_hgvs.rs`); SPDI does not. F1 must reconcile the two
-// policies (and decide what the right answer is on a wraparound m.
-// variant where SPDI's linear semantics break down).
+// `hgvs_to_spdi_simple` now accepts plain non-wrapping `m.` substitutions
+// and emits SPDI on the mitochondrial accession directly (closed by #116,
+// matching VCF's treat-as-linear policy from `src/vcf/from_hgvs.rs`).
+// Wraparound m. variants where linear semantics break down remain a
+// separate F1 question.
 // -----------------------------------------------------------------------------
 
-/// `hgvs_to_spdi_simple` rejects a plain non-wrapping `m.` substitution
-/// today. F1 must decide whether to lift this for non-wrapping m.
-/// variants (matching VCF's policy) or surface the same error from VCF.
+/// `hgvs_to_spdi_simple` accepts a plain non-wrapping `m.` substitution
+/// post-#116 and emits SPDI on the mt accession directly. Pinned so any
+/// regression that re-rejects m. → SPDI surfaces immediately.
 #[test]
-fn audit_mt_spdi_conversion_rejected_today() {
+fn audit_mt_spdi_conversion_accepted_after_issue_116() {
     let variant = parse_hgvs("NC_012920.1:m.100A>G").expect("parse should succeed");
-    let result = hgvs_to_spdi_simple(&variant);
-    assert!(
-        result.is_err(),
-        "PINNED: ferro rejects m. → SPDI conversion today. F1 must \
-         decide whether SPDI grows m. support (matching VCF's silent \
-         treat-as-linear policy) or whether VCF gains the same \
-         rejection until circular semantics are defined."
-    );
+    let spdi = hgvs_to_spdi_simple(&variant).expect("m. → SPDI must succeed post-#116");
+    assert_eq!(spdi.sequence, "NC_012920.1");
+    assert_eq!(spdi.position, 99); // 1-based 100 → 0-based 99
+    assert_eq!(spdi.deletion, "A");
+    assert_eq!(spdi.insertion, "G");
 }
