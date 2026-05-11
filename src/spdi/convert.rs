@@ -13,16 +13,20 @@
 //!
 //! # Supported Conversions
 //!
-//! | HGVS | SPDI |
-//! |------|------|
-//! | Substitution `g.12345A>G` | `seq:12344:A:G` |
-//! | Deletion `g.100_102del` | `seq:99:NNN:` (requires reference) |
-//! | Insertion `g.100_101insATG` | `seq:100::ATG` |
-//! | Delins `g.100_102delinsATG` | `seq:99:NNN:ATG` (requires reference) |
-//! | Duplication `g.100_102dup` | `seq:102::NNN` (requires reference) |
+//! | HGVS | SPDI | Provider |
+//! |------|------|----------|
+//! | Substitution `g.12345A>G` | `seq:12344:A:G` | not required |
+//! | Deletion `g.100_102del` | `seq:99:ATG:` | required (short form) |
+//! | Deletion `g.100_102delATG` | `seq:99:ATG:` | not required (explicit form) |
+//! | Insertion `g.100_101insATG` | `seq:100::ATG` | not required |
+//! | Delins `g.100_102delinsATG` | `seq:99:ATG:ATG` | required |
+//! | Duplication `g.100_102dup` | `seq:101::ATG` | required (short form) |
+//! | Duplication `g.100_102dupATG` | `seq:101::ATG` | not required (explicit form) |
 //!
-//! Note: Deletions, delins, and duplications require reference sequence data
-//! to determine the deleted sequence.
+//! Short-form deletions, delins, and duplications use [`hgvs_to_spdi`] with a
+//! [`ReferenceProvider`] to fetch the deleted/duplicated bases for SPDI's
+//! mandatory `del` (or, for duplication, `ins`) field. Explicit forms do not
+//! consult the provider.
 //!
 //! # Coordinate-system support
 //!
@@ -36,11 +40,14 @@
 //! - `r.` (RNA) — exonic, positive base; `u`/`U` rewritten to `T` for
 //!   SPDI's DNA alphabet convention.
 //!
-//! [`hgvs_to_spdi`] additionally handles `c.` (CDS) and intronic / UTR
+//! [`hgvs_to_spdi`] additionally handles `c.` (CDS) and UTR-style
 //! `n.`/`r.` positions by consulting a [`ReferenceProvider`] for transcript
-//! metadata. Per the [SPDI spec], the SPDI accession matches the HGVS
-//! accession (NCBI Variation Services emits SPDI on transcript accessions
-//! the same way).
+//! metadata, and uses the same provider to fetch reference bases for
+//! short-form `Deletion` / `Duplication` / `Delins` edits across all
+//! coordinate systems. Intronic `n.`/`r.` positions remain unsupported
+//! (SPDI has no offset notation; genomic projection is future work). Per
+//! the [SPDI spec], the SPDI accession matches the HGVS accession (NCBI
+//! Variation Services emits SPDI on transcript accessions the same way).
 //!
 //! `p.` (protein) variants are not representable in SPDI and are rejected.
 //!
@@ -190,9 +197,12 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 /// | `c.` (CDS) | NO — needs CDS start | use [`hgvs_to_spdi`] |
 /// | `p.` (protein) | NO | not representable in SPDI |
 ///
-/// For `c.`, intronic `n.`/`r.`, UTR `n.`/`r.`, or deletion/dup variants
-/// without an explicit deleted sequence, use [`hgvs_to_spdi`] which consults
-/// a [`ReferenceProvider`].
+/// For `c.`, UTR-style `n.`/`r.`, or deletion/dup variants without an
+/// explicit deleted sequence, use [`hgvs_to_spdi`] which consults a
+/// [`ReferenceProvider`]. Intronic `n.`/`r.` positions are not supported
+/// by either entry point — SPDI has no offset notation, and genomic
+/// projection is future work; both functions return
+/// [`ConversionError::MissingReferenceData`].
 ///
 /// # Arguments
 ///
@@ -250,13 +260,21 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
     }
 }
 
-/// Convert an HGVS variant to SPDI, consulting a reference provider when
-/// transcript metadata (CDS start, exon coordinates) is required.
+/// Convert an HGVS variant to SPDI, consulting a reference provider for
+/// transcript metadata (CDS start, exon coordinates) and for the deleted /
+/// duplicated bases of short-form `Deletion`, `Duplication`, and `Delins`
+/// edits.
 ///
 /// This is the provider-aware companion to [`hgvs_to_spdi_simple`]. It
-/// handles `c.` (CDS) variants, `n.`/`r.` variants with intronic offsets or
-/// UTR-style positions, and falls back to the simple path for cases that
-/// don't need provider data.
+/// handles `c.` (CDS) variants, `n.`/`r.` variants with UTR-style positions
+/// (`*N` downstream), and populates SPDI's mandatory `del` field for
+/// short-form deletions / delins (and the symmetric `ins` field for
+/// short-form duplications) by fetching the reference bases for the
+/// variant's interval. Explicit-form input (`g.100_102delATG`,
+/// `g.100_102dupATG`, etc.) emits the user-supplied bases as-is and does
+/// not consult the provider. Intronic `n.`/`r.` positions remain
+/// unsupported (SPDI has no offset notation) and return
+/// [`ConversionError::MissingReferenceData`].
 ///
 /// The resulting SPDI uses the **same accession** as the HGVS variant — for
 /// `NM_000088.3:c.1A>G` the SPDI sequence is `NM_000088.3`, not the
@@ -266,23 +284,44 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// # Arguments
 ///
 /// * `variant` - The HGVS variant to convert.
-/// * `provider` - A reference provider that can return the relevant
-///   transcript via `get_transcript`.
+/// * `provider` - A reference provider used both for transcript metadata
+///   (`get_transcript`) and reference-base fetches for short-form edits
+///   (`get_genomic_sequence` first, then `get_sequence` as fallback).
 ///
 /// # Errors
 ///
-/// * [`ConversionError::MissingReferenceData`] if the provider does not have
-///   the transcript or the position cannot be resolved (e.g. intronic
-///   without exon data).
+/// * [`ConversionError::MissingReferenceData`] if the provider does not
+///   have the transcript or the requested reference interval, or if the
+///   position cannot be resolved (e.g. intronic without exon data).
 /// * Other `ConversionError` variants for the same reasons as
 ///   [`hgvs_to_spdi_simple`].
+///
+/// # Examples
+///
+/// Short-form deletion with provider-backed ref fetch:
+///
+/// ```
+/// use ferro_hgvs::spdi::convert::hgvs_to_spdi;
+/// use ferro_hgvs::reference::mock::MockProvider;
+/// use ferro_hgvs::parse_hgvs;
+///
+/// let mut provider = MockProvider::new();
+/// // Build a contig where 1-based 100..102 = "ATG".
+/// let mut seq = "N".repeat(99);
+/// seq.push_str("ATG");
+/// provider.add_genomic_sequence("NC_000001.11", &seq);
+///
+/// let hgvs = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
+/// let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+/// assert_eq!(spdi.to_string(), "NC_000001.11:99:ATG:");
+/// ```
 pub fn hgvs_to_spdi<P: ReferenceProvider>(
     variant: &HgvsVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
     match variant {
-        HgvsVariant::Genome(g) => genome_to_spdi_simple(g),
-        HgvsVariant::Mt(m) => mt_to_spdi_simple(m),
+        HgvsVariant::Genome(g) => genome_to_spdi_with_provider(g, provider),
+        HgvsVariant::Mt(m) => mt_to_spdi_with_provider(m, provider),
         HgvsVariant::Tx(n) => tx_to_spdi_with_provider(n, provider),
         HgvsVariant::Rna(r) => rna_to_spdi_with_provider(r, provider),
         HgvsVariant::Cds(c) => cds_to_spdi_with_provider(c, provider),
@@ -315,6 +354,7 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         end_pos,
         edit,
         AlphabetMode::Dna,
+        None::<&dyn ReferenceProvider>,
     )
 }
 
@@ -337,6 +377,7 @@ fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError
         end_pos,
         edit,
         AlphabetMode::Dna,
+        None::<&dyn ReferenceProvider>,
     )
 }
 
@@ -356,6 +397,7 @@ fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError
         end_tx,
         edit,
         AlphabetMode::Dna,
+        None::<&dyn ReferenceProvider>,
     )
 }
 
@@ -375,6 +417,58 @@ fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionErr
         end_pos,
         edit,
         AlphabetMode::Rna,
+        None::<&dyn ReferenceProvider>,
+    )
+}
+
+/// Convert a genomic variant to SPDI with provider-backed reference fetch.
+///
+/// Same as [`genome_to_spdi_simple`] for substitution / insertion / identity,
+/// but uses the provider to populate the `del` field for short-form
+/// `Deletion`, `Duplication`, and `Delins` edits.
+fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
+    variant: &GenomeVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+        Some(provider),
+    )
+}
+
+/// Convert a mitochondrial variant to SPDI with provider-backed reference fetch.
+///
+/// The mito accession is genomic, so the path mirrors
+/// [`genome_to_spdi_with_provider`].
+fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
+    variant: &MtVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+        Some(provider),
     )
 }
 
@@ -382,7 +476,9 @@ fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionErr
 /// transcript positions through the supplied provider.
 ///
 /// The resulting SPDI uses the variant's transcript accession (e.g.
-/// `NM_000088.3`), matching NCBI Variation Services' convention.
+/// `NM_000088.3`), matching NCBI Variation Services' convention. Short-form
+/// `Deletion` / `Duplication` / `Delins` edits trigger a provider fetch on
+/// the transcript accession to populate SPDI's `del` field.
 fn cds_to_spdi_with_provider<P: ReferenceProvider>(
     variant: &CdsVariant,
     provider: &P,
@@ -407,74 +503,81 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider>(
         end_tx,
         edit,
         AlphabetMode::Dna,
+        Some(provider),
     )
 }
 
-/// Convert an `n.` variant using a provider for cases that the simple path
-/// can't handle (intronic offsets, downstream positions, non-positive base).
+/// Convert an `n.` variant with provider-backed reference fetch and
+/// transcript-aware position resolution (intronic offsets, downstream
+/// `*N`, non-positive base).
 fn tx_to_spdi_with_provider<P: ReferenceProvider>(
     variant: &TxVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
-    // Fast path: positions resolvable without provider data
-    if !tx_needs_provider(&variant.loc_edit.location) {
-        return tx_to_spdi_simple(variant);
-    }
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
-    let start_tx_pos = variant.loc_edit.location.start.inner().ok_or_else(|| {
-        ConversionError::InvalidPosition {
-            description: "cannot convert n. variant with unknown start position".to_string(),
-        }
-    })?;
-    let end_tx_pos = variant
-        .loc_edit
-        .location
-        .end
-        .inner()
-        .copied()
-        .unwrap_or(*start_tx_pos);
-    let (start_tx, end_tx) =
-        resolve_tx_to_provider_tx(&variant.accession, start_tx_pos, &end_tx_pos, provider)?;
+    let (start_tx, end_tx) = if tx_needs_provider(&variant.loc_edit.location) {
+        let start = variant.loc_edit.location.start.inner().ok_or_else(|| {
+            ConversionError::InvalidPosition {
+                description: "cannot convert n. variant with unknown start position".to_string(),
+            }
+        })?;
+        let end = variant
+            .loc_edit
+            .location
+            .end
+            .inner()
+            .copied()
+            .unwrap_or(*start);
+        resolve_tx_to_provider_tx(&variant.accession, start, &end, provider)?
+    } else {
+        let s = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
+        let e = tx_end_for_simple_path(&variant.loc_edit.location, s, "n")?;
+        (s, e)
+    };
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_tx,
         end_tx,
         edit,
         AlphabetMode::Dna,
+        Some(provider),
     )
 }
 
-/// Convert an `r.` variant using a provider for cases the simple path can't
-/// handle. Same coordinate resolution as `n.`; alphabet conversion `u → T`
-/// is applied via [`AlphabetMode::Rna`].
+/// Convert an `r.` variant with provider-backed reference fetch. Same
+/// coordinate resolution as `n.`; alphabet conversion `u → T` is applied
+/// via [`AlphabetMode::Rna`].
 fn rna_to_spdi_with_provider<P: ReferenceProvider>(
     variant: &RnaVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
-    if !rna_needs_provider(&variant.loc_edit.location) {
-        return rna_to_spdi_simple(variant);
-    }
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
-    let start_rna = variant.loc_edit.location.start.inner().ok_or_else(|| {
-        ConversionError::InvalidPosition {
-            description: "cannot convert r. variant with unknown start position".to_string(),
-        }
-    })?;
-    let end_rna = variant
-        .loc_edit
-        .location
-        .end
-        .inner()
-        .copied()
-        .unwrap_or(*start_rna);
-    let (start_tx, end_tx) =
-        resolve_rna_to_provider_tx(&variant.accession, start_rna, &end_rna, provider)?;
+    let (start_tx, end_tx) = if rna_needs_provider(&variant.loc_edit.location) {
+        let start = variant.loc_edit.location.start.inner().ok_or_else(|| {
+            ConversionError::InvalidPosition {
+                description: "cannot convert r. variant with unknown start position".to_string(),
+            }
+        })?;
+        let end = variant
+            .loc_edit
+            .location
+            .end
+            .inner()
+            .copied()
+            .unwrap_or(*start);
+        resolve_rna_to_provider_tx(&variant.accession, start, &end, provider)?
+    } else {
+        let s = rna_pos_for_simple_path(&variant.loc_edit.location, "r")?;
+        let e = rna_end_for_simple_path(&variant.loc_edit.location, s, "r")?;
+        (s, e)
+    };
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_tx,
         end_tx,
         edit,
         AlphabetMode::Rna,
+        Some(provider),
     )
 }
 
@@ -774,13 +877,23 @@ fn ensure_positive_tx<P: std::fmt::Display>(
 ///
 /// `start_one_based` and `end_one_based` are 1-based positions on the SPDI
 /// accession (genomic for `g.`/`m.`, transcript for `c.`/`n.`/`r.`).
-fn emit_spdi_for_edit(
+///
+/// When `provider` is `Some` and the edit is a short-form deletion,
+/// duplication, or delins (i.e. lacks an explicit deleted sequence), the
+/// reference bases for `[start_one_based, end_one_based]` are fetched via
+/// the provider so SPDI's mandatory `del` field can be populated. When
+/// `provider` is `None`, those cases return [`ConversionError::MissingReferenceData`].
+fn emit_spdi_for_edit<P>(
     sequence: String,
     start_one_based: u64,
     end_one_based: u64,
     edit: &NaEdit,
     alphabet: AlphabetMode,
-) -> Result<SpdiVariant, ConversionError> {
+    provider: Option<&P>,
+) -> Result<SpdiVariant, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
     let hgvs_pos_ob =
         OneBasedPos::try_new(start_one_based).ok_or_else(|| ConversionError::InvalidPosition {
             description: "position 0 is not valid in HGVS".to_string(),
@@ -814,71 +927,84 @@ fn emit_spdi_for_edit(
         NaEdit::Duplication {
             sequence: dup_seq, ..
         } => {
-            if let Some(seq) = dup_seq {
-                let end_pos_ob = OneBasedPos::new(end_one_based);
-                let spdi_end_zb = end_pos_ob.to_zero_based();
-                Ok(SpdiVariant::new(
-                    sequence,
-                    spdi_end_zb.value(),
-                    "",
-                    apply_alphabet(&sequence_to_string(seq), alphabet),
-                ))
-            } else {
-                Err(ConversionError::MissingReferenceData {
-                    description:
-                        "duplication sequence not provided; reference data needed to determine duplicated bases"
-                            .to_string(),
-                })
-            }
+            let dup_str = match dup_seq {
+                Some(seq) => sequence_to_string(seq),
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        return Err(ConversionError::MissingReferenceData {
+                            description:
+                                "duplication sequence not provided; reference data needed to determine duplicated bases"
+                                    .to_string(),
+                        });
+                    }
+                },
+            };
+            let end_pos_ob = OneBasedPos::new(end_one_based);
+            let spdi_end_zb = end_pos_ob.to_zero_based();
+            Ok(SpdiVariant::new(
+                sequence,
+                spdi_end_zb.value(),
+                "",
+                apply_alphabet(&dup_str, alphabet),
+            ))
         }
         NaEdit::Deletion {
             sequence: del_seq, ..
         } => {
-            if let Some(seq) = del_seq {
-                Ok(SpdiVariant::new(
-                    sequence,
-                    spdi_pos,
-                    apply_alphabet(&sequence_to_string(seq), alphabet),
-                    "",
-                ))
-            } else {
-                Err(ConversionError::MissingReferenceData {
-                    description:
-                        "deleted sequence not provided; reference data needed to determine deleted bases"
-                            .to_string(),
-                })
-            }
+            let del_str = match del_seq {
+                Some(seq) => sequence_to_string(seq),
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        return Err(ConversionError::MissingReferenceData {
+                            description:
+                                "deleted sequence not provided; reference data needed to determine deleted bases"
+                                    .to_string(),
+                        });
+                    }
+                },
+            };
+            Ok(SpdiVariant::new(
+                sequence,
+                spdi_pos,
+                apply_alphabet(&del_str, alphabet),
+                "",
+            ))
         }
         NaEdit::Delins {
             sequence: ins_seq,
             deleted,
             deleted_length: _,
         } => {
-            // Delins: g.100_102delinsATG -> seq:99:XYZ:ATG
-            //
-            // If the input carried an explicit deleted sequence
-            // (e.g. `delATGinsTTCC`, see issue #120) we can build the SPDI
-            // without consulting the reference. Otherwise we still need
-            // reference data.
-            if let Some(del_seq) = deleted.as_ref() {
-                if let Some(ins_str) = inserted_sequence_to_string(ins_seq) {
-                    return Ok(SpdiVariant::new(
-                        sequence,
-                        spdi_pos,
-                        sequence_to_string(del_seq),
-                        ins_str,
-                    ));
+            let ins_str = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
+                ConversionError::MissingReferenceData {
+                    description: "delins inserted sequence is not a literal sequence".to_string(),
                 }
-            }
-            let del_len = end_one_based
-                .saturating_sub(start_one_based)
-                .saturating_add(1) as usize;
-            Err(ConversionError::MissingReferenceData {
-                description: format!(
-                    "Cannot convert delins to SPDI: deleted sequence of length {} is unknown (no reference data)",
-                    del_len
-                ),
-            })
+            })?;
+            let del_str = match deleted {
+                Some(seq) => sequence_to_string(seq),
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        let del_len = end_one_based
+                            .saturating_sub(start_one_based)
+                            .saturating_add(1) as usize;
+                        return Err(ConversionError::MissingReferenceData {
+                            description: format!(
+                                "Cannot convert delins to SPDI: deleted sequence of length {} is unknown (no reference data)",
+                                del_len
+                            ),
+                        });
+                    }
+                },
+            };
+            Ok(SpdiVariant::new(
+                sequence,
+                spdi_pos,
+                apply_alphabet(&del_str, alphabet),
+                apply_alphabet(&ins_str, alphabet),
+            ))
         }
         NaEdit::Identity {
             sequence: id_seq, ..
@@ -910,6 +1036,66 @@ fn emit_spdi_for_edit(
             description: format!("unsupported edit type: {:?}", edit),
         }),
     }
+}
+
+/// Fetch reference bases for a 1-based inclusive interval `[start, end]` on
+/// `accession`. Tries [`ReferenceProvider::get_genomic_sequence`] first
+/// (correct for `g.`/`m.` and natural for genomic accessions) and falls
+/// back to [`ReferenceProvider::get_sequence`] for transcript accessions
+/// (`n.`/`r.`/`c.` SPDI emits on the transcript accession per #116).
+///
+/// The provider takes 0-based half-open coordinates, so the conversion is
+/// `[start - 1, end)`.
+///
+/// Returns [`ConversionError::MissingReferenceData`] when neither call
+/// returns data, or when the returned string length does not match the
+/// requested interval length (insufficient ref data near a boundary).
+fn fetch_reference_bases<P>(
+    provider: &P,
+    accession: &str,
+    start_one_based: u64,
+    end_one_based: u64,
+) -> Result<String, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    if start_one_based < 1 || end_one_based < start_one_based {
+        return Err(ConversionError::InvalidPosition {
+            description: format!(
+                "invalid 1-based interval [{}, {}] for reference fetch",
+                start_one_based, end_one_based
+            ),
+        });
+    }
+    let zb_start = start_one_based - 1;
+    let zb_end = end_one_based;
+    let expected_len = (zb_end - zb_start) as usize;
+
+    let bases = match provider.get_genomic_sequence(accession, zb_start, zb_end) {
+        Ok(s) => s,
+        Err(_) => provider
+            .get_sequence(accession, zb_start, zb_end)
+            .map_err(|e| ConversionError::MissingReferenceData {
+                description: format!(
+                    "could not fetch reference for {}:{}-{}: {}",
+                    accession, start_one_based, end_one_based, e
+                ),
+            })?,
+    };
+
+    if bases.len() != expected_len {
+        return Err(ConversionError::MissingReferenceData {
+            description: format!(
+                "reference fetch for {}:{}-{} returned {} bases, expected {}",
+                accession,
+                start_one_based,
+                end_one_based,
+                bases.len(),
+                expected_len
+            ),
+        });
+    }
+    Ok(bases)
 }
 
 /// Rewrite RNA-alphabet characters to the DNA alphabet for SPDI output.
@@ -1440,140 +1626,65 @@ mod tests {
     }
 
     // =========================================================================
-    // P1: Reference-dependent conversion tests
+    // Issue #117: Reference-aware HGVS→SPDI for del/dup/delins
     // =========================================================================
+    //
+    // These tests exercise the production `hgvs_to_spdi(variant, provider)`
+    // path with a real `MockProvider`. They replace the earlier
+    // `MockGenomicRef` prototype, which predated the public provider entry
+    // point and is now redundant.
 
-    /// Mock genomic reference for testing reference-dependent conversions.
-    struct MockGenomicRef {
-        /// Map of (accession, start, end) -> sequence
-        sequences: std::collections::HashMap<(String, u64, u64), String>,
-    }
-
-    impl MockGenomicRef {
-        fn new() -> Self {
-            let mut sequences = std::collections::HashMap::new();
-
-            // Add test sequences for NC_000001.11
-            // Positions are 0-based for internal storage
-            // Sequence at g.100_102 (1-based) = indices 99-101 (0-based) = "ATG"
-            sequences.insert(("NC_000001.11".to_string(), 99, 102), "ATG".to_string());
-            // Sequence at g.200_205 (1-based) = indices 199-204 (0-based) = "GATTACA"
-            sequences.insert(
-                ("NC_000001.11".to_string(), 199, 206),
-                "GATTACA".to_string(),
-            );
-            // Sequence at g.1000_1009 (1-based) = "AAACCCGGGT"
-            sequences.insert(
-                ("NC_000001.11".to_string(), 999, 1009),
-                "AAACCCGGGT".to_string(),
-            );
-
-            Self { sequences }
-        }
-
-        fn get_sequence(&self, accession: &str, start: u64, end: u64) -> Option<String> {
-            self.sequences
-                .get(&(accession.to_string(), start, end))
-                .cloned()
-        }
-    }
-
-    /// Convert deletion HGVS to SPDI using reference data.
-    fn hgvs_to_spdi_with_ref(
-        variant: &HgvsVariant,
-        reference: &MockGenomicRef,
-    ) -> Result<SpdiVariant, ConversionError> {
-        match variant {
-            HgvsVariant::Genome(g) => {
-                let sequence = g.accession.to_string();
-                let interval = &g.loc_edit.location;
-
-                let edit =
-                    g.loc_edit
-                        .edit
-                        .inner()
-                        .ok_or_else(|| ConversionError::InvalidPosition {
-                            description: "cannot convert variant with unknown edit".to_string(),
-                        })?;
-
-                let start_pos =
-                    get_start_pos(interval).ok_or_else(|| ConversionError::InvalidPosition {
-                        description: "cannot convert variant with unknown start position"
-                            .to_string(),
-                    })?;
-                let end_pos = get_end_pos(interval).unwrap_or(start_pos);
-
-                // Convert 1-based HGVS position to 0-based SPDI position
-                let start_pos_ob = OneBasedPos::new(start_pos);
-                let spdi_pos = start_pos_ob.to_zero_based().value();
-
-                match edit {
-                    NaEdit::Deletion { sequence: None, .. } => {
-                        // Fetch sequence from reference
-                        let del_seq = reference
-                            .get_sequence(&sequence, spdi_pos, end_pos)
-                            .ok_or_else(|| ConversionError::MissingReferenceData {
-                                description: format!(
-                                    "could not fetch sequence for {}:{}-{}",
-                                    sequence, start_pos, end_pos
-                                ),
-                            })?;
-                        Ok(SpdiVariant::new(sequence, spdi_pos, del_seq, ""))
-                    }
-                    NaEdit::Delins {
-                        sequence: ins_seq, ..
-                    } => {
-                        // Fetch deleted sequence from reference
-                        let del_seq = reference
-                            .get_sequence(&sequence, spdi_pos, end_pos)
-                            .ok_or_else(|| ConversionError::MissingReferenceData {
-                                description: format!(
-                                    "could not fetch sequence for {}:{}-{}",
-                                    sequence, start_pos, end_pos
-                                ),
-                            })?;
-                        let ins_str = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
-                            ConversionError::MissingReferenceData {
-                                description: "delins inserted sequence is not a literal"
-                                    .to_string(),
-                            }
-                        })?;
-                        Ok(SpdiVariant::new(sequence, spdi_pos, del_seq, ins_str))
-                    }
-                    NaEdit::Duplication { sequence: None, .. } => {
-                        // Fetch duplicated sequence from reference
-                        let dup_seq = reference
-                            .get_sequence(&sequence, spdi_pos, end_pos)
-                            .ok_or_else(|| ConversionError::MissingReferenceData {
-                                description: format!(
-                                    "could not fetch sequence for {}:{}-{}",
-                                    sequence, start_pos, end_pos
-                                ),
-                            })?;
-                        // Duplication becomes insertion after the region
-                        // Convert 1-based HGVS end position to 0-based SPDI position
-                        let end_pos_ob = OneBasedPos::new(end_pos);
-                        let spdi_end = end_pos_ob.to_zero_based().value();
-                        Ok(SpdiVariant::new(sequence, spdi_end, "", dup_seq))
-                    }
-                    // Fall back to simple conversion for other types
-                    _ => hgvs_to_spdi_simple(variant),
-                }
-            }
-            _ => hgvs_to_spdi_simple(variant),
-        }
+    /// Build a `MockProvider` with a contig where:
+    ///   1-based 100..102 = "ATG"
+    ///   1-based 200..206 = "GATTACA"
+    ///   1-based 1000..1009 = "AAACCCGGGT"
+    /// All other positions are filled with 'N'.
+    fn make_test_genomic_provider() -> crate::reference::mock::MockProvider {
+        let mut p = crate::reference::mock::MockProvider::new();
+        let mut contig = String::new();
+        contig.push_str(&"N".repeat(99)); // 1-based 1..99 (0-based 0..99)
+        contig.push_str("ATG"); // 1-based 100..102
+        contig.push_str(&"N".repeat(97)); // pad through 1-based 199
+        contig.push_str("GATTACA"); // 1-based 200..206
+        contig.push_str(&"N".repeat(793)); // pad through 1-based 999
+        contig.push_str("AAACCCGGGT"); // 1-based 1000..1009
+        contig.push_str(&"N".repeat(50));
+        p.add_genomic_sequence("NC_000001.11", &contig);
+        p
     }
 
     #[test]
-    fn test_deletion_without_seq_with_reference() {
-        let reference = MockGenomicRef::new();
+    fn fetch_reference_bases_returns_genomic_bases() {
+        let provider = make_test_genomic_provider();
+        let bases = fetch_reference_bases(&provider, "NC_000001.11", 100, 102).unwrap();
+        assert_eq!(bases, "ATG");
+    }
+
+    #[test]
+    fn fetch_reference_bases_errors_when_provider_lacks_contig() {
+        let provider = crate::reference::mock::MockProvider::new();
+        let err = fetch_reference_bases(&provider, "NC_000099.99", 100, 102).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("NC_000099.99"));
+        assert!(msg.contains("100"));
+        assert!(msg.contains("102"));
+    }
+
+    #[test]
+    fn fetch_reference_bases_errors_on_short_contig() {
+        let mut provider = crate::reference::mock::MockProvider::new();
+        // Contig is only 3 bases — fetching 1-based 100..102 must fail.
+        provider.add_genomic_sequence("NC_000001.11", "ATG");
+        let err = fetch_reference_bases(&provider, "NC_000001.11", 100, 102).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+    }
+
+    #[test]
+    fn hgvs_to_spdi_deletion_short_form_with_provider() {
+        let provider = make_test_genomic_provider();
         let hgvs = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
-
-        // This would fail with simple conversion
-        assert!(hgvs_to_spdi_simple(&hgvs).is_err());
-
-        // But works with reference data
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.sequence, "NC_000001.11");
         assert_eq!(spdi.position, 99);
         assert_eq!(spdi.deletion, "ATG");
@@ -1581,115 +1692,184 @@ mod tests {
     }
 
     #[test]
-    fn test_delins_with_reference_provides_actual_deletion() {
-        let reference = MockGenomicRef::new();
-        let hgvs = parse_hgvs("NC_000001.11:g.100_102delinsTTCC").unwrap();
-
-        // Simple conversion without reference data returns an error
-        let simple = hgvs_to_spdi_simple(&hgvs);
-        assert!(simple.is_err());
-        assert!(simple.unwrap_err().to_string().contains("unknown"));
-
-        // Reference-based conversion gets actual sequence
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
-        assert_eq!(spdi.deletion, "ATG");
-        assert_eq!(spdi.insertion, "TTCC");
-    }
-
-    #[test]
-    fn test_delins_roundtrip_with_reference() {
-        let reference = MockGenomicRef::new();
-        let original_hgvs = parse_hgvs("NC_000001.11:g.100_102delinsTTCC").unwrap();
-
-        // Convert to SPDI with reference
-        let spdi = hgvs_to_spdi_with_ref(&original_hgvs, &reference).unwrap();
-        assert_eq!(spdi.deletion, "ATG");
-        assert_eq!(spdi.insertion, "TTCC");
-
-        // Convert back to HGVS
-        let back = spdi_to_hgvs(&spdi).unwrap();
-        assert_eq!(back.to_string(), "NC_000001.11:g.100_102delinsTTCC");
-    }
-
-    #[test]
-    fn test_deletion_roundtrip_with_reference() {
-        let reference = MockGenomicRef::new();
-        let original_hgvs = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
-
-        // Convert to SPDI with reference
-        let spdi = hgvs_to_spdi_with_ref(&original_hgvs, &reference).unwrap();
-        assert_eq!(spdi.deletion, "ATG");
-        assert_eq!(spdi.insertion, "");
-
-        // Convert back to HGVS
-        let back = spdi_to_hgvs(&spdi).unwrap();
-        // Note: HGVS back includes the sequence
-        assert_eq!(back.to_string(), "NC_000001.11:g.100_102delATG");
-    }
-
-    #[test]
-    fn test_duplication_without_seq_with_reference() {
-        let reference = MockGenomicRef::new();
+    fn hgvs_to_spdi_duplication_short_form_with_provider() {
+        let provider = make_test_genomic_provider();
         let hgvs = parse_hgvs("NC_000001.11:g.100_102dup").unwrap();
-
-        // This would fail with simple conversion
-        assert!(hgvs_to_spdi_simple(&hgvs).is_err());
-
-        // But works with reference data
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
-        assert_eq!(spdi.sequence, "NC_000001.11");
-        // Dup is insertion after the region
-        assert_eq!(spdi.position, 101); // end position 0-based
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        // Dup encodes as an SPDI insertion at the 3' end of the duplicated
+        // region. ferro's convention places the SPDI position at the
+        // 0-based index of the last base of the duplicated region:
+        // 1-based end (102) → 0-based SPDI position 101.
+        assert_eq!(spdi.position, 101);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
 
     #[test]
-    fn test_long_deletion_with_reference() {
-        let reference = MockGenomicRef::new();
-        let hgvs = parse_hgvs("NC_000001.11:g.1000_1009del").unwrap();
+    fn hgvs_to_spdi_single_base_duplication_short_form_with_provider() {
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100dup").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "A");
+    }
 
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
+    #[test]
+    fn hgvs_to_spdi_delins_short_form_with_provider() {
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102delinsTTCC").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "TTCC");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_long_deletion_with_provider() {
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.1000_1009del").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.deletion, "AAACCCGGGT");
         assert_eq!(spdi.deletion.len(), 10);
+        assert_eq!(spdi.insertion, "");
     }
 
     #[test]
-    fn test_reference_missing_region() {
-        let reference = MockGenomicRef::new();
-        // Position not in mock reference
-        let hgvs = parse_hgvs("NC_000001.11:g.50000_50002del").unwrap();
-
-        let result = hgvs_to_spdi_with_ref(&hgvs, &reference);
-        assert!(matches!(
-            result,
-            Err(ConversionError::MissingReferenceData { .. })
-        ));
+    fn hgvs_to_spdi_explicit_deletion_does_not_consult_provider() {
+        // When the user supplied an explicit deleted sequence, ferro emits
+        // it as-is. Verified by attaching an empty provider — if we
+        // consulted it, the call would fail.
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102delATG").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "");
     }
 
     #[test]
-    fn test_substitution_falls_through_to_simple() {
-        let reference = MockGenomicRef::new();
+    fn hgvs_to_spdi_explicit_duplication_does_not_consult_provider() {
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102dupATG").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 101);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "ATG");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_substitution_unaffected_by_provider() {
+        let provider = make_test_genomic_provider();
         let hgvs = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
-
-        // Substitution doesn't need reference, falls through
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.to_string(), "NC_000001.11:12344:A:G");
     }
 
     #[test]
-    fn test_mnv_delins_with_reference() {
-        // Multi-nucleotide variant (MNV) as delins
-        let reference = MockGenomicRef::new();
+    fn hgvs_to_spdi_mnv_delins_with_provider_round_trips() {
+        // Same-length delins should round-trip through SPDI.
+        let provider = make_test_genomic_provider();
         let hgvs = parse_hgvs("NC_000001.11:g.100_102delinsGGG").unwrap();
-
-        let spdi = hgvs_to_spdi_with_ref(&hgvs, &reference).unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.deletion, "ATG");
         assert_eq!(spdi.insertion, "GGG");
-
-        // MNV same length should roundtrip
         let back = spdi_to_hgvs(&spdi).unwrap();
         assert_eq!(back.to_string(), "NC_000001.11:g.100_102delinsGGG");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_deletion_round_trip_with_provider() {
+        let provider = make_test_genomic_provider();
+        let original = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
+        let spdi = hgvs_to_spdi(&original, &provider).unwrap();
+        let back = spdi_to_hgvs(&spdi).unwrap();
+        // SPDI carries the deleted sequence, so the recovered HGVS is the
+        // explicit form.
+        assert_eq!(back.to_string(), "NC_000001.11:g.100_102delATG");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_delins_round_trip_with_provider() {
+        let provider = make_test_genomic_provider();
+        let original = parse_hgvs("NC_000001.11:g.100_102delinsTTCC").unwrap();
+        let spdi = hgvs_to_spdi(&original, &provider).unwrap();
+        let back = spdi_to_hgvs(&spdi).unwrap();
+        assert_eq!(back.to_string(), "NC_000001.11:g.100_102delinsTTCC");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_dup_round_trip_emits_ins_form_via_reference_free_path() {
+        // HGVS dup → SPDI ins, with the duplicated bases populated from
+        // the provider. Without a reference-aware SPDI→HGVS direction the
+        // reverse path produces ins form (per the SPDI-as-canonical
+        // contract). PR #119 (sibling) adds `spdi_to_hgvs_with_ref` that
+        // recovers the dup form when the 5' flank matches.
+        let provider = make_test_genomic_provider();
+        let original = parse_hgvs("NC_000001.11:g.100_102dup").unwrap();
+        let spdi = hgvs_to_spdi(&original, &provider).unwrap();
+        assert_eq!(spdi.position, 101);
+        assert_eq!(spdi.insertion, "ATG");
+        let recovered = spdi_to_hgvs(&spdi).unwrap();
+        // SPDI position 101 → 1-based 102 → insertion between 102 and 103.
+        assert_eq!(recovered.to_string(), "NC_000001.11:g.102_103insATG");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_mito_short_form_deletion_with_provider() {
+        // Mito accession (NC_012920.1) is genomic; verify the same path
+        // works there.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut seq = "N".repeat(16559);
+        seq.push_str("GATC"); // 1-based 16560..16563
+        seq.push_str(&"N".repeat(20));
+        provider.add_genomic_sequence("NC_012920.1", &seq);
+        let hgvs = parse_hgvs("NC_012920.1:m.16560_16563del").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "GATC");
+        assert_eq!(spdi.insertion, "");
+    }
+
+    #[test]
+    fn hgvs_to_spdi_deletion_with_provider_missing_data() {
+        // Provider attached but has no data for the requested contig.
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(matches!(
+            result,
+            Err(ConversionError::MissingReferenceData { .. })
+        ));
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("NC_000001.11"));
+    }
+
+    #[test]
+    fn hgvs_to_spdi_simple_pins_existing_short_form_failures() {
+        // The simple (no-provider) entry point continues to err on the
+        // three short-form cases, matching the existing audit pin.
+        for input in [
+            "NC_000001.11:g.100_102del",
+            "NC_000001.11:g.100_102dup",
+            "NC_000001.11:g.100_102delinsTTCC",
+        ] {
+            let hgvs = parse_hgvs(input).unwrap();
+            let r = hgvs_to_spdi_simple(&hgvs);
+            assert!(
+                matches!(r, Err(ConversionError::MissingReferenceData { .. })),
+                "expected MissingReferenceData for {} (got {:?})",
+                input,
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn hgvs_to_spdi_short_form_is_idempotent() {
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102del").unwrap();
+        let a = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        let b = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(a.to_string(), b.to_string());
     }
 
     // =========================================================================
