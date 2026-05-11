@@ -6,7 +6,6 @@
 //! handles this; this file pins the single-copy fix and the round-trip
 //! equivalence between rotation-mismatched alts and the matched alt.
 
-#[allow(dead_code)]
 mod common;
 
 use common::synthetic::{normalize_to_string, SyntheticBuilder};
