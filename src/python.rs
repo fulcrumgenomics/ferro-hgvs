@@ -1726,6 +1726,10 @@ pub enum PyErrorType {
     DeprecatedStopCodonX = 18,
     DeprecatedFrameshiftStar = 19,
     DeprecatedFrameshiftX = 20,
+    DelSizeSuffix = 21,
+    EmptyDelinsInsert = 22,
+    RedundantRepeatLabel = 23,
+    SinglePositionRange = 24,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -1752,6 +1756,10 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::DeprecatedStopCodonX => PyErrorType::DeprecatedStopCodonX,
             ErrorType::DeprecatedFrameshiftStar => PyErrorType::DeprecatedFrameshiftStar,
             ErrorType::DeprecatedFrameshiftX => PyErrorType::DeprecatedFrameshiftX,
+            ErrorType::DelSizeSuffix => PyErrorType::DelSizeSuffix,
+            ErrorType::EmptyDelinsInsert => PyErrorType::EmptyDelinsInsert,
+            ErrorType::RedundantRepeatLabel => PyErrorType::RedundantRepeatLabel,
+            ErrorType::SinglePositionRange => PyErrorType::SinglePositionRange,
         }
     }
 }
@@ -1780,6 +1788,10 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::DeprecatedStopCodonX => ErrorType::DeprecatedStopCodonX,
             PyErrorType::DeprecatedFrameshiftStar => ErrorType::DeprecatedFrameshiftStar,
             PyErrorType::DeprecatedFrameshiftX => ErrorType::DeprecatedFrameshiftX,
+            PyErrorType::DelSizeSuffix => ErrorType::DelSizeSuffix,
+            PyErrorType::EmptyDelinsInsert => ErrorType::EmptyDelinsInsert,
+            PyErrorType::RedundantRepeatLabel => ErrorType::RedundantRepeatLabel,
+            PyErrorType::SinglePositionRange => ErrorType::SinglePositionRange,
         }
     }
 }

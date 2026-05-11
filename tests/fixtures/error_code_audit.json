@@ -312,6 +312,30 @@
       "follow_up_issues": [125]
     },
     {
+      "code": "W3011",
+      "description": "DelSizeSuffix — deletion described with a size-count suffix instead of a position range (e.g. 'g.123del6' instead of 'g.123_128del').",
+      "spec_section": "recommendations/DNA/deletion.md: 'a deletion of more than one residue should mention the first and last residue deleted, e.g. NG_012232.1:g.123_128del and not NG_012232.1:g.123del6'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+      "status": "partial",
+      "spec_section_notes": "Lenient mode emits the warning without rewriting (warn_accept) because synthesizing a safe end position requires offset/intronic semantics ferro does not infer at parse time; strict mode rejects. Wired in InputPreprocessor as Phase 13 via correct_del_size_suffix."
+    },
+    {
+      "code": "W3012",
+      "description": "EmptyDelinsInsert — deletion-insertion with empty inserted sequence (e.g. 'g.100_102delins' rewritten to 'g.100_102del').",
+      "spec_section": "recommendations/DNA/delins.md: a delins whose inserted sequence is absent collapses to a plain del; #81 A3 canonicalization rule",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/delins/",
+      "status": "enforced",
+      "spec_section_notes": "Lenient/silent rewrite delins -> del and warn once; strict rejects. Wired in InputPreprocessor as Phase 11 via correct_empty_delins."
+    },
+    {
+      "code": "W3013",
+      "description": "RedundantRepeatLabel — repeat description with redundant base label (e.g. 'r.100_102cug[4]' rewritten to 'r.100_102[4]').",
+      "spec_section": "recommendations/RNA/repeated.md: 'the format r.-125_-123cug[4], should not be used; it contains redundant information (-125_-123 and cug)'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/RNA/repeated/",
+      "status": "enforced",
+      "spec_section_notes": "Lenient/silent strip the lowercase a/c/g/u label and warn once; strict rejects. Wired in InputPreprocessor as Phase 12 via correct_redundant_repeat_label, scoped to the r. description so subsequent non-r. descriptions are not affected."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
@@ -326,6 +350,14 @@
       "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
       "status": "registered",
       "spec_section_notes": "Position zero IS rejected at runtime — detect_position_zero runs in preprocessor Phase 1 and returns a failed PreprocessResult — but the diagnostic is raised under ErrorCode::InvalidPosition (E1003), not under W4002. The W4002 ErrorType variant is reachable only via the warning-code dispatch tables (config.rs, bin/ferro.rs); no emission path tags rejections with this specific code. The spec rule is enforced by E1003; W4002 is a duplicate identity that no caller emits."
+    },
+    {
+      "code": "W4003",
+      "description": "SinglePositionRange — single-position range used where a single position is canonical (e.g. 'c.123_123del' rewritten to 'c.123del'; same for dup and inv).",
+      "spec_section": "recommendations/DNA/deletion.md: 'position(s)_deleted should contain two different positions, e.g. 123_126 not 123_123'; analogous wording in recommendations/DNA/duplication.md and recommendations/DNA/inversion.md",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+      "status": "enforced",
+      "spec_section_notes": "Lenient/silent collapse the redundant range and warn once; strict rejects. Wired in InputPreprocessor as Phase 10 via correct_single_position_range, covering del / dup / inv."
     },
     {
       "code": "W5001",

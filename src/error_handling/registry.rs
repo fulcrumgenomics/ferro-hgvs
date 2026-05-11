@@ -772,6 +772,70 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3011",
+        CodeInfo {
+            code: "W3011",
+            name: "DelSizeSuffix",
+            summary: "Deletion described with a size-count suffix instead of a position range.",
+            explanation:
+                "HGVS recommends naming both endpoints of a multi-residue deletion. The legacy \
+                form `g.123del6` (size 6 starting at position 123) is non-canonical; the canonical \
+                form lists the first and last residue deleted, e.g. `g.123_128del`. ferro cannot \
+                auto-synthesize the end position safely (it depends on offset/intronic semantics), \
+                so this warning is emitted but not auto-corrected.",
+            category: CodeCategory::Format,
+            bad_examples: &["NG_012232.1:g.123del6"],
+            good_examples: &["NG_012232.1:g.123_128del"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+            ),
+            related_codes: &["W4003"],
+        },
+    );
+
+    map.insert(
+        "W3012",
+        CodeInfo {
+            code: "W3012",
+            name: "EmptyDelinsInsert",
+            summary: "Deletion-insertion with empty inserted sequence.",
+            explanation:
+                "A `delins` with no inserted sequence is semantically equivalent to a plain \
+                deletion. Per HGVS spec the canonical form is `del`. In lenient/silent modes, \
+                ferro rewrites `delins` to `del` and warns once.",
+            category: CodeCategory::Format,
+            bad_examples: &["NC_000001.11:g.100_102delins"],
+            good_examples: &["NC_000001.11:g.100_102del"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/DNA/delins/"),
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "W3013",
+        CodeInfo {
+            code: "W3013",
+            name: "RedundantRepeatLabel",
+            summary: "Repeat description with redundant base label.",
+            explanation:
+                "HGVS spec discourages including the repeat-unit base label when the positions \
+                already define the unit, e.g. `r.-125_-123cug[4]` should be written as \
+                `r.-125_-123[4]`. In lenient/silent modes, ferro strips the redundant base \
+                segment and warns once.",
+            category: CodeCategory::Format,
+            bad_examples: &["NM_000088.3:r.100_102cug[4]"],
+            good_examples: &["NM_000088.3:r.100_102[4]"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/RNA/repeated/",
+            ),
+            related_codes: &[],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
@@ -808,6 +872,36 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 "https://hgvs-nomenclature.org/stable/recommendations/DNA/numbering/",
             ),
             related_codes: &["E1003"],
+        },
+    );
+
+    map.insert(
+        "W4003",
+        CodeInfo {
+            code: "W4003",
+            name: "SinglePositionRange",
+            summary: "Single-position range used where a single position is canonical.",
+            explanation: "HGVS spec requires `position(s)_deleted` (and the analogous \
+                `positions_duplicated` / `positions_inverted`) to contain two different positions. \
+                Forms like `c.123_123del`, `c.123_123dup`, and `c.100_100inv` should be written \
+                with the single-position form `c.123del` / `c.123dup` / `c.100inv` respectively. \
+                In lenient/silent modes, ferro collapses the redundant range and warns once.",
+            category: CodeCategory::Position,
+            bad_examples: &[
+                "NM_000088.3:c.123_123del",
+                "NM_000088.3:c.123_123dup",
+                "NM_000088.3:c.100_100inv",
+            ],
+            good_examples: &[
+                "NM_000088.3:c.123del",
+                "NM_000088.3:c.123dup",
+                "NM_000088.3:c.100inv",
+            ],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+            ),
+            related_codes: &["W3011"],
         },
     );
 
