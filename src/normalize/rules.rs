@@ -1353,11 +1353,14 @@ pub fn canonicalize_edit(edit: &NaEdit) -> NaEdit {
             length: None,
             uncertain_extent: uncertain_extent.clone(),
         },
-        NaEdit::Delins { sequence } => {
-            // Keep the inserted sequence but remove any explicit deletion info
-            // that might be embedded in the sequence description
+        NaEdit::Delins { sequence, .. } => {
+            // Keep only the inserted sequence; strip the explicit deleted
+            // sequence/length per the HGVS spec recommendation that the
+            // short form `delinsXXX` is preferred.
             NaEdit::Delins {
                 sequence: sequence.clone(),
+                deleted: None,
+                deleted_length: None,
             }
         }
         // A4: a substitution where ref == alt (e.g. `c.100A>A`) is degenerate;
@@ -1438,6 +1441,8 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
                 if start >= 1 && end >= 1 && start <= end {
                     return Some(NaEdit::Delins {
                         sequence: InsertedSequence::PositionRange { start, end },
+                        deleted: None,
+                        deleted_length: None,
                     });
                 }
             }
@@ -1448,6 +1453,8 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
     // wrap in `Reference`, which displays as `[<source>]`.
     Some(NaEdit::Delins {
         sequence: InsertedSequence::Reference(source.clone()),
+        deleted: None,
+        deleted_length: None,
     })
 }
 
@@ -2709,6 +2716,7 @@ mod tests {
         match got {
             NaEdit::Delins {
                 sequence: InsertedSequence::PositionRange { start, end },
+                ..
             } => {
                 assert_eq!(start, 42536337);
                 assert_eq!(end, 42536382);
@@ -2727,6 +2735,7 @@ mod tests {
         match &got {
             NaEdit::Delins {
                 sequence: InsertedSequence::Reference(s),
+                ..
             } => {
                 assert_eq!(s, "NM_000089.1:c.789_1011");
             }
@@ -2756,7 +2765,8 @@ mod tests {
         assert!(matches!(
             got,
             NaEdit::Delins {
-                sequence: InsertedSequence::Reference(_)
+                sequence: InsertedSequence::Reference(_),
+                ..
             }
         ));
     }
@@ -2774,6 +2784,7 @@ mod tests {
         match got {
             NaEdit::Delins {
                 sequence: InsertedSequence::Reference(s),
+                ..
             } => assert_eq!(s, "0_0"),
             other => panic!("expected Delins{{Reference}} for 0_0, got {:?}", other),
         }
@@ -2790,6 +2801,7 @@ mod tests {
         match got {
             NaEdit::Delins {
                 sequence: InsertedSequence::Reference(s),
+                ..
             } => assert_eq!(s, "10_2"),
             other => panic!("expected Delins{{Reference}} for 10_2, got {:?}", other),
         }
@@ -2807,7 +2819,8 @@ mod tests {
             matches!(
                 got,
                 NaEdit::Delins {
-                    sequence: InsertedSequence::Reference(_)
+                    sequence: InsertedSequence::Reference(_),
+                    ..
                 }
             ),
             "expected Delins{{Reference}} fallback for 0_5"
@@ -2887,5 +2900,51 @@ mod tests {
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 7);
         assert_eq!(r.end, 8);
+    }
+
+    #[test]
+    fn test_canonicalize_edit_delins_strips_explicit_deleted_seq() {
+        use crate::hgvs::edit::{InsertedSequence, Sequence};
+        use std::str::FromStr;
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
+            deleted: Some(Sequence::from_str("ATG").unwrap()),
+            deleted_length: None,
+        };
+        let canonical = canonicalize_edit(&edit);
+        match canonical {
+            NaEdit::Delins {
+                sequence: _,
+                deleted,
+                deleted_length,
+            } => {
+                assert_eq!(deleted, None);
+                assert_eq!(deleted_length, None);
+            }
+            other => panic!("expected NaEdit::Delins, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_canonicalize_edit_delins_strips_explicit_deleted_count() {
+        use crate::hgvs::edit::{InsertedSequence, Sequence};
+        use std::str::FromStr;
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("TA").unwrap()),
+            deleted: None,
+            deleted_length: Some(3),
+        };
+        let canonical = canonicalize_edit(&edit);
+        match canonical {
+            NaEdit::Delins {
+                sequence: _,
+                deleted,
+                deleted_length,
+            } => {
+                assert_eq!(deleted, None);
+                assert_eq!(deleted_length, None);
+            }
+            other => panic!("expected NaEdit::Delins, got {other:?}"),
+        }
     }
 }

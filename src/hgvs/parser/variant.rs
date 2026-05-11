@@ -4603,10 +4603,15 @@ mod tests {
         assert!(matches!(variant, HgvsVariant::Cds(_)));
         assert_eq!(format!("{}", variant), "NM_000088.3:c.86-46_85+47insA");
 
-        // Delins with explicit deleted sequence (normalizes to delins)
+        // Delins with explicit deleted sequence is preserved on round-trip
+        // (issue #120). Use canonicalize_edit / canonicalization to strip
+        // the explicit deleted form when desired.
         let variant = parse_variant("NM_000088.3:c.85-47_84+48delGCCAinsG").unwrap();
         assert!(matches!(variant, HgvsVariant::Cds(_)));
-        assert_eq!(format!("{}", variant), "NM_000088.3:c.85-47_84+48delinsG");
+        assert_eq!(
+            format!("{}", variant),
+            "NM_000088.3:c.85-47_84+48delGCCAinsG"
+        );
     }
 
     #[test]

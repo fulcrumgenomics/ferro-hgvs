@@ -699,7 +699,7 @@ fn test_validate_na_edit_info_delins() {
     if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
         if let Some(edit) = v.loc_edit.edit.inner() {
             match edit {
-                NaEdit::Delins { sequence } => {
+                NaEdit::Delins { sequence, .. } => {
                     assert_eq!(sequence.to_string(), "ATG");
                 }
                 _ => panic!("Expected delins"),

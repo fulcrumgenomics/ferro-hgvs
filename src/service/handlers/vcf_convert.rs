@@ -632,7 +632,7 @@ fn extract_alleles_from_edit(edit: &crate::hgvs::edit::NaEdit) -> (Option<String
             // "N" is placeholder - accurate VCF needs reference lookup
             (Some("N".to_string()), Some(format!("N{}", sequence)))
         }
-        NaEdit::Delins { sequence } => {
+        NaEdit::Delins { sequence, .. } => {
             // Delins without original sequence - use "N" placeholder for ref
             (Some("N".to_string()), Some(sequence.to_string()))
         }

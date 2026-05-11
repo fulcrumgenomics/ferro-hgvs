@@ -10,10 +10,10 @@
     "total": 823,
     "by_status": {
       "correctly-rejected": 12,
-      "diverges": 146,
+      "diverges": 142,
       "false-acceptance": 22,
       "parse-error": 196,
-      "preserved": 447
+      "preserved": 451
     },
     "by_coordinate_system": {
       "c": 298,
@@ -184,30 +184,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.6775_6777delGAGinsC",
-      "current": "NM_004006.2:c.6775_6777delinsC",
-      "spec_expected": "NM_004006.2:c.6775_6777delGAGinsC",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.6775_6777delGTGinsC",
-      "current": "NM_004006.2:c.6775_6777delinsC",
-      "spec_expected": "NM_004006.2:c.6775_6777delGTGinsC",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2524,6 +2500,28 @@
       ]
     },
     {
+      "input": "NM_004006.2:c.6775_6777delGAGinsC",
+      "current": "NM_004006.2:c.6775_6777delGAGinsC",
+      "spec_expected": "NM_004006.2:c.6775_6777delGAGinsC",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.6775_6777delGTGinsC",
+      "current": "NM_004006.2:c.6775_6777delGTGinsC",
+      "spec_expected": "NM_004006.2:c.6775_6777delGTGinsC",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
+      ]
+    },
+    {
       "input": "NM_004006.2:c.6775_6777delinsC",
       "current": "NM_004006.2:c.6775_6777delinsC",
       "spec_expected": "NM_004006.2:c.6775_6777delinsC",
@@ -3743,30 +3741,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11:g.32386323delCinsGA",
-      "current": "NC_000023.11:g.32386323delinsGA",
-      "spec_expected": "NC_000023.11:g.32386323delCinsGA",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11:g.32386323delTinsGA",
-      "current": "NC_000023.11:g.32386323delinsGA",
-      "spec_expected": "NC_000023.11:g.32386323delTinsGA",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -5431,6 +5405,28 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/deletion.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.32386323delCinsGA",
+      "current": "NC_000023.11:g.32386323delCinsGA",
+      "spec_expected": "NC_000023.11:g.32386323delCinsGA",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.32386323delTinsGA",
+      "current": "NC_000023.11:g.32386323delTinsGA",
+      "spec_expected": "NC_000023.11:g.32386323delTinsGA",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
       ]
     },
     {

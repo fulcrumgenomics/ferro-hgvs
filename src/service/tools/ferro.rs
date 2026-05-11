@@ -128,7 +128,17 @@ fn extract_na_edit_info(edit: &NaEdit) -> (String, Option<String>, Option<String
         NaEdit::Insertion { sequence } => {
             ("insertion".to_string(), None, Some(sequence.to_string()))
         }
-        NaEdit::Delins { sequence } => ("delins".to_string(), None, Some(sequence.to_string())),
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => {
+            let deleted = deleted
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| deleted_length.map(|l| format!("{} bp", l)));
+            ("delins".to_string(), deleted, Some(sequence.to_string()))
+        }
         NaEdit::Duplication {
             sequence, length, ..
         } => {

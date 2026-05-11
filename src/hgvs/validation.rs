@@ -306,7 +306,7 @@ pub mod rules {
                     "Insertion must have at least one base",
                 ));
             }
-            NaEdit::Delins { sequence } if sequence.is_empty() => {
+            NaEdit::Delins { sequence, .. } if sequence.is_empty() => {
                 result = result.with_error(ValidationError::new(
                     "E003",
                     "Deletion-insertion must have at least one inserted base",
@@ -579,6 +579,8 @@ mod tests {
         fn test_validate_delins_empty_error() {
             let edit = NaEdit::Delins {
                 sequence: InsertedSequence::Literal(Sequence::new(vec![])),
+                deleted: None,
+                deleted_length: None,
             };
             let result = rules::validate_na_edit(&edit);
             assert!(!result.valid);

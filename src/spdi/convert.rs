@@ -849,7 +849,27 @@ fn emit_spdi_for_edit(
                 })
             }
         }
-        NaEdit::Delins { sequence: _ins_seq } => {
+        NaEdit::Delins {
+            sequence: ins_seq,
+            deleted,
+            deleted_length: _,
+        } => {
+            // Delins: g.100_102delinsATG -> seq:99:XYZ:ATG
+            //
+            // If the input carried an explicit deleted sequence
+            // (e.g. `delATGinsTTCC`, see issue #120) we can build the SPDI
+            // without consulting the reference. Otherwise we still need
+            // reference data.
+            if let Some(del_seq) = deleted.as_ref() {
+                if let Some(ins_str) = inserted_sequence_to_string(ins_seq) {
+                    return Ok(SpdiVariant::new(
+                        sequence,
+                        spdi_pos,
+                        sequence_to_string(del_seq),
+                        ins_str,
+                    ));
+                }
+            }
             let del_len = end_one_based
                 .saturating_sub(start_one_based)
                 .saturating_add(1) as usize;
@@ -1016,6 +1036,8 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
             interval,
             NaEdit::Delins {
                 sequence: InsertedSequence::Literal(ins_seq),
+                deleted: None,
+                deleted_length: None,
             },
         )
     };
@@ -1271,6 +1293,18 @@ mod tests {
     }
 
     #[test]
+    fn test_hgvs_to_spdi_delins_with_explicit_deleted_no_ref() {
+        // Issue #120: when the input carries an explicit deleted sequence, the
+        // SPDI conversion can succeed without reference data.
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102delATGinsTTCC").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs)
+            .expect("explicit deleted sequence should not require reference data");
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "TTCC");
+    }
+
+    #[test]
     fn test_hgvs_to_spdi_duplication_with_seq() {
         let hgvs = parse_hgvs("NC_000001.11:g.100_102dupATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
@@ -1486,7 +1520,9 @@ mod tests {
                             })?;
                         Ok(SpdiVariant::new(sequence, spdi_pos, del_seq, ""))
                     }
-                    NaEdit::Delins { sequence: ins_seq } => {
+                    NaEdit::Delins {
+                        sequence: ins_seq, ..
+                    } => {
                         // Fetch deleted sequence from reference
                         let del_seq = reference
                             .get_sequence(&sequence, spdi_pos, end_pos)

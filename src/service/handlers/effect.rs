@@ -213,7 +213,7 @@ fn analyze_na_edit(edit: &crate::hgvs::edit::NaEdit) -> (&'static str, bool, usi
             let len = sequence.to_string().len();
             ("insertion", len % 3 != 0, 0, len)
         }
-        NaEdit::Delins { sequence } => {
+        NaEdit::Delins { sequence, .. } => {
             let alt_len = sequence.to_string().len();
             // Delins is frameshift if net change not divisible by 3
             ("delins", true, 0, alt_len) // Can't determine ref length easily

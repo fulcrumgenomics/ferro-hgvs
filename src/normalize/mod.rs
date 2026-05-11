@@ -1819,7 +1819,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     }
                 }
             }
-            NaEdit::Delins { sequence } => {
+            NaEdit::Delins { sequence, .. } => {
                 use crate::hgvs::edit::InsertedSequence;
 
                 // HGVS spec (issue #81 A3): a delins with an empty inserted
@@ -1964,6 +1964,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 e0 as u64,
                                 NaEdit::Delins {
                                     sequence: bytes_to_inserted_seq(&trimmed_bytes),
+                                    deleted: None,
+                                    deleted_length: None,
                                 },
                                 warnings.clone(),
                             ));
@@ -2867,7 +2869,7 @@ fn extract_simple_delins(variant: &HgvsVariant) -> Option<(u64, u64, Vec<u8>)> {
         HgvsVariant::Mt(v) => simple_genome_loc_edit(&v.loc_edit)?,
         _ => return None,
     };
-    let NaEdit::Delins { sequence } = edit else {
+    let NaEdit::Delins { sequence, .. } = edit else {
         return None;
     };
     let InsertedSequence::Literal(seq) = sequence else {
