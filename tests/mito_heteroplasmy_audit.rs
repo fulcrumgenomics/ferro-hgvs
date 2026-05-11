@@ -30,13 +30,14 @@
 //!    and emit in the spec-preferred compact form.
 //! 3. Spec mosaic/chimeric markers (`var/var2`, `var//var2`) parse
 //!    when each side is a fully qualified HGVS variant.
-//! 4. The spec mosaic compact in-position form (`c.85=/T>C`,
-//!    documented in `recommendations/DNA/substitution.md`) is **not
-//!    supported** for any coordinate type, including `m.`. The
-//!    same compact form is documented for deletion and duplication
+//! 4. The spec mosaic / chimeric compact in-position form
+//!    (`c.85=/T>C`, `c.85=//T>C`, documented in
+//!    `recommendations/DNA/substitution.md`) is **accepted** on `m.`
+//!    and round-trips in compact form. The same compact form is
+//!    documented for deletion and duplication
 //!    (`recommendations/DNA/deletion.md` lines 59-60,
 //!    `recommendations/DNA/duplication.md` lines 56-57); those edit
-//!    types are also rejected on `m.` and pinned here.
+//!    types are also accepted on `m.` and pinned here. Closed by #133.
 //! 5. The non-spec ClinVar prose multi-allelic shorthand
 //!    `m.3243A>G/T` is rejected.
 //! 6. Allele-fraction annotations (e.g. `[level=70%]`, `(80%)`) are
@@ -57,9 +58,9 @@
 //! 10. Heteroplasmy-prose copy-paste hazards (internal whitespace,
 //!     non-ASCII A) are rejected.
 //!
-//! Items (4) and (5) are real-world gaps; (4) is the spec form, (5)
-//! is the ClinVar prose form. Follow-up issue #133 tracks adding
-//! support for the spec compact mosaic form.
+//! Item (5) remains a real-world gap: the ClinVar prose multi-allelic
+//! shorthand is not in the spec and stays rejected. Item (4) (the spec
+//! compact form) was closed by #133 and is now accepted.
 //!
 //! ## Boundary with sibling F1 (`tests/mito_circular_audit.rs`)
 //!
@@ -176,12 +177,11 @@ fn mt_mosaic_two_fully_qualified_variants_round_trips() {
     assert_eq!(format!("{parsed}"), input);
 }
 
-/// The `var/=` shorthand (spec: "the second allele is the reference
-/// sequence") parses on mt. The current emitted form expands `=` to a
-/// concrete identity variant `NC_012920.1:m.1=` rather than the more
-/// compact `m.=` — pinned here so a future cleanup is intentional.
+/// `var/=` shorthand renders with bare `=` on the right side per
+/// the spec wording in `substitution.md`. The pre-#133 render quirk
+/// (`NC_012920.1:m.1=`) was cleaned up as part of #133 work item 3.
 #[test]
-fn mt_mosaic_with_reference_shorthand_parses_with_known_render_quirk() {
+fn mt_mosaic_with_reference_shorthand_renders_compact() {
     let input = "NC_012920.1:m.3243A>G/=";
     let parsed = parse_hgvs(input).expect("mosaic with `=` shorthand must parse");
     if let HgvsVariant::Allele(allele) = &parsed {
@@ -190,56 +190,45 @@ fn mt_mosaic_with_reference_shorthand_parses_with_known_render_quirk() {
     } else {
         panic!("expected Allele variant, got {parsed:?}");
     }
-    // Pinned current rendering. A more spec-aligned form would emit
-    // `NC_012920.1:m.3243A>G/=`; this test will fail (correctly) the
-    // day that cleanup lands.
-    assert_eq!(
-        format!("{parsed}"),
-        "NC_012920.1:m.3243A>G/NC_012920.1:m.1="
-    );
+    // Post-#133: emits `var/=` (was `var/NC_012920.1:m.1=`).
+    assert_eq!(format!("{parsed}"), input, "var/= must round-trip");
 }
 
 // ---------------------------------------------------------------------------
-// 4. Spec compact mosaic in-position form `c.85=/T>C` — REJECTED.
+// 4. Spec compact mosaic in-position form `<pos>=/<edit>` — ACCEPTED (#133).
 //
-// Per `recommendations/DNA/substitution.md`:
-//   `LRG_199t1:c.85=/T>C` — a mosaic case where at position 85
-//   besides the normal sequence (a T, described as `=`) also
-//   chromosomes are found containing a C.
-// This is the spec's documented heteroplasmy/mosaic-friendly compact
-// form. It is rejected today for every coordinate system, including
-// `m.`, because the parser splits on `/` and tries to interpret the
-// right-hand side as a full variant.
+// Per `recommendations/DNA/substitution.md` lines 30-31:
+//   `LRG_199t1:c.85=/T>C` — a mosaic case where at position 85 besides
+//   the normal sequence (a T, described as `=`) also chromosomes are
+//   found containing a C.
+// `=//` is the chimeric variant. Both forms now parse on `m.` and
+// round-trip in compact form.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn spec_compact_mosaic_form_rejected_on_mt() {
-    // Spec example shape, transposed to mt: at position 3243 the
-    // reference (A) is observed alongside a G allele.
+fn spec_compact_mosaic_form_round_trips_on_mt() {
     let input = "NC_012920.1:m.3243=/A>G";
-    let result = parse_hgvs(input);
-    assert!(
-        result.is_err(),
-        "AUDIT: spec compact mosaic form is currently rejected; \
-         update this test (and tracking issue) when support lands. \
-         Got: {:?}",
-        result
-    );
+    let parsed = parse_hgvs(input).expect("spec compact mosaic must parse (#133)");
+    if let HgvsVariant::Allele(allele) = &parsed {
+        assert_eq!(allele.phase, AllelePhase::Mosaic);
+        assert_eq!(allele.variants.len(), 2);
+    } else {
+        panic!("expected Allele variant, got {parsed:?}");
+    }
+    assert_eq!(format!("{parsed}"), input, "compact form must round-trip");
 }
 
 #[test]
-fn spec_compact_chimeric_form_rejected_on_mt() {
-    // Same shape with the chimeric `//` separator from
-    // substitution.md (`LRG_199t1:c.85=//T>C`).
+fn spec_compact_chimeric_form_round_trips_on_mt() {
     let input = "NC_012920.1:m.3243=//A>G";
-    let result = parse_hgvs(input);
-    assert!(
-        result.is_err(),
-        "AUDIT: spec compact chimeric form is currently rejected; \
-         update this test (and tracking issue) when support lands. \
-         Got: {:?}",
-        result
-    );
+    let parsed = parse_hgvs(input).expect("spec compact chimeric must parse (#133)");
+    if let HgvsVariant::Allele(allele) = &parsed {
+        assert_eq!(allele.phase, AllelePhase::Chimeric);
+        assert_eq!(allele.variants.len(), 2);
+    } else {
+        panic!("expected Allele variant, got {parsed:?}");
+    }
+    assert_eq!(format!("{parsed}"), input, "compact form must round-trip");
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +287,7 @@ fn allele_fraction_annotations_must_be_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Spec compact mosaic form on del/dup — REJECTED on mt.
+// 7. Spec compact mosaic form on del/dup — ACCEPTED (#133).
 //
 // The spec documents the same `<pos>=/<edit>` shape for deletion and
 // duplication, not just substitution:
@@ -308,40 +297,49 @@ fn allele_fraction_annotations_must_be_rejected() {
 //   - `recommendations/DNA/duplication.md` lines 56-57:
 //       `NC_000023.11:g.33344590_33344592=/dup`   (mosaic)
 //       `NC_000023.11:g.33344590_33344592=//dup`  (chimeric)
-// Pinned for `m.` so the future #133 fix has a complete contract
-// (substitution, deletion, duplication — all four mosaic+chimeric
-// pairs).
+// All four forms now parse on `m.` and round-trip in compact form.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn spec_compact_mosaic_deletion_form_rejected_on_mt() {
-    let inputs = [
-        "NC_012920.1:m.8470_8482=/del",
-        "NC_012920.1:m.8470_8482=//del",
+fn spec_compact_mosaic_deletion_form_round_trips_on_mt() {
+    let cases = [
+        ("NC_012920.1:m.8470_8482=/del", AllelePhase::Mosaic),
+        ("NC_012920.1:m.8470_8482=//del", AllelePhase::Chimeric),
     ];
-    for input in inputs {
-        let result = parse_hgvs(input);
-        assert!(
-            result.is_err(),
-            "AUDIT: spec compact mosaic/chimeric deletion form \
-             `{input}` is currently rejected; update this test \
-             when #133 lands. Got: {:?}",
-            result
+    for (input, phase) in cases {
+        let parsed = parse_hgvs(input).expect("spec compact deletion must parse (#133)");
+        if let HgvsVariant::Allele(allele) = &parsed {
+            assert_eq!(allele.phase, phase, "phase mismatch for `{input}`");
+            assert_eq!(allele.variants.len(), 2);
+        } else {
+            panic!("expected Allele variant for `{input}`, got {parsed:?}");
+        }
+        assert_eq!(
+            format!("{parsed}"),
+            input,
+            "round-trip mismatch for `{input}`"
         );
     }
 }
 
 #[test]
-fn spec_compact_mosaic_duplication_form_rejected_on_mt() {
-    let inputs = ["NC_012920.1:m.302_303=/dup", "NC_012920.1:m.302_303=//dup"];
-    for input in inputs {
-        let result = parse_hgvs(input);
-        assert!(
-            result.is_err(),
-            "AUDIT: spec compact mosaic/chimeric duplication form \
-             `{input}` is currently rejected; update this test \
-             when #133 lands. Got: {:?}",
-            result
+fn spec_compact_mosaic_duplication_form_round_trips_on_mt() {
+    let cases = [
+        ("NC_012920.1:m.302_303=/dup", AllelePhase::Mosaic),
+        ("NC_012920.1:m.302_303=//dup", AllelePhase::Chimeric),
+    ];
+    for (input, phase) in cases {
+        let parsed = parse_hgvs(input).expect("spec compact duplication must parse (#133)");
+        if let HgvsVariant::Allele(allele) = &parsed {
+            assert_eq!(allele.phase, phase, "phase mismatch for `{input}`");
+            assert_eq!(allele.variants.len(), 2);
+        } else {
+            panic!("expected Allele variant for `{input}`, got {parsed:?}");
+        }
+        assert_eq!(
+            format!("{parsed}"),
+            input,
+            "round-trip mismatch for `{input}`"
         );
     }
 }
@@ -388,20 +386,21 @@ fn mt_position_identity_edit_round_trips() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mt_compact_mosaic_with_type_prefixed_rhs_parses_today() {
+fn mt_compact_mosaic_with_type_prefixed_rhs_round_trips_compact() {
     let input = "NC_012920.1:m.3243=/m.3243A>G";
     let parsed = parse_hgvs(input)
-        .unwrap_or_else(|e| panic!("AUDIT: type-prefixed RHS mosaic must parse today: {e}"));
+        .unwrap_or_else(|e| panic!("type-prefixed RHS mosaic must still parse: {e}"));
     if let HgvsVariant::Allele(allele) = &parsed {
         assert_eq!(allele.phase, AllelePhase::Mosaic);
         assert_eq!(allele.variants.len(), 2);
     } else {
         panic!("expected Allele variant, got {parsed:?}");
     }
-    // Inherited accession is materialized on the RHS during emission.
+    // Post-#133: emits in spec compact form regardless of input shape.
     assert_eq!(
         format!("{parsed}"),
-        "NC_012920.1:m.3243=/NC_012920.1:m.3243A>G"
+        "NC_012920.1:m.3243=/A>G",
+        "Allele displays in spec compact form"
     );
 }
 

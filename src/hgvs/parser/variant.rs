@@ -3780,13 +3780,28 @@ fn parse_mosaic_allele(input: &str) -> Result<HgvsVariant, FerroError> {
                     var
                 }
                 Err(_) if first_accession.is_some() => {
-                    // Try parsing as a variant with inherited accession
-                    // Check if it starts with a type prefix
-                    parse_variant_with_inherited_accession(
+                    // First fallback: parse with inherited accession + type prefix
+                    // (long form `<acc>:m.<pos>=/m.<pos><ref>><alt>`).
+                    match parse_variant_with_inherited_accession(
                         variant_str,
                         first_accession.as_ref().unwrap(),
                         first_gene_symbol.as_ref(),
-                    )?
+                    ) {
+                        Ok(var) => var,
+                        Err(prefix_err) => {
+                            // Second fallback: HGVS spec compact mosaic form
+                            // `<acc>:<type>.<pos>=/<edit>` — RHS is a bare
+                            // NaEdit, all metadata inherited from LHS. Only
+                            // applies when LHS is `<pos>=` identity.
+                            let lhs = first_variant
+                                .as_ref()
+                                .expect("first_accession set implies first_variant set");
+                            match parse_compact_mosaic_rhs(variant_str, lhs)? {
+                                Some(var) => var,
+                                None => return Err(prefix_err),
+                            }
+                        }
+                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -3848,6 +3863,134 @@ fn parse_mosaic_allele(input: &str) -> Result<HgvsVariant, FerroError> {
         variants,
         AllelePhase::Mosaic,
     )))
+}
+
+/// Parse the RHS of a HGVS spec compact mosaic / chimeric form.
+///
+/// The spec compact form is `<acc>:<type>.<pos>=/<edit>` (mosaic) or
+/// `<acc>:<type>.<pos>=//<edit>` (chimeric). The RHS is a bare edit
+/// with no accession, type prefix, or position; it inherits all three
+/// from the LHS, which must be a position-bound `=` identity edit.
+///
+/// Returns `Ok(None)` when the LHS is not eligible (so the caller can
+/// fall through to its existing error path); returns `Ok(Some(_))` on
+/// successful compact-form parse; returns `Err` only on a definite
+/// compact-form parse error (e.g. trailing characters).
+///
+/// Per `recommendations/DNA/{substitution,deletion,duplication}.md`,
+/// the form applies to substitution, deletion, and duplication on
+/// nucleic-acid coord systems (`g.`, `c.`, `n.`, `r.`, `m.`, `o.`).
+fn parse_compact_mosaic_rhs(
+    rhs: &str,
+    lhs: &HgvsVariant,
+) -> Result<Option<HgvsVariant>, FerroError> {
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::parser::edit::parse_na_edit;
+
+    // Eligibility: LHS must carry a position-bound (not whole-entity)
+    // identity edit on a NA coord system.
+    let lhs_is_eligible = match lhs {
+        HgvsVariant::Genome(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        HgvsVariant::Cds(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        HgvsVariant::Tx(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        HgvsVariant::Rna(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        HgvsVariant::Mt(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        HgvsVariant::Circular(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        ),
+        _ => false,
+    };
+    if !lhs_is_eligible {
+        return Ok(None);
+    }
+
+    // Parse the RHS as a bare NaEdit and require we consumed all of it.
+    let (remaining, edit) = match parse_na_edit(rhs) {
+        Ok((rem, e)) => (rem, e),
+        Err(_) => return Ok(None),
+    };
+    if !remaining.trim().is_empty() {
+        return Err(FerroError::Parse {
+            pos: rhs.len() - remaining.len(),
+            msg: format!(
+                "compact-mosaic RHS has unexpected trailing content: '{}'",
+                remaining
+            ),
+            diagnostic: None,
+        });
+    }
+
+    // Build the RHS variant by cloning LHS's accession + gene_symbol +
+    // interval, swapping in the new edit. The Mu wrapper on the LHS
+    // edit is replaced (we always emit Certain for the new RHS edit).
+    let rhs_variant = match lhs {
+        HgvsVariant::Genome(v) => HgvsVariant::Genome(GenomeVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        HgvsVariant::Cds(v) => HgvsVariant::Cds(CdsVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        HgvsVariant::Tx(v) => HgvsVariant::Tx(TxVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        HgvsVariant::Rna(v) => HgvsVariant::Rna(RnaVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        HgvsVariant::Mt(v) => HgvsVariant::Mt(MtVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        HgvsVariant::Circular(v) => HgvsVariant::Circular(CircularVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), edit),
+        }),
+        _ => unreachable!("eligibility check guards against non-NA arms"),
+    };
+    Ok(Some(rhs_variant))
 }
 
 /// Parse a variant that inherits its accession from a previous variant
@@ -4104,15 +4247,44 @@ fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
                 }
             }
         } else {
-            let (remaining, var) = parse_single_variant(part)?;
-            if !remaining.trim().is_empty() {
-                return Err(FerroError::Parse {
-                    pos: 0,
-                    msg: format!("Unexpected content after variant: '{}'", remaining),
-                    diagnostic: None,
-                });
+            match parse_single_variant(part) {
+                Ok((remaining, var)) => {
+                    if !remaining.trim().is_empty() {
+                        return Err(FerroError::Parse {
+                            pos: 0,
+                            msg: format!("Unexpected content after variant: '{}'", remaining),
+                            diagnostic: None,
+                        });
+                    }
+                    var
+                }
+                Err(single_err) => match &first_variant {
+                    Some(lhs) => {
+                        // First fallback: parse with inherited accession + type
+                        // prefix (long form `<acc>:m.<pos>=//m.<pos><ref>><alt>`).
+                        // Mirrors the mosaic path so chimeric and mosaic accept
+                        // the same set of equivalent input shapes.
+                        let inherited = lhs.accession().and_then(|acc| {
+                            let gs = lhs.gene_symbol().map(|s| s.to_string());
+                            parse_variant_with_inherited_accession(part, acc, gs.as_ref()).ok()
+                        });
+                        match inherited {
+                            Some(var) => var,
+                            None => {
+                                // Second fallback: HGVS spec compact chimeric
+                                // form `<acc>:<type>.<pos>=//<edit>` — RHS is a
+                                // bare NaEdit, all metadata inherited from LHS.
+                                // Only applies when LHS is `<pos>=` identity.
+                                match parse_compact_mosaic_rhs(part, lhs)? {
+                                    Some(var) => var,
+                                    None => return Err(single_err),
+                                }
+                            }
+                        }
+                    }
+                    None => return Err(single_err),
+                },
             }
-            var
         };
 
         if first_variant.is_none() {
@@ -5017,11 +5189,10 @@ mod tests {
                 panic!("Expected CDS variant");
             }
         }
-        // Roundtrip: c.123A>G/c.=
-        assert_eq!(
-            format!("{}", variant),
-            "NM_000088.3:c.123A>G/NM_000088.3:c.="
-        );
+        // Roundtrip in spec compact form (#133 work item 3): the RHS `=`
+        // shorthand emits as bare `=`, not as a synthetic identity at
+        // position 1.
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.123A>G/=");
     }
 
     #[test]
@@ -5033,10 +5204,8 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Chimeric);
             assert_eq!(allele.variants.len(), 2);
         }
-        assert_eq!(
-            format!("{}", variant),
-            "NM_000088.3:c.456C>T//NM_000088.3:c.="
-        );
+        // Roundtrip in spec compact form (#133 work item 3).
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.456C>T//=");
     }
 
     #[test]

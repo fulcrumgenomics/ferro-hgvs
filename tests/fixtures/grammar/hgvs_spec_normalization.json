@@ -10,10 +10,10 @@
     "total": 823,
     "by_status": {
       "correctly-rejected": 12,
-      "diverges": 144,
+      "diverges": 146,
       "false-acceptance": 22,
-      "parse-error": 204,
-      "preserved": 441
+      "parse-error": 196,
+      "preserved": 447
     },
     "by_coordinate_system": {
       "c": 298,
@@ -503,19 +503,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199t1:c.85=/T>C",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'T>C'",
-      "spec_expected": "LRG_199t1:c.85=/T>C",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/other.md",
-        "docs/recommendations/DNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_000333.3:c.(4_246)delN[15]",
       "current": "parse error: Parse error at position 25: Unexpected trailing characters: '[15]'",
       "spec_expected": "NM_000333.3:c.(4_246)delN[15]",
@@ -596,19 +583,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.85=//T>C",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"T>C\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.85=//T>C",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/other.md",
-        "docs/recommendations/DNA/substitution.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2004,6 +1978,18 @@
       ]
     },
     {
+      "input": "LRG_199t1:c.85=/T>C",
+      "current": "LRG_199t1:c.85=/T>C",
+      "spec_expected": "LRG_199t1:c.85=/T>C",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/other.md",
+        "docs/recommendations/DNA/substitution.md"
+      ]
+    },
+    {
       "input": "LRG_199t1:c.897T>G",
       "current": "LRG_199t1:c.897T>G",
       "spec_expected": "LRG_199t1:c.897T>G",
@@ -2579,6 +2565,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/delins.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.85=//T>C",
+      "current": "NM_004006.2:c.85=//T>C",
+      "spec_expected": "NM_004006.2:c.85=//T>C",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/other.md",
+        "docs/recommendations/DNA/substitution.md"
       ]
     },
     {
@@ -4598,54 +4596,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000023.11:g.33344590_33344592=//del",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"del\", code: Tag })",
-      "spec_expected": "NC_000023.11:g.33344590_33344592=//del",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11:g.33344590_33344592=//dup",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"dup\", code: Tag })",
-      "spec_expected": "NC_000023.11:g.33344590_33344592=//dup",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/duplication.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11:g.33344590_33344592=/del",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'del'",
-      "spec_expected": "NC_000023.11:g.33344590_33344592=/del",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11:g.33344590_33344592=/dup",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'dup'",
-      "spec_expected": "NC_000023.11:g.33344590_33344592=/dup",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/duplication.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000023.11:g.pter_qtersup",
       "current": "parse error: Parse error at position 26: Unexpected trailing characters: 'p'",
       "spec_expected": "NC_000023.11:g.pter_qtersup",
@@ -5525,6 +5475,50 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/other.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.33344590_33344592=//del",
+      "current": "NC_000023.11:g.33344590_33344592=//del",
+      "spec_expected": "NC_000023.11:g.33344590_33344592=//del",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/deletion.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.33344590_33344592=//dup",
+      "current": "NC_000023.11:g.33344590_33344592=//dup",
+      "spec_expected": "NC_000023.11:g.33344590_33344592=//dup",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/duplication.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.33344590_33344592=/del",
+      "current": "NC_000023.11:g.33344590_33344592=/del",
+      "spec_expected": "NC_000023.11:g.33344590_33344592=/del",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/deletion.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.33344590_33344592=/dup",
+      "current": "NC_000023.11:g.33344590_33344592=/dup",
+      "spec_expected": "NC_000023.11:g.33344590_33344592=/dup",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/duplication.md"
       ]
     },
     {
@@ -8396,6 +8390,30 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
+      "input": "NM_004006.3:r.85=//u>c",
+      "current": "NM_004006.3:r.85=//U>C",
+      "spec_expected": "NM_004006.3:r.85=//u>c",
+      "status": "diverges",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/substitution.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.3:r.85=/u>c",
+      "current": "NM_004006.3:r.85=/U>C",
+      "spec_expected": "NM_004006.3:r.85=/u>c",
+      "status": "diverges",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/substitution.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
       "input": "r.(100_150)insn[25]",
       "input_prefixed": "NM_004006.3:r.(100_150)insn[25]",
       "current": "NM_004006.3:r.(100)_(150)insn[25]",
@@ -8687,30 +8705,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/splicing.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.3:r.85=//u>c",
-      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"u>c\", code: Tag })",
-      "spec_expected": "NM_004006.3:r.85=//u>c",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.3:r.85=/u>c",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'u>c'",
-      "spec_expected": "NM_004006.3:r.85=/u>c",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/substitution.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
