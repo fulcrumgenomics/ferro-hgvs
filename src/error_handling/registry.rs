@@ -315,6 +315,26 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "E3006",
+        CodeInfo {
+            code: "E3006",
+            name: "SelfCancellingAllele",
+            summary: "Self-cancelling allele (overlapping del + dup or equivalent).",
+            explanation: "HGVS does not allow descriptions that remove part of a reference \
+                sequence and re-insert (part of) the same sequence in the same allele. \
+                For example, `c.[762_768del;767_774dup]` deletes [762..=768] and re-introduces \
+                bases [767..=774] from the reference, partially undoing the deletion. \
+                Drop the redundant edit (or rewrite as a single `delins`).",
+            category: CodeCategory::Validation,
+            bad_examples: &["NM_004006.2:c.[762_768del;767_774dup]"],
+            good_examples: &["NM_004006.2:c.[100_110del;200_210dup]"],
+            mode_behavior: None,
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["E3003", "W3003"],
+        },
+    );
+
     // --- Normalization Errors (E4xxx) ---
 
     map.insert(
@@ -833,6 +853,48 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 "https://hgvs-nomenclature.org/stable/recommendations/RNA/repeated/",
             ),
             related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "W3014",
+        CodeInfo {
+            code: "W3014",
+            name: "DeprecatedIvsNotation",
+            summary: "Retracted c.IVS intronic notation.",
+            explanation: "The c.IVSn+offset / c.IVSn-offset notation has been retracted by \
+                HGVS because the IVS number is not unique across transcripts and cannot be \
+                resolved to a unique genomic position without metadata. Use the canonical \
+                intronic-offset form, e.g. c.88+2T>G instead of c.IVS2+2T>G. ferro cannot \
+                auto-rewrite this form without genomic context, so all modes reject the input \
+                and emit an actionable hint.",
+            category: CodeCategory::Format,
+            bad_examples: &["c.IVS2+2T>G", "c.IVS5-1G>T"],
+            good_examples: &["c.88+2T>G", "c.123-1G>T"],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
+            related_codes: &["E1006", "E4001"],
+        },
+    );
+
+    map.insert(
+        "W3015",
+        CodeInfo {
+            code: "W3015",
+            name: "DeprecatedConSyntax",
+            summary: "Deprecated 'con' (sequence conversion) edit syntax.",
+            explanation:
+                "The HGVS spec retired the `con` edit type in favour of `delins`. Conversions \
+                (a range of nucleotides replaced by a sequence from elsewhere) should be \
+                described as deletion-insertions: `c.100_200conNM_001.1:c.5_105` becomes \
+                `c.100_200delinsNM_001.1:c.5_105`. In lenient/silent modes ferro auto-rewrites; \
+                in strict mode the input is rejected.",
+            category: CodeCategory::Format,
+            bad_examples: &["c.100_200conNM_001.1:c.5_105"],
+            good_examples: &["c.100_200delinsNM_001.1:c.5_105"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/DNA/delins/"),
+            related_codes: &["W3003"],
         },
     );
 

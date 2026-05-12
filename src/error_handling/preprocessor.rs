@@ -5,11 +5,12 @@
 
 use super::corrections::{
     correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
-    correct_deprecated_protein_forms, correct_empty_delins, correct_missing_coordinate_prefix,
-    correct_old_allele_format, correct_protein_arrow, correct_quote_characters,
-    correct_redundant_repeat_label, correct_single_letter_aa_in_protein,
-    correct_single_position_range, correct_whitespace, detect_del_size_suffix,
-    detect_missing_versions, detect_position_zero, strip_trailing_annotation, DetectedCorrection,
+    correct_deprecated_con, correct_deprecated_protein_forms, correct_empty_delins,
+    correct_missing_coordinate_prefix, correct_old_allele_format, correct_old_substitution_syntax,
+    correct_protein_arrow, correct_quote_characters, correct_redundant_repeat_label,
+    correct_single_letter_aa_in_protein, correct_single_position_range, correct_whitespace,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_missing_versions, detect_position_zero,
+    strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -807,6 +808,111 @@ impl InputPreprocessor {
             }
         }
 
+        // Phase 14: Rewrite deprecated multi-base substitution syntax to
+        // delins (W3003 — HGVS spec recommendations/DNA/substitution.md line 26).
+        let (corrected, corrections) = correct_old_substitution_syntax(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::OldSubstitutionSyntax);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            "Deprecated multi-base substitution syntax",
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS reserves '>' for single-base substitutions; use 'delins' for multi-base changes",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 15: Rewrite deprecated `con` (sequence conversion) syntax to
+        // delins (W3015 — HGVS spec recommendations/DNA/delins.md line 19).
+        let (corrected, corrections) = correct_deprecated_con(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::DeprecatedConSyntax);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            "Deprecated 'con' (conversion) edit syntax",
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS retired the 'con' edit type; describe conversions as 'delins<source>'",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 16: Reject retracted c.IVS intronic notation (W3014 — HGVS spec
+        // background/numbering.md line 32). Cannot be auto-corrected without
+        // genomic intron metadata, so the W3014 mode behavior is
+        // always_reject; only ErrorOverride::Accept lets the input pass.
+        let detections = detect_deprecated_ivs(&current);
+        if !detections.is_empty() {
+            let action = self.action_for(ErrorType::DeprecatedIvsNotation);
+            match action {
+                ResolvedAction::Reject
+                | ResolvedAction::WarnCorrect
+                | ResolvedAction::SilentCorrect => {
+                    let first = &detections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            "Retracted c.IVS intronic notation",
+                            Diagnostic::new()
+                                .with_code(ErrorCode::UnexpectedChar)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(
+                                    "Use the canonical intronic-offset form (e.g. c.88+2T>G) — IVS notation has been retracted by HGVS and is ambiguous without genomic context",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
         // Return result
         if current == input && all_warnings.is_empty() {
             PreprocessResult::unchanged(input.to_string())
@@ -1298,5 +1404,136 @@ mod tests {
             result.warnings[0].error_type,
             ErrorType::DeprecatedStopCodonX
         );
+    }
+
+    // ===== Issue #115: deprecated multi-base substitution (W3003) =====
+
+    #[test]
+    fn test_preprocessor_strict_rejects_old_substitution_with_refs() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NM_000088.3:c.79_80GC>TT");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_old_substitution_with_refs() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NM_000088.3:c.79_80GC>TT");
+        assert!(result.success, "lenient should rewrite to delins");
+        assert_eq!(result.preprocessed, "NM_000088.3:c.79_80delinsTT");
+        assert!(result.has_warnings());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::OldSubstitutionSyntax));
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_old_substitution_no_refs() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NM_000088.3:c.100_102>ATG");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.100_102delinsATG");
+        assert!(result.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_silent_rewrites_old_substitution_no_warning() {
+        let preprocessor = InputPreprocessor::silent();
+        let result = preprocessor.preprocess("NM_000088.3:c.79_80GC>TT");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.79_80delinsTT");
+        assert!(!result.has_warnings());
+    }
+
+    #[test]
+    fn test_preprocessor_canonical_substitution_unchanged() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NM_000088.3:c.100A>G");
+        assert!(result.success);
+        assert!(!result.has_corrections());
+    }
+
+    // ===== Issue #115: deprecated `con` syntax (W3015) =====
+
+    #[test]
+    fn test_preprocessor_strict_rejects_con_syntax() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NM_004006.2:c.100_200conNM_001.1:c.5_105");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_con_to_delins() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NM_004006.2:c.100_200conNM_001.1:c.5_105");
+        assert!(result.success);
+        assert_eq!(
+            result.preprocessed,
+            "NM_004006.2:c.100_200delinsNM_001.1:c.5_105"
+        );
+        assert!(result.has_warnings());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DeprecatedConSyntax));
+    }
+
+    #[test]
+    fn test_preprocessor_silent_corrects_con_no_warning() {
+        let preprocessor = InputPreprocessor::silent();
+        let result = preprocessor.preprocess("NM_004006.2:c.100_200conNM_001.1:c.5_105");
+        assert!(result.success);
+        assert_eq!(
+            result.preprocessed,
+            "NM_004006.2:c.100_200delinsNM_001.1:c.5_105"
+        );
+        assert!(!result.has_warnings());
+    }
+
+    // ===== Issue #115: retracted c.IVS notation (W3014) =====
+
+    #[test]
+    fn test_preprocessor_strict_rejects_ivs_notation() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NM_000088.3:c.IVS2+2T>G");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_preprocessor_lenient_rejects_ivs_notation() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NM_000088.3:c.IVS2+2T>G");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_silent_rejects_ivs_notation() {
+        let preprocessor = InputPreprocessor::silent();
+        let result = preprocessor.preprocess("NM_000088.3:c.IVS2+2T>G");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_preprocessor_override_accept_keeps_ivs_notation() {
+        let config = ErrorConfig::strict()
+            .with_override(ErrorType::DeprecatedIvsNotation, ErrorOverride::Accept);
+        let preprocessor = InputPreprocessor::new(config);
+        let result = preprocessor.preprocess("NM_000088.3:c.IVS2+2T>G");
+        // With Accept override, the preprocessor leaves the input alone; the
+        // downstream parser will of course still fail — but that's the
+        // user's choice.
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NM_000088.3:c.IVS2+2T>G");
+    }
+
+    #[test]
+    fn test_preprocessor_canonical_intronic_unchanged() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NM_000088.3:c.88+2T>G");
+        assert!(result.success);
+        assert!(!result.has_corrections());
     }
 }

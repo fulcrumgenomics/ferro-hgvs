@@ -1257,6 +1257,363 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
     (corrected, corrections)
 }
 
+/// Detect and correct the deprecated multi-base substitution syntax
+/// (`c.79_80GC>TT`, `c.79GC>TT`, `c.100_102>ATG`) by rewriting it to `delins`
+/// form, per HGVS spec recommendations/DNA/substitution.md line 26.
+///
+/// Single-base substitutions (`c.100A>G`) are canonical and not touched.
+///
+/// The detector recognises three patterns inside the input string:
+///
+/// 1. `<pos>_<pos>[ACGTU]+>[ACGTU]+` — explicit ref bases, range form
+/// 2. `<pos>[ACGTU]{2,}>[ACGTU]+`    — single position, multi-base ref
+/// 3. `<pos>(_<pos>)?>[ACGTU]+`      — no ref bases
+///
+/// Returns the (possibly rewritten) string and the list of corrections.
+pub fn correct_old_substitution_syntax(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let bytes = input.as_bytes();
+    let mut result = String::with_capacity(input.len());
+    let mut corrections = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        // The previous character must NOT be an ASCII alphanumeric or `_`,
+        // so we don't match digits embedded in identifiers like `NM_000088`.
+        let prev_ok = i == 0
+            || !{
+                let p = bytes[i - 1];
+                (p as char).is_ascii_alphanumeric() || p == b'_'
+            };
+
+        // Walk a position token: optional `-`/`*`, then digits.
+        let pos1_start = i;
+        let mut j = i;
+        if j < bytes.len() && matches!(bytes[j] as char, '-' | '*') {
+            j += 1;
+        }
+        let digits_start = j;
+        while j < bytes.len() && (bytes[j] as char).is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits_start || !prev_ok {
+            // Not a real position at this offset; emit one byte and advance.
+            result.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        let pos1_end = j;
+
+        // Optional `_<pos2>` for a range.
+        let has_range = bytes.get(j).copied() == Some(b'_');
+        let mut pos2_end = j;
+        if has_range {
+            let mut k = j + 1;
+            if k < bytes.len() && matches!(bytes[k] as char, '-' | '*') {
+                k += 1;
+            }
+            let d2 = k;
+            while k < bytes.len() && (bytes[k] as char).is_ascii_digit() {
+                k += 1;
+            }
+            if k > d2 {
+                pos2_end = k;
+            }
+        }
+        let positions_end = if has_range && pos2_end > j {
+            pos2_end
+        } else {
+            j
+        };
+
+        // Now look for `[ACGTU...]*>[ACGTU...]+`.
+        let mut k = positions_end;
+        let refs_start = k;
+        while k < bytes.len() && is_iupac_base(bytes[k] as char) {
+            k += 1;
+        }
+        let refs_end = k;
+        let ref_count = refs_end - refs_start;
+
+        if k >= bytes.len() || bytes[k] != b'>' {
+            // Not a substitution form — emit the position token verbatim and
+            // advance past it.
+            result.push_str(&input[pos1_start..positions_end]);
+            i = positions_end;
+            continue;
+        }
+        let arrow = k;
+
+        // RHS: 1+ IUPAC bases.
+        let mut m = arrow + 1;
+        while m < bytes.len() && is_iupac_base(bytes[m] as char) {
+            m += 1;
+        }
+        let rhs_count = m - (arrow + 1);
+        if rhs_count == 0 {
+            result.push_str(&input[pos1_start..positions_end]);
+            i = positions_end;
+            continue;
+        }
+
+        // Canonical sub: single-pos with exactly 1 ref base and 1 RHS base.
+        let is_canonical_sub = !has_range && ref_count == 1 && rhs_count == 1;
+        if is_canonical_sub {
+            result.push_str(&input[pos1_start..m]);
+            i = m;
+            continue;
+        }
+
+        // It's the deprecated form. Build the rewrite.
+        let pos_str = &input[pos1_start..positions_end];
+        let rhs_str = &input[arrow + 1..m];
+        let original = &input[pos1_start..m];
+
+        let new_pos = if has_range {
+            pos_str.to_string()
+        } else if ref_count > 1 {
+            // Single-pos with multi-base ref: extend to a range. Only safe
+            // when pos1 is a simple positive integer; otherwise leave as-is.
+            let pos1_text = &input[pos1_start..pos1_end];
+            let pos1_num: Option<i64> = pos1_text.parse().ok();
+            match pos1_num {
+                Some(n) if n >= 1 => {
+                    format!("{}_{}", n, n + ref_count as i64 - 1)
+                }
+                _ => pos1_text.to_string(),
+            }
+        } else {
+            pos_str.to_string()
+        };
+
+        let corrected = format!("{}delins{}", new_pos, rhs_str);
+        corrections.push(DetectedCorrection::new(
+            ErrorType::OldSubstitutionSyntax,
+            original.to_string(),
+            corrected.clone(),
+            pos1_start,
+            m,
+        ));
+        result.push_str(&corrected);
+        i = m;
+    }
+
+    (result, corrections)
+}
+
+/// IUPAC nucleotide base (incl. ambiguity codes used in HGVS).
+fn is_iupac_base(c: char) -> bool {
+    matches!(
+        c,
+        'A' | 'C'
+            | 'G'
+            | 'T'
+            | 'U'
+            | 'R'
+            | 'Y'
+            | 'S'
+            | 'W'
+            | 'K'
+            | 'M'
+            | 'B'
+            | 'D'
+            | 'H'
+            | 'V'
+            | 'N'
+    )
+}
+
+/// Detect retracted `c.IVS<n>(+|-)<offset>...` / `n.IVS<n>...` /
+/// `r.IVS<n>...` intronic notation. Per HGVS spec
+/// background/numbering.md line 32 the form is retracted; ferro cannot
+/// auto-rewrite it without genomic intron metadata so the detector returns
+/// the positions but does not mutate the input.
+///
+/// Returns a list of `DetectedCorrection`s with `original = "IVSn"` and an
+/// empty `corrected` field (rewrite is not possible). Callers that warn /
+/// reject should consume `error_type` + `start`/`end` for diagnostic spans.
+pub fn detect_deprecated_ivs(input: &str) -> Vec<DetectedCorrection> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    let prefixes: &[&[u8]] = &[b"c.IVS", b"n.IVS", b"r.IVS"];
+    for prefix in prefixes {
+        let mut search_start = 0usize;
+        while let Some(rel) = find_subslice(&bytes[search_start..], prefix) {
+            let prefix_start = search_start + rel;
+            // Validate left boundary: char before `c.`/`n.`/`r.` must NOT be
+            // an ASCII alphanumeric (avoid matching embedded identifiers).
+            let ok_left = prefix_start == 0 || !bytes[prefix_start - 1].is_ascii_alphanumeric();
+            // 'I' of "IVS" is at prefix_start + 2.
+            let ivs_start = prefix_start + 2;
+            let mut j = ivs_start + 3;
+            let digits_start = j;
+            while j < bytes.len() && (bytes[j] as char).is_ascii_digit() {
+                j += 1;
+            }
+            if ok_left && j > digits_start {
+                out.push(DetectedCorrection::new(
+                    ErrorType::DeprecatedIvsNotation,
+                    &input[ivs_start..j],
+                    "",
+                    ivs_start,
+                    j,
+                ));
+                search_start = j;
+            } else {
+                search_start = prefix_start + 1;
+            }
+        }
+    }
+    // Sort by start so multi-prefix scans return ordered results.
+    out.sort_by_key(|c| c.start);
+    out
+}
+
+/// Find the first occurrence of `needle` inside `haystack`, byte-wise.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Detect the deprecated `con` (sequence conversion) edit syntax and rewrite
+/// it as `delins`. Per HGVS spec recommendations/DNA/delins.md line 19:
+/// "The previous format 'con' is no longer used".
+///
+/// Recognises `<pos>_<pos>con<source>` where `<pos>` is an HGVS position
+/// (digits, optional leading `-` or `*`, optional `+`/`-` offset). The
+/// `<source>` portion runs to end of input or whitespace; the rewrite is
+/// `<pos>_<pos>delins<source>`.
+pub fn correct_deprecated_con(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let bytes = input.as_bytes();
+    let mut result = String::with_capacity(input.len() + 4);
+    let mut corrections = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if i + 3 <= bytes.len() && &bytes[i..i + 3] == b"con" {
+            let con_start = i;
+            // Must be immediately preceded by an ASCII digit (end of pos2).
+            let preceded_by_digit =
+                con_start > 0 && (bytes[con_start - 1] as char).is_ascii_digit();
+            if preceded_by_digit && has_range_position_before(bytes, con_start) {
+                // Right-hand source: take until whitespace or end, but only
+                // when the first byte starts a valid HGVS source. Without
+                // this guard, `c.100_200conditional` would be misread as
+                // `delinsditional` (everything until whitespace).
+                let src_start = con_start + 3;
+                if !has_valid_con_source_start(bytes, src_start) {
+                    result.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+                let mut j = src_start;
+                while j < bytes.len() && !(bytes[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                let src_end = j;
+                if src_end > src_start {
+                    let src = &input[src_start..src_end];
+                    let original = &input[con_start..src_end];
+                    let corrected = format!("delins{}", src);
+                    corrections.push(DetectedCorrection::new(
+                        ErrorType::DeprecatedConSyntax,
+                        original.to_string(),
+                        corrected.clone(),
+                        con_start,
+                        src_end,
+                    ));
+                    result.push_str(&corrected);
+                    i = src_end;
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    (result, corrections)
+}
+
+/// True if the bytes preceding `end` end in an HGVS-position range of the
+/// form `<pos>_<pos>` (with optional `-`/`*` prefixes and `+`/`-` offsets).
+/// Conservatively requires the `_` separator — single-position `con` is not
+/// a recognised pattern.
+fn has_range_position_before(bytes: &[u8], end: usize) -> bool {
+    let mut i = end;
+    // digits at the right end (the second pos)
+    let mut saw_digit = false;
+    while i > 0 && (bytes[i - 1] as char).is_ascii_digit() {
+        i -= 1;
+        saw_digit = true;
+    }
+    if !saw_digit {
+        return false;
+    }
+    // optional sign for the right-hand pos (`+`/`-` offset, or `-`/`*` UTR)
+    if i > 0 && matches!(bytes[i - 1] as char, '+' | '-' | '*') {
+        i -= 1;
+    }
+    // optional more digits (offset start)
+    while i > 0 && (bytes[i - 1] as char).is_ascii_digit() {
+        i -= 1;
+    }
+    if i > 0 && matches!(bytes[i - 1] as char, '-' | '*') {
+        i -= 1;
+    }
+    // require `_`
+    if i == 0 || bytes[i - 1] != b'_' {
+        return false;
+    }
+    i -= 1;
+    // left-hand pos: digits
+    let mut saw_digit_l = false;
+    while i > 0 && (bytes[i - 1] as char).is_ascii_digit() {
+        i -= 1;
+        saw_digit_l = true;
+    }
+    if !saw_digit_l {
+        return false;
+    }
+    if i > 0 && matches!(bytes[i - 1] as char, '+' | '-' | '*') {
+        i -= 1;
+    }
+    while i > 0 && (bytes[i - 1] as char).is_ascii_digit() {
+        i -= 1;
+    }
+    if i > 0 && matches!(bytes[i - 1] as char, '-' | '*') {
+        i -= 1;
+    }
+    let _ = i;
+    true
+}
+
+/// True if the byte at `start` is a plausible first character of a `delins`
+/// source. Allowed starters mirror what HGVS lets follow `delins`:
+/// - ASCII digit (bare-position source like `100_200`)
+/// - `-`/`*`/`(` (UTR offsets and uncertainty)
+/// - An accession start: ASCII uppercase letter (e.g. `NM_001`, `NC_000022`)
+/// - A coordinate-prefix shorthand: lowercase `g`/`c`/`n`/`r`/`m` immediately
+///   followed by `.`
+///
+/// Rejecting other starters prevents `c.100_200conditional` and similar
+/// embedded-`con` words from being rewritten to `delinsditional`.
+fn has_valid_con_source_start(bytes: &[u8], start: usize) -> bool {
+    if start >= bytes.len() {
+        return false;
+    }
+    let c = bytes[start] as char;
+    if c.is_ascii_digit() || matches!(c, '-' | '*' | '(') || c.is_ascii_uppercase() {
+        return true;
+    }
+    // Lowercase coordinate prefix must be one of g/c/n/r/m followed by `.`.
+    if matches!(c, 'g' | 'c' | 'n' | 'r' | 'm')
+        && start + 1 < bytes.len()
+        && bytes[start + 1] == b'.'
+    {
+        return true;
+    }
+    false
+}
+
 /// Apply a correction based on the resolved action.
 ///
 /// Returns the corrected input and whether a warning should be emitted.
@@ -3485,5 +3842,157 @@ mod tests {
         let (out, hits) = correct_single_position_range("NM_000088.3:c.100A>G");
         assert_eq!(out, "NM_000088.3:c.100A>G");
         assert!(hits.is_empty());
+    }
+
+    // ----- Issue #115: deprecated multi-base substitution syntax (W3003) -----
+
+    #[test]
+    fn test_correct_old_substitution_with_refs() {
+        let (out, corrections) = correct_old_substitution_syntax("NM_000088.3:c.79_80GC>TT");
+        assert_eq!(out, "NM_000088.3:c.79_80delinsTT");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].error_type, ErrorType::OldSubstitutionSyntax);
+        assert_eq!(corrections[0].original, "79_80GC>TT");
+        assert_eq!(corrections[0].corrected, "79_80delinsTT");
+    }
+
+    #[test]
+    fn test_correct_old_substitution_no_refs() {
+        let (out, corrections) = correct_old_substitution_syntax("NM_000088.3:c.100_102>ATG");
+        assert_eq!(out, "NM_000088.3:c.100_102delinsATG");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_old_substitution_single_pos_multi_ref() {
+        let (out, corrections) = correct_old_substitution_syntax("NM_000088.3:c.79GC>TT");
+        assert_eq!(out, "NM_000088.3:c.79_80delinsTT");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_old_substitution_canonical_no_op() {
+        let (out, corrections) = correct_old_substitution_syntax("NM_000088.3:c.100A>G");
+        assert_eq!(out, "NM_000088.3:c.100A>G");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_old_substitution_idempotent() {
+        let (out1, _) = correct_old_substitution_syntax("c.79_80GC>TT");
+        let (out2, c2) = correct_old_substitution_syntax(&out1);
+        assert_eq!(out1, out2);
+        assert!(c2.is_empty());
+    }
+
+    #[test]
+    fn test_correct_old_substitution_negative_position() {
+        let (out, corrections) = correct_old_substitution_syntax("c.-10_-8>ATG");
+        assert_eq!(out, "c.-10_-8delinsATG");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    // ----- Issue #115: retracted c.IVS notation (W3014) -----
+
+    #[test]
+    fn test_detect_deprecated_ivs_basic() {
+        let detections = detect_deprecated_ivs("NM_000088.3:c.IVS2+2T>G");
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].error_type, ErrorType::DeprecatedIvsNotation);
+        assert_eq!(detections[0].original, "IVS2");
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_minus_offset() {
+        let detections = detect_deprecated_ivs("NM_000088.3:c.IVS5-1G>T");
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].original, "IVS5");
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_canonical_no_op() {
+        let detections = detect_deprecated_ivs("NM_000088.3:c.88+2T>G");
+        assert!(detections.is_empty());
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_does_not_match_in_accession() {
+        let detections = detect_deprecated_ivs("NM_IVS_TEST.3:c.100A>G");
+        assert!(detections.is_empty());
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_n_prefix() {
+        let detections = detect_deprecated_ivs("NR_001234.1:n.IVS3+1G>A");
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].original, "IVS3");
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_r_prefix() {
+        let detections = detect_deprecated_ivs("NR_001234.1:r.IVS3+1g>a");
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].error_type, ErrorType::DeprecatedIvsNotation);
+        assert_eq!(detections[0].original, "IVS3");
+    }
+
+    // ----- Issue #115: deprecated `con` syntax (W3015) -----
+
+    #[test]
+    fn test_correct_deprecated_con_basic() {
+        let (out, corrections) = correct_deprecated_con("NM_004006.2:c.100_200conNM_001.1:c.5_105");
+        assert_eq!(out, "NM_004006.2:c.100_200delinsNM_001.1:c.5_105");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].error_type, ErrorType::DeprecatedConSyntax);
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_canonical_no_op() {
+        let (out, corrections) =
+            correct_deprecated_con("NM_004006.2:c.100_200delinsNM_001.1:c.5_105");
+        assert_eq!(out, "NM_004006.2:c.100_200delinsNM_001.1:c.5_105");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_genomic() {
+        let (out, corrections) = correct_deprecated_con("g.1000_2000conNC_000022.10:g.5_1005");
+        assert_eq!(out, "g.1000_2000delinsNC_000022.10:g.5_1005");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_idempotent() {
+        let (out1, _) = correct_deprecated_con("c.100_200conNM_001.1:c.5_105");
+        let (out2, c2) = correct_deprecated_con(&out1);
+        assert_eq!(out1, out2);
+        assert!(c2.is_empty());
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_does_not_match_inside_word() {
+        let (out, corrections) = correct_deprecated_con("concept text");
+        assert_eq!(out, "concept text");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_does_not_match_no_separator_word() {
+        // `con` followed by lowercase letters with no whitespace must not be
+        // misread as `delins`-style source. The function only rewrites when
+        // the byte after `con` starts a valid HGVS source: digit, `-`, `*`,
+        // `(`, or an accession-prefix letter / coordinate-prefix `g.`/`c.`/
+        // `n.`/`r.`/`m.`.
+        let (out, corrections) = correct_deprecated_con("c.100_200conditional");
+        assert_eq!(out, "c.100_200conditional");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_deprecated_con_bare_position_source() {
+        // Source starts with a digit (no accession prefix) — still valid.
+        let (out, corrections) = correct_deprecated_con("c.100_200con5_105");
+        assert_eq!(out, "c.100_200delins5_105");
+        assert_eq!(corrections.len(), 1);
     }
 }
