@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.4.1...v0.5.0) - 2026-05-12
+
+### Added
+
+- *(parser)* spec compact-mosaic form across sub/del/dup ([#133](https://github.com/fulcrumgenomics/ferro-hgvs/pull/133)) ([#153](https://github.com/fulcrumgenomics/ferro-hgvs/pull/153))
+- *(normalize)* canonicalize con to delins per SVD-WG009 (#81 H1) ([#142](https://github.com/fulcrumgenomics/ferro-hgvs/pull/142))
+- *(rna)* support r.spl, r.spl?, r.(spl), r.(spl?) splicing markers (#81 E2) ([#134](https://github.com/fulcrumgenomics/ferro-hgvs/pull/134))
+
+### Fixed
+
+- *(spdi)* emit inversion and repeat as SPDI delins ([#159](https://github.com/fulcrumgenomics/ferro-hgvs/pull/159))
+- *(error-handling)* error codes for spec-mandated input rejections ([#115](https://github.com/fulcrumgenomics/ferro-hgvs/pull/115)) ([#152](https://github.com/fulcrumgenomics/ferro-hgvs/pull/152))
+- *(spdi)* reference-aware HGVS→SPDI for del/dup/delins ([#158](https://github.com/fulcrumgenomics/ferro-hgvs/pull/158))
+- *(parser)* preserve explicit deleted sequence in delins round-trip ([#154](https://github.com/fulcrumgenomics/ferro-hgvs/pull/154))
+- *(error-handling)* soft-warn non-canonical input forms at parse time ([#127](https://github.com/fulcrumgenomics/ferro-hgvs/pull/127)) ([#151](https://github.com/fulcrumgenomics/ferro-hgvs/pull/151))
+- *(ci)* drop redundant `#[allow(dead_code)]` on `mod common;` ([#178](https://github.com/fulcrumgenomics/ferro-hgvs/pull/178))
+- *(spdi)* accept c./n./r./m. variants in HGVS->SPDI conversion ([#157](https://github.com/fulcrumgenomics/ferro-hgvs/pull/157))
+- *(normalize)* apply 3' rule across phase-mismatched cyclic rotations for ins ([#132](https://github.com/fulcrumgenomics/ferro-hgvs/pull/132)) ([#155](https://github.com/fulcrumgenomics/ferro-hgvs/pull/155))
+- *(error-handling)* surface deprecated stop-codon and frameshift forms as soft-warns ([#125](https://github.com/fulcrumgenomics/ferro-hgvs/pull/125)) ([#150](https://github.com/fulcrumgenomics/ferro-hgvs/pull/150))
+- *(error-handling)* wire W1001/W1002/W3001 soft-validation warnings ([#124](https://github.com/fulcrumgenomics/ferro-hgvs/pull/124)) ([#149](https://github.com/fulcrumgenomics/ferro-hgvs/pull/149))
+- *(spdi)* recover dup form on SPDI→HGVS for duplicated insertions ([#156](https://github.com/fulcrumgenomics/ferro-hgvs/pull/156))
+- *(parser)* extend unknown-phase (;) support to g./n./m./o./p. coord systems ([#123](https://github.com/fulcrumgenomics/ferro-hgvs/pull/123)) ([#148](https://github.com/fulcrumgenomics/ferro-hgvs/pull/148))
+- *(normalize)* detect cis-allele edits with coincident bounds (#81 A8) ([#147](https://github.com/fulcrumgenomics/ferro-hgvs/pull/147))
+- *(parser)* soft-warn embedded whitespace and zero-width chars ([#128](https://github.com/fulcrumgenomics/ferro-hgvs/pull/128)) ([#145](https://github.com/fulcrumgenomics/ferro-hgvs/pull/145))
+- *(normalize)* preserve r.*N UTR flag and translate via cds_end (closes #163) ([#164](https://github.com/fulcrumgenomics/ferro-hgvs/pull/164))
+- *(parser)* correct LRG accession variant-type inference and compound-ref handling ([#122](https://github.com/fulcrumgenomics/ferro-hgvs/pull/122)) ([#141](https://github.com/fulcrumgenomics/ferro-hgvs/pull/141))
+- *(normalize)* recognize revcomp inv sub-spans within delins ([#166](https://github.com/fulcrumgenomics/ferro-hgvs/pull/166))
+- *(normalize)* apply 3'-rule to merged cis-allele deletions (closes #161) ([#162](https://github.com/fulcrumgenomics/ferro-hgvs/pull/162))
+- *(normalize)* rewrite revcomp delins as inversion (#81 A2) ([#109](https://github.com/fulcrumgenomics/ferro-hgvs/pull/109))
+- *(normalize)* enforce HGVS c. codon-frame exception for repeat notation (#81 B1) ([#110](https://github.com/fulcrumgenomics/ferro-hgvs/pull/110))
+- *(normalize)* rewrite empty-insert delins as del (#81 A3) ([#113](https://github.com/fulcrumgenomics/ferro-hgvs/pull/113))
+- *(normalize)* degenerate substitution (ref==alt) -> identity (#81 A4) ([#111](https://github.com/fulcrumgenomics/ferro-hgvs/pull/111))
+
+### Other
+
+- *(parser)* triage failure expectations (#174 phase 2) ([#176](https://github.com/fulcrumgenomics/ferro-hgvs/pull/176))
+- *(parser)* per-input failure-expectations framework (#174 phase 1) ([#175](https://github.com/fulcrumgenomics/ferro-hgvs/pull/175))
+- drop ferro_version from HGVS spec fixture ([#177](https://github.com/fulcrumgenomics/ferro-hgvs/pull/177))
+- *(test)* cut Test job runtime ~398s → ~20s ([#173](https://github.com/fulcrumgenomics/ferro-hgvs/pull/173))
+- *(test)* correct misleading comment on trans-allele expanded-form test ([#167](https://github.com/fulcrumgenomics/ferro-hgvs/pull/167))
+- *(normalize)* tag r. positive bases as Region::Rna (closes #168) ([#169](https://github.com/fulcrumgenomics/ferro-hgvs/pull/169))
+- *(allele)* pin trans-phase round-trip across all coord systems and merge-barrier (#81 C1) ([#146](https://github.com/fulcrumgenomics/ferro-hgvs/pull/146))
+- *(compound)* pin cross-reference / cross-coord compound round-trip and merge-barrier (#81 H2) ([#143](https://github.com/fulcrumgenomics/ferro-hgvs/pull/143))
+- *(error-handling)* audit error codes against HGVS spec sections (#81 L1) ([#137](https://github.com/fulcrumgenomics/ferro-hgvs/pull/137))
+- *(parser)* pin gene-selector round-trip end-to-end with Display preservation (#81 I3) ([#135](https://github.com/fulcrumgenomics/ferro-hgvs/pull/135))
+- *(mito)* audit heteroplasmy notation; tracking #133 (#81 F2) ([#139](https://github.com/fulcrumgenomics/ferro-hgvs/pull/139))
+- *(normalize)* pin RNA path + edge cases for A9 substitution-after-trim ([#114](https://github.com/fulcrumgenomics/ferro-hgvs/pull/114))
+- *(protein)* pin p.? unknown-effect round-trip across allele forms and edge cases (#81 D7) ([#136](https://github.com/fulcrumgenomics/ferro-hgvs/pull/136))
+- *(protein)* pin p.0 no-product round-trip and adjacent guards (#81 D6) ([#130](https://github.com/fulcrumgenomics/ferro-hgvs/pull/130))
+- *(protein)* pin silent `=` round-trip across allele forms and edge cases (#81 D5) ([#131](https://github.com/fulcrumgenomics/ferro-hgvs/pull/131))
+- *(mito)* audit m. coord-system parse + wraparound behavior; tracking #129 (#81 F1) ([#138](https://github.com/fulcrumgenomics/ferro-hgvs/pull/138))
+- pin normalize() against HGVS v21.0 spec fixture (closes #84) ([#105](https://github.com/fulcrumgenomics/ferro-hgvs/pull/105))
+
 ### Added
 
 - *(normalize)* detect cis-allele edits with coincident reference bounds (e.g. `g.[100G>A;100A>C]`) and emit an advisory `OVERLAP_CONFLICTING_EDITS` (`W5002`) warning. Variant output is preserved unchanged. Addresses [#81](https://github.com/fulcrumgenomics/ferro-hgvs/issues/81) item A8.
