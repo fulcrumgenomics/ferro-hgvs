@@ -9,7 +9,6 @@ use clap::{Parser, Subcommand};
 use ferro_hgvs::cli::{
     output_error as cli_output_error, output_error_with_context as cli_output_error_with_context,
     parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line,
-    reverse_complement,
 };
 use ferro_hgvs::config::FerroConfig;
 use ferro_hgvs::error_handling::{
@@ -19,6 +18,7 @@ use ferro_hgvs::error_handling::{
 use ferro_hgvs::reference::transcript::GenomeBuild;
 use ferro_hgvs::reference::FastaProvider;
 use ferro_hgvs::reference::TranscriptDb;
+use ferro_hgvs::sequence::reverse_complement;
 use ferro_hgvs::vcf::{generate_info_header_lines, open_vcf, VcfAnnotator, VcfRecord};
 use ferro_hgvs::{parse_hgvs, FerroError, NormalizeConfig, Normalizer, ReferenceProvider};
 use flate2::read::MultiGzDecoder;

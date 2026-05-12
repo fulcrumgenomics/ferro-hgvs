@@ -1,4 +1,4 @@
-//! DNA sequence utilities for CLI operations
+//! DNA sequence utilities shared across the library.
 
 /// Reverse complement a DNA sequence
 ///
@@ -11,7 +11,7 @@
 /// # Examples
 ///
 /// ```
-/// use ferro_hgvs::cli::reverse_complement;
+/// use ferro_hgvs::sequence::reverse_complement;
 ///
 /// assert_eq!(reverse_complement("ATGC"), "GCAT");
 /// assert_eq!(reverse_complement("aattggcc"), "ggccaatt");

@@ -22,11 +22,20 @@
 //! | Delins `g.100_102delinsATG` | `seq:99:ATG:ATG` | required |
 //! | Duplication `g.100_102dup` | `seq:101::ATG` | required (short form) |
 //! | Duplication `g.100_102dupATG` | `seq:101::ATG` | not required (explicit form) |
+//! | Inversion `g.100_102inv` | `seq:99:ATG:CAT` | required (short form) |
+//! | Inversion `g.100_102invATG` | `seq:99:ATG:CAT` | not required (explicit form) |
+//! | Repeat `g.100_105AT[5]` | `seq:99:ATATAT:ATATATATAT` | required |
 //!
-//! Short-form deletions, delins, and duplications use [`hgvs_to_spdi`] with a
-//! [`ReferenceProvider`] to fetch the deleted/duplicated bases for SPDI's
-//! mandatory `del` (or, for duplication, `ins`) field. Explicit forms do not
-//! consult the provider.
+//! Short-form deletions, delins, duplications, inversions, and repeats use
+//! [`hgvs_to_spdi`] with a [`ReferenceProvider`] to fetch reference bases for
+//! SPDI's mandatory `del` (or, for duplication, `ins`) field. Explicit forms
+//! do not consult the provider.
+//!
+//! SPDI has no native `inv` or repeat shape; both convert to `delins`. The
+//! inverse direction ([`spdi_to_hgvs`]) is therefore lossy for these edits —
+//! an SPDI built from `g.100_102inv` round-trips back to
+//! `g.100_102delinsCAT`, not to `inv`. Detecting reverse-complement and
+//! repeat structure on input SPDI is tracked in #81 (items A2, B1).
 //!
 //! # Coordinate-system support
 //!
@@ -61,7 +70,7 @@ use super::SpdiVariant;
 use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::error::FerroError;
-use crate::hgvs::edit::{InsertedSequence, NaEdit, Sequence};
+use crate::hgvs::edit::{InsertedSequence, NaEdit, RepeatCount, Sequence};
 use crate::hgvs::interval::Interval;
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::accession::parse_accession;
@@ -70,6 +79,14 @@ use crate::hgvs::variant::{
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
+use crate::sequence::reverse_complement;
+
+/// Maximum number of bases allowed in an SPDI `ins` string emitted from a
+/// repeat expansion. The repeat count is user-controlled (HGVS `RepeatCount`
+/// is a `u64`), so an unbounded `unit.repeat(count)` can be forced into a
+/// huge allocation. 100 KB is well above any biological tandem-repeat tract
+/// we'd plausibly emit as a single SPDI.
+const MAX_REPEAT_EXPANSION_BASES: usize = 100_000;
 
 /// Error type for conversion failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -805,14 +822,14 @@ fn resolve_rna_to_provider_tx<P: ReferenceProvider>(
     Ok((s, e))
 }
 
-/// Resolve a single `TxPos` to a 1-based transcript position. For intronic
-/// positions, the returned position is the nearest exonic transcript base,
-/// because SPDI cannot directly represent intronic offsets. For downstream
-/// (*N) positions, the position is offset past the transcript end.
-fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, ConversionError> {
-    // Reject intronic + downstream-with-offset until #117/#118 wire ref-aware
-    // edit material in. SPDI cannot directly carry an intronic offset, so we
-    // surface a clear error rather than silently dropping it.
+/// Resolve a single `TxPos` to a 1-based transcript position. Intronic and
+/// downstream (`n.*N`) positions are rejected because they have no valid
+/// SPDI representation on the transcript accession.
+fn resolve_tx_pos(pos: &TxPos, _transcript: &Transcript) -> Result<u64, ConversionError> {
+    // SPDI is positional and has no offset notation, so intronic n. positions
+    // cannot be expressed without genomic projection. Match the sibling
+    // `resolve_rna_pos` (and the simple-path helpers) by emitting
+    // `MissingReferenceData` here.
     if pos.is_intronic() {
         return Err(ConversionError::MissingReferenceData {
             description: format!(
@@ -822,15 +839,18 @@ fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, Conversio
             ),
         });
     }
-    let tx_len = transcript.sequence_length();
+    // n. has no CDS anchor, so `n.*N` is N bases past the transcript end —
+    // an off-sequence position on the transcript accession. Reject until
+    // genomic projection is wired in; emitting SPDI at `tx_len + N` would
+    // produce a coordinate that does not exist on the accession.
     if pos.is_downstream() {
-        if pos.base < 1 {
-            return Err(ConversionError::InvalidPosition {
-                description: format!("downstream position *{} must be >= 1", pos.base),
-            });
-        }
-        let value = tx_len.saturating_add(pos.base as u64);
-        return Ok(value);
+        return Err(ConversionError::InvalidPosition {
+            description: format!(
+                "downstream n.{} cannot be expressed in SPDI on the transcript accession \
+                 without genomic projection",
+                pos
+            ),
+        });
     }
     ensure_positive_tx(pos.base, "n", pos)
 }
@@ -1020,12 +1040,129 @@ where
                 ref_base,
             ))
         }
-        NaEdit::Inversion { .. } => Err(ConversionError::UnsupportedEditType {
-            description: "inversions cannot be represented in SPDI format".to_string(),
-        }),
-        NaEdit::Repeat { .. } => Err(ConversionError::UnsupportedEditType {
-            description: "repeat variants cannot be directly converted to SPDI".to_string(),
-        }),
+        NaEdit::Inversion {
+            sequence: inv_seq, ..
+        } => {
+            // SPDI has no native inv; the standard mapping is delins where
+            // ins is the reverse-complement of the deleted reference span.
+            let del_raw = match inv_seq {
+                Some(seq) => sequence_to_string(seq),
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        return Err(ConversionError::MissingReferenceData {
+                            description:
+                                "inversion sequence not provided; reference data needed to determine inverted bases"
+                                    .to_string(),
+                        });
+                    }
+                },
+            };
+            let del_str = apply_alphabet(&del_raw, alphabet);
+            let ins_str = reverse_complement(&del_str);
+            Ok(SpdiVariant::new(sequence, spdi_pos, del_str, ins_str))
+        }
+        NaEdit::Repeat {
+            sequence: unit_seq,
+            count,
+            additional_counts,
+            trailing,
+        } => {
+            // SPDI has no native repeat; expand to delins where del is the
+            // reference repeat tract and ins is the unit repeated `count`
+            // times. Only an explicit unit and exact count are representable.
+            if !additional_counts.is_empty() {
+                return Err(ConversionError::UnsupportedEditType {
+                    description:
+                        "genotype-style repeat (multiple counts) cannot be expressed as a single SPDI; emit each allele separately"
+                            .to_string(),
+                });
+            }
+            if trailing.is_some() {
+                return Err(ConversionError::UnsupportedEditType {
+                    description: "repeat with trailing sequence cannot be represented in SPDI"
+                        .to_string(),
+                });
+            }
+            let unit = unit_seq
+                .as_ref()
+                .ok_or_else(|| ConversionError::MissingReferenceData {
+                    description:
+                        "repeat unit sequence not provided; cannot expand into SPDI delins"
+                            .to_string(),
+                })?;
+            let n_post = match count {
+                RepeatCount::Exact(n) => *n as usize,
+                _ => {
+                    return Err(ConversionError::UnsupportedEditType {
+                        description:
+                            "uncertain or range repeat counts cannot be represented in SPDI"
+                                .to_string(),
+                    });
+                }
+            };
+            let unit_str = apply_alphabet(&sequence_to_string(unit), alphabet);
+            // Bound the expanded ins-string before allocating. The count is
+            // user-controlled (u64), so `unit_str.repeat(n_post)` can be
+            // forced to allocate gigabytes from a single short input.
+            let expansion_bases = unit_str.len().checked_mul(n_post).ok_or_else(|| {
+                ConversionError::UnsupportedEditType {
+                    description: format!(
+                        "repeat expansion {} x {} overflows usize",
+                        unit_str.len(),
+                        n_post
+                    ),
+                }
+            })?;
+            if expansion_bases > MAX_REPEAT_EXPANSION_BASES {
+                return Err(ConversionError::UnsupportedEditType {
+                    description: format!(
+                        "repeat expansion {} bases exceeds SPDI ins-string cap of {} bases",
+                        expansion_bases, MAX_REPEAT_EXPANSION_BASES
+                    ),
+                });
+            }
+            let del_raw = match provider {
+                Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                None => {
+                    return Err(ConversionError::MissingReferenceData {
+                        description:
+                            "repeat reference span not provided; reference data needed to determine pre-expansion bases"
+                                .to_string(),
+                    });
+                }
+            };
+            let del_str = apply_alphabet(&del_raw, alphabet);
+            // The HGVS recommendations require the interval to span an
+            // integer number of repeat units. Reject non-divisible spans
+            // with a clear message rather than silently emitting nonsense.
+            if unit_str.is_empty() || !del_str.len().is_multiple_of(unit_str.len()) {
+                return Err(ConversionError::InvalidPosition {
+                    description: format!(
+                        "repeat span {}:{}-{} length {} is not a multiple of unit length {}",
+                        sequence,
+                        start_one_based,
+                        end_one_based,
+                        del_str.len(),
+                        unit_str.len()
+                    ),
+                });
+            }
+            // Verify the reference tract actually consists of repeated copies
+            // of the declared unit. A divisible length is necessary but not
+            // sufficient (e.g. `ATGCAT` has length 6 but is not `AT[3]`).
+            let pre_count = del_str.len() / unit_str.len();
+            if del_str != unit_str.repeat(pre_count) {
+                return Err(ConversionError::InvalidPosition {
+                    description: format!(
+                        "repeat span {}:{}-{} does not match repeat unit {}",
+                        sequence, start_one_based, end_one_based, unit_str
+                    ),
+                });
+            }
+            let ins_str = unit_str.repeat(n_post);
+            Ok(SpdiVariant::new(sequence, spdi_pos, del_str, ins_str))
+        }
         NaEdit::CopyNumber { .. } => Err(ConversionError::UnsupportedEditType {
             description: "copy number variants cannot be represented in SPDI format".to_string(),
         }),
@@ -1530,12 +1667,16 @@ mod tests {
     }
 
     #[test]
-    fn test_hgvs_to_spdi_unsupported_inversion() {
+    fn test_hgvs_to_spdi_simple_short_form_inversion_requires_provider() {
+        // Short-form inversion (no explicit sequence) cannot determine the
+        // reference bases without a provider. Pinned audit: the simple path
+        // surfaces MissingReferenceData rather than UnsupportedEditType
+        // (the prior, pre-#118 behaviour).
         let hgvs = parse_hgvs("NC_000001.11:g.100_200inv").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
         assert!(matches!(
             result,
-            Err(ConversionError::UnsupportedEditType { .. })
+            Err(ConversionError::MissingReferenceData { .. })
         ));
     }
 
@@ -2790,25 +2931,381 @@ mod tests {
         assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
     }
 
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_n_downstream_rejected() {
+        // n. has no CDS anchor, so `n.*N` is past the transcript end and
+        // cannot be expressed in SPDI on the transcript accession. The
+        // provider-aware path must reject rather than silently emit an
+        // off-sequence position at `tx_len + N`.
+        let tx = Transcript::new(
+            "NR_NONCODING.1".to_string(),
+            Some("NONCODING".to_string()),
+            Strand::Plus,
+            "A".repeat(40),
+            None,
+            None,
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        let hgvs = parse_hgvs("NR_NONCODING.1:n.*5A>G").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::InvalidPosition { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("downstream n.") && msg.contains("genomic projection"),
+            "expected downstream-n rejection, got: {}",
+            msg
+        );
+    }
+
     // ----- Edit-type passthrough on new coord systems -----------------------
 
     #[test]
-    fn test_hgvs_to_spdi_simple_n_inversion_unsupported() {
+    fn test_hgvs_to_spdi_simple_n_short_form_inversion_requires_provider() {
+        // Short-form `n.` inversion needs the provider to fetch reference
+        // bases — same shape as `g.`.
         let hgvs = parse_hgvs("NR_046018.2:n.10_20inv").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
         assert!(matches!(
             result,
-            Err(ConversionError::UnsupportedEditType { .. })
+            Err(ConversionError::MissingReferenceData { .. })
         ));
     }
 
     #[test]
-    fn test_hgvs_to_spdi_simple_m_inversion_unsupported() {
+    fn test_hgvs_to_spdi_simple_m_short_form_inversion_requires_provider() {
+        // Short-form `m.` inversion needs the provider to fetch reference
+        // bases — same shape as `g.`.
         let hgvs = parse_hgvs("NC_012920.1:m.100_200inv").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
         assert!(matches!(
             result,
-            Err(ConversionError::UnsupportedEditType { .. })
+            Err(ConversionError::MissingReferenceData { .. })
         ));
+    }
+
+    // ---------------------------------------------------------------------
+    // Inversion: provider-aware emission (#118)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_short_form_with_provider() {
+        // 1-based 100..102 is "ATG" → revcomp "CAT"
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NC_000001.11");
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_explicit_sequence_no_provider() {
+        // Explicit sequence bypasses the provider entirely — matches the
+        // explicit-form policy already used for del/dup.
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102invATG").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_explicit_sequence_does_not_consult_provider() {
+        // Same as above but routed through the provider-aware path with an
+        // empty provider — explicit-form must not call the provider.
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102invATG").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_single_base() {
+        // Inversion of a single base 'A' → 'T'
+        let provider = make_test_genomic_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_100inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "T");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_palindrome_round_trip() {
+        // ATAT is its own reverse complement; del == ins.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATAT");
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NC_000001.11", &contig);
+        let hgvs = parse_hgvs("NC_000001.11:g.100_103inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "ATAT");
+        assert_eq!(spdi.insertion, "ATAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_short_form_missing_provider_data() {
+        // Provider has no contig; expect a MissingReferenceData with the
+        // accession + 1-based interval in the message (same shape as #117).
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_102inv").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("NC_000001.11"));
+        assert!(msg.contains("100"));
+        assert!(msg.contains("102"));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_m_short_form_with_provider() {
+        // `m.` works the same as `g.` — accession is the mito contig.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATG");
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NC_012920.1", &contig);
+        let hgvs = parse_hgvs("NC_012920.1:m.100_102inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NC_012920.1");
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_n_short_form_with_provider() {
+        // `n.` (non-coding tx): SPDI emits on the transcript accession.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(9);
+        contig.push_str("ATGCATGC"); // 1-based 10..17
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NR_046018.2", &contig);
+        let hgvs = parse_hgvs("NR_046018.2:n.10_12inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NR_046018.2");
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_inversion_r_short_form_dna_alphabet() {
+        // `r.` input — SPDI must come out in DNA alphabet (T, not U).
+        // Reference bases on transcripts are stored as DNA, so the
+        // del/ins emitted here are uppercase DNA.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(9);
+        contig.push_str("ATGCATGC");
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NR_046018.2", &contig);
+        let hgvs = parse_hgvs("NR_046018.2:r.10_12inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "ATG");
+        assert_eq!(spdi.insertion, "CAT");
+        // The output must be DNA (no U).
+        assert!(!spdi.deletion.contains('U'));
+        assert!(!spdi.insertion.contains('U'));
+    }
+
+    // ---------------------------------------------------------------------
+    // Repeat: provider-aware emission (#118)
+    // ---------------------------------------------------------------------
+
+    /// Build a provider with an AT-tandem repeat tract:
+    ///   1-based 100..105 = "ATATAT" (3 copies of AT)
+    ///   1-based 200..209 = "ATATATATAT" (5 copies of AT)
+    fn make_repeat_provider() -> crate::reference::mock::MockProvider {
+        let mut p = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATATAT"); // 1-based 100..105 (6 bases)
+        contig.push_str(&"N".repeat(94)); // pad through 1-based 199
+        contig.push_str("ATATATATAT"); // 1-based 200..209 (10 bases)
+        contig.push_str(&"N".repeat(50));
+        p.add_genomic_sequence("NC_000001.11", &contig);
+        p
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_expansion_with_provider() {
+        // Reference has 3 copies of AT (100..105 = ATATAT); allele has 5.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[5]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NC_000001.11");
+        assert_eq!(spdi.position, 99);
+        assert_eq!(spdi.deletion, "ATATAT"); // 3 copies in reference
+        assert_eq!(spdi.insertion, "ATATATATAT"); // 5 copies on allele
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_contraction_with_provider() {
+        // Reference has 5 copies (200..209); allele has 3.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.200_209AT[3]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 199);
+        assert_eq!(spdi.deletion, "ATATATATAT"); // 5 copies
+        assert_eq!(spdi.insertion, "ATATAT"); // 3 copies
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_no_change_with_provider() {
+        // Reference and allele both have 3 copies → del == ins (a valid
+        // SPDI identity-shape delins).
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[3]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.deletion, "ATATAT");
+        assert_eq!(spdi.insertion, "ATATAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_simple_repeat_requires_provider() {
+        // No provider → MissingReferenceData (replaces prior
+        // UnsupportedEditType behaviour).
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[5]").unwrap();
+        let err = hgvs_to_spdi_simple(&hgvs).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_missing_provider_data() {
+        let provider = crate::reference::mock::MockProvider::new();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[5]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("NC_000001.11"));
+        assert!(msg.contains("100"));
+        assert!(msg.contains("105"));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_uncertain_count_unsupported() {
+        // RepeatCount::Range — uncertain — cannot be a single SPDI value.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[3_5]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::UnsupportedEditType { .. }));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_unknown_count_unsupported() {
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[?]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::UnsupportedEditType { .. }));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_genotype_unsupported() {
+        // Genotype-style additional counts cannot be a single SPDI.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[3][5]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::UnsupportedEditType { .. }));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_no_unit_unsupported() {
+        // `g.100_105(5)` parenthesized form: NaEdit::Repeat with no unit.
+        // Without a unit we cannot construct the inserted sequence.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105(5)").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::MissingReferenceData { .. }));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_span_not_multiple_of_unit() {
+        // Span 100..104 is 5 bases; AT unit is 2 bases → not divisible.
+        let provider = make_repeat_provider();
+        let hgvs = parse_hgvs("NC_000001.11:g.100_104AT[5]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::InvalidPosition { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("not a multiple"));
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_span_does_not_match_unit() {
+        // Reference span is `ATGCAT` (6 bases, multiple of unit length 2)
+        // but the locus is NOT an AT tandem repeat. Must reject rather
+        // than silently emit a wrong SPDI delins.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATGCAT"); // 1-based 100..105 — not a tandem AT[3]
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NC_000001.11", &contig);
+
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105AT[5]").unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::InvalidPosition { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("does not match repeat unit"),
+            "expected mismatch message, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_n_with_provider() {
+        // `n.` repeat — SPDI on transcript accession.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(9);
+        contig.push_str("ATATAT"); // 1-based 10..15
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NR_046018.2", &contig);
+        let hgvs = parse_hgvs("NR_046018.2:n.10_15AT[5]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NR_046018.2");
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "ATATAT");
+        assert_eq!(spdi.insertion, "ATATATATAT");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_expansion_too_large() {
+        // A huge user-supplied count must be refused before allocating the
+        // expanded ins-string. The reference span itself is small (and a
+        // valid AT tandem) so this isolates the size guard.
+        let provider = make_repeat_provider();
+        let huge = MAX_REPEAT_EXPANSION_BASES / 2 + 1; // unit.len() == 2
+        let hgvs = parse_hgvs(&format!("NC_000001.11:g.100_105AT[{}]", huge)).unwrap();
+        let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
+        assert!(matches!(err, ConversionError::UnsupportedEditType { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exceeds SPDI ins-string cap"),
+            "expected size-cap message, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_repeat_m_with_provider() {
+        let mut provider = crate::reference::mock::MockProvider::new();
+        let mut contig = "N".repeat(99);
+        contig.push_str("ATATAT"); // 1-based 100..105
+        contig.push_str(&"N".repeat(50));
+        provider.add_genomic_sequence("NC_012920.1", &contig);
+        let hgvs = parse_hgvs("NC_012920.1:m.100_105AT[5]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.sequence, "NC_012920.1");
+        assert_eq!(spdi.deletion, "ATATAT");
+        assert_eq!(spdi.insertion, "ATATATATAT");
     }
 }
