@@ -25,22 +25,29 @@ impl FeatureGraph {
         Self::default()
     }
 
-    pub fn ingest<R: AnnotationRecord>(&mut self, rec: &R) {
+    pub fn ingest<R: AnnotationRecord>(&mut self, rec: R) {
         let fid = FeatureId(
             u32::try_from(self.features.len()).expect("annotation file exceeds u32::MAX features"),
         );
         let id = rec.id().map(SmolStr::new);
         let parent_ids: Vec<SmolStr> = rec.parents().iter().map(SmolStr::new).collect();
+        let feature_type = rec.feature_type().clone();
+        let seqid = SmolStr::new(rec.seqid());
+        let range = (rec.start(), rec.end());
+        let strand = rec.strand();
+        let phase = rec.phase();
+        let source_line = rec.source_line();
+        let attrs = rec.into_attrs();
         let feature = Feature {
             id: id.clone(),
             parent_ids,
-            feature_type: rec.feature_type().clone(),
-            seqid: SmolStr::new(rec.seqid()),
-            range: (rec.start(), rec.end()),
-            strand: rec.strand(),
-            phase: rec.phase(),
-            attrs: Vec::new(), // attrs populated in Task 2.5 when ingest takes ownership
-            source_line: rec.source_line(),
+            feature_type,
+            seqid,
+            range,
+            strand,
+            phase,
+            attrs,
+            source_line,
         };
         self.features.push(feature);
         if let Some(id) = id {
@@ -134,7 +141,7 @@ mod tests {
 
     fn add_line(graph: &mut FeatureGraph, line: &str, n: u64) {
         let rec = Gff3Record::parse(line, n).unwrap().unwrap();
-        graph.ingest(&rec);
+        graph.ingest(rec);
     }
 
     #[test]

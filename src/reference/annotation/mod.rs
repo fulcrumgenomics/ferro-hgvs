@@ -126,7 +126,7 @@ fn parse_and_ingest<R: AnnotationRecord>(
     report: &mut LoaderReport,
 ) {
     match R::parse(line, line_no) {
-        Ok(Some(rec)) => graph.ingest(&rec),
+        Ok(Some(rec)) => graph.ingest(rec),
         Ok(None) => {}
         Err(e) => report.record(LoaderDiagnostic::error(
             "E-LOAD-001",
@@ -520,5 +520,17 @@ mod tests {
         let (db, report) = load_annotations(f.path(), &cfg).unwrap();
         assert_eq!(db.len(), 0);
         assert_eq!(report.transcripts_loaded, 0);
+    }
+
+    #[test]
+    fn gtf_gene_name_extracted_via_load_annotations() {
+        let f = write_gtf(
+            "chr1\tHAVANA\ttranscript\t100\t500\t.\t+\t.\tgene_id \"g1\"; gene_name \"GENE1\"; transcript_id \"tx1\";\n\
+             chr1\tHAVANA\texon\t100\t500\t.\t+\t.\tgene_id \"g1\"; transcript_id \"tx1\";\n",
+        );
+        let cfg = LoaderConfig::new();
+        let (db, _report) = load_annotations(f.path(), &cfg).unwrap();
+        let tx = db.get("tx1").unwrap();
+        assert_eq!(tx.gene_symbol.as_deref(), Some("GENE1"));
     }
 }

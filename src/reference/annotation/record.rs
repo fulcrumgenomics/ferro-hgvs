@@ -18,12 +18,11 @@ pub trait AnnotationRecord: Sized {
     fn phase(&self) -> Option<u8>;
     fn id(&self) -> Option<&str>;
     fn parents(&self) -> &[String];
-    /// Look up a single attribute by key; used in Phase 2.5+.
+    /// Look up a single attribute by key.
     #[allow(dead_code)]
     fn attribute(&self, key: &str) -> Option<&str>;
     fn source_line(&self) -> u64;
-    /// Consume the record and return its attribute map; used in Phase 2.5+.
-    #[allow(dead_code)]
+    /// Consume the record and return its attribute map.
     fn into_attrs(self) -> AttributeMap;
 }
 
@@ -49,8 +48,6 @@ pub struct Gff3Record {
     phase: Option<u8>,
     id: Option<String>,
     parents: Vec<String>,
-    /// Raw attributes; consumed by `into_attrs` in Phase 2.5+.
-    #[allow(dead_code)]
     attrs: AttributeMap,
     source_line: u64,
 }
@@ -193,8 +190,6 @@ pub struct GtfRecord {
     phase: Option<u8>,
     id: Option<String>,
     parents: Vec<String>,
-    /// Raw attributes; consumed by `into_attrs` in Phase 2.5+.
-    #[allow(dead_code)]
     attrs: AttributeMap,
     source_line: u64,
 }
