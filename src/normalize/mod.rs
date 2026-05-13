@@ -33,7 +33,7 @@ pub mod validate;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
-use crate::hgvs::edit::{InsertedSequence, NaEdit};
+use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
 use crate::hgvs::interval::Interval;
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
@@ -2938,6 +2938,18 @@ fn build_variant_at(
 /// subedits are 0-indexed into the (per-variant-sized) ref slice; absolute
 /// 1-based HGVS positions are recovered as `offset + hgvs_start`, where
 /// `hgvs_start` is the variant's HGVS start position.
+///
+/// Consecutive `Substitution` sub-edits whose positions are strictly
+/// adjacent (no gap, no `Inversion` or `IdentityAt` between them) are
+/// grouped into a single `delins` variant per HGVS spec — `substitution.md`:
+/// "changes involving two or more consecutive nucleotides are described as
+/// deletion/insertion (delins)" (issue #182). Singleton sub-runs stay as
+/// `Substitution`; an `Inversion` or `IdentityAt` always breaks a run and
+/// emits separately. `Inversion` therefore acts as a hard barrier — adjacent
+/// sub flanks on either side of an inv are NOT re-merged into the inv span,
+/// preserving the inv-priority decomposition introduced by #166 (which was
+/// adopted to align with the spec's edit-priority list `general.md:45`:
+/// sub > del > inv > dup > ins).
 fn build_split_variants(
     template: &HgvsVariant,
     subedits: Vec<DelinsSubedit>,
@@ -2945,32 +2957,33 @@ fn build_split_variants(
 ) -> Vec<HgvsVariant> {
     let abs = |idx: usize| -> u64 { idx as u64 + hgvs_start };
 
-    subedits
-        .into_iter()
-        .filter_map(|se| match se {
+    let mut output: Vec<HgvsVariant> = Vec::new();
+    // Pending run of strictly-adjacent Substitution sub-edits, in
+    // left-to-right order. Each entry is `(position, reference, alternative)`
+    // with `position` the 0-indexed offset into the variant's ref window.
+    let mut run: Vec<(usize, Base, Base)> = Vec::new();
+
+    for se in subedits {
+        match se {
             DelinsSubedit::Substitution {
                 position,
                 reference,
                 alternative,
             } => {
-                let p = abs(position);
-                Some(build_variant_at(
-                    template,
-                    p,
-                    p,
-                    NaEdit::Substitution {
-                        reference,
-                        alternative,
-                    },
-                ))
+                let breaks_run = matches!(run.last(), Some((prev, _, _)) if *prev + 1 != position);
+                if breaks_run {
+                    flush_substitution_run(&mut output, template, hgvs_start, &mut run);
+                }
+                run.push((position, reference, alternative));
             }
             DelinsSubedit::Inversion { start, end } => {
+                flush_substitution_run(&mut output, template, hgvs_start, &mut run);
                 // Half-open 0-indexed [start, end) of length L=end-start.
                 // HGVS inclusive interval covers L bases starting at
                 // abs(start) and ending at abs(start)+L-1 = abs(end-1).
                 let s = abs(start);
                 let e = abs(end) - 1;
-                Some(build_variant_at(
+                output.push(build_variant_at(
                     template,
                     s,
                     e,
@@ -2978,15 +2991,65 @@ fn build_split_variants(
                         sequence: None,
                         length: None,
                     },
-                ))
+                ));
             }
             // Drop IdentityAt: an unchanged base is not an edit, so emitting
             // a `pos=` sub-variant would clutter the split allele. Both the
             // codon-frame-merge interior identity (issue #79) and the outer
-            // bases absorbed by `shorten_inversion` map to IdentityAt.
-            DelinsSubedit::IdentityAt { .. } => None,
-        })
-        .collect()
+            // bases absorbed by `shorten_inversion` map to IdentityAt. An
+            // identity also ends any in-flight substitution run — the gap
+            // means the surrounding subs are no longer "consecutive".
+            DelinsSubedit::IdentityAt { .. } => {
+                flush_substitution_run(&mut output, template, hgvs_start, &mut run);
+            }
+        }
+    }
+    flush_substitution_run(&mut output, template, hgvs_start, &mut run);
+    output
+}
+
+/// Flush a pending run of consecutive substitution sub-edits into `output`.
+/// A length-1 run emits a `Substitution`; a length-2+ run emits a single
+/// `Delins` over `[run.first.position, run.last.position]` with `sequence`
+/// = concatenated `alternative` bases. See `build_split_variants` for the
+/// spec rationale (issue #182).
+fn flush_substitution_run(
+    output: &mut Vec<HgvsVariant>,
+    template: &HgvsVariant,
+    hgvs_start: u64,
+    run: &mut Vec<(usize, Base, Base)>,
+) {
+    if run.is_empty() {
+        return;
+    }
+    let abs = |idx: usize| -> u64 { idx as u64 + hgvs_start };
+    if run.len() == 1 {
+        let (position, reference, alternative) = run.pop().unwrap();
+        let p = abs(position);
+        output.push(build_variant_at(
+            template,
+            p,
+            p,
+            NaEdit::Substitution {
+                reference,
+                alternative,
+            },
+        ));
+        return;
+    }
+    let s = abs(run.first().unwrap().0);
+    let e = abs(run.last().unwrap().0);
+    let alt_bases: Vec<Base> = run.drain(..).map(|(_, _, a)| a).collect();
+    output.push(build_variant_at(
+        template,
+        s,
+        e,
+        NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
+            deleted: None,
+            deleted_length: None,
+        },
+    ));
 }
 
 /// Normalize DNA `T` and RNA `U` to a single byte (`T`) so byte-wise
