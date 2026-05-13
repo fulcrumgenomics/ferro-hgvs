@@ -239,6 +239,13 @@ pub(crate) struct InsToDupResult {
     /// 1-based HGVS end of the most-3' unit-aligned duplication position
     /// inside the rotation-aligned reference tract (inclusive).
     pub end: u64,
+    /// Number of full reference copies of `unit` in the chosen tract. The
+    /// caller uses this to decide whether the tract-aligned dup position
+    /// should win over a post-shuffle simple-dup candidate: a multi-copy
+    /// tract (`ref_count >= 2`) has a meaningful phase that must be
+    /// preserved; a single-copy tract is just one unit, and a longer
+    /// post-shuffle partial-match extension is more 3' (issue #180).
+    pub ref_count: u64,
 }
 
 /// Compute the canonical 3'-rule duplication position for a single-copy
@@ -307,6 +314,7 @@ pub(crate) fn insertion_to_duplication(
         unit,
         start: index_to_hgvs_pos(dup_start_idx),
         end: index_to_hgvs_pos(dup_end_idx),
+        ref_count,
     })
 }
 

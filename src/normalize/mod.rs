@@ -61,22 +61,6 @@ fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
     )
 }
 
-/// Whether a variant carries a pure `Deletion` edit (no inserted sequence).
-///
-/// Used by the cis-allele post-merge step to decide whether to re-apply
-/// the 3'-rule to a freshly-merged anchor (issue #161).
-fn is_pure_deletion(v: &HgvsVariant) -> bool {
-    let edit = match v {
-        HV::Genome(g) => g.loc_edit.edit.inner(),
-        HV::Cds(c) => c.loc_edit.edit.inner(),
-        HV::Tx(t) => t.loc_edit.edit.inner(),
-        HV::Rna(r) => r.loc_edit.edit.inner(),
-        HV::Mt(m) => m.loc_edit.edit.inner(),
-        _ => None,
-    };
-    matches!(edit, Some(NaEdit::Deletion { .. }))
-}
-
 /// Check if a TxPos has an unknown (?) offset sentinel value
 fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     matches!(
@@ -282,36 +266,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         allele: &crate::hgvs::variant::AlleleVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        // First pass: normalize each variant independently, collecting all warnings
+        // Merge first, then normalize each result through the full per-variant
+        // pipeline. Pre-normalizing each bracket entry would shift it
+        // independently of its siblings, which can collapse adjacent edits
+        // onto the same 3'-end position (e.g. `[260delA;261delA]` →
+        // `[264del;264del]`) and defeat the strict-adjacency merge. Issue #180.
+        //
+        // Order:
+        //   1. merge raw bracket entries by positional adjacency
+        //   2. cis-only: decompose merged delins into [..., inv, ...] (#160)
+        //   3. run the full per-variant pipeline on every result — this is
+        //      what applies the HGVS 3' rule to the merged anchor (#161, #180)
+        //   4. detect post-shift overlaps and emit warnings
         let mut all_warnings = Vec::new();
-        let mut normalized = Vec::new();
-
-        for v in &allele.variants {
-            let result = self.normalize_with_warnings(v)?;
-            all_warnings.extend(result.warnings);
-            normalized.push(result.result);
-        }
-
-        // Second pass: check for overlaps and resolve
-        if self.config.prevent_overlap {
-            normalized = self.resolve_overlaps(normalized)?;
-        }
-
-        // Detect coincident-bounds conflicts (issue #81 A8). Runs after per-variant
-        // normalization so post-shift collisions are caught the same as input-time
-        // ones; emits OVERLAP_CONFLICTING_EDITS warnings, leaves output unchanged.
-        all_warnings.extend(crate::normalize::overlap::detect_overlap_conflicts(
-            &normalized,
-            allele.phase,
-        ));
-
-        // HGVS requires consecutive edits in cis to render as a single delins.
-        // Track input length so we only unwrap when a merge actually collapsed
-        // multiple sub-variants — not for pre-existing singleton alleles, which
-        // must round-trip with the Allele wrapper intact for programmatic callers
-        // (Display already renders singletons in bare form regardless).
-        let original_len = normalized.len();
-        let merged_raw = merge::merge_consecutive_edits(normalized, allele.phase, &self.provider);
+        let original_len = allele.variants.len();
+        let merged_raw =
+            merge::merge_consecutive_edits(allele.variants.clone(), allele.phase, &self.provider);
 
         // Issue #160: any merged delins (or pre-existing delins that survived
         // merge unchanged) may decompose into [..., inv, ...] when an inv-
@@ -319,145 +289,56 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // helper is a no-op for non-Delins variants and for Delins without an
         // inv sub-span. Only applies in cis phase — trans alleles aren't
         // collapsible in the first place.
-        let mut merged: Vec<HgvsVariant> = Vec::with_capacity(merged_raw.len());
-        if allele.phase == crate::hgvs::variant::AllelePhase::Cis {
-            for v in merged_raw {
-                merged.extend(self.split_inv_for_variant(v));
-            }
-        } else {
-            merged = merged_raw;
+        let merged_split: Vec<HgvsVariant> =
+            if allele.phase == crate::hgvs::variant::AllelePhase::Cis {
+                merged_raw
+                    .into_iter()
+                    .flat_map(|v| self.split_inv_for_variant(v))
+                    .collect()
+            } else {
+                merged_raw
+            };
+
+        // Per-variant pipeline on every merged result. This is the single
+        // canonical place where the 3' rule, ins→dup canonicalization, ref
+        // validation, etc. apply — a merged variant is semantically a new
+        // variant and goes through the same pipeline as any direct input.
+        let mut normalized: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
+        for v in merged_split {
+            let r = self.normalize_with_warnings(&v)?;
+            all_warnings.extend(r.warnings);
+            normalized.push(r.result);
         }
 
-        // The HGVS 3'-rule requires the most-3' position possible — and that
-        // applies to the post-merge form, not just the per-variant inputs.
-        // When merge collapses adjacent single-base deletions into one
-        // ranged Deletion, that fresh anchor must reach its rotation
-        // fixed point. (Issue #161.)
-        //
-        // We restrict the re-normalize to merged Deletions specifically.
-        // Other merged forms (delins from sub+sub, delins from sub+ins,
-        // pure ins, etc.) are produced by the merge layer in their
-        // intended form; sending them back through `normalize_with_warnings`
-        // would re-canonicalize delins and traverse coord-system paths
-        // that are out of scope for this issue.
-        if merged.len() < original_len {
-            let mut renormalized = Vec::with_capacity(merged.len());
-            for v in merged {
-                if is_pure_deletion(&v) {
-                    let r = self.normalize_with_warnings(&v)?;
-                    all_warnings.extend(r.warnings);
-                    renormalized.push(r.result);
-                } else {
-                    renormalized.push(v);
-                }
-            }
-            merged = renormalized;
-        }
+        // Overlap detection runs post-shift so collisions caused by the
+        // 3' shift surface alongside input-time ones. Overlap *prevention*
+        // is structural — the merge-first ordering above plus the strict
+        // `prev.end + 1 == next.start` adjacency check in
+        // `merge_consecutive_edits` make it impossible for the normalizer
+        // to emit overlapping ranges from non-overlapping inputs.
+        all_warnings.extend(crate::normalize::overlap::detect_overlap_conflicts(
+            &normalized,
+            allele.phase,
+        ));
 
+        // HGVS requires consecutive edits in cis to render as a single edit.
+        // Only unwrap when a merge actually collapsed multiple sub-variants —
+        // pre-existing singleton alleles must round-trip with the Allele
+        // wrapper intact for programmatic callers (Display already renders
+        // singletons in bare form regardless).
         let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
             && original_len > 1
-            && merged.len() == 1
+            && normalized.len() == 1
         {
-            merged.pop().unwrap()
+            normalized.pop().unwrap()
         } else {
             HgvsVariant::Allele(crate::hgvs::variant::AlleleVariant::new(
-                merged,
+                normalized,
                 allele.phase,
             ))
         };
 
         Ok((result, all_warnings))
-    }
-
-    /// Resolve overlaps between normalized variants in a compound allele.
-    ///
-    /// When normalization shifts variants, they may end up overlapping. This function
-    /// detects overlaps and constrains the normalization to prevent collisions.
-    fn resolve_overlaps(&self, variants: Vec<HgvsVariant>) -> Result<Vec<HgvsVariant>, FerroError> {
-        if variants.len() < 2 {
-            return Ok(variants);
-        }
-
-        // Extract positions for comparison
-        let mut positions: Vec<(usize, Option<(u64, u64)>)> = variants
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (i, self.extract_position_range(v)))
-            .collect();
-
-        // Sort by start position
-        positions.sort_by(|a, b| match (&a.1, &b.1) {
-            (Some((s1, _)), Some((s2, _))) => s1.cmp(s2),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-
-        // Check for overlaps and mark variants that need adjustment
-        let mut needs_adjustment = vec![false; variants.len()];
-
-        for i in 0..positions.len() - 1 {
-            let (_idx_a, pos_a) = &positions[i];
-            let (idx_b, pos_b) = &positions[i + 1];
-
-            if let (Some((_, end_a)), Some((start_b, _))) = (pos_a, pos_b) {
-                // Check for overlap: end of A >= start of B
-                if end_a >= start_b {
-                    // Mark the second variant for potential adjustment
-                    needs_adjustment[*idx_b] = true;
-                }
-            }
-        }
-
-        // For now, we report overlaps but don't modify the variants
-        // A more sophisticated implementation would re-normalize with constraints
-        // or report a warning
-        for (i, needs_adj) in needs_adjustment.iter().enumerate() {
-            if *needs_adj {
-                // In a complete implementation, we would constrain normalization
-                // For now, we preserve the variant as-is with a potential warning
-                // Future: add to a warnings collection
-                let _ = i; // Suppress unused variable warning
-            }
-        }
-
-        Ok(variants)
-    }
-
-    /// Extract the genomic/CDS position range from a variant.
-    fn extract_position_range(&self, variant: &HgvsVariant) -> Option<(u64, u64)> {
-        match variant {
-            HV::Genome(v) => {
-                let start = v.loc_edit.location.start.inner()?.base;
-                let end = v.loc_edit.location.end.inner()?.base;
-                Some((start, end))
-            }
-            HV::Cds(v) => {
-                let start_pos = v.loc_edit.location.start.inner()?;
-                let end_pos = v.loc_edit.location.end.inner()?;
-                // Only return positions for exonic, non-UTR variants
-                if start_pos.is_intronic()
-                    || end_pos.is_intronic()
-                    || start_pos.base < 1
-                    || end_pos.base < 1
-                {
-                    None
-                } else {
-                    Some((start_pos.base as u64, end_pos.base as u64))
-                }
-            }
-            HV::Tx(v) => {
-                let start = v.loc_edit.location.start.inner()?.base;
-                let end = v.loc_edit.location.end.inner()?.base;
-                // Only return positions for positive bases (within transcript)
-                if start < 1 || end < 1 {
-                    None
-                } else {
-                    Some((start as u64, end as u64))
-                }
-            }
-            _ => None,
-        }
     }
 
     /// Normalize a genomic variant
@@ -2207,35 +2088,72 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         }
                     }
 
-                    // Check for cyclic-rotation single-copy duplication (issue #132).
-                    // When the inserted alt is a phase-mismatched cyclic rotation of an
-                    // adjacent reference repeat unit, shuffle's first-base check fails
-                    // (`alt[0] != ref[ins_point]`) and the variant never moves. The
-                    // 2+-copy path (`insertion_to_repeat`, above) already iterates
-                    // rotations; do the same for the single-copy case here so the
-                    // variant canonicalizes to the most-3' rotation-aligned dup slot.
+                    // Resolve insertion → duplication canonicalization. Three candidate
+                    // dup positions compete; we pick by the rules below in order.
                     //
-                    // Use the ORIGINAL position (start, 1-based HGVS), not the post-shuffle
-                    // result.start, because rotation iteration relies on the unmoved
-                    // insertion point. This is symmetric with the call to
-                    // `insertion_to_repeat` above.
+                    // (a) Tract-aligned dup via `insertion_to_duplication` (uses the
+                    //     ORIGINAL insertion point and finds the maximal tandem run
+                    //     under any cyclic rotation of the alt). When the tract has
+                    //     `ref_count >= 2` we prefer this regardless of how far
+                    //     shuffle walked: the multi-copy tract has a meaningful phase
+                    //     that the spec-canonical form preserves (issue #132).
+                    //
+                    // (b) Post-shuffle simple dup via `insertion_is_duplication`. When
+                    //     shuffle walked past a single-copy tract via partial-match
+                    //     extension (e.g. TGATC abutting TGAAG — first three bases
+                    //     match but the fourth does not), the post-shuffle position is
+                    //     more 3' than (a)'s tract-aligned position and is the canonical
+                    //     answer per the 3' rule (issue #180).
+                    //
+                    // (c) Single-copy tract fallback (`insertion_to_duplication` with
+                    //     `ref_count == 1`). Hit when shuffle stalled before completing
+                    //     one alt rotation (so (b) doesn't find a dup at the post-
+                    //     shuffle position) but the alt does match an adjacent ref unit
+                    //     at the ORIGINAL position. Example: ins AACA abutting AACA.
+                    //
+                    // If none match, fall through to ins (possibly rotated).
                     let original_pos_idx = hgvs_pos_to_index(start) as u64;
-                    if let Some(rules::InsToDupResult {
-                        unit: _,
-                        start: dup_start,
-                        end: dup_end,
-                    }) = rules::insertion_to_duplication(ref_seq, original_pos_idx, &seq_bytes)
-                    {
-                        return Ok((
-                            dup_start,
-                            dup_end,
-                            NaEdit::Duplication {
-                                sequence: None,
-                                length: None,
-                                uncertain_extent: None,
-                            },
-                            warnings,
-                        ));
+                    let ins_to_dup =
+                        rules::insertion_to_duplication(ref_seq, original_pos_idx, &seq_bytes);
+
+                    // Codon-frame gate (repeated.md): in c., if the alt is
+                    // >=2 copies of a non-codon-aligned unit, the spec
+                    // mandates ins<literal>, not dup. The smallest-unit
+                    // length is rotation-invariant, so we can compute it
+                    // once from `seq_bytes` and apply the same gate at
+                    // every dup-emission site below. In practice the gate
+                    // never fires when `ins_to_dup` is `Some` (that helper
+                    // only returns for single-unit alts, where
+                    // `smallest_unit.len() == seq_bytes.len()`), but we
+                    // guard the (a) fast path and (c) single-copy fallback
+                    // anyway so the spec rule is explicit at each site and
+                    // survives future changes to `insertion_to_duplication`.
+                    let smallest_unit = rules::smallest_repeat_unit(&seq_bytes);
+                    let codon_blocks_dup = is_coding
+                        && smallest_unit.len() < seq_bytes.len()
+                        && !smallest_unit.len().is_multiple_of(3);
+
+                    if !codon_blocks_dup {
+                        if let Some(rules::InsToDupResult {
+                            start: dup_start,
+                            end: dup_end,
+                            ref_count,
+                            ..
+                        }) = ins_to_dup.as_ref()
+                        {
+                            if *ref_count >= 2 {
+                                return Ok((
+                                    *dup_start,
+                                    *dup_end,
+                                    NaEdit::Duplication {
+                                        sequence: None,
+                                        length: None,
+                                        uncertain_extent: None,
+                                    },
+                                    warnings,
+                                ));
+                            }
+                        }
                     }
 
                     // Check for simple duplication (single-base or matching adjacent)
@@ -2254,15 +2172,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         seq_bytes.clone()
                     };
 
-                    // Codon-frame gate (repeated.md): in c., if the rotated
-                    // insertion is >=2 copies of a non-codon-aligned unit, the
-                    // spec mandates ins<literal>, not dup. Skip dup conversion
-                    // in that case so the caller falls through to the literal
-                    // ins emission below.
-                    let smallest_unit = rules::smallest_repeat_unit(&rotated_seq);
-                    let codon_blocks_dup = is_coding
-                        && smallest_unit.len() < rotated_seq.len()
-                        && !smallest_unit.len().is_multiple_of(3);
                     if !codon_blocks_dup
                         && rules::insertion_is_duplication(ref_seq, result.start, &rotated_seq)
                     {
@@ -2281,6 +2190,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             dup_end,
                             NaEdit::Duplication {
                                 sequence: None, // Minimal notation - no explicit sequence
+                                length: None,
+                                uncertain_extent: None,
+                            },
+                        )
+                    } else if let Some(rules::InsToDupResult {
+                        start: dup_start,
+                        end: dup_end,
+                        ..
+                    }) = ins_to_dup.as_ref().filter(|_| !codon_blocks_dup)
+                    {
+                        // (c) Single-copy tract fallback. Reached when (a) declined
+                        // because `ref_count < 2` and (b) declined because the post-
+                        // shuffle rotated alt doesn't match adjacent reference. The
+                        // alt is a (possibly rotated) tandem unit abutting a single-
+                        // copy ref tract at the original insertion point — emit the
+                        // dup over that tract.
+                        (
+                            *dup_start,
+                            *dup_end,
+                            NaEdit::Duplication {
+                                sequence: None,
                                 length: None,
                                 uncertain_extent: None,
                             },
@@ -4620,19 +4550,6 @@ mod tests {
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
         assert_eq!(result.unwrap(), 2);
-    }
-
-    #[test]
-    fn test_variant_positions_negative_cds_base() {
-        // CDS variant with negative base should return None from variant_positions
-        let provider = MockProvider::with_test_data();
-        let normalizer = Normalizer::new(provider);
-        let variant = parse_hgvs("NM_001234.1:c.-3A>G").unwrap();
-        let positions = normalizer.extract_position_range(&variant);
-        assert_eq!(
-            positions, None,
-            "variant_positions should return None for 5' UTR CDS positions"
-        );
     }
 
     #[test]

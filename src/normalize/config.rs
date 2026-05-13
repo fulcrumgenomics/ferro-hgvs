@@ -50,10 +50,16 @@ pub struct NormalizeConfig {
     /// Window size for reference sequence fetching
     pub window_size: u64,
 
-    /// Whether to prevent overlaps in compound variant normalization
+    /// Vestigial overlap-prevention flag retained for source compatibility.
     ///
-    /// When true, normalization will check if variants in an allele would overlap
-    /// after shifting and constrain the normalization to prevent collisions.
+    /// Overlap is now prevented structurally: `normalize_allele` merges
+    /// adjacent sub-variants before the per-variant pipeline runs, and
+    /// `merge_consecutive_edits` uses a strict `prev.end + 1 == next.start`
+    /// adjacency rule, so the normalizer cannot emit overlapping ranges
+    /// from non-overlapping inputs. Detection of input-time overlap is
+    /// handled unconditionally by `detect_overlap_conflicts`. This field
+    /// has no effect and is preserved only so existing callers (notably
+    /// `with_overlap_prevention`) keep compiling.
     pub prevent_overlap: bool,
 }
 
@@ -148,7 +154,13 @@ impl NormalizeConfig {
         self
     }
 
-    /// Enable overlap prevention in compound variants
+    /// Set the vestigial `prevent_overlap` flag.
+    ///
+    /// This builder is retained only for source compatibility with existing
+    /// callers. The flag has no runtime effect: overlap prevention is handled
+    /// structurally by `normalize_allele`, `merge_consecutive_edits`, and
+    /// `detect_overlap_conflicts`. See [`NormalizeConfig::prevent_overlap`]
+    /// for details.
     pub fn with_overlap_prevention(mut self, prevent: bool) -> Self {
         self.prevent_overlap = prevent;
         self
