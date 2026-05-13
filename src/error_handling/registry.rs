@@ -1012,6 +1012,291 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    // =========================================================================
+    // LOADER WARNINGS / ERRORS (E-LOAD-* / W-LOAD-*)
+    // =========================================================================
+
+    // --- Loader Errors (E-LOAD-*) ---
+
+    map.insert(
+        "E-LOAD-001",
+        CodeInfo {
+            code: "E-LOAD-001",
+            name: "MalformedRecord",
+            summary: "A required GFF/GTF column failed to parse and the offending row was dropped.",
+            explanation: "During GFF3 or GTF loading, a record could not be interpreted because a \
+                mandatory column was malformed: for example, a non-integer coordinate, a missing \
+                tab delimiter, an invalid strand character, or an out-of-range phase value (must \
+                be 0, 1, or 2). The row is silently discarded and the loader continues. \
+                See the GFF/GTF loader design (§6 Stage 2 — record parsing).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["E-LOAD-002", "W-LOAD-010"],
+        },
+    );
+
+    map.insert(
+        "E-LOAD-002",
+        CodeInfo {
+            code: "E-LOAD-002",
+            name: "UnsupportedFormat",
+            summary: "The input file could not be classified as GFF3 or GTF after extension and content sniffing.",
+            explanation: "ferro attempts to detect the annotation format by examining the file \
+                extension and scanning for format-specific header directives (e.g. `##gff-version 3` \
+                for GFF3, `gene_id` attributes for GTF). When neither heuristic succeeds the file \
+                is treated as unsupported. Currently reserved — Phase 1 falls back to GFF3 when \
+                detection is ambiguous (see W-LOAD-001). \
+                See the GFF/GTF loader design (§6 Stage 1 — format detection).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "E-LOAD-103",
+        CodeInfo {
+            code: "E-LOAD-103",
+            name: "StrandRequired",
+            summary: "A transcript has an unspecified or unknown strand and was dropped.",
+            explanation: "HGVS coordinate arithmetic requires a defined strand (+ or −) for every \
+                transcript. GFF3 allows `.` (unspecified) and `?` (unknown) as strand values; \
+                transcripts carrying either of these values cannot be represented in ferro's \
+                data model and are discarded. If the strand is determinable from context, \
+                fix the source annotation before loading. \
+                See the GFF/GTF loader design (§6 Stage 4 — transcript assembly).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-100"],
+        },
+    );
+
+    // --- Loader Warnings (W-LOAD-*) ---
+
+    map.insert(
+        "W-LOAD-001",
+        CodeInfo {
+            code: "W-LOAD-001",
+            name: "UnknownFormat",
+            summary: "Format could not be determined with high confidence; defaulted to GFF3.",
+            explanation: "ferro examines the file extension and the presence of `##gff-version` \
+                or GTF-style attribute syntax to decide which parser to invoke. When neither \
+                indicator is present or they conflict, ferro falls back to GFF3 and emits this \
+                warning. Inspect the file extension and ensure a `##gff-version 3` (or `2`) \
+                directive is present on the first line. \
+                See the GFF/GTF loader design (§6 Stage 1 — format detection).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-002",
+        CodeInfo {
+            code: "W-LOAD-002",
+            name: "InlineFastaIgnored",
+            summary: "A `##FASTA` directive was encountered; inline sequences are not parsed.",
+            explanation: "GFF3 files may embed reference sequences after a `##FASTA` line. \
+                ferro's loader does not parse inline FASTA sections — if reference sequences are \
+                needed for CDS validation, supply them via `--fasta` separately. \
+                Currently reserved — Phase 1 does not yet detect the `##FASTA` directive. \
+                See the GFF/GTF loader design (§6 Stage 2 — record parsing).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-010",
+        CodeInfo {
+            code: "W-LOAD-010",
+            name: "OrphanFeature",
+            summary: "A feature references a parent ID that is not present in the file; the orphan is dropped.",
+            explanation: "In GFF3, child features reference their parent via the `Parent=` \
+                attribute; in GTF, children reference `transcript_id`. When the referenced \
+                parent record is absent — common with truncated or region-filtered input files — \
+                the child feature cannot be assembled into a transcript and is discarded. \
+                Check that the source file is complete and that all parent features are present. \
+                See the GFF/GTF loader design (§6 Stage 3 — parent-child linking).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["E-LOAD-001"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-100",
+        CodeInfo {
+            code: "W-LOAD-100",
+            name: "TranscriptWithoutExons",
+            summary: "A transcript-like feature has no exon, UTR, or CDS children and was dropped.",
+            explanation: "After parent-child linking, a transcript record (mRNA, transcript, \
+                ncRNA, lincRNA, etc.) was found with no child features from which an exon \
+                structure could be derived. Without at least one exon, UTR, or CDS interval \
+                there is nothing to build the transcript model from, so the transcript is \
+                discarded. Verify that the source file contains matching child records with the \
+                correct `Parent=` or `transcript_id` attributes. \
+                See the GFF/GTF loader design (§6 Stage 4 — transcript assembly).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-101", "E-LOAD-103"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-101",
+        CodeInfo {
+            code: "W-LOAD-101",
+            name: "GeneAsTranscript",
+            summary: "A `gene` feature with direct CDS children (no mRNA/transcript) is treated as a transcript.",
+            explanation: "Some prokaryotic GFF3 files attach CDS records directly to a `gene` \
+                feature without an intervening mRNA or transcript record. ferro detects this \
+                pattern and promotes the gene to act as its own transcript, preserving the CDS \
+                coordinates. If this was unintentional, restructure the annotation to include an \
+                explicit transcript-level feature. \
+                See the GFF/GTF loader design (§6 Stage 4 — transcript assembly).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-100"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-110",
+        CodeInfo {
+            code: "W-LOAD-110",
+            name: "PhaseAppliedToCdsStart",
+            summary: "The leading CDS feature has a non-zero phase; `cds_start_genomic` was shifted by the phase value.",
+            explanation: "GFF3 phase values indicate how many bases at the start of a CDS feature \
+                should be skipped to reach the first complete in-frame codon. When the 5'-most CDS \
+                record on a transcript carries a phase of 1 or 2, the loader advances \
+                `cds_start_genomic` by that number of bases so that ferro's CDS coordinates \
+                begin at a codon boundary. This is expected for fragmented or partial CDS \
+                annotations but may indicate a truncated transcript. \
+                See the GFF/GTF loader design (§6 Stage 4 — CDS start adjustment).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-111"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-111",
+        CodeInfo {
+            code: "W-LOAD-111",
+            name: "PhaseUnavailable",
+            summary:
+                "The leading CDS feature has no phase recorded; the unshifted CDS start is used.",
+            explanation: "When the 5'-most CDS record on a transcript has a missing or `.` phase \
+                field, ferro cannot determine whether the genomic start is offset from a codon \
+                boundary. The loader falls back to using the unshifted coordinate, which may be \
+                incorrect if the annotation was intended to encode a non-zero phase. Inspect the \
+                source annotation and add an explicit phase value where possible. \
+                See the GFF/GTF loader design (§6 Stage 4 — CDS start adjustment).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-110"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-112",
+        CodeInfo {
+            code: "W-LOAD-112",
+            name: "StopCodonAssumed",
+            summary: "No explicit `stop_codon` record was found; `cds_end_genomic` was extended by 3 bp on the 3' side.",
+            explanation: "ferro's CDS model is stop-codon-inclusive: the 3' boundary of the CDS \
+                encompasses the stop codon. GFF3 files often encode the stop codon as a separate \
+                `stop_codon` feature rather than including it in the CDS interval. When no \
+                `stop_codon` record is present, the loader extends `cds_end_genomic` by 3 bp \
+                toward the 3' end, clipped at the transcript boundary. If the extension would \
+                overshoot the last exon, the CDS end may be slightly incorrect. Verify that the \
+                transcript end is consistent with the annotated stop codon. \
+                See the GFF/GTF loader design (§6 Stage 4 — stop codon handling).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-110"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-200",
+        CodeInfo {
+            code: "W-LOAD-200",
+            name: "CdsLengthNotMod3",
+            summary: "FASTA validation found a CDS whose length is not divisible by 3.",
+            explanation: "When FASTA-based validation is enabled (Phase 4), ferro checks that the \
+                assembled CDS length (3' end inclusive of the stop codon) is a multiple of 3. A \
+                non-multiple-of-3 length suggests a frameshift, an incomplete CDS record, or an \
+                annotation error in the source file. Currently reserved — FASTA validation is not \
+                yet shipped (Phase 4). \
+                See the GFF/GTF loader design (§6 Stage 5 — FASTA validation).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-201"],
+        },
+    );
+
+    map.insert(
+        "W-LOAD-201",
+        CodeInfo {
+            code: "W-LOAD-201",
+            name: "NonCanonicalStartCodon",
+            summary:
+                "FASTA validation found that the first CDS codon is not in {ATG, CTG, GTG, TTG}.",
+            explanation: "When FASTA-based validation is enabled (Phase 4), ferro reads the first \
+                three bases of the CDS from the reference FASTA and checks for a canonical start \
+                codon (ATG) or one of the known alternative initiators (CTG, GTG, TTG). Any other \
+                triplet suggests a mis-annotated CDS start or a sequencing artefact. Currently \
+                reserved — FASTA validation is not yet shipped (Phase 4). \
+                See the GFF/GTF loader design (§6 Stage 5 — FASTA validation).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["W-LOAD-200"],
+        },
+    );
+
     map
 }
 
@@ -1106,6 +1391,11 @@ mod tests {
     fn test_warning_codes_have_mode_behavior() {
         let warnings = list_warning_codes();
         for code in warnings {
+            // Loader codes (W-LOAD-*) do not participate in the parser's
+            // strict/lenient/silent configuration, so they may omit mode_behavior.
+            if code.code.starts_with("W-LOAD-") {
+                continue;
+            }
             assert!(
                 code.mode_behavior.is_some(),
                 "Warning {} should have mode_behavior",
@@ -1158,5 +1448,42 @@ mod tests {
         for code in parse_codes {
             assert_eq!(code.category, CodeCategory::Parse);
         }
+    }
+
+    #[test]
+    fn loader_error_codes_are_registered() {
+        assert!(get_code_info("E-LOAD-001").is_some());
+        assert!(get_code_info("E-LOAD-002").is_some());
+        assert!(get_code_info("E-LOAD-103").is_some());
+    }
+
+    #[test]
+    fn loader_warning_codes_are_registered() {
+        for code in &[
+            "W-LOAD-001",
+            "W-LOAD-002",
+            "W-LOAD-010",
+            "W-LOAD-100",
+            "W-LOAD-101",
+            "W-LOAD-110",
+            "W-LOAD-111",
+            "W-LOAD-112",
+            "W-LOAD-200",
+            "W-LOAD-201",
+        ] {
+            assert!(
+                get_code_info(code).is_some(),
+                "loader warning code {} not registered",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn loader_codes_have_consistent_metadata() {
+        let info = get_code_info("W-LOAD-100").unwrap();
+        assert_eq!(info.name, "TranscriptWithoutExons");
+        assert!(!info.summary.is_empty());
+        assert!(!info.explanation.is_empty());
     }
 }

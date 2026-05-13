@@ -1,0 +1,8 @@
+##gff-version 3
+##sequence-region NC_000021.9 1 46709983
+# Hand-curated RefSeq-style GFF3 excerpt for unit testing.
+# Mimics NCBI RefSeq attribute conventions: tag=MANE_Select, RefSeq=, Dbxref=.
+NC_000021.9	RefSeq	gene	5011799	5017178	.	-	.	ID=gene-MIR99AHG;Name=MIR99AHG;gene_biotype=lncRNA
+NC_000021.9	RefSeq	mRNA	5011799	5017178	.	-	.	ID=NR_027228.1;Parent=gene-MIR99AHG;transcript_id=NR_027228.1;tag=MANE_Select;RefSeq=NR_027228.1
+NC_000021.9	RefSeq	exon	5016902	5017178	.	-	.	ID=exon-NR_027228.1-1;Parent=NR_027228.1
+NC_000021.9	RefSeq	exon	5011799	5012256	.	-	.	ID=exon-NR_027228.1-2;Parent=NR_027228.1

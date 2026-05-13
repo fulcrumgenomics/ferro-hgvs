@@ -1,0 +1,6 @@
+##description: Hand-curated GENCODE-style GTF excerpt for unit testing.
+##provider: GENCODE-style attributes (tag, gene_name, transcript_id)
+chr21	HAVANA	gene	5011799	5017178	.	-	.	gene_id "ENSG00000275413"; gene_name "MIR99AHG"; gene_type "lncRNA";
+chr21	HAVANA	transcript	5011799	5017178	.	-	.	gene_id "ENSG00000275413"; transcript_id "ENST00000620911"; gene_name "MIR99AHG"; tag "MANE_Select";
+chr21	HAVANA	exon	5016902	5017178	.	-	.	gene_id "ENSG00000275413"; transcript_id "ENST00000620911"; exon_number "1";
+chr21	HAVANA	exon	5011799	5012256	.	-	.	gene_id "ENSG00000275413"; transcript_id "ENST00000620911"; exon_number "2";
