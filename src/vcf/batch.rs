@@ -405,7 +405,7 @@ mod tests {
             ],
             cds_start: Some(50),
             cds_end: Some(150),
-            sequence: "ATGC".repeat(50),
+            sequence: Some("ATGC".repeat(50)),
             chromosome: Some("chr1".to_string()),
             genomic_start: Some(1000),
             genomic_end: Some(2099),

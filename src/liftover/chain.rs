@@ -78,6 +78,7 @@ impl Chain {
                 return Some(match self.query_strand {
                     Strand::Plus => q_pos + offset,
                     Strand::Minus => self.query_size - (q_pos + offset) - 1,
+                    Strand::Unknown => return None,
                 });
             }
 

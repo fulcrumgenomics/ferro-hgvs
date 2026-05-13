@@ -7,10 +7,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::sync::OnceLock;
 
 use crate::error::FerroError;
-use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+use crate::reference::transcript::{GenomeBuild, ManeStatus, Transcript};
 
 /// Statistics about MANE transcript coverage in the database
 #[derive(Debug, Clone, Default)]
@@ -268,449 +267,24 @@ impl TranscriptDb {
     }
 }
 
-/// GFF3 attribute parser
-struct Gff3Attributes {
-    id: Option<String>,
-    parent: Option<String>,
-    name: Option<String>,
-    gene_name: Option<String>,
-    transcript_id: Option<String>,
-    mane_status: ManeStatus,
-    refseq_match: Option<String>,
-    ensembl_match: Option<String>,
-}
-
-impl Gff3Attributes {
-    fn parse(attr_str: &str) -> Self {
-        let mut attrs = Self {
-            id: None,
-            parent: None,
-            name: None,
-            gene_name: None,
-            transcript_id: None,
-            mane_status: ManeStatus::None,
-            refseq_match: None,
-            ensembl_match: None,
-        };
-
-        for part in attr_str.split(';') {
-            let part = part.trim();
-            if let Some((key, value)) = part.split_once('=') {
-                let value = url_decode(value);
-                match key {
-                    "ID" => attrs.id = Some(value),
-                    "Parent" => attrs.parent = Some(value),
-                    "Name" => attrs.name = Some(value),
-                    "gene" | "gene_name" => attrs.gene_name = Some(value),
-                    "transcript_id" => attrs.transcript_id = Some(value),
-                    // MANE status parsing - various formats used in GFF3/GTF files
-                    "tag" => {
-                        if value.contains("MANE_Select") || value.contains("MANE Select") {
-                            attrs.mane_status = ManeStatus::Select;
-                        } else if value.contains("MANE_Plus_Clinical")
-                            || value.contains("MANE Plus Clinical")
-                        {
-                            attrs.mane_status = ManeStatus::PlusClinical;
-                        }
-                    }
-                    "MANE" | "mane_status" => {
-                        let lower = value.to_lowercase();
-                        if lower.contains("select") {
-                            attrs.mane_status = ManeStatus::Select;
-                        } else if lower.contains("plus") || lower.contains("clinical") {
-                            attrs.mane_status = ManeStatus::PlusClinical;
-                        }
-                    }
-                    // Cross-reference accessions
-                    "RefSeq" | "refseq_id" => attrs.refseq_match = Some(value),
-                    "Ensembl" | "ensembl_id" | "ENST" => attrs.ensembl_match = Some(value),
-                    _ => {}
-                }
-            }
-        }
-
-        attrs
-    }
-}
-
-/// Simple URL decoding for GFF3 attributes
-fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            } else {
-                result.push('%');
-                result.push_str(&hex);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
-/// Parse strand from a single character
-fn parse_strand(s: &str) -> Strand {
-    match s {
-        "+" => Strand::Plus,
-        "-" => Strand::Minus,
-        _ => Strand::Plus, // Default to plus for unknown
-    }
-}
-
 /// Load transcripts from a GFF3 file
 ///
-/// GFF3 format has tab-separated columns:
-/// 1. seqid (chromosome)
-/// 2. source
-/// 3. type (gene, mRNA, exon, CDS, etc.)
-/// 4. start (1-based)
-/// 5. end (1-based, inclusive)
-/// 6. score
-/// 7. strand (+/-)
-/// 8. phase
-/// 9. attributes (ID=..;Name=..;Parent=..)
+/// Delegates to [`crate::reference::annotation::load_annotations`] using the GFF3 format.
 pub fn load_gff3<P: AsRef<Path>>(path: P) -> Result<TranscriptDb, FerroError> {
-    let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open GFF3 file: {}", e),
-    })?;
-    let reader = BufReader::new(file);
-
-    let mut db = TranscriptDb::new();
-
-    // Track transcripts being built
-    let mut tx_builders: HashMap<String, TranscriptBuilder> = HashMap::new();
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| FerroError::Io {
-            msg: format!("Failed to read line: {}", e),
-        })?;
-
-        // Skip comments and empty lines
-        if line.starts_with('#') || line.trim().is_empty() {
-            // Check for genome build in header
-            if line.contains("genome-build") {
-                if line.contains("GRCh37") || line.contains("hg19") {
-                    db.genome_build = GenomeBuild::GRCh37;
-                } else if line.contains("GRCh38") || line.contains("hg38") {
-                    db.genome_build = GenomeBuild::GRCh38;
-                }
-            }
-            continue;
-        }
-
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 9 {
-            continue;
-        }
-
-        let seqid = fields[0];
-        let feature_type = fields[2];
-        let start: u64 = fields[3].parse().unwrap_or(0);
-        let end: u64 = fields[4].parse().unwrap_or(0);
-        let strand = parse_strand(fields[6]);
-        let attrs = Gff3Attributes::parse(fields[8]);
-
-        match feature_type {
-            "mRNA" | "transcript" | "primary_transcript" => {
-                if let Some(id) = attrs.id.or(attrs.transcript_id) {
-                    let builder = TranscriptBuilder {
-                        id: id.clone(),
-                        gene_symbol: attrs.gene_name.or(attrs.name),
-                        chromosome: Some(seqid.to_string()),
-                        strand,
-                        genomic_start: start,
-                        genomic_end: end,
-                        exons: Vec::new(),
-                        cds_ranges: Vec::new(),
-                        mane_status: attrs.mane_status,
-                        refseq_match: attrs.refseq_match,
-                        ensembl_match: attrs.ensembl_match,
-                    };
-                    tx_builders.insert(id, builder);
-                }
-            }
-            "exon" => {
-                if let Some(parent) = attrs.parent {
-                    // Handle multiple parents (comma-separated)
-                    for parent_id in parent.split(',') {
-                        if let Some(builder) = tx_builders.get_mut(parent_id) {
-                            builder.exons.push((start, end));
-                        }
-                    }
-                }
-            }
-            "CDS" => {
-                if let Some(parent) = attrs.parent {
-                    for parent_id in parent.split(',') {
-                        if let Some(builder) = tx_builders.get_mut(parent_id) {
-                            builder.cds_ranges.push((start, end));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Build transcripts from builders
-    for (_, builder) in tx_builders {
-        if let Some(transcript) = builder.build(db.genome_build) {
-            db.add(transcript);
-        }
-    }
-
+    let cfg = crate::reference::annotation::LoaderConfig::new()
+        .with_format(crate::reference::annotation::AnnotationFormat::Gff3);
+    let (db, _report) = crate::reference::annotation::load_annotations(path, &cfg)?;
     Ok(db)
 }
 
 /// Load transcripts from a GTF file
 ///
-/// GTF format is similar to GFF but uses different attribute format
+/// Delegates to [`crate::reference::annotation::load_annotations`] using the GTF format.
 pub fn load_gtf<P: AsRef<Path>>(path: P) -> Result<TranscriptDb, FerroError> {
-    let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open GTF file: {}", e),
-    })?;
-    let reader = BufReader::new(file);
-
-    let mut db = TranscriptDb::new();
-    let mut tx_builders: HashMap<String, TranscriptBuilder> = HashMap::new();
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| FerroError::Io {
-            msg: format!("Failed to read line: {}", e),
-        })?;
-
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 9 {
-            continue;
-        }
-
-        let seqid = fields[0];
-        let feature_type = fields[2];
-        let start: u64 = fields[3].parse().unwrap_or(0);
-        let end: u64 = fields[4].parse().unwrap_or(0);
-        let strand = parse_strand(fields[6]);
-        let attrs = parse_gtf_attributes(fields[8]);
-
-        let transcript_id = attrs.get("transcript_id").cloned();
-        let gene_name = attrs
-            .get("gene_name")
-            .or_else(|| attrs.get("gene_id"))
-            .cloned();
-
-        // Parse MANE status from GTF "tag" attribute
-        let mane_status = attrs
-            .get("tag")
-            .map(|tag| {
-                if tag.contains("MANE_Select") || tag.contains("MANE Select") {
-                    ManeStatus::Select
-                } else if tag.contains("MANE_Plus_Clinical") || tag.contains("MANE Plus Clinical") {
-                    ManeStatus::PlusClinical
-                } else {
-                    ManeStatus::None
-                }
-            })
-            .unwrap_or(ManeStatus::None);
-
-        match feature_type {
-            "transcript" => {
-                if let Some(id) = transcript_id {
-                    let builder = TranscriptBuilder {
-                        id: id.clone(),
-                        gene_symbol: gene_name,
-                        chromosome: Some(seqid.to_string()),
-                        strand,
-                        genomic_start: start,
-                        genomic_end: end,
-                        exons: Vec::new(),
-                        cds_ranges: Vec::new(),
-                        mane_status,
-                        refseq_match: None,
-                        ensembl_match: None,
-                    };
-                    tx_builders.insert(id, builder);
-                }
-            }
-            "exon" => {
-                if let Some(id) = transcript_id {
-                    // Create transcript if not seen yet
-                    let builder =
-                        tx_builders
-                            .entry(id.clone())
-                            .or_insert_with(|| TranscriptBuilder {
-                                id,
-                                gene_symbol: gene_name.clone(),
-                                chromosome: Some(seqid.to_string()),
-                                strand,
-                                genomic_start: start,
-                                genomic_end: end,
-                                exons: Vec::new(),
-                                cds_ranges: Vec::new(),
-                                mane_status,
-                                refseq_match: None,
-                                ensembl_match: None,
-                            });
-
-                    // Update bounds
-                    builder.genomic_start = builder.genomic_start.min(start);
-                    builder.genomic_end = builder.genomic_end.max(end);
-                    builder.exons.push((start, end));
-                }
-            }
-            "CDS" => {
-                if let Some(id) = transcript_id {
-                    if let Some(builder) = tx_builders.get_mut(&id) {
-                        builder.cds_ranges.push((start, end));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Build transcripts
-    for (_, builder) in tx_builders {
-        if let Some(transcript) = builder.build(db.genome_build) {
-            db.add(transcript);
-        }
-    }
-
+    let cfg = crate::reference::annotation::LoaderConfig::new()
+        .with_format(crate::reference::annotation::AnnotationFormat::Gtf);
+    let (db, _report) = crate::reference::annotation::load_annotations(path, &cfg)?;
     Ok(db)
-}
-
-/// Parse GTF attribute string
-fn parse_gtf_attributes(attr_str: &str) -> HashMap<String, String> {
-    let mut attrs = HashMap::new();
-
-    for part in attr_str.split(';') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-
-        // GTF format: key "value"
-        let mut iter = part.splitn(2, ' ');
-        if let (Some(key), Some(value)) = (iter.next(), iter.next()) {
-            // Remove quotes from value
-            let value = value.trim_matches('"').to_string();
-            attrs.insert(key.to_string(), value);
-        }
-    }
-
-    attrs
-}
-
-/// Builder for constructing transcripts from annotation features
-struct TranscriptBuilder {
-    id: String,
-    gene_symbol: Option<String>,
-    chromosome: Option<String>,
-    strand: Strand,
-    genomic_start: u64,
-    genomic_end: u64,
-    exons: Vec<(u64, u64)>,
-    cds_ranges: Vec<(u64, u64)>,
-    mane_status: ManeStatus,
-    refseq_match: Option<String>,
-    ensembl_match: Option<String>,
-}
-
-impl TranscriptBuilder {
-    fn build(mut self, genome_build: GenomeBuild) -> Option<Transcript> {
-        if self.exons.is_empty() {
-            return None;
-        }
-
-        // Sort exons by position
-        self.exons.sort_by_key(|(start, _)| *start);
-
-        // Calculate CDS bounds
-        let (cds_start, cds_end) = if !self.cds_ranges.is_empty() {
-            let cds_start = self.cds_ranges.iter().map(|(s, _)| *s).min().unwrap();
-            let cds_end = self.cds_ranges.iter().map(|(_, e)| *e).max().unwrap();
-            (Some(cds_start), Some(cds_end))
-        } else {
-            (None, None)
-        };
-
-        // Build exon structures
-        let mut tx_pos = 1u64;
-        let exons: Vec<Exon> = self
-            .exons
-            .iter()
-            .enumerate()
-            .map(|(i, (g_start, g_end))| {
-                let exon_len = g_end - g_start + 1;
-                let exon = Exon::with_genomic(
-                    (i + 1) as u32,
-                    tx_pos,
-                    tx_pos + exon_len - 1,
-                    *g_start,
-                    *g_end,
-                );
-                tx_pos += exon_len;
-                exon
-            })
-            .collect();
-
-        // Calculate CDS start/end in transcript coordinates
-        let (tx_cds_start, tx_cds_end) =
-            if let (Some(g_cds_start), Some(g_cds_end)) = (cds_start, cds_end) {
-                let mut cds_tx_start = None;
-                let mut cds_tx_end = None;
-
-                for exon in &exons {
-                    if let (Some(g_start), Some(g_end)) = (exon.genomic_start, exon.genomic_end) {
-                        // Check if CDS start is in this exon
-                        if g_cds_start >= g_start && g_cds_start <= g_end {
-                            let offset = g_cds_start - g_start;
-                            cds_tx_start = Some(exon.start + offset);
-                        }
-                        // Check if CDS end is in this exon
-                        if g_cds_end >= g_start && g_cds_end <= g_end {
-                            let offset = g_cds_end - g_start;
-                            cds_tx_end = Some(exon.start + offset);
-                        }
-                    }
-                }
-
-                (cds_tx_start, cds_tx_end)
-            } else {
-                (None, None)
-            };
-
-        // Calculate sequence length from exons
-        let seq_len: u64 = exons.iter().map(|e| e.end - e.start + 1).sum();
-
-        Some(Transcript {
-            id: self.id,
-            gene_symbol: self.gene_symbol,
-            strand: self.strand,
-            sequence: "N".repeat(seq_len as usize),
-            cds_start: tx_cds_start,
-            cds_end: tx_cds_end,
-            exons,
-            chromosome: self.chromosome,
-            genomic_start: Some(self.genomic_start),
-            genomic_end: Some(self.genomic_end),
-            genome_build,
-            mane_status: self.mane_status,
-            refseq_match: self.refseq_match,
-            ensembl_match: self.ensembl_match,
-            exon_cigars: Vec::new(),
-            cached_introns: OnceLock::new(),
-        })
-    }
 }
 
 /// Detect genome build from file header or content
@@ -741,6 +315,7 @@ pub fn detect_genome_build<P: AsRef<Path>>(path: P) -> Result<GenomeBuild, Ferro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::transcript::{Exon, Strand};
     use std::sync::OnceLock;
 
     #[test]
@@ -757,7 +332,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -786,7 +361,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -805,7 +380,7 @@ mod tests {
             id: "NM_000089.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -835,7 +410,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -873,7 +448,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -892,7 +467,7 @@ mod tests {
             id: "NM_000089.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -930,7 +505,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -949,7 +524,7 @@ mod tests {
             id: "NM_000099.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -971,34 +546,6 @@ mod tests {
         assert_eq!(stats.total_genes, 2);
         assert_eq!(stats.genes_with_mane_select, 1);
         assert!((stats.mane_select_coverage() - 50.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_parse_gtf_attributes() {
-        let attrs = parse_gtf_attributes(
-            r#"gene_id "ENSG00000000001"; transcript_id "ENST00000000001"; gene_name "TEST";"#,
-        );
-
-        assert_eq!(attrs.get("gene_id"), Some(&"ENSG00000000001".to_string()));
-        assert_eq!(
-            attrs.get("transcript_id"),
-            Some(&"ENST00000000001".to_string())
-        );
-        assert_eq!(attrs.get("gene_name"), Some(&"TEST".to_string()));
-    }
-
-    #[test]
-    fn test_url_decode() {
-        assert_eq!(url_decode("hello%20world"), "hello world");
-        assert_eq!(url_decode("no%2Fslash"), "no/slash");
-        assert_eq!(url_decode("plain"), "plain");
-    }
-
-    #[test]
-    fn test_parse_strand() {
-        assert_eq!(parse_strand("+"), Strand::Plus);
-        assert_eq!(parse_strand("-"), Strand::Minus);
-        assert_eq!(parse_strand("."), Strand::Plus); // Default
     }
 
     // ===== ManeStats Tests =====
@@ -1045,7 +592,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1087,7 +634,7 @@ mod tests {
             id: "NM_000100.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1106,7 +653,7 @@ mod tests {
             id: "NM_000101.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1144,7 +691,7 @@ mod tests {
             id: "NR_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: None,
             cds_end: None,
             exons: vec![Exon::new(1, 1, 4)],
@@ -1164,7 +711,7 @@ mod tests {
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1196,7 +743,7 @@ mod tests {
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("GENE1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1215,7 +762,7 @@ mod tests {
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("GENE2".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1238,171 +785,6 @@ mod tests {
 
         let iter_count = db.iter().count();
         assert_eq!(iter_count, 2);
-    }
-
-    // ===== Gff3Attributes Tests =====
-
-    #[test]
-    fn test_gff3_attributes_parse_basic() {
-        let attrs = Gff3Attributes::parse("ID=gene123;Name=TestGene;Parent=parent123");
-        assert_eq!(attrs.id, Some("gene123".to_string()));
-        assert_eq!(attrs.name, Some("TestGene".to_string()));
-        assert_eq!(attrs.parent, Some("parent123".to_string()));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_gene_name() {
-        let attrs = Gff3Attributes::parse("ID=tx1;gene=BRCA1;gene_name=BRCA1");
-        assert_eq!(attrs.gene_name, Some("BRCA1".to_string()));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_mane_select() {
-        let attrs = Gff3Attributes::parse("ID=tx1;tag=MANE_Select");
-        assert!(matches!(attrs.mane_status, ManeStatus::Select));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_mane_plus_clinical() {
-        let attrs = Gff3Attributes::parse("ID=tx1;tag=MANE_Plus_Clinical");
-        assert!(matches!(attrs.mane_status, ManeStatus::PlusClinical));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_mane_attribute() {
-        let attrs = Gff3Attributes::parse("ID=tx1;MANE=Select");
-        assert!(matches!(attrs.mane_status, ManeStatus::Select));
-
-        let attrs = Gff3Attributes::parse("ID=tx1;mane_status=plus_clinical");
-        assert!(matches!(attrs.mane_status, ManeStatus::PlusClinical));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_cross_references() {
-        let attrs = Gff3Attributes::parse("ID=tx1;RefSeq=NM_000088.3;Ensembl=ENST00000000001");
-        assert_eq!(attrs.refseq_match, Some("NM_000088.3".to_string()));
-        assert_eq!(attrs.ensembl_match, Some("ENST00000000001".to_string()));
-    }
-
-    #[test]
-    fn test_gff3_attributes_parse_url_encoded() {
-        let attrs = Gff3Attributes::parse("ID=tx1;Name=Test%20Gene");
-        assert_eq!(attrs.name, Some("Test Gene".to_string()));
-    }
-
-    // ===== URL Decode Extended Tests =====
-
-    #[test]
-    fn test_url_decode_special_chars() {
-        assert_eq!(url_decode("%3D"), "=");
-        assert_eq!(url_decode("%3E"), ">");
-        assert_eq!(url_decode("%3C"), "<");
-        assert_eq!(url_decode("%26"), "&");
-    }
-
-    #[test]
-    fn test_url_decode_invalid() {
-        // Invalid hex should pass through
-        assert_eq!(url_decode("%ZZ"), "%ZZ");
-        assert_eq!(url_decode("%"), "%");
-        // Single hex digit: "2" is valid hex (0x02), so it decodes to that character
-        assert_eq!(url_decode("%2"), "\u{02}");
-    }
-
-    // ===== TranscriptBuilder Tests =====
-
-    #[test]
-    fn test_transcript_builder_empty_exons() {
-        let builder = TranscriptBuilder {
-            id: "NM_000001.1".to_string(),
-            gene_symbol: Some("TEST".to_string()),
-            chromosome: Some("chr1".to_string()),
-            strand: Strand::Plus,
-            genomic_start: 1000,
-            genomic_end: 2000,
-            exons: Vec::new(), // Empty
-            cds_ranges: Vec::new(),
-            mane_status: ManeStatus::None,
-            refseq_match: None,
-            ensembl_match: None,
-        };
-
-        // Should return None for empty exons
-        assert!(builder.build(GenomeBuild::GRCh38).is_none());
-    }
-
-    #[test]
-    fn test_transcript_builder_with_cds() {
-        let builder = TranscriptBuilder {
-            id: "NM_000001.1".to_string(),
-            gene_symbol: Some("TEST".to_string()),
-            chromosome: Some("chr1".to_string()),
-            strand: Strand::Plus,
-            genomic_start: 1000,
-            genomic_end: 2000,
-            exons: vec![(1000, 1100), (1500, 1600), (1800, 2000)],
-            cds_ranges: vec![(1050, 1100), (1500, 1550)],
-            mane_status: ManeStatus::Select,
-            refseq_match: Some("NM_000001.1".to_string()),
-            ensembl_match: Some("ENST00000001".to_string()),
-        };
-
-        let transcript = builder.build(GenomeBuild::GRCh38);
-        assert!(transcript.is_some());
-
-        let tx = transcript.unwrap();
-        assert_eq!(tx.id, "NM_000001.1");
-        assert_eq!(tx.gene_symbol, Some("TEST".to_string()));
-        assert!(tx.is_coding());
-        assert_eq!(tx.exons.len(), 3);
-        assert!(matches!(tx.mane_status, ManeStatus::Select));
-    }
-
-    #[test]
-    fn test_transcript_builder_unsorted_exons() {
-        let builder = TranscriptBuilder {
-            id: "NM_000001.1".to_string(),
-            gene_symbol: Some("TEST".to_string()),
-            chromosome: Some("chr1".to_string()),
-            strand: Strand::Plus,
-            genomic_start: 1000,
-            genomic_end: 2000,
-            exons: vec![(1500, 1600), (1000, 1100), (1800, 2000)], // Unsorted
-            cds_ranges: Vec::new(),
-            mane_status: ManeStatus::None,
-            refseq_match: None,
-            ensembl_match: None,
-        };
-
-        let transcript = builder.build(GenomeBuild::GRCh38);
-        assert!(transcript.is_some());
-
-        let tx = transcript.unwrap();
-        // Exons should be sorted by position
-        assert!(tx.exons[0].genomic_start.unwrap() < tx.exons[1].genomic_start.unwrap());
-    }
-
-    // ===== GTF Attributes Extended Tests =====
-
-    #[test]
-    fn test_parse_gtf_attributes_empty() {
-        let attrs = parse_gtf_attributes("");
-        assert!(attrs.is_empty());
-    }
-
-    #[test]
-    fn test_parse_gtf_attributes_with_mane_tag() {
-        let attrs = parse_gtf_attributes(
-            r#"gene_id "ENSG00000000001"; transcript_id "ENST00000000001"; tag "MANE_Select";"#,
-        );
-        assert_eq!(attrs.get("tag"), Some(&"MANE_Select".to_string()));
-    }
-
-    #[test]
-    fn test_parse_gtf_attributes_whitespace() {
-        let attrs = parse_gtf_attributes(r#"  gene_id "GENE1" ;  transcript_id "TX1"  ;"#);
-        assert_eq!(attrs.get("gene_id"), Some(&"GENE1".to_string()));
-        assert_eq!(attrs.get("transcript_id"), Some(&"TX1".to_string()));
     }
 
     // ===== Gene Lookup Edge Cases =====
@@ -1428,7 +810,7 @@ mod tests {
             id: "NM_000001.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1451,69 +833,6 @@ mod tests {
     }
 
     // ===== I/O Tests with Temporary Files =====
-
-    #[test]
-    fn test_load_gff3_basic() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(gff3_file, "##genome-build GRCh38").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;Name=TEST;gene=TESTGENE"
-        )
-        .unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\texon\t1000\t1100\t.\t+\t.\tID=exon1;Parent=tx1"
-        )
-        .unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\texon\t1500\t1600\t.\t+\t.\tID=exon2;Parent=tx1"
-        )
-        .unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tCDS\t1050\t1100\t.\t+\t0\tID=cds1;Parent=tx1"
-        )
-        .unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-
-        assert_eq!(db.len(), 1);
-        assert_eq!(db.genome_build, GenomeBuild::GRCh38);
-
-        let tx = db.get("tx1").unwrap();
-        assert_eq!(tx.gene_symbol, Some("TESTGENE".to_string()));
-        assert_eq!(tx.exons.len(), 2);
-        assert!(tx.is_coding());
-    }
-
-    #[test]
-    fn test_load_gff3_with_mane() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;gene=BRCA1;tag=MANE_Select"
-        )
-        .unwrap();
-        writeln!(gff3_file, "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1").unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-
-        let tx = db.get("tx1").unwrap();
-        assert!(matches!(tx.mane_status, ManeStatus::Select));
-        assert!(db.has_mane_select("BRCA1"));
-    }
 
     #[test]
     fn test_load_gff3_primary_transcript() {
@@ -1554,26 +873,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_gff3_grch37() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(gff3_file, "##genome-build GRCh37").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST"
-        )
-        .unwrap();
-        writeln!(gff3_file, "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1").unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-        assert_eq!(db.genome_build, GenomeBuild::GRCh37);
-    }
-
-    #[test]
     fn test_load_gff3_multiple_parents() {
         use std::io::Write;
         use tempfile::NamedTempFile;
@@ -1608,134 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_gtf_basic() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gtf_file = NamedTempFile::new().unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	transcript	1000	2000	.	+	.	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1000	1100	.	+	.	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1500	1600	.	+	.	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	CDS	1050	1100	.	+	0	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        gtf_file.flush().unwrap();
-
-        let db = load_gtf(gtf_file.path()).unwrap();
-
-        assert_eq!(db.len(), 1);
-
-        let tx = db.get("tx1").unwrap();
-        assert_eq!(tx.gene_symbol, Some("TESTGENE".to_string()));
-        assert_eq!(tx.exons.len(), 2);
-        assert!(tx.is_coding());
-    }
-
-    #[test]
-    fn test_load_gtf_with_mane() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gtf_file = NamedTempFile::new().unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	transcript	1000	2000	.	+	.	gene_id "BRCA1"; transcript_id "tx1"; tag "MANE_Select";"#
-        )
-        .unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1000	2000	.	+	.	gene_id "BRCA1"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        gtf_file.flush().unwrap();
-
-        let db = load_gtf(gtf_file.path()).unwrap();
-
-        let tx = db.get("tx1").unwrap();
-        assert!(matches!(tx.mane_status, ManeStatus::Select));
-    }
-
-    #[test]
-    fn test_load_gtf_exon_before_transcript() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        // In some GTF files, exons appear before the transcript feature
-        let mut gtf_file = NamedTempFile::new().unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1000	1100	.	+	.	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1500	1600	.	+	.	gene_id "TESTGENE"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        gtf_file.flush().unwrap();
-
-        let db = load_gtf(gtf_file.path()).unwrap();
-
-        // Transcript should still be created from exon features
-        assert_eq!(db.len(), 1);
-        let tx = db.get("tx1").unwrap();
-        assert_eq!(tx.exons.len(), 2);
-    }
-
-    #[test]
-    fn test_load_gtf_gene_name_fallback() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        // Use gene_id when gene_name is not present
-        let mut gtf_file = NamedTempFile::new().unwrap();
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1000	2000	.	+	.	gene_id "GENEID"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        gtf_file.flush().unwrap();
-
-        let db = load_gtf(gtf_file.path()).unwrap();
-
-        let tx = db.get("tx1").unwrap();
-        assert_eq!(tx.gene_symbol, Some("GENEID".to_string()));
-    }
-
-    #[test]
-    fn test_load_gtf_skip_comments() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gtf_file = NamedTempFile::new().unwrap();
-        writeln!(gtf_file, "# Comment line").unwrap();
-        writeln!(gtf_file).unwrap(); // Empty line
-        writeln!(
-            gtf_file,
-            r#"chr1	.	exon	1000	2000	.	+	.	gene_id "TEST"; transcript_id "tx1";"#
-        )
-        .unwrap();
-        gtf_file.flush().unwrap();
-
-        let db = load_gtf(gtf_file.path()).unwrap();
-        assert_eq!(db.len(), 1);
-    }
-
-    #[test]
     fn test_load_gff3_skip_invalid_lines() {
         use std::io::Write;
         use tempfile::NamedTempFile;
@@ -1765,7 +936,7 @@ mod tests {
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1784,7 +955,7 @@ mod tests {
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1815,7 +986,7 @@ mod tests {
             id: "NM_000003.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1841,7 +1012,7 @@ mod tests {
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1866,7 +1037,7 @@ mod tests {
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGC".to_string(),
+            sequence: Some("ATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(4),
             exons: vec![Exon::new(1, 1, 4)],
@@ -1888,33 +1059,20 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_strand_all_cases() {
-        assert!(matches!(parse_strand("+"), Strand::Plus));
-        assert!(matches!(parse_strand("-"), Strand::Minus));
-        assert!(matches!(parse_strand("."), Strand::Plus)); // Default
-        assert!(matches!(parse_strand("?"), Strand::Plus)); // Default
-    }
-
-    #[test]
-    fn test_transcript_builder_minus_strand() {
-        let builder = TranscriptBuilder {
-            id: "NM_000001.1".to_string(),
-            gene_symbol: Some("TEST".to_string()),
-            chromosome: Some("chr1".to_string()),
-            strand: Strand::Minus,
-            genomic_start: 1000,
-            genomic_end: 2000,
-            exons: vec![(1800, 2000), (1500, 1600), (1000, 1100)], // Minus strand order
-            cds_ranges: Vec::new(),
-            mane_status: ManeStatus::None,
-            refseq_match: None,
-            ensembl_match: None,
-        };
-
-        let transcript = builder.build(GenomeBuild::GRCh38);
-        assert!(transcript.is_some());
-
-        let tx = transcript.unwrap();
-        assert!(matches!(tx.strand, Strand::Minus));
+    fn shim_load_gff3_handles_issue_183() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        let mut tf = NamedTempFile::new().unwrap();
+        writeln!(tf, "##gff-version 3").unwrap();
+        writeln!(tf, "seq1\t.\tgene\t100\t1200\t.\t+\t.\tID=gene01").unwrap();
+        writeln!(
+            tf,
+            "seq1\t.\tmRNA\t100\t1200\t.\t+\t.\tID=gene01.1;Parent=gene01"
+        )
+        .unwrap();
+        writeln!(tf, "seq1\t.\tCDS\t100\t1200\t.\t+\t0\tParent=gene01.1").unwrap();
+        tf.flush().unwrap();
+        let db = load_gff3(tf.path()).unwrap();
+        assert_eq!(db.len(), 1);
     }
 }

@@ -623,7 +623,7 @@ mod tests {
             ],
             cds_start: Some(50),
             cds_end: Some(250),
-            sequence: "ATGC".repeat(75),
+            sequence: Some("ATGC".repeat(75)),
             chromosome: Some("chr1".to_string()),
             genomic_start: Some(1000),
             genomic_end: Some(3099),
@@ -1021,7 +1021,7 @@ mod tests {
             ],
             cds_start: None, // Non-coding
             cds_end: None,
-            sequence: "ATGC".repeat(50),
+            sequence: Some("ATGC".repeat(50)),
             chromosome: Some("chr1".to_string()),
             genomic_start: Some(1000),
             genomic_end: Some(2099),
@@ -1053,7 +1053,7 @@ mod tests {
             exons: vec![Exon::new(1, 1, 100), Exon::new(2, 101, 200)],
             cds_start: Some(50),
             cds_end: Some(150),
-            sequence: "ATGC".repeat(50),
+            sequence: Some("ATGC".repeat(50)),
             chromosome: None, // No genomic coords
             genomic_start: None,
             genomic_end: None,

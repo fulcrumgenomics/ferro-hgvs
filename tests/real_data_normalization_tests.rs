@@ -38,7 +38,7 @@ fn test_nm_001408491_c517dela_should_shift() {
     };
 
     println!("=== Transcript NM_001408491.1 ===");
-    println!("Sequence length: {}", transcript.sequence.len());
+    println!("Sequence length: {}", transcript.sequence_length());
     println!("CDS start (1-based): {:?}", transcript.cds_start);
     println!("CDS end: {:?}", transcript.cds_end);
     println!("Exon count: {}", transcript.exons.len());
@@ -71,7 +71,11 @@ fn test_nm_001408491_c517dela_should_shift() {
     );
 
     // Get the bases at these positions
-    let seq = transcript.sequence.as_bytes();
+    let seq = transcript
+        .sequence
+        .as_deref()
+        .expect("real-data test requires cached transcript bases")
+        .as_bytes();
     let idx_517 = (tx_pos_517 - 1) as usize; // 0-based
     let idx_518 = (tx_pos_518 - 1) as usize; // 0-based
 
@@ -150,7 +154,11 @@ fn test_potential_bug_deletion_shift_nm033517() {
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
-    let seq = transcript.sequence.as_bytes();
+    let seq = transcript
+        .sequence
+        .as_deref()
+        .expect("real-data test requires cached transcript bases")
+        .as_bytes();
 
     // Check c.1324, c.1325, c.1326
     for pos in 1324..=1328 {
@@ -195,7 +203,11 @@ fn test_potential_bug_delins_shift() {
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
-    let seq = transcript.sequence.as_bytes();
+    let seq = transcript
+        .sequence
+        .as_deref()
+        .expect("real-data test requires cached transcript bases")
+        .as_bytes();
 
     // Check sequence around c.2139-2141
     println!("Sequence around c.2139-2141:");
@@ -248,7 +260,11 @@ fn test_5utr_duplication_shifting() {
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
-    let seq = transcript.sequence.as_bytes();
+    let seq = transcript
+        .sequence
+        .as_deref()
+        .expect("real-data test requires cached transcript bases")
+        .as_bytes();
 
     // Check sequence around c.-56 to c.-45
     println!("CDS start: {}", cds_start);
@@ -303,7 +319,11 @@ fn test_compare_with_mutalyzer_sequence() {
     let tx_pos_517 = cds_start + 517 - 1;
     let tx_pos_518 = cds_start + 518 - 1;
 
-    let seq = transcript.sequence.as_bytes();
+    let seq = transcript
+        .sequence
+        .as_deref()
+        .expect("real-data test requires cached transcript bases")
+        .as_bytes();
     let idx_517 = (tx_pos_517 - 1) as usize;
     let idx_518 = (tx_pos_518 - 1) as usize;
 

@@ -109,7 +109,9 @@ impl MockProvider {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCCCAAGGTGCTGCCCCAGATGCTGCCAGTGCTGCTGCTGCTGCTGCTGCTGCTGCTG".to_string(),
+            sequence: Some(
+                "ATGCCCAAGGTGCTGCCCCAGATGCTGCCAGTGCTGCTGCTGCTGCTGCTGCTGCTGCTG".to_string(),
+            ),
             cds_start: Some(1),
             cds_end: Some(60),
             exons: vec![
@@ -133,7 +135,7 @@ impl MockProvider {
             id: "NM_001234.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "AAAAATGCCCAAGGGGGGGGGGGGGGGGGGGGGGGGGTAAAAAA".to_string(),
+            sequence: Some("AAAAATGCCCAAGGGGGGGGGGGGGGGGGGGGGGGGGTAAAAAA".to_string()),
             cds_start: Some(5),
             cds_end: Some(38),
             exons: vec![
@@ -157,7 +159,7 @@ impl MockProvider {
             id: "NM_999999.1".to_string(),
             gene_symbol: Some("MINUS".to_string()),
             strand: Strand::Minus,
-            sequence: "ATGCATGCATGCATGCATGCATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGCATGCATGCATGCATGCATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(30),
             exons: vec![Exon::new(1, 1, 32)],
@@ -183,7 +185,7 @@ impl MockProvider {
             id: "NM_888888.1".to_string(),
             gene_symbol: Some("DUPTEST".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCCCGAAGCCCCCCCCCGTTTGCATGCATGCATGCAT".to_string(),
+            sequence: Some("ATGCCCGAAGCCCCCCCCCGTTTGCATGCATGCATGCAT".to_string()),
             cds_start: Some(1),
             cds_end: Some(39),
             exons: vec![Exon::new(1, 1, 39)],
@@ -589,6 +591,6 @@ mod tests {
         let tx = provider
             .get_transcript("NM_000001.1")
             .expect("tx not found");
-        assert_eq!(tx.sequence, "ATGC");
+        assert_eq!(tx.sequence.as_deref(), Some("ATGC"));
     }
 }

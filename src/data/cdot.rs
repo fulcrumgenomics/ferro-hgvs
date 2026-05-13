@@ -280,6 +280,7 @@ fn genomic_to_tx_pos(exons: &[[u64; 4]], genomic_pos: u64, strand: Strand) -> Op
             let offset = match strand {
                 Strand::Plus => genomic_pos - g_start,
                 Strand::Minus => g_end - 1 - genomic_pos,
+                Strand::Unknown => return None,
             };
             return Some(tx_start + offset);
         }
@@ -414,6 +415,7 @@ impl CdotTranscript {
         match self.strand {
             Strand::Plus => Some(exon.genome_start + offset),
             Strand::Minus => Some(exon.genome_end - 1 - offset),
+            Strand::Unknown => None,
         }
     }
 
@@ -430,6 +432,7 @@ impl CdotTranscript {
                 let offset = exon.genome_end - 1 - genome_pos;
                 Some(exon.tx_start + offset)
             }
+            Strand::Unknown => None,
         }
     }
 
@@ -485,6 +488,7 @@ impl CdotTranscript {
             let (intron_start, intron_end) = match self.strand {
                 Strand::Plus => (current.genome_end, next.genome_start),
                 Strand::Minus => (next.genome_end, current.genome_start),
+                Strand::Unknown => return None,
             };
 
             if genome_pos >= intron_start && genome_pos < intron_end {
@@ -492,6 +496,7 @@ impl CdotTranscript {
                 let offset = match self.strand {
                     Strand::Plus => (genome_pos as i64) - (current.genome_end as i64),
                     Strand::Minus => (current.genome_start as i64) - (genome_pos as i64),
+                    Strand::Unknown => return None,
                 };
                 // Adjust for 0-based to intronic offset convention
                 let intronic_offset = if offset >= 0 { offset + 1 } else { offset };

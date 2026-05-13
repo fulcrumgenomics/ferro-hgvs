@@ -392,11 +392,14 @@ impl<'a> CoordinateMapper<'a> {
         let codon_start = cds_start as usize - 1 + (position as usize - 1) * 3;
         let codon_end = codon_start + 3;
 
-        if codon_end > cds_end as usize || codon_end > self.transcript.sequence.len() {
+        // Need cached transcript bases to translate; coordinate-only
+        // transcripts return `None`.
+        let seq = self.transcript.sequence.as_deref()?;
+        if codon_end > cds_end as usize || codon_end > seq.len() {
             return None;
         }
 
-        let codon = &self.transcript.sequence[codon_start..codon_end];
+        let codon = &seq[codon_start..codon_end];
         Self::translate_codon(codon)
     }
 
@@ -461,6 +464,7 @@ impl<'a> CoordinateMapper<'a> {
                         let offset_in_exon = g_end - genomic_pos;
                         exon.start + offset_in_exon
                     }
+                    Strand::Unknown => return Ok(None),
                 };
 
                 return Ok(Some(TxPos::new(tx_pos as i64)));
@@ -550,6 +554,7 @@ impl<'a> CoordinateMapper<'a> {
                         // Minus strand: transcript position increases as genomic position decreases
                         g_end - offset_in_exon
                     }
+                    Strand::Unknown => return Ok(None),
                 };
 
                 return Ok(Some(genomic_pos));
@@ -711,7 +716,7 @@ mod tests {
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
             // 5' UTR (5bp) + CDS (30bp) + 3' UTR (5bp) = 40bp
-            sequence: "AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string(),
+            sequence: Some("AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string()),
             cds_start: Some(6),
             cds_end: Some(35),
             exons: vec![Exon::new(1, 1, 38)],
@@ -830,7 +835,7 @@ mod tests {
             id: "NM_GENOMIC.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "A".repeat(30),
+            sequence: Some("A".repeat(30)),
             cds_start: Some(5),
             cds_end: Some(25),
             exons: vec![
@@ -859,7 +864,7 @@ mod tests {
             id: "NM_GENOMIC_MINUS.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Minus,
-            sequence: "A".repeat(30),
+            sequence: Some("A".repeat(30)),
             cds_start: Some(5),
             cds_end: Some(25),
             exons: vec![
@@ -980,9 +985,9 @@ mod tests {
             id: "NM_GAPS.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "A".repeat(244), // Not used for coordinate tests
-            cds_start: Some(114),      // 1-based CDS start
-            cds_end: Some(247),        // 1-based CDS end
+            sequence: Some("A".repeat(244)), // Not used for coordinate tests
+            cds_start: Some(114),            // 1-based CDS start
+            cds_end: Some(247),              // 1-based CDS end
             exons: vec![
                 Exon::new(1, 2, 94),    // Exon 1: tx 2-94
                 Exon::new(2, 96, 193),  // Exon 2: tx 96-193 (gap at 95)
@@ -1225,9 +1230,9 @@ mod intronic_debug_tests {
             id: "NM_003742.4".to_string(),
             gene_symbol: Some("ABCB11".to_string()),
             strand: Strand::Minus,
-            sequence: String::new(), // Not needed for coordinate tests
-            cds_start: Some(128),    // 127 + 1 = 128 (1-based)
-            cds_end: Some(4093),     // Same (half-open end = inclusive 1-based)
+            sequence: None,       // Not needed for coordinate tests
+            cds_start: Some(128), // 127 + 1 = 128 (1-based)
+            cds_end: Some(4093),  // Same (half-open end = inclusive 1-based)
             exons,
             chromosome: None,
             genomic_start: None,

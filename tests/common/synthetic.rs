@@ -127,6 +127,11 @@ impl SyntheticBuilder {
                 let genomic = padded(&match strand {
                     Strand::Plus => core.clone(),
                     Strand::Minus => reverse_complement(&core),
+                    Strand::Unknown => {
+                        unreachable!("synthetic transcripts never have unknown strand")
+                    }
+                    // #[non_exhaustive] wildcard — no other variants exist today.
+                    _ => unreachable!("unexpected Strand variant"),
                 });
                 let g_start = PAD_OFFSET + 1;
                 let g_end = PAD_OFFSET + tx_len;

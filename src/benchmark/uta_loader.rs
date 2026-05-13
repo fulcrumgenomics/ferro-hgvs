@@ -388,6 +388,7 @@ async fn copy_exon_sets(
             let strand: i16 = match tx.strand {
                 Strand::Plus => 1,
                 Strand::Minus => -1,
+                Strand::Unknown => 0,
             };
             let line2 = format!("{}\t{}\t{}\tsplign\tnow\n", accession, tx.contig, strand);
             buffer.put_slice(line2.as_bytes());

@@ -529,9 +529,14 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
     /// Get a single reference base at a position
     fn get_reference_base(&self, _chrom: &str, pos: u64) -> Result<char, FerroError> {
-        // Try to get from transcript sequence first
-        let seq = &self.transcript.sequence;
-        if !seq.is_empty() {
+        // Try to get from cached transcript bases first; coordinate-only
+        // transcripts fall through to the reference provider.
+        if let Some(seq) = self
+            .transcript
+            .sequence
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
             // This is a simplification - in practice we'd need proper coordinate mapping
             // Use checked conversion to avoid truncation on 32-bit systems
             let idx = usize::try_from(pos.saturating_sub(1)).map_err(|_| {
@@ -562,9 +567,14 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
         start: u64,
         end: u64,
     ) -> Result<String, FerroError> {
-        // Try to get from transcript sequence first
-        let seq = &self.transcript.sequence;
-        if !seq.is_empty() {
+        // Try to get from cached transcript bases first; coordinate-only
+        // transcripts fall through to the reference provider.
+        if let Some(seq) = self
+            .transcript
+            .sequence
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
             // Use checked conversion to avoid truncation on 32-bit systems
             let start_idx = usize::try_from(start.saturating_sub(1)).map_err(|_| {
                 FerroError::ConversionError {
@@ -732,7 +742,7 @@ mod tests {
             ],
             cds_start: Some(50),
             cds_end: Some(150),
-            sequence: "ATGCATGCATGC".repeat(20),
+            sequence: Some("ATGCATGCATGC".repeat(20)),
             chromosome: Some("chr1".to_string()),
             genomic_start: Some(1000),
             genomic_end: Some(2099),
