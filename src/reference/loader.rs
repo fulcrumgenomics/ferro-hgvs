@@ -267,26 +267,6 @@ impl TranscriptDb {
     }
 }
 
-/// Load transcripts from a GFF3 file
-///
-/// Delegates to [`crate::reference::annotation::load_annotations`] using the GFF3 format.
-pub fn load_gff3<P: AsRef<Path>>(path: P) -> Result<TranscriptDb, FerroError> {
-    let cfg = crate::reference::annotation::LoaderConfig::new()
-        .with_format(crate::reference::annotation::AnnotationFormat::Gff3);
-    let (db, _report) = crate::reference::annotation::load_annotations(path, &cfg)?;
-    Ok(db)
-}
-
-/// Load transcripts from a GTF file
-///
-/// Delegates to [`crate::reference::annotation::load_annotations`] using the GTF format.
-pub fn load_gtf<P: AsRef<Path>>(path: P) -> Result<TranscriptDb, FerroError> {
-    let cfg = crate::reference::annotation::LoaderConfig::new()
-        .with_format(crate::reference::annotation::AnnotationFormat::Gtf);
-    let (db, _report) = crate::reference::annotation::load_annotations(path, &cfg)?;
-    Ok(db)
-}
-
 /// Detect genome build from file header or content
 pub fn detect_genome_build<P: AsRef<Path>>(path: P) -> Result<GenomeBuild, FerroError> {
     let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {
@@ -832,100 +812,6 @@ mod tests {
         assert!(!db.get_by_position("chr1", 1500).is_empty());
     }
 
-    // ===== I/O Tests with Temporary Files =====
-
-    #[test]
-    fn test_load_gff3_primary_transcript() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tprimary_transcript\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST"
-        )
-        .unwrap();
-        writeln!(gff3_file, "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1").unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-        assert_eq!(db.len(), 1);
-    }
-
-    #[test]
-    fn test_load_gff3_transcript_type() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\ttranscript\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST"
-        )
-        .unwrap();
-        writeln!(gff3_file, "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1").unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-        assert_eq!(db.len(), 1);
-    }
-
-    #[test]
-    fn test_load_gff3_multiple_parents() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST"
-        )
-        .unwrap();
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx2;gene=TEST"
-        )
-        .unwrap();
-        // Exon belongs to both transcripts
-        writeln!(
-            gff3_file,
-            "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1,tx2"
-        )
-        .unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-
-        // Both transcripts should have the exon
-        let tx1 = db.get("tx1").unwrap();
-        let tx2 = db.get("tx2").unwrap();
-        assert_eq!(tx1.exons.len(), 1);
-        assert_eq!(tx2.exons.len(), 1);
-    }
-
-    #[test]
-    fn test_load_gff3_skip_invalid_lines() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut gff3_file = NamedTempFile::new().unwrap();
-        writeln!(gff3_file, "##gff-version 3").unwrap();
-        writeln!(gff3_file, "short_line").unwrap(); // Invalid - too few fields
-        writeln!(
-            gff3_file,
-            "chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST"
-        )
-        .unwrap();
-        writeln!(gff3_file, "chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1").unwrap();
-        gff3_file.flush().unwrap();
-
-        let db = load_gff3(gff3_file.path()).unwrap();
-        assert_eq!(db.len(), 1); // Invalid line should be skipped
-    }
-
     // ===== Additional TranscriptDb Tests =====
 
     #[test]
@@ -1056,23 +942,5 @@ mod tests {
         // Should prefer MANE Select
         let preferred = db.get_preferred_transcript("TEST").unwrap();
         assert_eq!(preferred.id, "NM_000001.1");
-    }
-
-    #[test]
-    fn shim_load_gff3_handles_issue_183() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-        let mut tf = NamedTempFile::new().unwrap();
-        writeln!(tf, "##gff-version 3").unwrap();
-        writeln!(tf, "seq1\t.\tgene\t100\t1200\t.\t+\t.\tID=gene01").unwrap();
-        writeln!(
-            tf,
-            "seq1\t.\tmRNA\t100\t1200\t.\t+\t.\tID=gene01.1;Parent=gene01"
-        )
-        .unwrap();
-        writeln!(tf, "seq1\t.\tCDS\t100\t1200\t.\t+\t0\tParent=gene01.1").unwrap();
-        tf.flush().unwrap();
-        let db = load_gff3(tf.path()).unwrap();
-        assert_eq!(db.len(), 1);
     }
 }

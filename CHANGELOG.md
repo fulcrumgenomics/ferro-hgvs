@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(loader)* unified `load_annotations` entry point with `LoaderConfig`/`LoaderReport`; auto-detects GFF3 vs GTF by extension and content (#191, #194, #195)
+- *(loader)* exon-derivation ladder closes single-exon GFF3 without `exon` records (#183 fix) (#191)
+- *(loader)* phase-aware CDS bounds with `start_codon` / `stop_codon` precedence; GFF3 input now extends `cds_end` to include the stop codon, matching ferro's downstream convention (fixes a latent off-by-one-codon bug in GFF3 protein conversion) (#194)
+- *(loader)* UTR-merge ladder step: synthesizes exons from UTR + CDS when no explicit `exon` records (#194)
+- *(loader)* `gene_symbol`, `mane_status`, `refseq_match`, `ensembl_match` extracted from attributes (#194)
+- *(loader)* optional FASTA-aware validation: CDS length mod 3 and start codon (ATG/CTG/GTG/TTG) checks when `--fasta` is supplied
+- *(error_handling)* 13 loader diagnostic codes (E-LOAD-*, W-LOAD-*) registered for `ferro explain` (#195)
+- *(cli)* `ferro convert-gff --strict / --silent / --no-validate-fasta / --diagnostics-json` flags (#195)
+- *(strand)* `Strand::Unknown` variant for GFF3 `.` and `?` strand values; transcripts with unknown strand are dropped at load with `E-LOAD-103` (#191)
+
+### Changed
+
+- *(strand)* `Strand`, `LoaderConfig`, and `LoaderReport` are marked `#[non_exhaustive]` for forward compatibility (#191)
+- *(loader)* `load_gff3` and `load_gtf` have been removed; use `load_annotations` instead
+
 ## [0.5.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.4.1...v0.5.0) - 2026-05-12
 
 ### Added
