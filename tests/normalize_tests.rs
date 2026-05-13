@@ -4476,11 +4476,14 @@ mod issue_160_revcomp_inv_subspans {
         // ref AGACC at 1300-1304, alt CTAGT decomposes to
         // [Inv(0,2); Identity(2); Sub(3 C>G); Sub(4 C>T)] inside
         // decompose_delins_inv. The IdentityAt sub-edit must NOT render as a
-        // spurious `g.1302=` variant — the split allele should contain
-        // exactly the 3 real edits, in order.
+        // spurious `g.1302=` variant. Per issue #182, the trailing two
+        // strictly-adjacent Substitutions group into a single delins
+        // (substitution.md: "changes involving two or more consecutive
+        // nucleotides are described as deletion/insertion"). The IdentityAt
+        // at position 1302 still drops cleanly.
         let provider = provider_with_genomic("NC_000001.11", 1300, "AGACC");
         let result = normalize_to_string(provider, "NC_000001.11:g.1300_1304delinsCTAGT");
-        assert_eq!(result, "NC_000001.11:g.[1300_1301inv;1303C>G;1304C>T]");
+        assert_eq!(result, "NC_000001.11:g.[1300_1301inv;1303_1304delinsGT]");
     }
 
     #[test]
