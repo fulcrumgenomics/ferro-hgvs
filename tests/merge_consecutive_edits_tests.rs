@@ -764,25 +764,27 @@ fn provider_with_utr_transcript() -> MockProvider {
 fn test_merge_5utr_consecutive_subs_cds() {
     // `c.-2A>G;c.-1C>T` are physically adjacent within the 5'UTR.
     // No HGVS range crosses the 5'UTR/CDS boundary, but a range *within*
-    // the 5'UTR is valid (`c.-2_-1`); the merged form is a single delins.
+    // the 5'UTR is valid (`c.-2_-1`); the merged form is delinsGT, which
+    // is the reverse complement of the deleted AC → canonicalized to inv.
     assert_eq!(
         normalize_with_provider(
             provider_with_utr_transcript(),
             "NM_TESTUTR.1:c.[-2A>G;-1C>T]",
         ),
-        "NM_TESTUTR.1:c.-2_-1delinsGT",
+        "NM_TESTUTR.1:c.-2_-1inv",
     );
 }
 
 #[test]
 fn test_merge_3utr_consecutive_subs_cds() {
-    // `c.*1A>G;c.*2C>T` are physically adjacent within the 3'UTR.
+    // `c.*1A>G;c.*2C>T` are physically adjacent within the 3'UTR. Merged
+    // form `delinsGT` over deleted `AC` canonicalizes to inv (rev-comp).
     assert_eq!(
         normalize_with_provider(
             provider_with_utr_transcript(),
             "NM_TESTUTR.1:c.[*1A>G;*2C>T]",
         ),
-        "NM_TESTUTR.1:c.*1_*2delinsGT",
+        "NM_TESTUTR.1:c.*1_*2inv",
     );
 }
 

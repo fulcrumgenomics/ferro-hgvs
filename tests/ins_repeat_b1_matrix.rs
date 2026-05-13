@@ -115,6 +115,20 @@ mod cds_plus {
     }
 
     #[rstest]
+    fn single_copy_ins_dinucleotide_unit_in_multi_copy_tract_emits_dup() {
+        // Single-copy alt of a codon-misaligned unit (len=2) abutting a
+        // multi-copy AT tract. The 3'-rule fast path (`ref_count >= 2` in
+        // `insertion_to_duplication`) emits `dup` at the tract-aligned 3'-most
+        // position; the codon-frame gate does NOT block single-copy
+        // additions, since the gate fires only when the alt itself is >=2
+        // copies of a non-codon-aligned unit. Regression lock-in for the
+        // codon_blocks_dup guard applied to the fast path.
+        let p = provider("CATATATCACGTACGTACGT");
+        let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insAT", &[1, 2]));
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[6, 7]));
+    }
+
+    #[rstest]
     fn multi_copy_ins_codon_unit_passes_in_cds() {
         // unit_len=3, codon-aligned: gate is no-op, repeat notation fires.
         let p = provider("CCAGCAGCAGTACGTACGTAC");
