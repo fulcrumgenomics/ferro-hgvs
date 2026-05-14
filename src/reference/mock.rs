@@ -42,6 +42,13 @@ impl MockProvider {
             proteins: HashMap<String, String>,
             #[serde(default)]
             genomic_sequences: HashMap<String, String>,
+            /// Container metadata emitted by `ferro convert-gff`; accepted but ignored.
+            #[serde(default, rename = "version")]
+            _version: Option<String>,
+            /// Container metadata emitted by `ferro convert-gff`; per-transcript
+            /// `genome_build` on each `Transcript` is authoritative.
+            #[serde(default, rename = "genome_build")]
+            _genome_build: Option<String>,
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -534,5 +541,54 @@ mod tests {
             ),
             Ok(_) => panic!("expected unknown field to be rejected"),
         }
+    }
+
+    #[test]
+    fn from_json_accepts_convert_gff_output_with_metadata_keys() {
+        // The container shape produced by `ferro convert-gff`.
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+            "version": "1.0",
+            "genome_build": "GRCh38",
+            "transcripts": []
+        }"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path())
+            .expect("convert-gff JSON with version/genome_build metadata should load");
+        assert!(provider.is_empty());
+    }
+
+    #[test]
+    fn from_json_loads_convert_gff_output_with_transcript() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+            "version": "1.0",
+            "genome_build": "GRCh38",
+            "transcripts": [
+                {
+                    "id": "NM_000001.1",
+                    "strand": "+",
+                    "sequence": "ATGC",
+                    "exons": [{"number": 1, "start": 1, "end": 4}]
+                }
+            ]
+        }"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path())
+            .expect("convert-gff JSON with transcript should load");
+        let tx = provider
+            .get_transcript("NM_000001.1")
+            .expect("tx not found");
+        assert_eq!(tx.sequence, "ATGC");
     }
 }
