@@ -397,15 +397,10 @@ fn inserted_sequence_len(seq: &InsertedSequence) -> Option<i64> {
     seq.len().map(|n| n as i64)
 }
 
-/// Check if a variant causes a frameshift (indel_length % 3 != 0).
-///
-/// Returns false if the indel length is 0 or cannot be determined.
-pub fn is_frameshift(variant: &HgvsVariant) -> bool {
-    match get_indel_length(variant) {
-        Some(len) if len != 0 => len % 3 != 0,
-        _ => false,
-    }
-}
+/// Re-export of `crate::hgvs::variant::is_frameshift`. Lives in `hgvs::variant`
+/// so core code (e.g. `crate::project`) does not need to depend on the
+/// Python-bindings helper module.
+pub use crate::hgvs::variant::is_frameshift;
 
 /// Get the number of sub-variants in an allele, or 1 for simple variants.
 pub fn get_num_variants(variant: &HgvsVariant) -> usize {

@@ -1425,3 +1425,96 @@ class CoordinateMapper:
     def has_transcript(self, transcript_id: str) -> bool:
         """Check if a transcript exists in the reference."""
         ...
+
+# ============================================================================
+# Variant Projection
+# ============================================================================
+
+class VariantProjection:
+    """The result of projecting a g. variant onto a transcript."""
+
+    @property
+    def g_name(self) -> str:
+        """The normalized g. variant as an HGVS string."""
+        ...
+
+    @property
+    def c_name(self) -> str | None:
+        """The c./n. variant as an HGVS string, or None when projection skipped."""
+        ...
+
+    @property
+    def p_name(self) -> str | None:
+        """The p. variant as an HGVS string, or None for intronic/UTR/non-coding variants."""
+        ...
+
+    @property
+    def transcript_id(self) -> str:
+        """The transcript accession (e.g., "NM_000088.3")."""
+        ...
+
+    @property
+    def gene_symbol(self) -> str | None:
+        """Gene symbol, if available."""
+        ...
+
+    @property
+    def is_frameshift(self) -> bool:
+        """True if the variant causes a frameshift."""
+        ...
+
+    @property
+    def is_intronic(self) -> bool:
+        """True if the variant falls entirely within an intron."""
+        ...
+
+    @property
+    def is_utr(self) -> bool:
+        """True if the variant falls in a UTR."""
+        ...
+
+class VariantProjector:
+    """Projects g. HGVS variants onto transcripts to produce c./p. equivalents."""
+
+    def __init__(
+        self,
+        reference_json: str | None = None,
+        direction: str = "3prime",
+    ) -> None:
+        """Create a variant projector.
+
+        Args:
+            reference_json: Path to a transcripts.json file. If None, uses
+                built-in test data (limited; not for production).
+            direction: Shuffle direction passed to the internal normalizer
+                ("3prime" or "5prime").
+        """
+        ...
+
+    @staticmethod
+    def from_manifest(manifest_path: str, direction: str = "3prime") -> "VariantProjector":
+        """Create a projector from a ferro-prepare manifest.
+
+        Args:
+            manifest_path: Path to manifest.json produced by `ferro prepare`.
+            direction: Shuffle direction ("3prime" or "5prime").
+
+        Returns:
+            A VariantProjector backed by MultiFastaProvider with cdot data.
+        """
+        ...
+
+    def project(self, hgvs_string: str, transcript: str) -> VariantProjection:
+        """Project a g. HGVS string onto a target transcript.
+
+        Args:
+            hgvs_string: A g. HGVS variant string (e.g., "NC_000017.11:g.48275363C>T").
+            transcript: Transcript accession (e.g., "NM_000088.3").
+
+        Returns:
+            VariantProjection with g./c./p. representations and flags.
+
+        Raises:
+            RuntimeError: If parsing or projection fails.
+        """
+        ...

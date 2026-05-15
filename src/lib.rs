@@ -49,6 +49,7 @@ pub mod normalize;
 #[cfg(feature = "parallel")]
 pub mod parallel;
 pub mod prepare;
+pub mod project;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod python_helpers;
@@ -65,6 +66,7 @@ pub use error::FerroError;
 pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
 pub use hgvs::variant::HgvsVariant;
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
+pub use project::{VariantProjection, VariantProjector};
 pub use reference::{MockProvider, MultiFastaProvider, ReferenceProvider};
 pub use spdi::{
     hgvs_to_spdi_simple, parse_spdi, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError,
