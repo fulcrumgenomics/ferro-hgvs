@@ -61,6 +61,8 @@ pub enum ErrorCode {
     IntronicVariant = 4001,
     /// Unsupported variant type
     UnsupportedVariant = 4002,
+    /// Unsupported projection between coordinate systems
+    UnsupportedProjection = 4003,
 
     // Conversion errors (E5xxx)
     /// Coordinate conversion failed
@@ -103,6 +105,7 @@ impl ErrorCode {
             ErrorCode::SelfCancellingAllele => "self-cancelling allele (overlapping del+dup)",
             ErrorCode::IntronicVariant => "intronic variant not supported",
             ErrorCode::UnsupportedVariant => "unsupported variant type",
+            ErrorCode::UnsupportedProjection => "unsupported projection between coordinate systems",
             ErrorCode::ConversionFailed => "coordinate conversion failed",
             ErrorCode::NoOverlappingTranscript => "no overlapping transcript",
             ErrorCode::IoError => "file I/O error",
@@ -331,6 +334,21 @@ pub enum FerroError {
     #[error("Coordinate conversion error: {msg}")]
     ConversionError { msg: String },
 
+    /// Variant does not overlap the requested transcript
+    #[error("variant does not overlap transcript {transcript_id}: {variant}")]
+    TranscriptNotOverlapping {
+        variant: String,
+        transcript_id: String,
+    },
+
+    /// Protein sequence is not available for the given accession
+    #[error("protein sequence unavailable for accession {accession}")]
+    ProteinSequenceUnavailable { accession: String },
+
+    /// Projection between the requested coordinate systems is not supported
+    #[error("unsupported projection: {reason}")]
+    UnsupportedProjection { reason: String },
+
     /// IO error (for file operations)
     #[error("IO error: {msg}")]
     Io { msg: String },
@@ -378,6 +396,9 @@ impl FerroError {
             FerroError::IntronicVariant { .. } => Some(ErrorCode::IntronicVariant),
             FerroError::ReferenceMismatch { .. } => Some(ErrorCode::ReferenceMismatch),
             FerroError::ConversionError { .. } => Some(ErrorCode::ConversionFailed),
+            FerroError::TranscriptNotOverlapping { .. } => Some(ErrorCode::NoOverlappingTranscript),
+            FerroError::ProteinSequenceUnavailable { .. } => Some(ErrorCode::SequenceNotFound),
+            FerroError::UnsupportedProjection { .. } => Some(ErrorCode::UnsupportedProjection),
             FerroError::Io { .. } => Some(ErrorCode::IoError),
             FerroError::Json { .. } => Some(ErrorCode::JsonError),
             _ => None,
@@ -741,6 +762,22 @@ mod tests {
             msg: "json error".to_string(),
         };
         assert_eq!(err.code(), Some(ErrorCode::JsonError));
+
+        let err = FerroError::TranscriptNotOverlapping {
+            variant: "chr1:g.5000A>G".to_string(),
+            transcript_id: "NM_TEST.1".to_string(),
+        };
+        assert_eq!(err.code(), Some(ErrorCode::NoOverlappingTranscript));
+
+        let err = FerroError::ProteinSequenceUnavailable {
+            accession: "NP_TEST.1".to_string(),
+        };
+        assert_eq!(err.code(), Some(ErrorCode::SequenceNotFound));
+
+        let err = FerroError::UnsupportedProjection {
+            reason: "g. → r. not supported".to_string(),
+        };
+        assert_eq!(err.code(), Some(ErrorCode::UnsupportedProjection));
     }
 
     #[test]
