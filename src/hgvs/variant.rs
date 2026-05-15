@@ -1437,6 +1437,16 @@ impl fmt::Display for RnaFusionVariant {
     }
 }
 
+/// Check if a variant causes a frameshift (net indel length not divisible by 3).
+///
+/// Returns false if the indel length is 0 or cannot be determined.
+pub fn is_frameshift(variant: &HgvsVariant) -> bool {
+    match crate::python_helpers::get_indel_length(variant) {
+        Some(len) if len != 0 => len % 3 != 0,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,7 +5,8 @@ use crate::error::FerroError;
 use crate::hgvs::edit::{Base, NaEdit, ProteinEdit};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
-use crate::hgvs::variant::{Accession, HgvsVariant, LocEdit, ProteinVariant};
+use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
+use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
 
 /// Read the codon (3 bases) covering a given CDS position from a transcript's CDS sequence.
@@ -86,7 +87,6 @@ pub(crate) fn translate(codon: &str) -> Option<AminoAcid> {
 /// Returns `Err(ProteinSequenceUnavailable)` if the transcript's CDS sequence
 /// cannot supply the codon at `cds_pos`. Returns `Err(UnsupportedProjection)`
 /// if `edit` is not a `NaEdit::Substitution`.
-#[allow(dead_code)] // TODO(issue-200): used in Task 7
 pub(crate) fn predict_substitution_protein(
     transcript: &Transcript,
     cds_pos: i64,
@@ -123,7 +123,7 @@ pub(crate) fn predict_substitution_protein(
         }
     };
 
-    let accession = parse_protein_accession(protein_accession);
+    let accession = parse_accession(protein_accession);
     let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_number));
     let variant = ProteinVariant {
         accession,
@@ -131,23 +131,6 @@ pub(crate) fn predict_substitution_protein(
         loc_edit: LocEdit::new_predicted(loc, protein_edit),
     };
     Ok(HgvsVariant::Protein(variant))
-}
-
-fn parse_protein_accession(s: &str) -> Accession {
-    // Format: PREFIX_NUMBER.VERSION (e.g. "NP_000288.1") or PREFIX_NUMBER.
-    // For Ensembl-style accessions like "ENSP00000256509" there is no underscore;
-    // pass them through with the whole string as the prefix.
-    if let Some((prefix_num, version)) = s.rsplit_once('.') {
-        if let Ok(v) = version.parse::<u32>() {
-            if let Some((prefix, number)) = prefix_num.split_once('_') {
-                return Accession::new(prefix, number, Some(v));
-            }
-        }
-    }
-    if let Some((prefix, number)) = s.split_once('_') {
-        return Accession::new(prefix, number, None);
-    }
-    Accession::new(s, "", None)
 }
 
 #[cfg(test)]

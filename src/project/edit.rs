@@ -8,7 +8,6 @@ use crate::reference::Strand;
 /// On the plus strand, the edit is returned unchanged. On the minus strand, the
 /// ref/alt bases (and any embedded sequences) are reverse-complemented so the
 /// resulting edit reads correctly on the transcript's sense strand.
-#[allow(dead_code)] // TODO(issue-200): called from projector in Task 7
 pub(crate) fn transform_edit_for_strand(edit: &NaEdit, strand: Strand) -> NaEdit {
     if strand == Strand::Plus {
         return edit.clone();
