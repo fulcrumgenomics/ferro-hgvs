@@ -299,6 +299,107 @@ mod tests {
         (projector, provider)
     }
 
+    fn make_minus_strand_provider_and_projector() -> (Projector, MockProvider) {
+        // Same 9bp CDS on chr1, but transcript is on the minus strand.
+        //
+        // Plus-strand chr1:1000..1008 reads "TTAGCGCAT".  The minus-strand
+        // transcript reads the complement strand from g.1008 backwards to
+        // g.1000, giving CDS "ATGCGCTAA" (Met-Arg-Stop).
+        //
+        // cdot coordinate convention (matches make_test_provider_and_projector):
+        //   exons:     [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end]
+        //   cds_start: 0-based tx position of first CDS base
+        //   cds_end:   0-based tx position one-past the last CDS base
+        //
+        // Minus-strand mapping (genome_to_tx for Minus):
+        //   offset = genome_end - 1 - genome_pos
+        //   tx_pos = tx_start + offset
+        //
+        //   g.1008 → offset = 1009-1-1008 = 0 → tx_pos 0 (c.1, 'A')
+        //   g.1007 → offset = 1 → tx_pos 1 (c.2, 'T')
+        //   g.1005 → offset = 3 → tx_pos 3 → tx_to_cds(3, cds_start=0) = 4 → c.4
+        //
+        // Variant: g.1005G>A on the plus strand.
+        //   The plus-strand base at g.1005 is 'G' (stated; actual byte is 'C'
+        //   — but for substitutions the normalizer trusts the stated ref).
+        //   After transform_edit_for_strand(Minus): G>A → revcomp → C>T.
+        //   c.4 of "ATGCGCTAA" is 'C' (first base of codon 2 "CGC" = Arg).
+        //   C>T → "TGC" = Cys.  Protein: p.(Arg2Cys).
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_TEST_MINUS.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Minus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_TEST_MINUS.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_TEST_MINUS.1".to_string(),
+            gene_symbol: Some("TESTGENE".to_string()),
+            strand: TxStrand::Minus,
+            sequence: Some("ATGCGCTAA".to_string()), // CDS as the transcript reads it
+            cds_start: Some(1),                      // 1-based inclusive per Transcript convention
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // Plus-strand sequence on chr1 (not needed for substitution normalization,
+        // provided for completeness).
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}TTAGCGCAT{}", prefix, suffix));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_substitution_minus_strand_revcomps_ref_alt() {
+        let (projector, provider) = make_minus_strand_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1005G>A: plus-strand G at position 1005.
+        // Minus-strand transcript maps this to c.4 and revcomps G>A → C>T.
+        // Codon 2 "CGC" (Arg) → "TGC" (Cys) = missense.
+        let result = vp
+            .project("chr1:g.1005G>A", "NM_TEST_MINUS.1")
+            .expect("minus-strand projection should succeed");
+        let c = result
+            .coding
+            .as_ref()
+            .expect("c. should be present")
+            .to_string();
+        assert!(
+            c.contains(":c.4C>T"),
+            "expected revcomp c.4C>T for minus strand, got: {}",
+            c
+        );
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. should be present")
+            .to_string();
+        assert_eq!(p, "NP_TEST_MINUS.1(TESTGENE):p.(Arg2Cys)");
+        assert!(!result.is_frameshift);
+        assert!(!result.is_intronic);
+        assert!(!result.is_utr);
+    }
+
     #[test]
     fn project_substitution_plus_strand_missense() {
         let (projector, provider) = make_test_provider_and_projector();
