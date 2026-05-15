@@ -490,6 +490,54 @@ enum Commands {
         #[arg(long, default_value = "ferro-reference")]
         reference: PathBuf,
     },
+
+    /// Build a transcripts.json from a FASTA + CDS coordinates (single-exon).
+    ///
+    /// Useful for synthetic constructs (plasmids, reporter genes, custom amplicons)
+    /// where the user already knows the CDS bounds and does not need a GFF3.
+    BuildTranscript {
+        /// Path to the FASTA file (indexed or plain; index will be built on the fly if absent).
+        #[arg(long)]
+        fasta: PathBuf,
+
+        /// CDS start position (1-based inclusive, in transcript coordinates).
+        ///
+        /// For minus-strand transcripts the sequence is reverse-complemented before
+        /// emission, so the position is relative to the reverse-complemented sequence.
+        #[arg(long)]
+        cds_start: u64,
+
+        /// CDS end position (1-based inclusive, in transcript coordinates).
+        ///
+        /// For minus-strand transcripts the sequence is reverse-complemented before
+        /// emission, so the position is relative to the reverse-complemented sequence.
+        #[arg(long)]
+        cds_end: u64,
+
+        /// Output path for transcripts.json.
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+
+        /// Transcript ID (default: FASTA contig name).
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Strand: + or -.
+        #[arg(long, default_value = "+")]
+        strand: String,
+
+        /// Contig name to use when the FASTA has multiple contigs.
+        #[arg(long)]
+        contig: Option<String>,
+
+        /// Optional gene symbol to embed in the transcript record.
+        #[arg(long)]
+        gene: Option<String>,
+
+        /// Genome build name embedded in the output (default: GRCh38).
+        #[arg(long, default_value = "GRCh38")]
+        genome_build: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -727,6 +775,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
         ),
         Commands::Check { reference } => run_check(&reference),
+        Commands::BuildTranscript {
+            fasta,
+            cds_start,
+            cds_end,
+            output,
+            id,
+            strand,
+            contig,
+            gene,
+            genome_build,
+        } => run_build_transcript(
+            &fasta,
+            cds_start,
+            cds_end,
+            &output,
+            id.as_deref(),
+            &strand,
+            contig.as_deref(),
+            gene.as_deref(),
+            &genome_build,
+        ),
     }
 }
 
@@ -2756,4 +2825,126 @@ fn run_check(reference: &Path) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Err("Reference data check failed".into())
     }
+}
+
+/// Build a transcripts.json from a FASTA file and CDS coordinates.
+///
+/// Creates a single-exon transcript record directly from a FASTA sequence and
+/// user-supplied CDS start/end positions (in transcript coordinates), without
+/// requiring a GFF3 intermediary. The exon spans the full contig. For plus-strand
+/// transcripts, transcript coordinates equal genomic coordinates; for minus-strand
+/// the sequence is reverse-complemented and the CDS positions are interpreted
+/// against the reverse-complemented (transcript) sequence.
+#[allow(clippy::too_many_arguments)]
+fn run_build_transcript(
+    fasta_path: &PathBuf,
+    cds_start: u64,
+    cds_end: u64,
+    output: &PathBuf,
+    id: Option<&str>,
+    strand: &str,
+    contig: Option<&str>,
+    gene: Option<&str>,
+    genome_build: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fasta = FastaProvider::new(fasta_path)?;
+
+    // Collect contig names; HashMap iteration order is non-deterministic but we
+    // only need the names to detect single vs. multi-contig.
+    let contig_names: Vec<String> = fasta.sequence_names().cloned().collect();
+
+    let contig_name: String = match (contig, contig_names.as_slice()) {
+        (Some(c), _) => {
+            if !fasta.has_sequence(c) {
+                return Err(format!(
+                    "Contig '{}' not found in FASTA; available: {}",
+                    c,
+                    contig_names.join(", ")
+                )
+                .into());
+            }
+            c.to_string()
+        }
+        (None, [single]) => single.clone(),
+        (None, []) => return Err("FASTA contains no contigs".into()),
+        (None, _) => {
+            return Err(format!(
+                "FASTA has {} contigs; pass --contig to select one (available: {})",
+                contig_names.len(),
+                contig_names.join(", ")
+            )
+            .into())
+        }
+    };
+
+    let contig_length = fasta
+        .sequence_length(&contig_name)
+        .ok_or_else(|| format!("Could not determine length of contig '{}'", contig_name))?;
+
+    // Validate CDS bounds (1-based inclusive)
+    if cds_start < 1 || cds_end < cds_start || cds_end > contig_length {
+        return Err(format!(
+            "Invalid CDS bounds: cds_start={}, cds_end={}, contig length={}",
+            cds_start, cds_end, contig_length
+        )
+        .into());
+    }
+
+    // Parse and validate strand
+    if strand != "+" && strand != "-" {
+        return Err(format!("Invalid strand '{}'; expected + or -", strand).into());
+    }
+
+    // Read the full contig sequence (0-based half-open for get_sequence)
+    use ferro_hgvs::reference::provider::ReferenceProvider;
+    let sequence = fasta.get_sequence(&contig_name, 0, contig_length)?;
+
+    // Reverse-complement for minus-strand transcripts
+    let final_sequence = if strand == "-" {
+        reverse_complement(&sequence)
+    } else {
+        sequence
+    };
+
+    let tx_id = id.unwrap_or(&contig_name).to_string();
+
+    // Build the exon object: single exon spanning the full contig. For a
+    // single-exon synthetic construct, plus-strand transcript coordinates equal
+    // genomic coordinates; for minus-strand the emitted `sequence` is
+    // reverse-complemented and CDS positions are in transcript space.
+    let exon = serde_json::json!({
+        "number": 1,
+        "start": 1_u64,
+        "end": contig_length,
+        "genomic_start": 1_u64,
+        "genomic_end": contig_length,
+    });
+
+    let mut tx_obj = serde_json::json!({
+        "id": tx_id,
+        "strand": strand,
+        "sequence": final_sequence,
+        "cds_start": cds_start,
+        "cds_end": cds_end,
+        "exons": [exon],
+        "chromosome": contig_name,
+        "genomic_start": 1_u64,
+        "genomic_end": contig_length,
+        "genome_build": genome_build,
+    });
+
+    if let Some(g) = gene {
+        tx_obj["gene_symbol"] = serde_json::json!(g);
+    }
+
+    let output_json = serde_json::json!({
+        "version": "1.0",
+        "genome_build": genome_build,
+        "transcripts": [tx_obj],
+    });
+
+    std::fs::write(output, serde_json::to_string_pretty(&output_json)?)?;
+    eprintln!("Wrote 1 transcript ({}) to {}", tx_id, output.display());
+
+    Ok(())
 }
