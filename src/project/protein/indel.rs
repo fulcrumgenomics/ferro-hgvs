@@ -234,11 +234,16 @@ fn build_inframe_deletion(
     // In a pure codon-aligned deletion, alt_protein is shorter. The deleted
     // range in ref_protein is [first_diff .. first_diff + (ref_len - alt_len)].
     let n_deleted = ref_protein.len().saturating_sub(alt_protein.len());
-    let last_deleted = first_diff + n_deleted - 1;
 
     if n_deleted == 0 {
+        // Guard before subtracting: alt_protein.len() >= ref_protein.len() means the
+        // "deletion" didn't shorten the protein (e.g. a stop-disrupting deletion whose
+        // extension detection missed an edge case). Avoid the underflow in the
+        // last_deleted computation by short-circuiting to an identity variant.
         return build_identity_variant(ref_protein, protein_accession, transcript);
     }
+
+    let last_deleted = first_diff + n_deleted - 1;
 
     let start_aa = ref_protein
         .get(first_diff)
@@ -282,6 +287,23 @@ fn build_inframe_insertion(
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
+    // If the inserted nucleotides translate to a stop, `alt_protein` is truncated
+    // at the new Ter and ends up no longer than `ref_protein`. That's not a pure
+    // insertion any more — re-attach the implicit Ter (the stop that truncated
+    // translation) and fall back to the generic delins pathway, which can
+    // represent the asymmetric ref/alt sizes correctly.
+    if alt_protein.len() <= ref_protein.len() {
+        let mut alt_with_stop = alt_protein.to_vec();
+        alt_with_stop.push(AminoAcid::Ter);
+        return build_inframe_delins(
+            ref_protein,
+            &alt_with_stop,
+            cds_pos_start,
+            protein_accession,
+            transcript,
+        );
+    }
+
     // The insertion happens between codon N and N+1.
     // cds_pos_start is the last base (frame 2) of codon N.
     // codon_N = (cds_pos_start - 1) / 3  (0-based), so 1-based = (cds_pos_start + 2) / 3
@@ -299,9 +321,9 @@ fn build_inframe_insertion(
 
     // The inserted amino acids are the additional ones in alt_protein between
     // aa_before_idx and aa_before_idx+1.
-    let n_inserted = alt_protein.len().saturating_sub(ref_protein.len());
-    let inserted_aas: Vec<AminoAcid> =
-        alt_protein[aa_before_idx + 1..aa_before_idx + 1 + n_inserted].to_vec();
+    let n_inserted = alt_protein.len() - ref_protein.len();
+    let insert_end = (aa_before_idx + 1 + n_inserted).min(alt_protein.len());
+    let inserted_aas: Vec<AminoAcid> = alt_protein[aa_before_idx + 1..insert_end].to_vec();
 
     let protein_edit = ProteinEdit::Insertion {
         sequence: AminoAcidSeq::new(inserted_aas),
@@ -572,7 +594,7 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: seq.to_string(),
+            sequence: Some(seq.to_string()),
             cds_start: Some(cds_start),
             cds_end: Some(cds_end),
             exons: vec![Exon::new(1, 1, seq.len() as u64)],
@@ -773,6 +795,46 @@ mod tests {
         assert!(s.contains("Arg2"), "expected Arg2 in '{}'", s);
         assert!(s.contains("delins"), "expected delins in '{}'", s);
         assert!(s.contains("Ala"), "expected Ala in '{}'", s);
+    }
+
+    // ─── Regression tests for CodeRabbit-flagged edge cases ───────────────────
+
+    #[test]
+    fn inframe_deletion_with_zero_diff_returns_identity_not_panic() {
+        // Regression for the underflow in build_inframe_deletion: if it is ever
+        // called with alt_protein.len() >= ref_protein.len(), `n_deleted` is 0
+        // and `first_diff + n_deleted - 1` would underflow usize. The guard
+        // must run before the subtraction. Calling directly bypasses upstream
+        // detection so we are testing the function's own safety.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let ref_protein = [AminoAcid::Met, AminoAcid::Arg];
+        let alt_protein = [AminoAcid::Met, AminoAcid::Arg];
+        let result =
+            build_inframe_deletion(&ref_protein, &alt_protein, "NP_TEST.1", &t).expect("no panic");
+        let s = prot_str(&result);
+        // Identity variant -- whole-protein "=" representation.
+        assert!(s.contains("(="), "expected identity '(=' in '{}'", s);
+    }
+
+    #[test]
+    fn ins_three_bases_premature_stop_falls_back_to_delins() {
+        // Regression for malformed `p.(...ins)` with empty sequence: insert
+        // "TAA" between c.3 (last base of Met codon) and c.4 (first base of
+        // Arg codon). The inserted codon is a stop, so translate_full_cds
+        // truncates alt_protein to [Met]. ref_protein = [Met, Arg, Lys]
+        // (CDS "ATGCGCAAATAA"). alt is shorter than ref -> falls back to
+        // build_inframe_delins which can represent the asymmetric change
+        // without emitting an empty `ins` sequence.
+        let t = tx("ATGCGCAAATAA", 1, 12);
+        let seq: crate::hgvs::edit::Sequence = "TAA".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel_protein(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        // delins fallback re-attaches the implicit Ter (truncated by translate_full_cds)
+        // before computing the AA diff, so the new stop appears in the inserted sequence.
+        assert_eq!(s, "NP_TEST.1:p.(Arg2_Lys3delinsTer)");
     }
 
     #[test]

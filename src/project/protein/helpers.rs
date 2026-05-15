@@ -28,7 +28,13 @@ pub(crate) fn read_full_cds(transcript: &Transcript) -> Result<String, FerroErro
         .ok_or_else(|| FerroError::ConversionError {
             msg: format!("transcript {} has no CDS end", transcript.id),
         })? as usize;
-    let seq = &transcript.sequence;
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
     if cds_start < 1 || cds_end > seq.len() || cds_start > cds_end + 1 {
         return Err(FerroError::ProteinSequenceUnavailable {
             accession: transcript.id.clone(),
@@ -214,7 +220,7 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: seq.to_string(),
+            sequence: Some(seq.to_string()),
             cds_start: Some(cds_start),
             cds_end: Some(cds_end),
             exons: vec![Exon::new(1, 1, seq.len() as u64)],
