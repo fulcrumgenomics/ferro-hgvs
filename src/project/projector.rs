@@ -112,6 +112,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let mapper = self.projector.mapper();
         let normalized_str = normalized.to_string();
 
+        // Compute the overall genomic extent of the transcript from its exons.
+        // Exon format: [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end].
+        // The transcript's genomic extent is [min(genome_start), max(genome_end)) — 0-based half-open.
+        let (tx_genome_start, tx_genome_end) = {
+            let exons = &cdot_tx.exons;
+            if exons.is_empty() {
+                return Err(FerroError::ReferenceNotFound {
+                    id: transcript_id.to_string(),
+                });
+            }
+            let starts = exons.iter().map(|e| e[0]).min().unwrap();
+            let ends = exons.iter().map(|e| e[1]).max().unwrap();
+            (starts, ends)
+        };
+
         // We map start and end positions independently rather than calling
         // CoordinateMapper::genome_interval_to_cds because the latter discards
         // the end position's MappingInfo (only start_info is propagated for the
@@ -122,6 +137,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Helper: map one GenomePos → CdsPos, converting out-of-range errors to
         // TranscriptNotOverlapping.
         let map_position = |gp: &GenomePos| -> Result<(CdsPos, MappingInfo), FerroError> {
+            // Check whether the position falls within the transcript's overall genomic
+            // extent before calling genome_to_cds.  genome_to_cds uses intronic
+            // arithmetic to handle positions between exons, so it will happily return
+            // a large offset for a position that is completely outside the transcript.
+            // Exon bounds are 0-based half-open [genome_start, genome_end), so a
+            // position is outside when it is before the first exon's start or at/after
+            // the last exon's end.
+            if gp.base < tx_genome_start || gp.base >= tx_genome_end {
+                return Err(FerroError::TranscriptNotOverlapping {
+                    variant: normalized_str.clone(),
+                    transcript_id: transcript_id.to_string(),
+                });
+            }
             match mapper.genome_to_cds(transcript_id, gp) {
                 Ok(res) => Ok((res.variant, res.info)),
                 Err(FerroError::InvalidCoordinates { .. })
@@ -475,6 +503,21 @@ mod tests {
             c.contains('+'),
             "expected intronic offset notation (e.g. c.9+6 or c.10+6), got: {}",
             c
+        );
+    }
+
+    #[test]
+    fn project_no_overlap_returns_transcript_not_overlapping() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // chr1:5000 is far outside the transcript at 1000..1009.
+        let err = vp
+            .project("NC_000001.11:g.5000A>G", "NM_TEST.1")
+            .expect_err("should fail to project outside the transcript");
+        assert!(
+            matches!(err, FerroError::TranscriptNotOverlapping { .. }),
+            "expected TranscriptNotOverlapping, got: {:?}",
+            err
         );
     }
 
