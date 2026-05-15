@@ -1,4 +1,4 @@
-//! Protein consequence prediction for substitutions in the CDS.
+//! Protein consequence prediction for CDS substitutions.
 
 use crate::backtranslate::{Codon, CodonTable};
 use crate::error::FerroError;

@@ -10,7 +10,7 @@ use crate::hgvs::variant::{is_frameshift, CdsVariant, HgvsVariant, LocEdit, TxVa
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
-use crate::project::protein::predict_substitution_protein;
+use crate::project::protein::{predict_indel_protein, predict_substitution_protein};
 use crate::project::result::VariantProjection;
 use crate::reference::ReferenceProvider;
 
@@ -209,9 +209,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let is_utr = !is_intronic
             && (info_start.in_5utr || info_start.in_3utr || info_end.in_5utr || info_end.in_3utr);
 
-        // 8. Predict protein consequence for CDS substitutions.
+        // 8. Predict protein consequence for CDS variants.
         let mut protein = None;
-        if !is_intronic && !is_utr && is_coding && matches!(c_edit, NaEdit::Substitution { .. }) {
+        if !is_intronic && !is_utr && is_coding {
             // Prefer the explicit cdot.protein accession; otherwise infer NP_/XP_
             // from NM_/XM_ by stripping the prefix (not by substring replace, which
             // would mangle accessions whose suffix happens to contain "NM_"). If
@@ -229,13 +229,45 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     }),
             };
             if let Some(prot_acc) = prot_acc {
-                let tx_for_codon = self.provider.get_transcript(transcript_id)?;
-                protein = Some(predict_substitution_protein(
-                    &tx_for_codon,
-                    cds_start.base,
-                    &c_edit,
-                    &prot_acc,
-                )?);
+                match &c_edit {
+                    NaEdit::Substitution { .. } => {
+                        let tx_for_codon = self.provider.get_transcript(transcript_id)?;
+                        protein = Some(predict_substitution_protein(
+                            &tx_for_codon,
+                            cds_start.base,
+                            &c_edit,
+                            &prot_acc,
+                        )?);
+                    }
+                    NaEdit::Deletion { .. }
+                    | NaEdit::Insertion { .. }
+                    | NaEdit::Duplication { .. }
+                    | NaEdit::Delins { .. }
+                    | NaEdit::Inversion { .. }
+                        // Only predict when both CDS positions are concrete exonic positions
+                        // (no intronic offsets — already guarded above).
+                        if cds_start.offset.is_none()
+                            && cds_end.offset.is_none()
+                            && cds_start.base > 0
+                            && cds_end.base > 0 =>
+                    {
+                        let tx_for_codon = self.provider.get_transcript(transcript_id)?;
+                        match predict_indel_protein(
+                            &tx_for_codon,
+                            cds_start.base,
+                            cds_end.base,
+                            &c_edit,
+                            &prot_acc,
+                        ) {
+                            Ok(pv) => protein = Some(pv),
+                            // Non-fatal: unsupported edits or missing sequence → leave protein=None.
+                            Err(FerroError::UnsupportedProjection { .. })
+                            | Err(FerroError::ProteinSequenceUnavailable { .. }) => {}
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -559,14 +591,22 @@ mod tests {
     fn project_single_base_deletion_is_frameshift() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1004del deletes a single base — net change -1 → frameshift.
+        // g.1004del deletes a single base (c.5, the 'G' in the Arg codon CGC) — net=-1 → frameshift.
+        // Mutated CDS: "ATGCCTAA" → Met-Pro-Stop → alt=[Met,Pro].
+        // first_diff=1 (Arg≠Pro) → p.(Arg2Profs).
         let result = vp
             .project("NC_000001.11:g.1004del", "NM_TEST.1")
             .expect("deletion should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains(":c."), "expected c. variant, got: {}", c);
         assert!(c.contains("del"), "expected del notation in c., got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. expected for CDS del")
+            .to_string();
+        assert!(p.contains("Arg2"), "expected Arg2 in p.: {}", p);
+        assert!(p.contains("fs"), "expected fs in p.: {}", p);
         assert!(result.is_frameshift, "1-base del should be frameshift");
         assert!(!result.is_intronic);
     }
@@ -575,13 +615,19 @@ mod tests {
     fn project_three_base_deletion_in_frame() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1005del deletes 3 bases — in-frame.
+        // g.1003_1005del deletes 3 bases (c.4_6 = entire Arg codon CGC) — in-frame.
+        // Mutated CDS: "ATGTAA" → [Met] → p.(Arg2del).
         let result = vp
             .project("NC_000001.11:g.1003_1005del", "NM_TEST.1")
             .expect("3-base del should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("del"), "expected del notation, got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. expected for in-frame del")
+            .to_string();
+        assert!(p.contains("Arg2del"), "expected Arg2del in p.: {}", p);
         assert!(!result.is_frameshift, "3-base deletion is in-frame");
     }
 
@@ -589,13 +635,14 @@ mod tests {
     fn project_single_base_insertion_is_frameshift() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1004insA inserts one base — frameshift.
+        // g.1003_1004insA inserts one base — frameshift (net=+1).
         let result = vp
             .project("NC_000001.11:g.1003_1004insA", "NM_TEST.1")
             .expect("insertion should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("ins"), "expected ins notation, got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        // p. should be produced (frameshift) — exact form depends on insertion position.
+        assert!(result.protein.is_some(), "p. expected for CDS insertion");
         assert!(result.is_frameshift, "1-base insertion is frameshift");
     }
 
@@ -603,13 +650,13 @@ mod tests {
     fn project_duplication() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1004dup duplicates a single base — frameshift.
+        // g.1004dup duplicates a single base (c.5 'G') — net=+1 → frameshift.
         let result = vp
             .project("NC_000001.11:g.1004dup", "NM_TEST.1")
             .expect("dup should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("dup"), "expected dup notation, got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(result.protein.is_some(), "p. expected for CDS dup");
         assert!(result.is_frameshift, "1-base dup is frameshift");
     }
 
@@ -617,13 +664,21 @@ mod tests {
     fn project_delins() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1004delinsAT — replace 2 bases with 2 bases → not a frameshift.
+        // g.1003_1004delinsAT — replace 2 bases (c.4_5, first 2 bases of Arg codon CGC)
+        // with AT → new codon "ATC" = Ile. Mutated CDS: "ATGATCTAA" → [Met, Ile].
+        // In-frame (net=0), straddles codon → build_inframe_delins.
+        // first_diff=1 (Arg≠Ile) → p.(Arg2delinsIle).
         let result = vp
             .project("NC_000001.11:g.1003_1004delinsAT", "NM_TEST.1")
             .expect("delins should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("delins"), "expected delins notation, got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. expected for delins")
+            .to_string();
+        assert!(p.contains("delins"), "expected delins in p.: {}", p);
         assert!(
             !result.is_frameshift,
             "delins of equal length is not a frameshift"
@@ -634,13 +689,21 @@ mod tests {
     fn project_inversion() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1005inv — inversion preserves length → not a frameshift.
+        // g.1003_1005inv — inversion of c.4_6 (CGC → GCG = Ala). Preserves length.
+        // Mutated CDS: "ATGGCGTAA" → [Met, Ala] → p.(Arg2delinsAla).
         let result = vp
             .project("NC_000001.11:g.1003_1005inv", "NM_TEST.1")
             .expect("inv should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("inv"), "expected inv notation, got: {}", c);
-        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. expected for inv")
+            .to_string();
+        assert!(p.contains("Arg2"), "expected Arg2 in p.: {}", p);
+        assert!(p.contains("delins"), "expected delins in p.: {}", p);
+        assert!(p.contains("Ala"), "expected Ala in p.: {}", p);
         assert!(!result.is_frameshift, "inversion is not a frameshift");
     }
 
