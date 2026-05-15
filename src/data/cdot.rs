@@ -12,13 +12,14 @@
 //!
 //! | Field | Basis | Format |
 //! |-------|-------|--------|
-//! | Genomic coordinates (`genome_start`, `genome_end`) | 0-based | Half-open `[start, end)` |
-//! | Transcript coordinates (`tx_start`, `tx_end`) | 1-based | See note below |
+//! | Genomic coordinates (`genome_start`, `genome_end`) | HGVS-value-based | Half-open `[start, end)` where `start` equals the numeric HGVS g. position of the first exonic base |
+//! | Transcript coordinates (`tx_start`, `tx_end`) | 0-based | Half-open `[start, end)` |
 //! | CDS coordinates (`cds_start`, `cds_end`) | 0-based | Half-open `[start, end)` |
 //!
-//! **Note on transcript coordinates**: The cdot format uses 1-based transcript
-//! positions (fixed in commit 944a4e9). This is a common source of bugs when
-//! developers assume all coordinates are 0-based.
+//! **Note on genomic coordinates**: `genome_start` stores the numeric value of the first HGVS
+//! g. position in the exon (e.g., an exon starting at g.1000 has `genome_start = 1000`).
+//! `genome_end` is one past the last HGVS g. position (exclusive). This differs from a
+//! strict 0-based system: an exon at g.1000–g.1008 has `genome_start = 1000, genome_end = 1009`.
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
@@ -36,8 +37,8 @@ use std::path::Path;
 /// cdot transcript alignment data (normalized internal representation).
 ///
 /// # Coordinate Systems
-/// - Genomic: 0-based half-open `[start, end)`
-/// - Transcript (tx_start/tx_end in exons): 1-based
+/// - Genomic: HGVS-value-based half-open `[start, end)` (see module-level docs)
+/// - Transcript (tx_start/tx_end in exons): 0-based half-open `[start, end)`
 /// - CDS: 0-based half-open `[start, end)` in transcript space
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdotTranscript {
@@ -53,7 +54,7 @@ pub struct CdotTranscript {
     #[serde(deserialize_with = "deserialize_strand")]
     pub strand: Strand,
 
-    /// Exon alignments: [genome_start(0-based), genome_end(0-based excl), tx_start(1-based), tx_end(1-based)].
+    /// Exon alignments: [genome_start(HGVS-val), genome_end(HGVS-val excl), tx_start(0-based), tx_end(0-based excl)].
     pub exons: Vec<[u64; 4]>,
 
     /// Start of CDS in transcript coordinates (0-based, inclusive).
@@ -315,19 +316,25 @@ where
 /// Parsed exon with named fields for clarity.
 ///
 /// # Coordinate Systems
-/// - Genomic coordinates: 0-based half-open `[genome_start, genome_end)`
-/// - Transcript coordinates: 1-based (NOT 0-based - common source of bugs!)
+/// - Genomic coordinates: HGVS-value-based half-open `[genome_start, genome_end)` where
+///   `genome_start` equals the numeric value of the first HGVS g. position in the exon
+///   and `genome_end` is one past the last (exclusive). For example, an exon spanning
+///   g.1000–g.1008 has `genome_start = 1000`, `genome_end = 1009`.
+/// - Transcript coordinates: 0-based half-open `[tx_start, tx_end)` where `tx_start = 0`
+///   for the first base of the transcript. `contains_tx_pos` uses `pos >= tx_start && pos < tx_end`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exon {
     /// Exon number (1-based).
     pub number: u32,
-    /// Start position in genomic coordinates (0-based, inclusive).
+    /// Start position in genomic coordinates (HGVS-value-based, inclusive).
+    /// Equals the numeric value of the first HGVS g. position in the exon.
     pub genome_start: u64,
-    /// End position in genomic coordinates (0-based, exclusive).
+    /// End position in genomic coordinates (HGVS-value-based, exclusive).
+    /// Equals genome_start + exon_length.
     pub genome_end: u64,
-    /// Start position in transcript coordinates (1-based, inclusive).
+    /// Start position in transcript coordinates (0-based, inclusive).
     pub tx_start: u64,
-    /// End position in transcript coordinates (1-based, exclusive for range).
+    /// End position in transcript coordinates (0-based, exclusive).
     pub tx_end: u64,
 }
 
@@ -761,47 +768,87 @@ impl CdotMapper {
     }
 
     /// Build a `CdotMapper` from in-memory `Transcript` records (typically loaded into a
-    /// `MockProvider`). Converts the 1-based `Transcript` coordinates to the 0-based half-open
-    /// form expected by `CdotTranscript`.
+    /// `MockProvider`). Converts the 1-based `Transcript` coordinates into the form expected
+    /// by `CdotTranscript`.
     ///
     /// # Coordinate conversions
     ///
-    /// | Transcript field | Basis | CdotTranscript field | Basis |
-    /// |-----------------|-------|----------------------|-------|
-    /// | `Exon.genomic_start` | 1-based inclusive | `exons[][0]` (genome_start) | 0-based |
-    /// | `Exon.genomic_end` | 1-based inclusive | `exons[][1]` (genome_end) | 0-based exclusive |
-    /// | `Exon.start` | 1-based tx | `exons[][2]` (tx_start) | 1-based |
-    /// | `Exon.end` | 1-based tx | `exons[][3]` (tx_end) | 1-based |
-    /// | `cds_start` | 1-based tx | `cds_start` | 0-based |
-    /// | `cds_end` | 1-based tx inclusive | `cds_end` | 0-based exclusive |
+    /// `Transcript.Exon` fields are documented as 1-based inclusive (see
+    /// `src/reference/transcript.rs`). `CdotTranscript` exon arrays use:
+    /// - `exons[][0]` (genome_start): HGVS-value-based — the numeric value of the first
+    ///   HGVS g. position in the exon. Conversion: `genome_start = Exon.genomic_start` (no change).
+    /// - `exons[][1]` (genome_end): exclusive, equals `Exon.genomic_end + 1`.
+    /// - `exons[][2]` (tx_start): 0-based. Conversion: `tx_start = Exon.start - 1`.
+    /// - `exons[][3]` (tx_end): 0-based exclusive. Same numeric value as `Exon.end` (1-based
+    ///   inclusive end equals 0-based exclusive end).
+    /// - `cds_start`: 0-based. Conversion: `cds_start = Transcript.cds_start - 1`.
+    /// - `cds_end`: 0-based exclusive. Same numeric value as `Transcript.cds_end`.
+    ///
+    /// Defaults to GRCh38 for contig alias resolution (so `chr17` ↔ `NC_000017.11`
+    /// works after construction). Use [`from_transcripts_with_build`] to specify a
+    /// different genome build.
     pub fn from_transcripts<'a, I>(transcripts: I) -> Self
+    where
+        I: IntoIterator<Item = &'a crate::reference::transcript::Transcript>,
+    {
+        Self::from_transcripts_with_build(transcripts, "GRCh38")
+    }
+
+    /// Like [`from_transcripts`], but uses `genome_build` (e.g. "GRCh37" or
+    /// "GRCh38") for contig alias resolution.
+    ///
+    /// Transcripts with missing or inconsistent coordinates are skipped with a
+    /// `log::warn!`, rather than silently coerced to bogus intervals. A transcript
+    /// must have a chromosome and, for every exon, all of: `genomic_start`,
+    /// `genomic_end >= genomic_start`, `start >= 1` (1-based), `end >= start`.
+    pub fn from_transcripts_with_build<'a, I>(transcripts: I, genome_build: &str) -> Self
     where
         I: IntoIterator<Item = &'a crate::reference::transcript::Transcript>,
     {
         let mut mapper = Self::new();
         for tx in transcripts {
-            let contig = tx.chromosome.clone().unwrap_or_default();
-            let exons: Vec<[u64; 4]> = tx
-                .exons
-                .iter()
-                .map(|e| {
-                    // genome_start: 1-based inclusive → 0-based
-                    let g_start = e.genomic_start.map(|s| s.saturating_sub(1)).unwrap_or(0);
-                    // genome_end: 1-based inclusive → 0-based exclusive (same value)
-                    let g_end = e.genomic_end.unwrap_or(0);
-                    // tx_start/tx_end: already 1-based — used directly in CdotTranscript
-                    let t_start = e.start;
-                    let t_end = e.end;
-                    [g_start, g_end, t_start, t_end]
-                })
-                .collect();
+            let Some(contig) = tx.chromosome.clone() else {
+                log::warn!("Skipping transcript {}: missing chromosome", tx.id);
+                continue;
+            };
+            let mut exons: Vec<[u64; 4]> = Vec::with_capacity(tx.exons.len());
+            let mut valid = true;
+            for e in &tx.exons {
+                // Require both genomic bounds and a non-empty, well-ordered interval
+                // on both the transcript and genomic axes; 1-based `start == 0` is
+                // invalid input and we refuse to silently turn it into `tx_start = 0`.
+                let (Some(g_start), Some(g_end_inclusive)) = (e.genomic_start, e.genomic_end)
+                else {
+                    valid = false;
+                    break;
+                };
+                let Some(t_start) = e.start.checked_sub(1) else {
+                    valid = false;
+                    break;
+                };
+                if e.end < e.start || g_end_inclusive < g_start {
+                    valid = false;
+                    break;
+                }
+                // genome_end: 1-based inclusive → exclusive (add 1).
+                // tx_end: 1-based inclusive end equals 0-based exclusive end numerically.
+                exons.push([g_start, g_end_inclusive + 1, t_start, e.end]);
+            }
+            if !valid || exons.is_empty() {
+                log::warn!(
+                    "Skipping transcript {}: incomplete or inconsistent exon coordinates",
+                    tx.id
+                );
+                continue;
+            }
             let cdot_tx = CdotTranscript {
                 gene_name: tx.gene_symbol.clone(),
                 contig,
                 strand: tx.strand,
                 exons,
-                // cds_start: 1-based tx → 0-based
-                cds_start: tx.cds_start.map(|c| c.saturating_sub(1)),
+                // cds_start: 1-based tx → 0-based. Use `checked_sub` so a stray `Some(0)`
+                // becomes `None` rather than wrapping to a giant `u64`.
+                cds_start: tx.cds_start.and_then(|c| c.checked_sub(1)),
                 // cds_end: 1-based tx inclusive → 0-based exclusive (same value)
                 cds_end: tx.cds_end,
                 gene_id: None,
@@ -810,6 +857,7 @@ impl CdotMapper {
             };
             mapper.add_transcript(tx.id.clone(), cdot_tx);
         }
+        mapper.populate_contig_aliases(genome_build);
         mapper
     }
 
@@ -1502,6 +1550,248 @@ mod tests {
         assert_eq!(tx.exons.len(), 1);
         assert_eq!(tx.exons[0][0], 48263025); // genome_start
         assert_eq!(tx.exons[0][1], 48263098); // genome_end
+    }
+
+    #[test]
+    fn test_from_transcripts_populates_contig_aliases_grch38() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        let tx = Transcript {
+            id: "NM_000088.3".to_string(),
+            gene_symbol: Some("COL1A1".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(11),
+            cds_end: Some(60),
+            exons: vec![Exon::with_genomic(1, 1, 73, 50184096, 50184168)],
+            chromosome: Some("NC_000017.11".to_string()),
+            genomic_start: Some(50184096),
+            genomic_end: Some(50184168),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+
+        // Canonical RefSeq lookup works.
+        assert_eq!(mapper.transcripts_on_contig("NC_000017.11").len(), 1);
+        // UCSC alias resolution (default GRCh38).
+        assert_eq!(mapper.transcripts_on_contig("chr17").len(), 1);
+        // Ensembl alias resolution.
+        assert_eq!(mapper.transcripts_on_contig("17").len(), 1);
+    }
+
+    #[test]
+    fn test_from_transcripts_with_build_grch37_aliases() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        let tx = Transcript {
+            id: "NM_000088.3".to_string(),
+            gene_symbol: Some("COL1A1".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(11),
+            cds_end: Some(60),
+            exons: vec![Exon::with_genomic(1, 1, 73, 48263025, 48263097)],
+            chromosome: Some("NC_000017.10".to_string()),
+            genomic_start: Some(48263025),
+            genomic_end: Some(48263097),
+            genome_build: GenomeBuild::GRCh37,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts_with_build(std::iter::once(&tx), "GRCh37");
+
+        assert_eq!(mapper.transcripts_on_contig("NC_000017.10").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("chr17").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("17").len(), 1);
+    }
+
+    #[test]
+    fn test_from_transcripts_skips_missing_chromosome() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        let tx = Transcript {
+            id: "NM_NOCHR.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::with_genomic(1, 1, 9, 1000, 1008)],
+            chromosome: None, // ← missing chromosome
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+        assert_eq!(
+            mapper.transcript_count(),
+            0,
+            "transcript with no chromosome must be skipped, not silently coerced"
+        );
+    }
+
+    #[test]
+    fn test_from_transcripts_skips_exon_missing_genomic_coords() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        // Exon::new(...) leaves genomic_start/genomic_end as None.
+        let tx = Transcript {
+            id: "NM_NOGENOMIC.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+        assert_eq!(
+            mapper.transcript_count(),
+            0,
+            "transcript with exon missing genomic coords must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_from_transcripts_skips_exon_with_zero_start() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        // Exon.start is documented as 1-based; 0 is invalid. We must NOT
+        // silently coerce it to tx_start = 0 (it would collide with a real
+        // first exon and break downstream coordinate math).
+        let tx = Transcript {
+            id: "NM_ZEROSTART.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::with_genomic(1, 0, 9, 1000, 1008)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+        assert_eq!(
+            mapper.transcript_count(),
+            0,
+            "transcript with 1-based start=0 must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_from_transcripts_skips_inverted_exon() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        // end < start on either axis is invalid (empty or inverted interval).
+        let tx = Transcript {
+            id: "NM_INVERTED.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            // Genomic end (1000) < genomic start (1008).
+            exons: vec![Exon::with_genomic(1, 1, 9, 1008, 1000)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+        assert_eq!(
+            mapper.transcript_count(),
+            0,
+            "transcript with inverted exon genomic interval must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_from_transcripts_cds_start_zero_yields_none() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        // tx.cds_start is documented as 1-based; if upstream feeds Some(0)
+        // we should yield None instead of wrapping to u64::MAX via saturating_sub.
+        let tx = Transcript {
+            id: "NM_CDSZERO.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(0),
+            cds_end: Some(9),
+            exons: vec![Exon::with_genomic(1, 1, 9, 1000, 1008)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&tx));
+        let stored = mapper
+            .get_transcript("NM_CDSZERO.1")
+            .expect("transcript should be present (exon coords are valid)");
+        assert_eq!(
+            stored.cds_start, None,
+            "cds_start=Some(0) must become None, not a wrapped u64"
+        );
     }
 
     #[test]

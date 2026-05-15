@@ -12,17 +12,25 @@ import ferro_hgvs
 def projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
     """Build a VariantProjector backed by a minimal hand-crafted reference JSON.
 
-    The transcript NM_TEST.1 maps chr1 genomic positions 1001-1009 (1-based,
-    0-based half-open [1000, 1009)) with CDS sequence "ATGCGCTAA"
-    (Met-Arg-Stop, 3 codons) on the plus strand.
+    The transcript NM_TEST.1 maps chr1 genomic positions 1000-1008 (1-based
+    inclusive) with CDS sequence "ATGCGCTAA" (Met-Arg-Stop, 3 codons) on the
+    plus strand.  g.1000 is the 'A' of the start codon (c.1).
 
-    Exon coordinate notes
-    ---------------------
-    The MockProvider uses ``Exon.start`` directly as the cdot ``tx_start``
-    field (0-based), so we set ``start=0`` and ``end=8`` to match the
-    0-based cdot convention used internally by ``CdotMapper.from_transcripts``.
-    ``genomic_start`` and ``genomic_end`` are 1-based inclusive; they are
-    converted to 0-based half-open by subtracting 1 from the start only.
+    All coordinate fields follow the documented 1-based inclusive convention:
+    - ``Exon.start`` / ``Exon.end``: 1-based transcript positions.
+    - ``Exon.genomic_start`` / ``Exon.genomic_end``: 1-based genomic positions.
+    - ``cds_start`` / ``cds_end``: 1-based transcript positions.
+
+    ``CdotMapper.from_transcripts`` converts these to the internal cdot
+    representation:
+    - tx_start  = Exon.start - 1      (1-based → 0-based)
+    - tx_end    = Exon.end            (1-based inclusive == 0-based exclusive)
+    - g_start   = Exon.genomic_start  (HGVS-value-based, no conversion)
+    - g_end     = Exon.genomic_end + 1  (1-based inclusive → exclusive)
+    - cds_start = cds_start - 1       (1-based → 0-based)
+
+    This produces the canonical cdot exon [1000, 1009, 0, 9] matching the
+    Rust unit tests in ``src/project/projector.rs``.
     """
     fixture = {
         "transcripts": [
@@ -36,10 +44,10 @@ def projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
                 "exons": [
                     {
                         "number": 1,
-                        "start": 0,
-                        "end": 8,
-                        "genomic_start": 1001,
-                        "genomic_end": 1009,
+                        "start": 1,  # 1-based, inclusive tx start
+                        "end": 9,  # 1-based, inclusive tx end
+                        "genomic_start": 1000,  # 1-based, inclusive genomic start
+                        "genomic_end": 1008,  # 1-based, inclusive genomic end
                     }
                 ],
                 "chromosome": "chr1",
