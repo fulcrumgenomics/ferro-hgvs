@@ -1,0 +1,11 @@
+##gff-version 3
+# Hand-curated FlyBase-style GFF3 excerpt for unit testing.
+# FlyBase uses Derives_from in addition to Parent for transcripts derived from
+# pseudogenes / alleles. ferro-hgvs does not currently consume Derives_from
+# (the standard Parent edge still works), so this fixture documents that gap.
+2L	FlyBase	gene	7529	9484	.	+	.	ID=FBgn0031208;Name=CG11023;gene_biotype=protein_coding
+2L	FlyBase	mRNA	7529	9484	.	+	.	ID=FBtr0300689;Parent=FBgn0031208;Name=CG11023-RA
+2L	FlyBase	exon	7529	8116	.	+	.	ID=FBex0_1;Parent=FBtr0300689
+2L	FlyBase	exon	8193	9484	.	+	.	ID=FBex0_2;Parent=FBtr0300689
+2L	FlyBase	CDS	7680	8116	.	+	0	ID=CDS_FBtr0300689_1;Parent=FBtr0300689
+2L	FlyBase	CDS	8193	8589	.	+	1	ID=CDS_FBtr0300689_2;Parent=FBtr0300689

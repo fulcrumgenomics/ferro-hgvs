@@ -3,22 +3,24 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 const SAMPLE_LIMIT: usize = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Severity {
     Error,
     Warning,
     Info,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SourceLocation {
     pub path: PathBuf,
     pub line: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum DiagnosticPayload {
     MalformedRecord {
         field: &'static str,
@@ -60,7 +62,7 @@ pub enum DiagnosticPayload {
     Other,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LoaderDiagnostic {
     pub code: &'static str,
     pub severity: Severity,

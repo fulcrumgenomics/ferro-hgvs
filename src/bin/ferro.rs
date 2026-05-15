@@ -343,6 +343,22 @@ enum Commands {
         /// Filter to specific gene symbols (comma-separated)
         #[arg(long)]
         genes: Option<String>,
+
+        /// Promote loader warnings to log-level errors and fail if any Severity::Error diagnostic is recorded.
+        #[arg(long, conflicts_with = "silent")]
+        strict: bool,
+
+        /// Suppress loader diagnostic warnings; still records them in the report.
+        #[arg(long, conflicts_with = "strict")]
+        silent: bool,
+
+        /// Skip CDS-length and start-codon FASTA-aware validation even when --fasta is supplied. (Phase 4 — currently a no-op.)
+        #[arg(long)]
+        no_validate_fasta: bool,
+
+        /// Write the bounded sample of loader diagnostics as JSON to this path.
+        #[arg(long, value_name = "PATH")]
+        diagnostics_json: Option<PathBuf>,
     },
 
     /// Generate HGVS descriptions from components (Name Generator)
@@ -626,6 +642,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mane_only,
             transcripts,
             genes,
+            strict,
+            silent,
+            no_validate_fasta,
+            diagnostics_json,
         } => run_convert_gff(
             &gff,
             fasta.as_ref(),
@@ -634,6 +654,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mane_only,
             transcripts.as_deref(),
             genes.as_deref(),
+            strict,
+            silent,
+            no_validate_fasta,
+            diagnostics_json.as_ref(),
         ),
         Commands::Generate {
             accession,
@@ -1299,6 +1323,7 @@ fn run_parse(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_convert_gff(
     gff: &PathBuf,
     fasta: Option<&PathBuf>,
@@ -1307,21 +1332,39 @@ fn run_convert_gff(
     mane_only: bool,
     transcripts: Option<&str>,
     genes: Option<&str>,
+    strict: bool,
+    silent: bool,
+    no_validate_fasta: bool,
+    diagnostics_json: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::reference::annotation::{load_annotations, LoaderConfig};
     use ferro_hgvs::reference::transcript::ManeStatus;
     use std::collections::HashSet;
 
     // Parse genome build
     let genome_build = parse_genome_build(build);
 
-    // Load GFF/GTF file
-    let ext = gff.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let mut db = if ext == "gtf" || gff.to_string_lossy().contains(".gtf") {
-        ferro_hgvs::reference::loader::load_gtf(gff)?
-    } else {
-        ferro_hgvs::reference::loader::load_gff3(gff)?
-    };
+    // Build loader config with error mode and genome build
+    let mut cfg = LoaderConfig::new().with_genome_build(genome_build);
+    if strict {
+        cfg = cfg.with_strict();
+    } else if silent {
+        cfg = cfg.with_silent();
+    }
+
+    // Load GFF/GTF file via load_annotations
+    let (mut db, report) = load_annotations(gff, &cfg)?;
     db.genome_build = genome_build;
+    eprintln!("{}", report.summary_line());
+
+    // Write diagnostics JSON if requested
+    if let Some(path) = diagnostics_json {
+        let json = serde_json::to_string_pretty(&report.sample_diagnostics)
+            .map_err(|e| format!("serialize diagnostics: {}", e))?;
+        std::fs::write(path, json).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    }
+
+    let _ = no_validate_fasta; // Phase 4 will use this
 
     // Load FASTA if provided and extract sequences
     let fasta_provider = if let Some(fasta_path) = fasta {
@@ -1487,12 +1530,6 @@ fn run_convert_gff(
     };
 
     writeln!(writer, "{}", serde_json::to_string_pretty(&output_json)?)?;
-
-    eprintln!(
-        "Converted {} transcripts from {}",
-        output_transcripts.len(),
-        gff.display()
-    );
 
     Ok(())
 }

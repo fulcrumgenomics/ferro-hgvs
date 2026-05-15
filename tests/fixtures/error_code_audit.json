@@ -396,6 +396,110 @@
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/alleles/",
       "status": "enforced",
       "spec_section_notes": "Detected in src/normalize/overlap.rs by detect_overlap_conflicts and wired into normalize_allele after per-variant normalization. Variant output is preserved; the warning is advisory."
+    },
+    {
+      "code": "E-LOAD-001",
+      "description": "MalformedRecord — a required GFF/GTF column failed to parse; the offending row is dropped.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 2."
+    },
+    {
+      "code": "E-LOAD-002",
+      "description": "UnsupportedFormat — the input file cannot be classified as GFF3 or GTF. Reserved for future use.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 1."
+    },
+    {
+      "code": "E-LOAD-103",
+      "description": "StrandRequired — a transcript with an unspecified or unknown strand is dropped.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-001",
+      "description": "UnknownFormat — format could not be determined with high confidence; defaulted to GFF3.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 1."
+    },
+    {
+      "code": "W-LOAD-002",
+      "description": "InlineFastaIgnored — a ##FASTA directive was encountered; inline sequences are not parsed. Reserved.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 2."
+    },
+    {
+      "code": "W-LOAD-010",
+      "description": "OrphanFeature — a feature references a parent ID not present in the file; the orphan is dropped.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 3."
+    },
+    {
+      "code": "W-LOAD-100",
+      "description": "TranscriptWithoutExons — a transcript-like feature has no exon, UTR, or CDS children; the transcript is dropped.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-101",
+      "description": "GeneAsTranscript — a gene feature with direct CDS children (no mRNA/transcript) is treated as a transcript.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; prokaryotic GFF3 convention. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-110",
+      "description": "PhaseAppliedToCdsStart — the leading CDS has a non-zero phase; cds_start_genomic was shifted by the phase value.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-111",
+      "description": "PhaseUnavailable — the leading CDS has no phase recorded; the unshifted CDS start is used.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-112",
+      "description": "StopCodonAssumed — no explicit stop_codon record found; cds_end_genomic was extended by 3 bp on the 3' side.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
+      "code": "W-LOAD-200",
+      "description": "CdsLengthNotMod3 — FASTA validation found a CDS whose length is not divisible by 3. Reserved for Phase 4.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 5."
+    },
+    {
+      "code": "W-LOAD-201",
+      "description": "NonCanonicalStartCodon — FASTA validation found the first CDS codon is not in {ATG, CTG, GTG, TTG}. Reserved for Phase 4.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 5."
     }
   ]
 }
