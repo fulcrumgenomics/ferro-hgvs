@@ -554,4 +554,157 @@ mod tests {
         assert!(!result.is_intronic);
         assert!(!result.is_utr);
     }
+
+    #[test]
+    fn project_single_base_deletion_is_frameshift() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1004del deletes a single base — net change -1 → frameshift.
+        let result = vp
+            .project("NC_000001.11:g.1004del", "NM_TEST.1")
+            .expect("deletion should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains(":c."), "expected c. variant, got: {}", c);
+        assert!(c.contains("del"), "expected del notation in c., got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(result.is_frameshift, "1-base del should be frameshift");
+        assert!(!result.is_intronic);
+    }
+
+    #[test]
+    fn project_three_base_deletion_in_frame() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1003_1005del deletes 3 bases — in-frame.
+        let result = vp
+            .project("NC_000001.11:g.1003_1005del", "NM_TEST.1")
+            .expect("3-base del should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains("del"), "expected del notation, got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(!result.is_frameshift, "3-base deletion is in-frame");
+    }
+
+    #[test]
+    fn project_single_base_insertion_is_frameshift() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1003_1004insA inserts one base — frameshift.
+        let result = vp
+            .project("NC_000001.11:g.1003_1004insA", "NM_TEST.1")
+            .expect("insertion should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains("ins"), "expected ins notation, got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(result.is_frameshift, "1-base insertion is frameshift");
+    }
+
+    #[test]
+    fn project_duplication() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1004dup duplicates a single base — frameshift.
+        let result = vp
+            .project("NC_000001.11:g.1004dup", "NM_TEST.1")
+            .expect("dup should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains("dup"), "expected dup notation, got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(result.is_frameshift, "1-base dup is frameshift");
+    }
+
+    #[test]
+    fn project_delins() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1003_1004delinsAT — replace 2 bases with 2 bases → not a frameshift.
+        let result = vp
+            .project("NC_000001.11:g.1003_1004delinsAT", "NM_TEST.1")
+            .expect("delins should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains("delins"), "expected delins notation, got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(
+            !result.is_frameshift,
+            "delins of equal length is not a frameshift"
+        );
+    }
+
+    #[test]
+    fn project_inversion() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1003_1005inv — inversion preserves length → not a frameshift.
+        let result = vp
+            .project("NC_000001.11:g.1003_1005inv", "NM_TEST.1")
+            .expect("inv should project");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains("inv"), "expected inv notation, got: {}", c);
+        assert!(result.protein.is_none(), "p. for indels deferred to PR 2");
+        assert!(!result.is_frameshift, "inversion is not a frameshift");
+    }
+
+    fn make_ensembl_provider_and_projector() -> (Projector, MockProvider) {
+        // Same CDS as make_test_provider_and_projector but the transcript ID is
+        // an Ensembl accession (no NM_/XM_ prefix) and cdot.protein is absent.
+        // The projector must NOT fabricate a bogus protein accession via
+        // substring substitution; it should skip protein prediction instead.
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "ENST00000000001.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "ENST00000000001.1".to_string(),
+            gene_symbol: Some("TESTGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGCGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_substitution_no_protein_accession_skips_protein() {
+        let (projector, provider) = make_ensembl_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "ENST00000000001.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(c.contains(":c.4C>A"), "expected c.4C>A, got: {}", c);
+        // Neither NM_/XM_ prefix nor cdot.protein: must skip protein prediction.
+        assert!(
+            result.protein.is_none(),
+            "expected no protein for accession with no NM_/XM_ prefix and no cdot.protein, got: {:?}",
+            result.protein
+        );
+    }
 }
