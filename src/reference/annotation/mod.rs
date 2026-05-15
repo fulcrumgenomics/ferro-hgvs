@@ -25,6 +25,7 @@ pub(crate) mod feature;
 pub mod format_detect;
 pub(crate) mod graph;
 pub(crate) mod record;
+pub(crate) mod validate;
 
 pub use diagnostics::{
     DiagnosticPayload, LoaderDiagnostic, LoaderReport, Severity, SourceLocation,
@@ -62,6 +63,10 @@ pub struct LoaderConfig {
     pub format: Option<AnnotationFormat>,
     pub error_mode: ErrorMode,
     pub genome_build: Option<GenomeBuild>,
+    /// Optional FASTA provider for CDS-length and start-codon validation.
+    pub(crate) fasta: Option<Box<dyn crate::reference::provider::ReferenceProvider>>,
+    /// When `true` (default) and `fasta` is set, run FASTA-aware validation.
+    pub validate_fasta: bool,
 }
 
 impl Default for LoaderConfig {
@@ -72,12 +77,15 @@ impl Default for LoaderConfig {
 
 impl LoaderConfig {
     /// Create a new `LoaderConfig` with default settings:
-    /// format auto-detected, [`ErrorMode::Lenient`], genome build GRCh38.
+    /// format auto-detected, [`ErrorMode::Lenient`], genome build GRCh38,
+    /// no FASTA provider, FASTA validation enabled.
     pub fn new() -> Self {
         Self {
             format: None,
             error_mode: ErrorMode::Lenient,
             genome_build: None,
+            fasta: None,
+            validate_fasta: true,
         }
     }
 
@@ -108,6 +116,27 @@ impl LoaderConfig {
     /// Set the genome build / assembly version used when constructing transcripts.
     pub fn with_genome_build(mut self, b: GenomeBuild) -> Self {
         self.genome_build = Some(b);
+        self
+    }
+
+    /// Supply a FASTA provider for optional CDS-length and start-codon validation.
+    ///
+    /// When a provider is set and `validate_fasta` is `true` (the default),
+    /// [`load_annotations`] will emit `W-LOAD-200` / `W-LOAD-201` diagnostics
+    /// for transcripts with non-mod-3 CDS lengths or non-canonical start codons.
+    /// Use [`Self::with_no_validate_fasta`] to disable validation while still
+    /// passing a FASTA for other purposes.
+    pub fn with_fasta<F>(mut self, fasta: F) -> Self
+    where
+        F: crate::reference::provider::ReferenceProvider + 'static,
+    {
+        self.fasta = Some(Box::new(fasta));
+        self
+    }
+
+    /// Disable FASTA-aware validation even when a FASTA provider has been supplied.
+    pub fn with_no_validate_fasta(mut self) -> Self {
+        self.validate_fasta = false;
         self
     }
 }
@@ -274,9 +303,20 @@ pub fn load_annotations<P: AsRef<Path>>(
     }
     report.records_dropped += graph.orphan_count;
 
-    let transcripts = build_transcripts(&graph, format, genome_build, source_path, &mut report);
+    let transcripts = build_transcripts(
+        &graph,
+        format,
+        genome_build,
+        source_path.clone(),
+        &mut report,
+    );
 
     let mut db = TranscriptDb::with_build(genome_build);
+    for tx in &transcripts {
+        if let (Some(fasta), true) = (&config.fasta, config.validate_fasta) {
+            validate::validate_transcript(tx, fasta.as_ref(), &source_path, &mut report);
+        }
+    }
     for tx in transcripts {
         db.add(tx);
     }
@@ -520,6 +560,23 @@ mod tests {
         let (db, report) = load_annotations(f.path(), &cfg).unwrap();
         assert_eq!(db.len(), 0);
         assert_eq!(report.transcripts_loaded, 0);
+    }
+
+    #[test]
+    fn gff3_exon_shared_between_two_transcripts_via_comma_separated_parent() {
+        let f = write_gff3(
+            "##gff-version 3\n\
+             chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx1;gene=TEST\n\
+             chr1\t.\tmRNA\t1000\t2000\t.\t+\t.\tID=tx2;gene=TEST\n\
+             chr1\t.\texon\t1000\t2000\t.\t+\t.\tParent=tx1,tx2\n",
+        );
+        let cfg = LoaderConfig::new();
+        let (db, _report) = load_annotations(f.path(), &cfg).unwrap();
+        // Both transcripts should have the exon
+        let tx1 = db.get("tx1").unwrap();
+        let tx2 = db.get("tx2").unwrap();
+        assert_eq!(tx1.exons.len(), 1);
+        assert_eq!(tx2.exons.len(), 1);
     }
 
     #[test]

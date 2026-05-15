@@ -13,7 +13,7 @@ pub mod transcript;
 
 pub use annotation::{load_annotations, AnnotationFormat, LoaderConfig, LoaderReport};
 pub use fasta::FastaProvider;
-pub use loader::{detect_genome_build, load_gff3, load_gtf, TranscriptDb};
+pub use loader::{detect_genome_build, TranscriptDb};
 pub use mock::MockProvider;
 pub use multi_fasta::MultiFastaProvider;
 pub use protein::ProteinCache;

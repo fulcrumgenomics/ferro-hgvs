@@ -352,7 +352,7 @@ enum Commands {
         #[arg(long, conflicts_with = "strict")]
         silent: bool,
 
-        /// Skip CDS-length and start-codon FASTA-aware validation even when --fasta is supplied. (Phase 4 — currently a no-op.)
+        /// Skip CDS-length and start-codon FASTA-aware validation even when --fasta is supplied.
         #[arg(long)]
         no_validate_fasta: bool,
 
@@ -743,12 +743,13 @@ fn run_annotate_vcf(
 
     // Load transcript database
     let db = if let Some(gff_path) = gff {
-        let ext = gff_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext == "gtf" || ext == "gtf.gz" {
-            ferro_hgvs::reference::loader::load_gtf(gff_path)?
-        } else {
-            ferro_hgvs::reference::loader::load_gff3(gff_path)?
+        let cfg =
+            ferro_hgvs::reference::annotation::LoaderConfig::new().with_genome_build(genome_build);
+        let (db, report) = ferro_hgvs::reference::annotation::load_annotations(gff_path, &cfg)?;
+        if !report.diagnostics_by_code.is_empty() {
+            eprintln!("{}", report.summary_line());
         }
+        db
     } else {
         // Create empty database
         TranscriptDb::with_build(genome_build)
@@ -832,12 +833,13 @@ fn run_vcf_to_hgvs(
 
     // Load transcript database
     let db = if let Some(gff_path) = gff {
-        let ext = gff_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext == "gtf" || ext == "gtf.gz" {
-            ferro_hgvs::reference::loader::load_gtf(gff_path)?
-        } else {
-            ferro_hgvs::reference::loader::load_gff3(gff_path)?
+        let cfg =
+            ferro_hgvs::reference::annotation::LoaderConfig::new().with_genome_build(genome_build);
+        let (db, report) = ferro_hgvs::reference::annotation::load_annotations(gff_path, &cfg)?;
+        if !report.diagnostics_by_code.is_empty() {
+            eprintln!("{}", report.summary_line());
         }
+        db
     } else {
         TranscriptDb::with_build(genome_build)
     };
@@ -1344,12 +1346,21 @@ fn run_convert_gff(
     // Parse genome build
     let genome_build = parse_genome_build(build);
 
-    // Build loader config with error mode and genome build
+    // Build loader config with error mode, genome build, and optional FASTA validation.
     let mut cfg = LoaderConfig::new().with_genome_build(genome_build);
     if strict {
         cfg = cfg.with_strict();
     } else if silent {
         cfg = cfg.with_silent();
+    }
+    // Pass a FASTA provider to load_annotations for CDS-length / start-codon validation.
+    // A second FastaProvider is constructed below for sequence extraction; FastaProvider::new
+    // is cheap (reads only the index), so the double construction is acceptable.
+    if let Some(fasta_path) = fasta {
+        cfg = cfg.with_fasta(FastaProvider::new(fasta_path)?);
+    }
+    if no_validate_fasta {
+        cfg = cfg.with_no_validate_fasta();
     }
 
     // Load GFF/GTF file via load_annotations
@@ -1363,8 +1374,6 @@ fn run_convert_gff(
             .map_err(|e| format!("serialize diagnostics: {}", e))?;
         std::fs::write(path, json).map_err(|e| format!("write {}: {}", path.display(), e))?;
     }
-
-    let _ = no_validate_fasta; // Phase 4 will use this
 
     // Load FASTA if provided and extract sequences
     let fasta_provider = if let Some(fasta_path) = fasta {
