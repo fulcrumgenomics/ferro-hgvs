@@ -2,15 +2,16 @@
 
 use crate::backtranslate::{Codon, CodonTable};
 use crate::error::FerroError;
-use crate::hgvs::edit::Base;
-use crate::hgvs::location::AminoAcid;
+use crate::hgvs::edit::{Base, NaEdit, ProteinEdit};
+use crate::hgvs::interval::ProtInterval;
+use crate::hgvs::location::{AminoAcid, ProtPos};
+use crate::hgvs::variant::{Accession, HgvsVariant, LocEdit, ProteinVariant};
 use crate::reference::transcript::Transcript;
 
 /// Read the codon (3 bases) covering a given CDS position from a transcript's CDS sequence.
 ///
 /// Returns the codon bases (uppercase) plus the 0/1/2 frame index (which base
 /// within the codon the CDS position corresponds to).
-#[allow(dead_code)] // TODO(issue-200): used in Task 6
 pub(crate) fn read_ref_codon(
     transcript: &Transcript,
     cds_pos: i64,
@@ -63,7 +64,6 @@ pub(crate) fn read_ref_codon(
 }
 
 /// Apply a single-base substitution to a codon at the given 0/1/2 frame index.
-#[allow(dead_code)] // TODO(issue-200): used in Task 6
 pub(crate) fn apply_substitution(codon: &str, frame: u8, alt: Base) -> String {
     let mut bytes = codon.as_bytes().to_vec();
     bytes[frame as usize] = alt.to_u8();
@@ -72,7 +72,6 @@ pub(crate) fn apply_substitution(codon: &str, frame: u8, alt: Base) -> String {
 
 /// Translate a 3-character codon to an `AminoAcid`. Returns `Some(Ter)` for stop codons,
 /// `Some(Xaa)` if the codon is unrecognized; `None` only if the input is not 3 ASCII bases.
-#[allow(dead_code)] // TODO(issue-200): used in Task 6
 pub(crate) fn translate(codon: &str) -> Option<AminoAcid> {
     let parsed = Codon::parse(codon)?;
     let table = CodonTable::standard();
@@ -80,6 +79,75 @@ pub(crate) fn translate(codon: &str) -> Option<AminoAcid> {
         return Some(AminoAcid::Ter);
     }
     Some(*table.amino_acid_for(&parsed).unwrap_or(&AminoAcid::Xaa))
+}
+
+/// Build a predicted `p.(...)` ProteinVariant for a CDS substitution.
+///
+/// Returns `Err(ProteinSequenceUnavailable)` if the transcript's CDS sequence
+/// cannot supply the codon at `cds_pos`. Returns `Err(UnsupportedProjection)`
+/// if `edit` is not a `NaEdit::Substitution`.
+#[allow(dead_code)] // TODO(issue-200): used in Task 7
+pub(crate) fn predict_substitution_protein(
+    transcript: &Transcript,
+    cds_pos: i64,
+    edit: &NaEdit,
+    protein_accession: &str,
+) -> Result<HgvsVariant, FerroError> {
+    let alt = match edit {
+        NaEdit::Substitution { alternative, .. } => *alternative,
+        _ => {
+            return Err(FerroError::UnsupportedProjection {
+                reason: "predict_substitution_protein called with non-substitution edit"
+                    .to_string(),
+            })
+        }
+    };
+    let (ref_codon, frame) = read_ref_codon(transcript, cds_pos)?;
+    let alt_codon = apply_substitution(&ref_codon, frame, alt);
+    let ref_aa = translate(&ref_codon).unwrap_or(AminoAcid::Xaa);
+    let alt_aa = translate(&alt_codon).unwrap_or(AminoAcid::Xaa);
+    let aa_number = ((cds_pos - 1) / 3 + 1) as u64;
+
+    // For the identity case, use predicted: false — the outer Mu::Uncertain wrapper
+    // (from LocEdit::new_predicted) already provides the p.(...) predicted wrapping.
+    // Using predicted: true here would produce double parens: p.(Arg1(=)).
+    let protein_edit = if ref_aa == alt_aa {
+        ProteinEdit::Identity {
+            predicted: false,
+            whole_protein: false,
+        }
+    } else {
+        ProteinEdit::Substitution {
+            reference: ref_aa,
+            alternative: alt_aa,
+        }
+    };
+
+    let accession = parse_protein_accession(protein_accession);
+    let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_number));
+    let variant = ProteinVariant {
+        accession,
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new_predicted(loc, protein_edit),
+    };
+    Ok(HgvsVariant::Protein(variant))
+}
+
+fn parse_protein_accession(s: &str) -> Accession {
+    // Format: PREFIX_NUMBER.VERSION (e.g. "NP_000288.1") or PREFIX_NUMBER.
+    // For Ensembl-style accessions like "ENSP00000256509" there is no underscore;
+    // pass them through with the whole string as the prefix.
+    if let Some((prefix_num, version)) = s.rsplit_once('.') {
+        if let Ok(v) = version.parse::<u32>() {
+            if let Some((prefix, number)) = prefix_num.split_once('_') {
+                return Accession::new(prefix, number, Some(v));
+            }
+        }
+    }
+    if let Some((prefix, number)) = s.split_once('_') {
+        return Accession::new(prefix, number, None);
+    }
+    Accession::new(s, "", None)
 }
 
 #[cfg(test)]
@@ -168,5 +236,53 @@ mod tests {
         assert_eq!(translate("TAA"), Some(AminoAcid::Ter));
         assert_eq!(translate("CGG"), Some(AminoAcid::Arg));
         assert_eq!(translate("GGG"), Some(AminoAcid::Gly));
+    }
+
+    #[test]
+    fn substitution_missense_arg_to_gly() {
+        // CDS "CGGGGG": codon 1 = CGG = Arg. c.1C>G → codon 1 = GGG = Gly.
+        let tx = tx_with_seq("CGGGGG", 1, 6);
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::G,
+        };
+        let pv = predict_substitution_protein(&tx, 1, &edit, "NP_000288.1").unwrap();
+        let s = match &pv {
+            HgvsVariant::Protein(p) => p.to_string(),
+            _ => panic!("expected Protein variant"),
+        };
+        assert_eq!(s, "NP_000288.1:p.(Arg1Gly)");
+    }
+
+    #[test]
+    fn substitution_synonymous_arg_arg() {
+        // CGG (Arg) → CGC (Arg). Frame 2 of codon 1, alt C.
+        let tx = tx_with_seq("CGGGGG", 1, 6);
+        let edit = NaEdit::Substitution {
+            reference: Base::G,
+            alternative: Base::C,
+        };
+        let pv = predict_substitution_protein(&tx, 3, &edit, "NP_000288.1").unwrap();
+        let s = match &pv {
+            HgvsVariant::Protein(p) => p.to_string(),
+            _ => panic!("expected Protein variant"),
+        };
+        assert_eq!(s, "NP_000288.1:p.(Arg1=)");
+    }
+
+    #[test]
+    fn substitution_nonsense_arg_ter() {
+        // CGA (Arg) → TGA (Ter). Frame 0 of codon 1, alt T.
+        let tx = tx_with_seq("CGAAAA", 1, 6);
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::T,
+        };
+        let pv = predict_substitution_protein(&tx, 1, &edit, "NP_000288.1").unwrap();
+        let s = match &pv {
+            HgvsVariant::Protein(p) => p.to_string(),
+            _ => panic!("expected Protein variant"),
+        };
+        assert_eq!(s, "NP_000288.1:p.(Arg1Ter)");
     }
 }
