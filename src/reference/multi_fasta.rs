@@ -575,6 +575,11 @@ impl MultiFastaProvider {
         self.index.len()
     }
 
+    /// Get the cdot mapper if one was loaded with this provider.
+    pub fn cdot_mapper(&self) -> Option<&CdotMapper> {
+        self.cdot_mapper.as_ref()
+    }
+
     /// Get CDS info from supplemental metadata for old/superseded transcripts.
     /// Creates a synthetic single exon spanning the entire transcript since
     /// mRNA transcripts are already spliced.

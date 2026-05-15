@@ -251,6 +251,11 @@ impl MockProvider {
     pub fn transcript_ids(&self) -> Vec<&str> {
         self.transcripts.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Iterate over all transcripts registered in the provider.
+    pub fn all_transcripts(&self) -> impl Iterator<Item = &Transcript> {
+        self.transcripts.values()
+    }
 }
 
 impl Default for MockProvider {

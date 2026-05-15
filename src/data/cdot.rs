@@ -760,6 +760,59 @@ impl CdotMapper {
         }
     }
 
+    /// Build a `CdotMapper` from in-memory `Transcript` records (typically loaded into a
+    /// `MockProvider`). Converts the 1-based `Transcript` coordinates to the 0-based half-open
+    /// form expected by `CdotTranscript`.
+    ///
+    /// # Coordinate conversions
+    ///
+    /// | Transcript field | Basis | CdotTranscript field | Basis |
+    /// |-----------------|-------|----------------------|-------|
+    /// | `Exon.genomic_start` | 1-based inclusive | `exons[][0]` (genome_start) | 0-based |
+    /// | `Exon.genomic_end` | 1-based inclusive | `exons[][1]` (genome_end) | 0-based exclusive |
+    /// | `Exon.start` | 1-based tx | `exons[][2]` (tx_start) | 1-based |
+    /// | `Exon.end` | 1-based tx | `exons[][3]` (tx_end) | 1-based |
+    /// | `cds_start` | 1-based tx | `cds_start` | 0-based |
+    /// | `cds_end` | 1-based tx inclusive | `cds_end` | 0-based exclusive |
+    pub fn from_transcripts<'a, I>(transcripts: I) -> Self
+    where
+        I: IntoIterator<Item = &'a crate::reference::transcript::Transcript>,
+    {
+        let mut mapper = Self::new();
+        for tx in transcripts {
+            let contig = tx.chromosome.clone().unwrap_or_default();
+            let exons: Vec<[u64; 4]> = tx
+                .exons
+                .iter()
+                .map(|e| {
+                    // genome_start: 1-based inclusive → 0-based
+                    let g_start = e.genomic_start.map(|s| s.saturating_sub(1)).unwrap_or(0);
+                    // genome_end: 1-based inclusive → 0-based exclusive (same value)
+                    let g_end = e.genomic_end.unwrap_or(0);
+                    // tx_start/tx_end: already 1-based — used directly in CdotTranscript
+                    let t_start = e.start;
+                    let t_end = e.end;
+                    [g_start, g_end, t_start, t_end]
+                })
+                .collect();
+            let cdot_tx = CdotTranscript {
+                gene_name: tx.gene_symbol.clone(),
+                contig,
+                strand: tx.strand,
+                exons,
+                // cds_start: 1-based tx → 0-based
+                cds_start: tx.cds_start.map(|c| c.saturating_sub(1)),
+                // cds_end: 1-based tx inclusive → 0-based exclusive (same value)
+                cds_end: tx.cds_end,
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            };
+            mapper.add_transcript(tx.id.clone(), cdot_tx);
+        }
+        mapper
+    }
+
     /// Load from a cdot JSON file.
     pub fn from_json_file<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
         let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {

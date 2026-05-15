@@ -126,6 +126,19 @@ impl PyProvider {
     fn test_data() -> Self {
         PyProvider::Mock(MockProvider::with_test_data())
     }
+
+    /// Build / extract a CdotMapper for this provider.
+    fn cdot_mapper(&self) -> crate::data::cdot::CdotMapper {
+        match self {
+            PyProvider::Mock(p) => {
+                crate::data::cdot::CdotMapper::from_transcripts(p.all_transcripts())
+            }
+            PyProvider::MultiFasta(p) => p
+                .cdot_mapper()
+                .cloned()
+                .unwrap_or_else(crate::data::cdot::CdotMapper::new),
+        }
+    }
 }
 
 /// Parse an HGVS variant string
@@ -525,6 +538,126 @@ impl PyNormalizer {
             .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
 
         Ok(normalized.to_string())
+    }
+}
+
+// ============================================================================
+// VariantProjector
+// ============================================================================
+
+#[pyclass(name = "VariantProjection")]
+pub struct PyVariantProjection {
+    inner: crate::project::VariantProjection,
+}
+
+#[pymethods]
+impl PyVariantProjection {
+    /// The normalized g. variant as an HGVS string.
+    #[getter]
+    fn g_name(&self) -> String {
+        self.inner.genomic.to_string()
+    }
+
+    /// The c./n. variant as an HGVS string (None when projection skipped).
+    #[getter]
+    fn c_name(&self) -> Option<String> {
+        self.inner.coding.as_ref().map(|v| v.to_string())
+    }
+
+    /// The p. variant as an HGVS string (None for intronic, UTR, non-coding,
+    /// or non-substitution edits).
+    #[getter]
+    fn p_name(&self) -> Option<String> {
+        self.inner.protein.as_ref().map(|v| v.to_string())
+    }
+
+    #[getter]
+    fn transcript_id(&self) -> String {
+        self.inner.transcript_id.clone()
+    }
+
+    #[getter]
+    fn gene_symbol(&self) -> Option<String> {
+        self.inner.gene_symbol.clone()
+    }
+
+    #[getter]
+    fn is_frameshift(&self) -> bool {
+        self.inner.is_frameshift
+    }
+
+    #[getter]
+    fn is_intronic(&self) -> bool {
+        self.inner.is_intronic
+    }
+
+    #[getter]
+    fn is_utr(&self) -> bool {
+        self.inner.is_utr
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "VariantProjection(g={:?}, c={:?}, p={:?}, transcript={:?})",
+            self.g_name(),
+            self.c_name(),
+            self.p_name(),
+            self.transcript_id()
+        )
+    }
+}
+
+#[pyclass(name = "VariantProjector")]
+pub struct PyVariantProjector {
+    inner: crate::project::VariantProjector<PyProvider>,
+}
+
+#[pymethods]
+impl PyVariantProjector {
+    /// Create a variant projector.
+    ///
+    /// Args:
+    ///     reference_json: Path to a transcripts.json file. If None, uses
+    ///         built-in test data (limited; not for production).
+    ///     direction: Shuffle direction passed to the internal normalizer
+    ///         ("3prime" or "5prime").
+    #[new]
+    #[pyo3(signature = (reference_json=None, direction="3prime"))]
+    fn new(reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+        let provider = match reference_json {
+            Some(path) => PyProvider::from_json(Path::new(path))?,
+            None => PyProvider::test_data(),
+        };
+        Self::from_provider(provider, direction)
+    }
+
+    /// Create a projector from a ferro-prepare manifest (preferred for
+    /// production — uses MultiFastaProvider with cdot data).
+    #[staticmethod]
+    #[pyo3(signature = (manifest_path, direction="3prime"))]
+    fn from_manifest(manifest_path: &str, direction: &str) -> PyResult<Self> {
+        let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
+        Self::from_provider(provider, direction)
+    }
+
+    /// Project a g. HGVS string onto a target transcript.
+    fn project(&self, hgvs_string: &str, transcript: &str) -> PyResult<PyVariantProjection> {
+        self.inner
+            .project(hgvs_string, transcript)
+            .map(|inner| PyVariantProjection { inner })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+}
+
+impl PyVariantProjector {
+    fn from_provider(provider: PyProvider, direction: &str) -> PyResult<Self> {
+        let cdot = provider.cdot_mapper();
+        let projector = crate::data::projection::Projector::new(cdot);
+        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
+        Ok(Self {
+            inner: crate::project::VariantProjector::new(projector, provider)
+                .with_normalize_config(config),
+        })
     }
 }
 
@@ -3088,6 +3221,10 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Coordinate mapping classes
     m.add_class::<PyCoordinateMapper>()?;
+
+    // Variant projection classes
+    m.add_class::<PyVariantProjector>()?;
+    m.add_class::<PyVariantProjection>()?;
 
     // Add version
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
