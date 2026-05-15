@@ -257,3 +257,135 @@ class TestIndelProteinNomenclature:
         assert result.p_name is not None
         assert "Ter6" in result.p_name
         assert "ext" in result.p_name
+
+
+@pytest.fixture
+def two_tx_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
+    """VariantProjector with two transcripts overlapping chr1:1000-1008.
+
+    NM_TX1.1 and NM_TX2.1 share the same genomic region and CDS sequence
+    "ATGCGCTAA" on chr1. NM_TX2.1 is registered as MANE Select via the
+    reference JSON (the projector's MANE annotation comes from the Projector
+    built at VariantProjector construction time and uses the underlying
+    cdot mapper).
+
+    Because the Python VariantProjector does not yet expose MANE annotation,
+    tests using this fixture only verify that *both* transcripts are returned;
+    they do not assert ordering by MANE status.
+    """
+    fixture = {
+        "transcripts": [
+            {
+                "id": "NM_TX1.1",
+                "gene_symbol": "GENE1",
+                "strand": "+",
+                "sequence": "ATGCGCTAA",
+                "cds_start": 1,
+                "cds_end": 9,
+                "exons": [
+                    {
+                        "number": 1,
+                        "start": 1,
+                        "end": 9,
+                        "genomic_start": 1000,
+                        "genomic_end": 1008,
+                    }
+                ],
+                "chromosome": "chr1",
+                "genomic_start": 1000,
+                "genomic_end": 1008,
+            },
+            {
+                "id": "NM_TX2.1",
+                "gene_symbol": "GENE1",
+                "strand": "+",
+                "sequence": "ATGCGCTAA",
+                "cds_start": 1,
+                "cds_end": 9,
+                "exons": [
+                    {
+                        "number": 1,
+                        "start": 1,
+                        "end": 9,
+                        "genomic_start": 1000,
+                        "genomic_end": 1008,
+                    }
+                ],
+                "chromosome": "chr1",
+                "genomic_start": 1000,
+                "genomic_end": 1008,
+            },
+        ],
+        "genomic_sequences": {
+            "chr1": "N" * 1000 + "ATGCGCTAA" + "N" * 100,
+        },
+    }
+    path = tmp_path / "two_tx.json"
+    path.write_text(json.dumps(fixture))
+    return ferro_hgvs.VariantProjector(reference_json=str(path))
+
+
+class TestProjectAll:
+    """Smoke tests for project_all and project_normalized_all."""
+
+    def test_project_all_returns_both_transcripts(
+        self, two_tx_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        results = two_tx_projector.project_all("chr1:g.1003C>A")
+        assert len(results) == 2, f"expected 2 projections, got {len(results)}"
+
+    def test_project_all_no_overlap_returns_empty(
+        self, two_tx_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # g.5000 is far outside all transcripts.
+        results = two_tx_projector.project_all("NC_000001.11:g.5000A>G")
+        assert results == [], "expected empty list for non-overlapping position"
+
+    def test_project_all_projections_have_c_name(
+        self, two_tx_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        results = two_tx_projector.project_all("chr1:g.1003C>A")
+        for r in results:
+            assert r.c_name is not None
+            assert ":c." in r.c_name
+
+    def test_project_normalized_all_same_result_as_project_all(
+        self, two_tx_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        hgvs_string = "chr1:g.1003C>A"
+        via_all = two_tx_projector.project_all(hgvs_string)
+        # Parse only; g.1003C>A is already canonical (a CDS substitution can't
+        # 3'-shift), so normalize() would be a no-op and skipping it exercises
+        # the fast-path contract: project_normalized_all on a parsed-but-not-
+        # normalized canonical variant equals project_all on the source string.
+        variant = ferro_hgvs.parse(hgvs_string)
+        via_normalized_all = two_tx_projector.project_normalized_all(variant)
+        assert len(via_all) == len(via_normalized_all)
+        for a, b in zip(via_all, via_normalized_all, strict=True):
+            assert a.transcript_id == b.transcript_id
+            assert a.c_name == b.c_name
+
+
+class TestProjectNormalized:
+    """Smoke tests for project_normalized."""
+
+    def test_project_normalized_matches_project(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        hgvs_string = "NC_000001.11:g.1003C>A"
+        via_project = projector.project(hgvs_string, "NM_TEST.1")
+        # project_normalized skips re-normalization; for an already-canonical
+        # string the results must be identical.
+        variant = ferro_hgvs.parse(hgvs_string)
+        via_normalized = projector.project_normalized(variant, "NM_TEST.1")
+        assert via_project.c_name == via_normalized.c_name
+        assert via_project.p_name == via_normalized.p_name
+        assert via_project.transcript_id == via_normalized.transcript_id
+
+    def test_project_normalized_returns_variant_projection(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        variant = ferro_hgvs.parse("NC_000001.11:g.1003C>A")
+        result = projector.project_normalized(variant, "NM_TEST.1")
+        assert isinstance(result, ferro_hgvs.VariantProjection)
+        assert result.c_name is not None
