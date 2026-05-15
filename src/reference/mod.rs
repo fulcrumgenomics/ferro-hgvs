@@ -2,6 +2,7 @@
 //!
 //! Provides traits and implementations for accessing reference sequence data.
 
+pub mod annotation;
 pub mod fasta;
 pub mod loader;
 pub mod mock;
@@ -10,6 +11,7 @@ pub mod protein;
 pub mod provider;
 pub mod transcript;
 
+pub use annotation::{load_annotations, AnnotationFormat, LoaderConfig, LoaderReport};
 pub use fasta::FastaProvider;
 pub use loader::{detect_genome_build, load_gff3, load_gtf, TranscriptDb};
 pub use mock::MockProvider;

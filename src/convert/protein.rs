@@ -73,7 +73,7 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: "ATGCCCAAAGGGTTTTAG".to_string(), // 18 bases = 6 codons
+            sequence: Some("ATGCCCAAAGGGTTTTAG".to_string()), // 18 bases = 6 codons
             cds_start: Some(1),
             cds_end: Some(18),
             exons: vec![Exon::new(1, 1, 18)],

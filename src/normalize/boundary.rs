@@ -82,7 +82,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(12),
             exons: vec![Exon::new(1, 1, 4), Exon::new(2, 5, 8), Exon::new(3, 9, 12)],

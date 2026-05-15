@@ -20,7 +20,9 @@ use crate::reference::transcript::{IntronPosition, SpliceSiteType, Transcript};
 
 /// Validate a transcript position against a transcript
 pub fn validate_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<(), FerroError> {
-    let seq_len = transcript.sequence.len() as i64;
+    // `sequence_length` is exon-derived, so this works for both
+    // FASTA-backed and coordinate-only transcripts.
+    let seq_len = transcript.sequence_length() as i64;
 
     // Check if position is within transcript bounds
     // Note: negative positions are allowed for upstream positions (e.g., n.-30)
@@ -297,7 +299,7 @@ mod tests {
             id: "NR_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "A".repeat(100),
+            sequence: Some("A".repeat(100)),
             cds_start: None, // Non-coding
             cds_end: None,
             exons: vec![
@@ -785,7 +787,7 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            sequence: "A".repeat(200),
+            sequence: Some("A".repeat(200)),
             cds_start: Some(1),
             cds_end: Some(200),
             exons: vec![

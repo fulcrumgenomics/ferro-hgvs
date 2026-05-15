@@ -110,7 +110,7 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: "AAAAATGCCCAAAGGGTTTTAAAAAA".to_string(), // 26 bases
+            sequence: Some("AAAAATGCCCAAAGGGTTTTAAAAAA".to_string()), // 26 bases
             cds_start: Some(6),
             cds_end: Some(20),
             exons: vec![Exon::new(1, 1, 26)],
@@ -180,7 +180,7 @@ mod tests {
             id: "NM_TEST_ZERO.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: "ATGCCCAAAGGG".to_string(),
+            sequence: Some("ATGCCCAAAGGG".to_string()),
             cds_start: Some(0),
             cds_end: Some(5),
             exons: vec![Exon::new(1, 1, 12)],

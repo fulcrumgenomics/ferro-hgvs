@@ -723,7 +723,7 @@ impl ReferenceProvider for MultiFastaProvider {
                     id: resolved,
                     gene_symbol: meta.gene_symbol,
                     strand: meta.strand,
-                    sequence,
+                    sequence: Some(sequence),
                     cds_start: meta.cds_start,
                     cds_end: meta.cds_end,
                     exons: meta.exons,

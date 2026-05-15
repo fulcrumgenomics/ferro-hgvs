@@ -230,13 +230,23 @@ impl ReferenceProvider for FastaProvider {
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
-        // First try as transcript ID
+        // First try as transcript ID. Only return a hit when the transcript
+        // has cached sequence bases; coordinate-only transcripts fall through
+        // to the FASTA index lookup below.
         if let Some(transcript) = self.transcripts.get(id) {
-            // Get sequence from transcript
-            let start_idx = start as usize;
-            let end_idx = end as usize;
-            if end_idx <= transcript.sequence.len() {
-                return Ok(transcript.sequence[start_idx..end_idx].to_string());
+            if let Some(seq) = transcript.sequence.as_deref() {
+                let start_idx = start as usize;
+                let end_idx = end as usize;
+                if start_idx <= end_idx && end_idx <= seq.len() {
+                    return Ok(seq[start_idx..end_idx].to_string());
+                } else if start_idx > end_idx {
+                    return Err(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "Invalid range {}-{} for transcript {} (start must be <= end)",
+                            start, end, id
+                        ),
+                    });
+                }
             }
         }
 
@@ -1027,7 +1037,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(12),
             exons: vec![Exon::new(1, 1, 12)],
@@ -1062,7 +1072,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(12),
             exons: vec![Exon::new(1, 1, 12)],
@@ -1103,7 +1113,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGC".to_string()),
             cds_start: Some(1),
             cds_end: Some(12),
             exons: vec![Exon::new(1, 1, 12)],
@@ -1123,6 +1133,48 @@ mod tests {
         let result = provider.get_sequence("NM_000088.3", 0, 4);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "ATGC");
+    }
+
+    /// `start > end` on a cached transcript sequence used to slip past the
+    /// bounds guard and panic on the slice; it must now return
+    /// `InvalidCoordinates` like protein.rs and mock.rs already do.
+    #[test]
+    fn test_fasta_provider_get_sequence_rejects_inverted_range() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand};
+        use std::sync::OnceLock;
+
+        let mut provider = FastaProvider {
+            path: PathBuf::new(),
+            index: HashMap::new(),
+            aliases: HashMap::new(),
+            transcripts: HashMap::new(),
+        };
+        let transcript = Transcript {
+            id: "NM_INV.1".to_string(),
+            gene_symbol: None,
+            strand: Strand::Plus,
+            sequence: Some("ATGCATGC".to_string()),
+            cds_start: None,
+            cds_end: None,
+            exons: vec![Exon::new(1, 1, 8)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        provider.add_transcript(transcript);
+
+        match provider.get_sequence("NM_INV.1", 5, 2) {
+            Err(FerroError::InvalidCoordinates { msg }) => {
+                assert!(msg.contains("start must be <= end"), "msg={msg}");
+            }
+            other => panic!("expected InvalidCoordinates, got {other:?}"),
+        }
     }
 
     // ===== resolve_name Extended Tests =====

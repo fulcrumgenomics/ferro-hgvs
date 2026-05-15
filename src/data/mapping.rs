@@ -117,6 +117,11 @@ impl CoordinateMapper {
         let (start, end) = match tx.strand {
             Strand::Plus => (start_genome, end_genome),
             Strand::Minus => (end_genome, start_genome),
+            Strand::Unknown => {
+                return Err(FerroError::ConversionError {
+                    msg: "strand unknown for transcript".into(),
+                })
+            }
         };
 
         let mut info = start_info;
@@ -191,6 +196,11 @@ impl CoordinateMapper {
         let (start, end) = match tx.strand {
             Strand::Plus => (interval_start, interval_end),
             Strand::Minus => (interval_end, interval_start),
+            Strand::Unknown => {
+                return Err(FerroError::ConversionError {
+                    msg: "strand unknown for transcript".into(),
+                })
+            }
         };
 
         let (start_cds, start_info) = self.genome_pos_to_cds_pos(tx, start, transcript_id)?;
@@ -264,6 +274,11 @@ impl CoordinateMapper {
                         // Before exon start (minus strand = after in genomic coords)
                         (base_genome as i64 - offset) as u64
                     }
+                }
+                Strand::Unknown => {
+                    return Err(FerroError::ConversionError {
+                        msg: "strand unknown for transcript".into(),
+                    })
                 }
             };
 
@@ -428,6 +443,11 @@ impl CoordinateMapper {
                         } else {
                             dist
                         }
+                    }
+                    Strand::Unknown => {
+                        return Err(FerroError::ConversionError {
+                            msg: "strand unknown for transcript".into(),
+                        })
                     }
                 };
 

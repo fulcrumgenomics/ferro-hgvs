@@ -291,6 +291,6 @@ mod normalization_boundaries {
 
         // With cross_boundaries=true, should allow full transcript range
         assert_eq!(bounds.left, 1);
-        assert_eq!(bounds.right, tx.sequence.len() as u64);
+        assert_eq!(bounds.right, tx.sequence_length());
     }
 }

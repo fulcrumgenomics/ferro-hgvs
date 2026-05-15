@@ -476,6 +476,16 @@ fn convert_cds_to_vcf(
                     exon_boundary_pos.saturating_sub(intron_offset as u64)
                 }
             }
+            Strand::Unknown => {
+                return (
+                    None,
+                    Some(format!(
+                        "Cannot convert intronic CDS position for transcript {}: \
+                         unknown strand",
+                        transcript_id
+                    )),
+                );
+            }
         }
     } else {
         // Exonic variant - direct conversion

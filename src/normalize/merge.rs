@@ -552,6 +552,7 @@ fn lookup_cds_middle_ref<P: ReferenceProvider>(
     let tx_idx_1based = cds_start.checked_add(cds_axis as u64)?.checked_sub(1)?;
     let byte = *tx
         .sequence
+        .as_deref()?
         .as_bytes()
         .get(tx_idx_1based.checked_sub(1)? as usize)?;
     Base::from_char(byte as char)

@@ -42,12 +42,17 @@ impl std::fmt::Display for GenomeBuild {
 
 /// Strand orientation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum Strand {
     #[serde(rename = "+")]
     #[default]
     Plus,
     #[serde(rename = "-")]
     Minus,
+    /// Strand is unspecified or not applicable (GFF3 `.` or `?`).
+    /// Transcripts with unknown strand are dropped by the loader builder (Task 1.8).
+    #[serde(rename = ".", alias = "?")]
+    Unknown,
 }
 
 impl std::fmt::Display for Strand {
@@ -55,6 +60,7 @@ impl std::fmt::Display for Strand {
         match self {
             Strand::Plus => write!(f, "+"),
             Strand::Minus => write!(f, "-"),
+            Strand::Unknown => write!(f, "."),
         }
     }
 }
@@ -266,8 +272,13 @@ pub struct Transcript {
     /// Strand orientation
     pub strand: Strand,
 
-    /// Full transcript sequence
-    pub sequence: String,
+    /// Full transcript sequence. `None` when the loader has not been paired
+    /// with a FASTA provider — coordinate-only callers (HGVS position math,
+    /// VCF conversion, exon-structure introspection) work without sequence
+    /// bases. Sequence-dependent operations (`get_sequence`, base-aware
+    /// validation) return `None` / fall through in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
 
     /// CDS start position (1-based, in transcript coordinates)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -377,7 +388,7 @@ impl Transcript {
         id: String,
         gene_symbol: Option<String>,
         strand: Strand,
-        sequence: String,
+        sequence: impl Into<Option<String>>,
         cds_start: Option<u64>,
         cds_end: Option<u64>,
         exons: Vec<Exon>,
@@ -393,7 +404,7 @@ impl Transcript {
             id,
             gene_symbol,
             strand,
-            sequence,
+            sequence: sequence.into(),
             cds_start,
             cds_end,
             exons,
@@ -409,9 +420,18 @@ impl Transcript {
         }
     }
 
-    /// Get the length of the transcript sequence
+    /// Length of the transcript in mRNA bases. Uses the cached `sequence`
+    /// length when available (matches the historical contract); otherwise
+    /// falls back to the sum of exon spans so coordinate-only transcripts
+    /// produced by the loader still report a sensible length.
     pub fn sequence_length(&self) -> u64 {
-        self.sequence.len() as u64
+        if let Some(s) = self.sequence.as_deref() {
+            s.len() as u64
+        } else {
+            // Use `Exon::len()`, which saturates instead of underflowing when
+            // a deserialized exon has `end < start`.
+            self.exons.iter().map(Exon::len).sum()
+        }
     }
 
     /// Check if this is a coding transcript
@@ -427,12 +447,14 @@ impl Transcript {
         }
     }
 
-    /// Get sequence at a position range (0-based)
+    /// Get sequence at a position range (0-based). Returns `None` if the
+    /// transcript has no cached sequence bases or the range is out of bounds.
     pub fn get_sequence(&self, start: u64, end: u64) -> Option<&str> {
+        let seq = self.sequence.as_deref()?;
         let start = start as usize;
         let end = end as usize;
-        if end <= self.sequence.len() && start < end {
-            Some(&self.sequence[start..end])
+        if end <= seq.len() && start < end {
+            Some(&seq[start..end])
         } else {
             None
         }
@@ -603,6 +625,7 @@ impl Transcript {
                     let g_end = upstream.genomic_start.map(|s| s - 1);
                     (g_start, g_end)
                 }
+                Strand::Unknown => (None, None),
             };
 
             let mut intron = Intron::new(
@@ -632,6 +655,10 @@ impl Transcript {
     /// Positive offset means downstream from 5' boundary (c.N+offset notation).
     /// Negative offset means upstream from 3' boundary (c.N-offset notation).
     pub fn find_intron_at_genomic(&self, genomic_pos: u64) -> Option<(Intron, IntronPosition)> {
+        // Spec §9: transcripts with unknown strand cannot have meaningful intronic positions.
+        if self.strand == Strand::Unknown {
+            return None;
+        }
         // Use cached introns for O(1) access after first call
         for intron in self.introns() {
             if intron.contains_genomic(genomic_pos) {
@@ -654,6 +681,8 @@ impl Transcript {
                         let from_3prime = (genomic_pos - g_start).saturating_add(1);
                         (from_5prime, from_3prime)
                     }
+                    // SAFETY: early return at top of fn guarantees strand != Unknown.
+                    Strand::Unknown => unreachable!("strand unknown — guarded by early return"),
                 };
 
                 // Determine which boundary is closer and create position
@@ -768,6 +797,7 @@ impl Transcript {
                     Some(g_start + (-offset) as u64 - 1)
                 }
             }
+            Strand::Unknown => None,
         }
     }
 
@@ -930,7 +960,7 @@ mod tests {
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGCATGCATGC".to_string(), // 20 bases
+            sequence: Some("ATGCATGCATGCATGCATGC".to_string()), // 20 bases
             cds_start: Some(5),
             cds_end: Some(15),
             exons: vec![
@@ -955,7 +985,7 @@ mod tests {
             id: "NM_000088.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
-            sequence: "ATGCATGCATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGCATGCATGC".to_string()),
             cds_start: Some(5),
             cds_end: Some(15),
             exons: vec![
@@ -979,6 +1009,34 @@ mod tests {
     fn test_transcript_sequence_length() {
         let tx = make_test_transcript();
         assert_eq!(tx.sequence_length(), 20);
+    }
+
+    /// A sequence-less transcript with a malformed exon (`end < start`) must
+    /// not underflow `u64`; `Exon::len()` saturates to 0 instead.
+    #[test]
+    fn test_transcript_sequence_length_fallback_handles_malformed_exon() {
+        let mut bad_exon = Exon::new(1, 10, 20);
+        bad_exon.end = 5; // end < start
+        let tx = Transcript {
+            id: "NM_BAD.1".to_string(),
+            gene_symbol: None,
+            strand: Strand::Plus,
+            sequence: None,
+            cds_start: None,
+            cds_end: None,
+            exons: vec![bad_exon, Exon::new(2, 21, 30)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        // First exon contributes 0 (malformed); second contributes 10.
+        assert_eq!(tx.sequence_length(), 10);
     }
 
     #[test]
@@ -1086,6 +1144,16 @@ mod tests {
     #[test]
     fn test_mane_status_default() {
         assert_eq!(ManeStatus::default(), ManeStatus::None);
+    }
+
+    #[test]
+    fn test_strand_deserialize_unknown_from_dot_and_question_mark() {
+        // GFF3 accepts both `.` and `?` for unknown strand; `Strand::Unknown` must
+        // round-trip from JSON for both forms.
+        let from_dot: Strand = serde_json::from_str("\".\"").unwrap();
+        let from_q: Strand = serde_json::from_str("\"?\"").unwrap();
+        assert_eq!(from_dot, Strand::Unknown);
+        assert_eq!(from_q, Strand::Unknown);
     }
 
     #[test]
@@ -1273,7 +1341,7 @@ mod tests {
             id: "NR_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
-            sequence: "A".repeat(100),
+            sequence: Some("A".repeat(100)),
             cds_start: None,
             cds_end: None,
             exons: vec![Exon::new(1, 1, 100)],

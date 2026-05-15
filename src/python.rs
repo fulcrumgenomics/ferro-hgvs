@@ -2675,6 +2675,7 @@ impl PyGenomeBuild {
 pub enum PyStrand {
     Plus = 0,
     Minus = 1,
+    Unknown = 2,
 }
 
 impl From<Strand> for PyStrand {
@@ -2682,6 +2683,7 @@ impl From<Strand> for PyStrand {
         match s {
             Strand::Plus => PyStrand::Plus,
             Strand::Minus => PyStrand::Minus,
+            Strand::Unknown => PyStrand::Unknown,
         }
     }
 }
@@ -2692,6 +2694,7 @@ impl PyStrand {
         match self {
             PyStrand::Plus => "+",
             PyStrand::Minus => "-",
+            PyStrand::Unknown => ".",
         }
     }
 }

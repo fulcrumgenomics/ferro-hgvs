@@ -1386,8 +1386,12 @@ fn run_convert_gff(
                 full_seq = reverse_complement(&full_seq);
             }
             full_seq
-        } else if !tx.sequence.is_empty() && !tx.sequence.chars().all(|c| c == 'N') {
-            tx.sequence.clone()
+        } else if let Some(seq) = tx
+            .sequence
+            .as_deref()
+            .filter(|s| !s.is_empty() && !s.chars().all(|c| c == 'N'))
+        {
+            seq.to_string()
         } else {
             // No FASTA, use placeholder
             "N".repeat(tx.exons.iter().map(|e| e.end - e.start + 1).sum::<u64>() as usize)
@@ -1443,6 +1447,8 @@ fn run_convert_gff(
         tx_obj["strand"] = serde_json::json!(match tx.strand {
             ferro_hgvs::reference::transcript::Strand::Plus => "+",
             ferro_hgvs::reference::transcript::Strand::Minus => "-",
+            ferro_hgvs::reference::transcript::Strand::Unknown => ".",
+            _ => ".",
         });
 
         tx_obj["genome_build"] = serde_json::json!(match genome_build {

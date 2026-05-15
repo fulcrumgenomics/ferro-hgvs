@@ -532,7 +532,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Get boundaries (stay within exon unless configured otherwise)
         let boundaries = if self.config.cross_boundaries {
-            Boundaries::new(1, transcript.sequence.len() as u64)
+            Boundaries::new(1, transcript.sequence_length())
         } else {
             match boundary::get_cds_boundaries(&transcript, tx_start, &self.config) {
                 Ok(b) => b,
@@ -541,7 +541,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // Perform normalization on transcript sequence (CDS context).
-        let seq = transcript.sequence.as_bytes();
+        // Coordinate-only transcripts (no cached bases) fall back to the
+        // canonicalize-only path, matching the other early-return branches.
+        let seq = match transcript.sequence.as_deref() {
+            Some(s) => s.as_bytes(),
+            None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+        };
         let (new_tx_start, new_tx_end, new_edit, warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, true)?;
 
@@ -633,10 +638,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let tx_end = end_pos.base as u64;
 
         // Get boundaries
-        let boundaries = Boundaries::new(1, transcript.sequence.len() as u64);
+        let boundaries = Boundaries::new(1, transcript.sequence_length());
 
         // Perform normalization (n. non-coding tx context).
-        let seq = transcript.sequence.as_bytes();
+        // Coordinate-only transcripts (no cached bases) fall back to the
+        // canonicalize-only path.
+        let seq = match transcript.sequence.as_deref() {
+            Some(s) => s.as_bytes(),
+            None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
+        };
         let (new_start, new_end, new_edit, warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
@@ -974,11 +984,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Get boundaries (entire transcript span; r. has no exon-level
         // junction restriction beyond the transcript ends).
-        let boundaries = Boundaries::new(1, transcript.sequence.len() as u64);
+        let boundaries = Boundaries::new(1, transcript.sequence_length());
 
         // Perform normalization (RNA context: codon-frame gate does not apply;
         // r. is not in the spec's accepted reference types for repeats).
-        let seq = transcript.sequence.as_bytes();
+        // Coordinate-only transcripts fall back to the canonicalize-only path.
+        let seq = match transcript.sequence.as_deref() {
+            Some(s) => s.as_bytes(),
+            None => return Ok((HV::Rna(variant.clone()), vec![])),
+        };
         let (new_tx_start, new_tx_end, new_edit, warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
@@ -2643,7 +2657,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 let cds_start = tx.cds_start?;
                 let s = cds_start.checked_add(hgvs_start)?.checked_sub(2)? as usize;
                 let e = cds_start.checked_add(hgvs_end)?.checked_sub(1)? as usize;
-                let bytes = tx.sequence.as_bytes();
+                let bytes = tx.sequence.as_deref()?.as_bytes();
                 if e > bytes.len() || s >= e {
                     return None;
                 }
@@ -2656,7 +2670,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     .ok()?;
                 let s = (hgvs_start - 1) as usize;
                 let e = hgvs_end as usize;
-                let bytes = tx.sequence.as_bytes();
+                let bytes = tx.sequence.as_deref()?.as_bytes();
                 if e > bytes.len() || s >= e {
                     return None;
                 }
@@ -2669,7 +2683,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     .ok()?;
                 let s = (hgvs_start - 1) as usize;
                 let e = hgvs_end as usize;
-                let bytes = tx.sequence.as_bytes();
+                let bytes = tx.sequence.as_deref()?.as_bytes();
                 if e > bytes.len() || s >= e {
                     return None;
                 }
@@ -4062,7 +4076,7 @@ mod tests {
             id: "NM_BOUNDARY.1".to_string(),
             gene_symbol: Some("BOUNDARY".to_string()),
             strand: Strand::Plus,
-            sequence: tx_seq.to_string(),
+            sequence: Some(tx_seq.to_string()),
             cds_start: Some(1),
             cds_end: Some(58),
             exons: vec![
@@ -4129,7 +4143,7 @@ mod tests {
             id: "NM_BOUNDARYM.1".to_string(),
             gene_symbol: Some("BOUNDARY_M".to_string()),
             strand: Strand::Minus,
-            sequence: tx_seq.to_string(),
+            sequence: Some(tx_seq.to_string()),
             cds_start: Some(1),
             cds_end: Some(58),
             exons: vec![
@@ -4382,7 +4396,7 @@ mod tests {
             id: "NM_777777.1".to_string(),
             gene_symbol: Some("SHIFTTEST".to_string()),
             strand: Strand::Plus,
-            sequence: seq.clone(),
+            sequence: Some(seq.clone()),
             cds_start: Some(1),
             cds_end: Some(600),
             exons: vec![Exon::new(1, 1, 600)], // Single exon covering all
@@ -4486,7 +4500,7 @@ mod tests {
             id: "NM_666666.1".to_string(),
             gene_symbol: Some("UTRTEST".to_string()),
             strand: Strand::Plus,
-            sequence: seq.clone(),
+            sequence: Some(seq.clone()),
             cds_start: Some(101),
             cds_end: Some(seq_len as u64),
             exons: vec![Exon::new(1, 1, seq_len as u64)], // Single exon
@@ -4551,7 +4565,7 @@ mod tests {
             id: "NM_555555.1".to_string(),
             gene_symbol: Some("DELINSTEST".to_string()),
             strand: Strand::Plus,
-            sequence: seq,
+            sequence: Some(seq),
             cds_start: Some(1),
             cds_end: Some(26),
             exons: vec![Exon::new(1, 1, 26)],
@@ -4684,7 +4698,7 @@ mod tests {
             id: "NR_001566.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: crate::reference::transcript::Strand::Plus,
-            sequence: "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC".to_string(),
+            sequence: Some("ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC".to_string()),
             cds_start: None,
             cds_end: None,
             exons: vec![Exon::new(1, 1, 51)],
@@ -4729,7 +4743,7 @@ mod tests {
             id: "NR_038982.1".to_string(),
             gene_symbol: Some("NCRNA_TEST".to_string()),
             strand: Strand::Plus,
-            sequence: tx_sequence,
+            sequence: Some(tx_sequence),
             cds_start: None,
             cds_end: None,
             exons: vec![
