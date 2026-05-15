@@ -400,6 +400,84 @@ mod tests {
         assert!(!result.is_utr);
     }
 
+    fn make_intronic_test_data() -> (Projector, MockProvider) {
+        // Two-exon coding transcript on chr1, plus strand.
+        //
+        //   Exon 1: genome [1000, 1010), tx [0, 10)  — 10 bp
+        //   Intron: genome [1010, 2000)               — 990 bp
+        //   Exon 2: genome [2000, 2010), tx [10, 20) — 10 bp (last 2 are pad)
+        //
+        // CDS: tx [0, 18) → 18 bp → 6 codons: ATG-CGC-AAA-GGG-TAA-CCC
+        //   (Met-Arg-Lys-Gly-Stop-Pro)
+        //
+        // Test position g.1015 is in the intron, 6 bases after the end of exon 1
+        // (exon 1 ends at genome 1010, exclusive; last exonic base is g.1009;
+        //  distance = 1015-1010+1 = 6).  Maps to c.9+6 or c.10+6 depending on
+        // whether tx_end is inclusive or exclusive in the boundary calculation.
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_INTR.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("INTRGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1010, 0, 10], [2000, 2010, 10, 20]],
+                cds_start: Some(0),
+                cds_end: Some(18),
+                gene_id: None,
+                protein: Some("NP_INTR.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_INTR.1".to_string(),
+            gene_symbol: Some("INTRGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGCGCAAAGGGTAACCC".to_string()), // 18 bp
+            cds_start: Some(1),
+            cds_end: Some(18),
+            exons: vec![Exon::new(1, 1, 10), Exon::new(2, 11, 20)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(2009),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let exon1 = "ATGCGCAAAG"; // 10 bp (genomic positions 1000..1009)
+        let intron = "N".repeat(990); // genomic positions 1010..1999 (990 bp)
+        let exon2 = "GGTAACCCNN"; // 10 bp pad (genomic positions 2000..2009)
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{prefix}{exon1}{intron}{exon2}{suffix}"));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_intronic_substitution_no_protein() {
+        let (projector, provider) = make_intronic_test_data();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1015 is 6 positions into the intron after exon 1 (which ends at genome
+        // position 1009 inclusive / 1010 exclusive).
+        let result = vp
+            .project("NC_000001.11:g.1015A>G", "NM_INTR.1")
+            .expect("intronic substitution should project to c. with offset");
+        assert!(result.is_intronic, "expected is_intronic=true");
+        assert!(result.protein.is_none(), "no p. for intronic substitutions");
+        let c = result.coding.as_ref().expect("c. expected").to_string();
+        assert!(
+            c.contains('+'),
+            "expected intronic offset notation (e.g. c.9+6 or c.10+6), got: {}",
+            c
+        );
+    }
+
     #[test]
     fn project_substitution_plus_strand_missense() {
         let (projector, provider) = make_test_provider_and_projector();
