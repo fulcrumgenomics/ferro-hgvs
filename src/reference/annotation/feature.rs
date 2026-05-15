@@ -87,8 +87,7 @@ pub struct Feature {
     /// CDS phase (0/1/2); populated by the parser but consumed in Phase 2+.
     #[allow(dead_code)]
     pub phase: Option<u8>,
-    /// Raw key-value attributes; populated in Phase 2.5 when ingest takes ownership.
-    #[allow(dead_code)]
+    /// Raw key-value attributes; populated from the parsed record.
     pub attrs: AttributeMap,
     pub source_line: u64,
 }
