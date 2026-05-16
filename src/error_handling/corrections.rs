@@ -977,12 +977,11 @@ pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
         return None;
     }
 
-    // Skip any offset (like +5 or -10)
-    while let Some(&(_, c)) = chars.peek() {
-        if c == '+' || c == '-' || c.is_ascii_digit() {
-            chars.next();
-        } else {
-            break;
+    // Bail on offset-bearing first position (e.g. `100+5_99+3`) — the
+    // bare-integer swap below would silently drop the offset.
+    if let Some(&(_, c)) = chars.peek() {
+        if c == '+' || c == '-' {
+            return None;
         }
     }
 
@@ -1012,6 +1011,14 @@ pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
 
     if second_num_str.is_empty() || second_num_str == "-" {
         return None;
+    }
+
+    // Bail on offset-bearing second position (e.g. `100_99+3`) — same
+    // reason: bare-integer swap would drop the offset.
+    if let Some(&(_, c)) = chars.peek() {
+        if c == '+' || c == '-' {
+            return None;
+        }
     }
 
     // Parse the numbers

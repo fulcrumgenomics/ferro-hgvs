@@ -8,9 +8,9 @@ use super::corrections::{
     correct_deprecated_con, correct_deprecated_protein_forms, correct_empty_delins,
     correct_missing_coordinate_prefix, correct_old_allele_format, correct_old_substitution_syntax,
     correct_protein_arrow, correct_quote_characters, correct_redundant_repeat_label,
-    correct_single_letter_aa_in_protein, correct_single_position_range, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_missing_versions, detect_position_zero,
-    strip_trailing_annotation, DetectedCorrection,
+    correct_single_letter_aa_in_protein, correct_single_position_range, correct_swapped_positions,
+    correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs, detect_missing_versions,
+    detect_position_zero, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -865,6 +865,48 @@ impl InputPreprocessor {
                                 .with_suggestion(corrected.clone())
                                 .with_hint(
                                     "HGVS retired the 'con' edit type; describe conversions as 'delins<source>'",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 15a: Swap inverted-order interval positions (W4001 — HGVS spec
+        // recommendations/general.md, range semantics start ≤ end). Covers
+        // simple integer pairs like `c.200_100del`; offset-bearing forms
+        // (`c.100+5_99+3`) are not handled and fall through to the parser.
+        let (corrected, corrections) = correct_swapped_positions(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::SwappedPositions);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Interval positions are swapped ('{}'); expected start ≤ end",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidPosition)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "HGVS range syntax requires start ≤ end; rewrite to the ascending form",
                                 ),
                         ),
                     );
