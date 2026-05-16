@@ -21,7 +21,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
-          submodules: true
+          # No submodules: release-plz only reads Cargo.toml/changelog/git
+          # history. `/assets/` is excluded from the package (Cargo.toml
+          # `exclude`), and checking it out couples this job to upstream
+          # submodule cleanliness — cargo's vcs check rejected the working
+          # tree after the hgvs-nomenclature bump shipped tracked files
+          # matching its own `docs/versions/.gitignore` (`*.md`).
           # release-plz pushes tags/commits via the persisted token; do not disable.
           token: ${{ secrets.RELEASE_PLZ_TOKEN }} # zizmor: ignore[artipacked]
       - name: Install Rust toolchain
