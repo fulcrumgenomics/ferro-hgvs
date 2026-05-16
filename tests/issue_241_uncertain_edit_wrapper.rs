@@ -192,25 +192,5 @@ mod canonical_re_emission {
     }
 }
 
-// =============================================================================
-// SECTION 5 — Compound brackets with uncertain edits (deferred)
-// =============================================================================
-//
-// `c.[(123A>G);125C>T]` puts a predicted member inside a cis bracket.
-// The bracket-member parser does not yet support the predicted-edit
-// wrapper at the bracket level. Pinned as currently rejected — a
-// follow-up will extend the bracket parser to honor the wrapper.
-
-mod compound_brackets {
-    use super::*;
-
-    #[test]
-    fn cis_bracket_with_uncertain_first_member_is_currently_rejected() {
-        assert!(parse_hgvs(&format!("{CDS}:c.[(123A>G);125C>T]")).is_err());
-    }
-
-    #[test]
-    fn cis_bracket_with_uncertain_both_members_is_currently_rejected() {
-        assert!(parse_hgvs(&format!("{CDS}:c.[(123A>G);(125C>T)]")).is_err());
-    }
-}
+// Compound brackets with uncertain edit members are covered in the
+// follow-up audit `tests/issue_243_bracket_uncertain_member.rs`.
