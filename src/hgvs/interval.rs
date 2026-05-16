@@ -192,6 +192,14 @@ impl<T: fmt::Display + PartialEq> fmt::Display for Interval<T> {
                     _ => write!(f, "{}_{}", self.start, self.end),
                 }
             }
+            // Single uncertain position with bounded range: (a_b) describes one
+            // position somewhere in [a,b], encoded as the same `Range` on both
+            // sides of the Interval. Emit `(a_b)` once, not `(a_b)_(a_b)`.
+            (UncertainBoundary::Range { .. }, UncertainBoundary::Range { .. })
+                if self.start == self.end =>
+            {
+                write!(f, "{}", self.start)
+            }
             // Complex boundaries or mixed - always show both
             _ => write!(f, "{}_{}", self.start, self.end),
         }
