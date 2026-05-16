@@ -1116,34 +1116,171 @@ impl<P: ReferenceProvider> Normalizer<P> {
     }
 
     /// Normalize a mitochondrial variant
+    ///
+    /// Mirrors `normalize_genome` for non-origin-crossing variants: fetch
+    /// a sequence window around the variant, run `normalize_na_edit` with
+    /// `is_coding=false` (mito is genomic-style and not subject to the
+    /// codon-frame restriction — `repeated.md` line 21 restricts the
+    /// codon-frame gate exclusively to `c.` descriptions), then map
+    /// positions back.
+    ///
+    /// Origin-crossing (wraparound) `del`/`delins` variants are rejected
+    /// at parse time by `parse_genome_interval`'s inverted-range check;
+    /// wraparound `dup`/`ins`/`inv` are exempt from that check and reach
+    /// this function. Without provider data they fall through to
+    /// `canonicalize_mt_variant`; with provider data the window fetch
+    /// errors (start > end is invalid for a linear slice), again
+    /// dropping to the fallback. F1 / #129 will introduce circular-aware
+    /// semantics in a follow-up — see `tests/mito_circular_audit.rs` for
+    /// the pinned behavior preserved by this PR.
     fn normalize_mt(
         &self,
         variant: &crate::hgvs::variant::MtVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        // MT variants are similar to genomic. We canonicalize `con` -> `delins`
-        // (SVD-WG009) up front, then route through apply_canonical_split so any
-        // delins whose ref/alt span contains an inv-eligible sub-span
-        // decomposes the same way it does for g. (issue #160). Full
-        // window-based normalization and the per-edit canonicalization that
-        // runs inside normalize_na_edit for g./c./n./r. is not yet wired up
-        // for m. (would also need circular genome handling) — that gap is
-        // pre-existing and out of scope here.
-        if let Some(edit) = variant.loc_edit.edit.inner() {
-            if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
-                let new_variant = MtVariant {
-                    accession: variant.accession.clone(),
-                    gene_symbol: variant.gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(
-                        variant.loc_edit.location.clone(),
-                        variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
-                    ),
-                };
-                let split = self.apply_canonical_split(HV::Mt(new_variant));
-                return Ok((wrap_allele_if_split(split), vec![]));
-            }
+        // Can't normalize variants with unknown edits or positions.
+        let edit = match variant.loc_edit.edit.inner() {
+            Some(e) => e,
+            None => return Ok((HV::Mt(variant.clone()), vec![])),
+        };
+
+        // SVD-WG009: rewrite `con` to `delins` up front. Pure-syntax;
+        // no reference data needed. Returns immediately (no inv-split
+        // pass), matching `normalize_genome`: callers that want
+        // inv-split on the rewritten delins can re-normalize.
+        if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
+            let new_variant = MtVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+                ),
+            };
+            return Ok((HV::Mt(new_variant), vec![]));
         }
-        let split = self.apply_canonical_split(HV::Mt(variant.clone()));
-        Ok((wrap_allele_if_split(split), vec![]))
+
+        // Only normalize indels; substitutions / identity / repeat-with-
+        // count pass through unchanged. Mirrors `normalize_genome`.
+        if !needs_normalization(edit) {
+            return Ok((HV::Mt(variant.clone()), vec![]));
+        }
+
+        // Fallback for variants we cannot remap through the window-based
+        // pipeline (unknown position, decorated position, or no provider
+        // data). Runs minimal-notation cleanup, then still applies
+        // `apply_canonical_split` so issue #160 inv-split and issue #165
+        // sub-only decomposition remain in force — those run on a narrow
+        // fetch (`fetch_ref_for_canonical_split`) that can succeed even
+        // when the wider shuffle window does not.
+        let mt_fallback = |v: &crate::hgvs::variant::MtVariant| {
+            let canonical = self.canonicalize_mt_variant(v);
+            let split = self.apply_canonical_split(HV::Mt(canonical));
+            wrap_allele_if_split(split)
+        };
+
+        let accession = variant.accession.transcript_accession();
+        let start_pos = match variant.loc_edit.location.start.inner() {
+            Some(pos) => pos,
+            None => return Ok((mt_fallback(variant), vec![])),
+        };
+        let end_pos = match variant.loc_edit.location.end.inner() {
+            Some(pos) => pos,
+            None => return Ok((mt_fallback(variant), vec![])),
+        };
+
+        // Decorated genome positions (offset / pter / qter / cen) cannot
+        // be losslessly remapped through base-only window normalization —
+        // remapping via `pos.base` and rebuilding with `GenomePos::new`
+        // would silently drop the decoration. Fall back to minimal-
+        // notation cleanup for these.
+        if start_pos.offset.is_some()
+            || end_pos.offset.is_some()
+            || start_pos.is_special()
+            || end_pos.is_special()
+        {
+            return Ok((mt_fallback(variant), vec![]));
+        }
+
+        let start = start_pos.base;
+        let end = end_pos.base;
+
+        // Window-based fetch around the variant. Non-origin-crossing
+        // variants take this path exactly like genomic; wraparound
+        // `dup`/`ins`/`inv` (where `start > end`) drop through to the
+        // canonicalize-only fallback below via `get_sequence` failure.
+        let window_start = start.saturating_sub(self.config.window_size);
+        let seq_result = self.provider.get_sequence(
+            &accession,
+            window_start,
+            end.saturating_add(self.config.window_size),
+        );
+
+        let ref_seq = match seq_result {
+            Ok(s) => s,
+            // No reference data → fall back to minimal-notation cleanup.
+            Err(_) => return Ok((mt_fallback(variant), vec![])),
+        };
+
+        let rel_start = start - window_start;
+        let rel_end = end - window_start;
+
+        // Mitochondrial reference is plus-strand and not subject to the
+        // codon-frame `unit_len % 3 == 0` restriction (the mito genome
+        // has no canonical "CDS" exemption boundary in the same sense as
+        // nuclear `c.`; the spec's mito chapter doesn't carry the
+        // codon-frame clause), so pass `is_coding=false`.
+        let (new_rel_start, new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            ref_seq.as_bytes(),
+            edit,
+            rel_start,
+            rel_end,
+            &Boundaries::new(1, ref_seq.len() as u64),
+            false,
+        )?;
+
+        let new_start = new_rel_start + window_start;
+        let new_end = new_rel_end + window_start;
+
+        let new_variant = MtVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::new(
+                Interval::new(GenomePos::new(new_start), GenomePos::new(new_end)),
+                new_edit,
+            ),
+        };
+
+        // Issue #160 inv-split post-pass (mirrors normalize_genome).
+        let split = self.apply_canonical_split(HV::Mt(new_variant));
+        Ok((wrap_allele_if_split(split), warnings))
+    }
+
+    /// Apply minimal notation to an mt variant without full normalization.
+    /// Mirrors `canonicalize_genome_variant` — used as a fallback when
+    /// reference data is unavailable.
+    fn canonicalize_mt_variant(
+        &self,
+        variant: &crate::hgvs::variant::MtVariant,
+    ) -> crate::hgvs::variant::MtVariant {
+        let edit = match variant.loc_edit.edit.inner() {
+            Some(e) => e,
+            None => return variant.clone(),
+        };
+
+        if !should_canonicalize(edit) {
+            return variant.clone();
+        }
+
+        let canonical_edit = canonicalize_edit(edit);
+
+        MtVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| canonical_edit),
+            ),
+        }
     }
 
     /// Normalize an intronic CDS variant

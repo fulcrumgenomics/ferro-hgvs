@@ -49,10 +49,17 @@
 //!   (`ins`, `dup`, `inv`, and complex `delins` are exempt from the
 //!   inverted-range check, but for unrelated reasons. Sections 2, 3, 5
 //!   below pin both halves of the asymmetry.)
-//! - `src/normalize/mod.rs::normalize_mt` is a stub: it returns the
-//!   variant unchanged and adds no warnings. Comment in source: "MT
-//!   variants are similar to genomic … For now, return as-is (could
-//!   implement circular genome handling)".
+//! - `src/normalize/mod.rs::normalize_mt` now mirrors `normalize_genome`
+//!   for non-origin-crossing variants (issue #210): window-based 3'
+//!   shuffle and repeat-notation canonicalization, with
+//!   `is_coding=false`. Wraparound variants either fail to parse
+//!   (`del`/`delins`/`sub`) or fall through to the no-reference
+//!   `canonicalize_mt_variant` fallback (`dup`/`ins`/`inv`), preserving
+//!   the pinned behavior below until F1/#129 introduces circular-aware
+//!   semantics. The audit assertions in this file pin the wraparound
+//!   parse / pass-through surface — they continue to hold because the
+//!   tests use `MockProvider::new()` (no reference data) and bare
+//!   substitutions short-circuit before normalization.
 //! - `src/vcf/from_hgvs.rs` synthesizes a `GenomeVariant` from the
 //!   `MtVariant` and routes it through the linear genomic conversion
 //!   path; nothing knows the contig is circular.
@@ -106,7 +113,8 @@ fn audit_mt_non_wrapping_sub_parses_and_round_trips() {
 }
 
 /// Non-wrapping `m.` substitution passes through `normalize` unchanged
-/// today (`normalize_mt` is a stub).
+/// (substitutions short-circuit before normalization regardless of the
+/// `normalize_mt` body).
 #[test]
 fn audit_mt_non_wrapping_sub_normalizes_to_self() {
     let input = "NC_012920.1:m.100A>G";
@@ -173,8 +181,10 @@ fn audit_mt_wrapping_del_longer_currently_rejected() {
 // 33138-nt sequence, but on a circular reference it is degenerate
 // (every base duplicated relative to itself). F1 must decide how to
 // handle this; today it parses (because `dup` is exempt from the
-// inverted-range check, and 1 ≤ 16569 anyway) and `normalize_mt` is a
-// no-op stub.
+// inverted-range check, and 1 ≤ 16569 anyway). With #210 in place,
+// `normalize_mt` would try the window fetch, but `MockProvider::new()`
+// has no NC_012920.1 sequence so it falls back to
+// `canonicalize_mt_variant` (minimal-notation cleanup, no shift).
 // -----------------------------------------------------------------------------
 
 /// Full mtDNA span as a duplication parses today; pin the round-trip
@@ -201,13 +211,14 @@ fn audit_mt_full_span_dup_normalizes_to_self_today() {
     let normalizer = Normalizer::new(MockProvider::new());
     let normalized = normalizer
         .normalize(&variant)
-        .expect("normalize should succeed (stub)");
+        .expect("normalize should succeed (no-reference fallback)");
     assert_eq!(
         format!("{}", normalized),
         input,
-        "PINNED: `normalize_mt` is a stub that returns the variant unchanged. \
-         F1 must define what circular-aware normalization does for a \
-         full-mtDNA span."
+        "PINNED: without provider data `normalize_mt` falls back to \
+         minimal-notation cleanup, which preserves a count-less span dup \
+         verbatim. F1 must define what circular-aware normalization \
+         does for a full-mtDNA span."
     );
 }
 
@@ -242,8 +253,9 @@ fn audit_mt_wrapping_delins_currently_rejected() {
     );
 }
 
-/// Wrapping `dup` at the origin **parses** today and stub-normalizes
-/// to itself. Pinned to expose the parser asymmetry: wraparound
+/// Wrapping `dup` at the origin **parses** today and (with no provider
+/// data) falls back to minimal-notation cleanup, which preserves the
+/// input verbatim. Pinned to expose the parser asymmetry: wraparound
 /// `del` is rejected, but wraparound `dup` is silently accepted.
 #[test]
 fn audit_mt_wrapping_dup_silently_accepted_today() {
@@ -263,11 +275,13 @@ fn audit_mt_wrapping_dup_silently_accepted_today() {
     let normalizer = Normalizer::new(MockProvider::new());
     let normalized = normalizer
         .normalize(&variant)
-        .expect("stub normalize should succeed");
+        .expect("no-reference fallback normalize should succeed");
     assert_eq!(
         format!("{}", normalized),
         input,
-        "PINNED: `normalize_mt` is a stub; wraparound dup is unchanged."
+        "PINNED: with no provider data, wraparound dup falls back to \
+         minimal-notation cleanup and is preserved unchanged. F1 must \
+         define a circular-aware canonical form."
     );
 }
 
