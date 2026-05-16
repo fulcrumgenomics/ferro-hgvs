@@ -6,7 +6,9 @@ use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::{CdsInterval, TxInterval};
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
-use crate::hgvs::variant::{is_frameshift, CdsVariant, HgvsVariant, LocEdit, TxVariant};
+use crate::hgvs::variant::{
+    is_frameshift, AlleleVariant, CdsVariant, HgvsVariant, LocEdit, TxVariant,
+};
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
@@ -46,6 +48,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     }
 
     /// Normalize and project an already-parsed g. variant onto a transcript.
+    ///
+    /// The variant is normalized first; for pre-normalized variants use
+    /// [`project_normalized`] to skip the redundant normalization step.
     pub fn project_variant(
         &self,
         variant: &HgvsVariant,
@@ -55,9 +60,199 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // construction time so we don't clone the (potentially heavy) provider
         // on every call.
         let normalized = self.normalizer.normalize(variant)?;
+        self.project_variant_inner(&normalized, transcript_id)
+    }
 
-        // 2. Require a g. variant for now.
-        let genome_variant = match &normalized {
+    /// Project an already-normalized g. variant onto a transcript, skipping the
+    /// normalization step.
+    ///
+    /// Callers that pre-normalize once and then project against many transcripts
+    /// should use this method to avoid the cost of re-normalization.
+    ///
+    /// **Warning**: passing a non-normalized variant will produce coordinates
+    /// that are technically valid but may not match other tools' canonical form.
+    pub fn project_normalized(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        self.project_variant_inner(variant, transcript_id)
+    }
+
+    /// Parse, normalize, and project an HGVS string onto ALL overlapping
+    /// transcripts, returning results in clinical priority order (MANE Select
+    /// first, then Plus Clinical, then canonical, then longest CDS).
+    ///
+    /// Returns an empty `Vec` when the variant overlaps no known transcripts.
+    /// Individual transcript errors are logged at trace level and silently
+    /// skipped so that a single bad transcript does not abort the whole call.
+    pub fn project_all(&self, hgvs_string: &str) -> Result<Vec<VariantProjection>, FerroError> {
+        let variant = crate::parse_hgvs(hgvs_string)?;
+        self.project_variant_all(&variant)
+    }
+
+    /// Normalize and project an already-parsed g. variant onto ALL overlapping
+    /// transcripts.
+    ///
+    /// See [`project_all`] for ordering and error-handling semantics.
+    pub fn project_variant_all(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Vec<VariantProjection>, FerroError> {
+        // 1. Normalize once via the cached normalizer (built at construction time).
+        let normalized = self.normalizer.normalize(variant)?;
+        self.project_normalized_all(&normalized)
+    }
+
+    /// Project an already-normalized g. variant onto ALL overlapping
+    /// transcripts, skipping re-normalization.
+    ///
+    /// Callers that pre-normalize once and then fan-out across transcripts
+    /// should use this method.
+    pub fn project_normalized_all(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Vec<VariantProjection>, FerroError> {
+        // 2. Extract contig + first-base position from the normalized variant.
+        //    For Allele variants we use the first inner variant's accession.
+        let (contig, pos) = extract_contig_and_pos(variant)?;
+
+        // 3. Find overlapping transcripts via the Projector (sorted by priority).
+        let projection_result = self.projector.project(&contig, pos)?;
+
+        // 4. Project against each overlapping transcript.
+        let mut results = Vec::with_capacity(projection_result.projections.len());
+        for tx_proj in &projection_result.projections {
+            match self.project_variant_inner(variant, &tx_proj.transcript_id) {
+                Ok(vp) => results.push(vp),
+                Err(e) => {
+                    // Skip transcripts that fail — log at trace level only.
+                    log::trace!(
+                        "project_normalized_all: skipping {} for {}: {}",
+                        tx_proj.transcript_id,
+                        variant,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /// Core projection logic, operating on a variant that is assumed to be
+    /// already normalized.  Does NOT re-normalize.
+    fn project_variant_inner(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        // Dispatch on variant kind.
+        match variant {
+            HgvsVariant::Allele(allele) => {
+                self.project_allele_inner(allele, variant, transcript_id)
+            }
+            _ => self.project_single_inner(variant, transcript_id),
+        }
+    }
+
+    /// Project a compound [`AlleleVariant`] by recursively projecting each
+    /// inner variant and combining the results.
+    fn project_allele_inner(
+        &self,
+        allele: &AlleleVariant,
+        original: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        // Empty allele: pass through with no coding/protein, but validate the
+        // transcript ID — every other path through `project_variant_inner` errors
+        // out for unknown transcripts (via `project_single_inner`), and this
+        // branch must behave the same to avoid silently returning bogus
+        // projections for typo'd or missing accessions.
+        if allele.variants.is_empty() {
+            let gene_symbol = self
+                .projector
+                .mapper()
+                .cdot()
+                .get_transcript(transcript_id)
+                .ok_or_else(|| FerroError::ReferenceNotFound {
+                    id: transcript_id.to_string(),
+                })?
+                .gene_name
+                .clone();
+            return Ok(VariantProjection {
+                genomic: original.clone(),
+                coding: None,
+                protein: None,
+                transcript_id: transcript_id.to_string(),
+                gene_symbol,
+                is_frameshift: false,
+                is_intronic: false,
+                is_utr: false,
+            });
+        }
+
+        // Recursively project each inner variant.
+        let mut inner_projections = Vec::with_capacity(allele.variants.len());
+        for inner in &allele.variants {
+            let proj = self.project_variant_inner(inner, transcript_id)?;
+            inner_projections.push(proj);
+        }
+
+        // Aggregate flags.
+        let is_frameshift = inner_projections.iter().any(|p| p.is_frameshift);
+        let is_intronic = inner_projections.iter().any(|p| p.is_intronic);
+        let is_utr = inner_projections.iter().any(|p| p.is_utr);
+
+        // gene_symbol from any projection that has one.
+        let gene_symbol = inner_projections.iter().find_map(|p| p.gene_symbol.clone());
+
+        // Build the coding allele from inner c./n. variants.
+        let coding_variants: Option<Vec<HgvsVariant>> =
+            inner_projections.iter().map(|p| p.coding.clone()).collect();
+        let coding = coding_variants
+            .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+
+        // Build the protein allele only if ALL inner projections have a protein.
+        let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
+        let protein = if all_have_protein {
+            let protein_variants: Vec<HgvsVariant> = inner_projections
+                .iter()
+                .filter_map(|p| p.protein.clone())
+                .collect();
+            Some(HgvsVariant::Allele(AlleleVariant::new(
+                protein_variants,
+                allele.phase,
+            )))
+        } else {
+            None
+        };
+
+        Ok(VariantProjection {
+            genomic: original.clone(),
+            coding,
+            protein,
+            transcript_id: transcript_id.to_string(),
+            gene_symbol,
+            is_frameshift,
+            is_intronic,
+            is_utr,
+        })
+    }
+
+    /// Project a single (non-allele) g. variant, assuming it has already been
+    /// normalized.
+    fn project_single_inner(
+        &self,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        // Require a g. variant.
+        let genome_variant = match normalized {
             HgvsVariant::Genome(g) => g.clone(),
             _ => {
                 return Err(FerroError::UnsupportedProjection {
@@ -75,7 +270,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 reason: "g. variant has no concrete edit".to_string(),
             })?;
 
-        // 3. Look up the transcript in the cdot mapper.
+        // Look up the transcript in the cdot mapper.
         let cdot_tx = self
             .projector
             .mapper()
@@ -89,7 +284,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let cdot_protein = cdot_tx.protein.clone();
         let is_coding = cdot_tx.cds_start.is_some();
 
-        // 4. Extract start and end genomic positions from the variant interval.
+        // Extract start and end genomic positions from the variant interval.
         let g_start = genome_variant
             .loc_edit
             .location
@@ -114,7 +309,6 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Compute the overall genomic extent of the transcript from its exons.
         // Exon format: [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end].
-        // The transcript's genomic extent is [min(genome_start), max(genome_end)) — 0-based half-open.
         let (tx_genome_start, tx_genome_end) = {
             let exons = &cdot_tx.exons;
             if exons.is_empty() {
@@ -127,23 +321,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             (starts, ends)
         };
 
-        // We map start and end positions independently rather than calling
-        // CoordinateMapper::genome_interval_to_cds because the latter discards
-        // the end position's MappingInfo (only start_info is propagated for the
-        // is_intronic / in_5utr / in_3utr flags). For a range variant that crosses
-        // an exon-intron boundary, we want is_intronic=true when EITHER end is
-        // intronic, which requires both MappingInfos. The strand swap is otherwise
-        // equivalent to what genome_interval_to_cds does internally.
-        // Helper: map one GenomePos → CdsPos, converting out-of-range errors to
-        // TranscriptNotOverlapping.
+        // Helper: map one GenomePos → CdsPos, converting out-of-range errors.
         let map_position = |gp: &GenomePos| -> Result<(CdsPos, MappingInfo), FerroError> {
-            // Check whether the position falls within the transcript's overall genomic
-            // extent before calling genome_to_cds.  genome_to_cds uses intronic
-            // arithmetic to handle positions between exons, so it will happily return
-            // a large offset for a position that is completely outside the transcript.
-            // Exon bounds are 0-based half-open [genome_start, genome_end), so a
-            // position is outside when it is before the first exon's start or at/after
-            // the last exon's end.
             if gp.base < tx_genome_start || gp.base >= tx_genome_end {
                 return Err(FerroError::TranscriptNotOverlapping {
                     variant: normalized_str.clone(),
@@ -166,8 +345,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let (cds_start_raw, info_start) = map_position(&g_start)?;
         let (cds_end_raw, info_end) = map_position(&g_end)?;
 
-        // On minus strand the start and end of the c. interval are swapped
-        // relative to the g. interval (transcript reads in the opposite direction).
+        // On minus strand the start and end of the c. interval are swapped.
         let (cds_start, cds_end) = match strand {
             crate::reference::Strand::Plus => (cds_start_raw, cds_end_raw),
             crate::reference::Strand::Minus => (cds_end_raw, cds_start_raw),
@@ -181,10 +359,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         };
 
-        // 5. Transform the edit for the transcript strand.
+        // Transform the edit for the transcript strand.
         let c_edit = transform_edit_for_strand(&edit, strand);
 
-        // 6. Build the c./n. HGVS variant.
+        // Build the c./n. HGVS variant.
         let coding = if is_coding {
             let interval = CdsInterval::new(cds_start, cds_end);
             HgvsVariant::Cds(CdsVariant {
@@ -193,8 +371,6 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 loc_edit: LocEdit::new(interval, c_edit.clone()),
             })
         } else {
-            // Non-coding transcript: report as n. using transcript positions.
-            // CdsPos.base is signed; for non-coding it acts as the tx position.
             let tx_start = TxPos::new(cds_start.base);
             let tx_end = TxPos::new(cds_end.base);
             HgvsVariant::Tx(TxVariant {
@@ -204,12 +380,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             })
         };
 
-        // 7. Derive per-position flags from MappingInfo.
+        // Derive per-position flags from MappingInfo.
         let is_intronic = info_start.is_intronic || info_end.is_intronic;
         let is_utr = !is_intronic
             && (info_start.in_5utr || info_start.in_3utr || info_end.in_5utr || info_end.in_3utr);
 
-        // 8. Predict protein consequence for CDS variants.
+        // Predict protein consequence for CDS variants.
         let mut protein = None;
         if !is_intronic && !is_utr && is_coding {
             // Prefer the explicit cdot.protein accession; otherwise infer NP_/XP_
@@ -285,11 +461,68 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     }
 }
 
+/// Extract the contig name and a representative 1-based genomic position from
+/// an already-normalized `HgvsVariant`.
+///
+/// For `HgvsVariant::Allele`, the first inner g. variant is used.
+///
+/// # Contig name resolution
+///
+/// The contig name is taken directly from the variant's `Accession`. For
+/// standard RefSeq genomic accessions (e.g. `NC_000001.11`) the cdot mapper
+/// stores contigs under those same names and also aliases UCSC names
+/// (`chr1`) to them via `populate_contig_aliases`.  For assembly-notation
+/// accessions (`GRCh38(chr1)`) the `chromosome` field of `Accession` is
+/// used instead.  Callers that use non-standard accession formats (e.g.
+/// plain `chr1` keys) should ensure their cdot data was loaded with matching
+/// contig keys.
+fn extract_contig_and_pos(variant: &HgvsVariant) -> Result<(String, u64), FerroError> {
+    let effective = match variant {
+        HgvsVariant::Allele(allele) => {
+            allele
+                .variants
+                .first()
+                .ok_or_else(|| FerroError::UnsupportedProjection {
+                    reason: "cannot project an empty allele to all transcripts".to_string(),
+                })?
+        }
+        other => other,
+    };
+
+    match effective {
+        HgvsVariant::Genome(gv) => {
+            // Prefer the chromosome field for assembly-notation accessions.
+            let contig = if let Some(chr) = &gv.accession.chromosome {
+                chr.to_string()
+            } else {
+                gv.accession.full()
+            };
+
+            let pos = gv
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .cloned()
+                .ok_or_else(|| FerroError::InvalidCoordinates {
+                    msg: "genomic interval start is unknown".to_string(),
+                })?
+                .base;
+
+            Ok((contig, pos))
+        }
+        _ => Err(FerroError::UnsupportedProjection {
+            reason: "project_all currently only accepts g. variants".to_string(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::cdot::{CdotMapper, CdotTranscript};
     use crate::data::projection::Projector;
+    use crate::hgvs::variant::{AllelePhase, AlleleVariant};
     use crate::reference::mock::MockProvider;
     use crate::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
     use crate::reference::Strand as ProvStrand;
@@ -352,7 +585,6 @@ mod tests {
             cached_introns: OnceLock::new(),
         });
         // Genomic sequence: 999 N's + "ATGCGCTAA" + 100 N's.
-        // At 0-based index 999 = 'A' (g.1000), ..., 0-based index 1002 = 'C' (g.1003).
         let prefix = "N".repeat(999);
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
@@ -361,30 +593,6 @@ mod tests {
 
     fn make_minus_strand_provider_and_projector() -> (Projector, MockProvider) {
         // Same 9bp CDS on chr1, but transcript is on the minus strand.
-        //
-        // Plus-strand chr1:1000..1008 reads "TTAGCGCAT".  The minus-strand
-        // transcript reads the complement strand from g.1008 backwards to
-        // g.1000, giving CDS "ATGCGCTAA" (Met-Arg-Stop).
-        //
-        // cdot coordinate convention (matches make_test_provider_and_projector):
-        //   exons:     [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end]
-        //   cds_start: 0-based tx position of first CDS base
-        //   cds_end:   0-based tx position one-past the last CDS base
-        //
-        // Minus-strand mapping (genome_to_tx for Minus):
-        //   offset = genome_end - 1 - genome_pos
-        //   tx_pos = tx_start + offset
-        //
-        //   g.1008 → offset = 1009-1-1008 = 0 → tx_pos 0 (c.1, 'A')
-        //   g.1007 → offset = 1 → tx_pos 1 (c.2, 'T')
-        //   g.1005 → offset = 3 → tx_pos 3 → tx_to_cds(3, cds_start=0) = 4 → c.4
-        //
-        // Variant: g.1005G>A on the plus strand.
-        //   The plus-strand base at g.1005 is 'G' (stated; actual byte is 'C'
-        //   — but for substitutions the normalizer trusts the stated ref).
-        //   After transform_edit_for_strand(Minus): G>A → revcomp → C>T.
-        //   c.4 of "ATGCGCTAA" is 'C' (first base of codon 2 "CGC" = Arg).
-        //   C>T → "TGC" = Cys.  Protein: p.(Arg2Cys).
         let mut cdot = CdotMapper::new();
         cdot.add_transcript(
             "NM_TEST_MINUS.1".to_string(),
@@ -421,21 +629,86 @@ mod tests {
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
-        // Plus-strand sequence on chr1 (not needed for substitution normalization,
-        // provided for completeness).
         let prefix = "N".repeat(999);
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{}TTAGCGCAT{}", prefix, suffix));
         (projector, provider)
     }
 
+    /// Build a two-transcript setup for project_all tests.
+    ///
+    /// NM_TX1.1: chr1 [1000,1009), plus strand, 9bp CDS "ATGCGCTAA"
+    /// NM_TX2.1: chr1 [1000,1009), plus strand, 9bp CDS "ATGCGCTAA" (same region)
+    ///           NM_TX2.1 is registered as MANE Select so it sorts first.
+    fn make_two_transcript_setup() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_TX1.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("GENE1".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_TX1.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        cdot.add_transcript(
+            "NM_TX2.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("GENE1".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_TX2.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot)
+            // Make NM_TX2.1 the MANE Select so it sorts first.
+            .with_mane(vec!["NM_TX2.1".to_string()], vec![]);
+
+        let mut provider = MockProvider::new();
+        for id in ["NM_TX1.1", "NM_TX2.1"] {
+            provider.add_transcript(Transcript {
+                id: id.to_string(),
+                gene_symbol: Some("GENE1".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAA".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exons: vec![Exon::new(1, 1, 9)],
+                chromosome: Some("chr1".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1008),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+        }
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
+        (projector, provider)
+    }
+
+    // -------------------------------------------------------------------------
+    // Existing tests (preserved)
+    // -------------------------------------------------------------------------
+
     #[test]
     fn project_substitution_minus_strand_revcomps_ref_alt() {
         let (projector, provider) = make_minus_strand_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1005G>A: plus-strand G at position 1005.
-        // Minus-strand transcript maps this to c.4 and revcomps G>A → C>T.
-        // Codon 2 "CGC" (Arg) → "TGC" (Cys) = missense.
         let result = vp
             .project("chr1:g.1005G>A", "NM_TEST_MINUS.1")
             .expect("minus-strand projection should succeed");
@@ -523,8 +796,6 @@ mod tests {
     fn project_intronic_substitution_no_protein() {
         let (projector, provider) = make_intronic_test_data();
         let vp = VariantProjector::new(projector, provider);
-        // g.1015 is 6 positions into the intron after exon 1 (which ends at genome
-        // position 1009 inclusive / 1010 exclusive).
         let result = vp
             .project("NC_000001.11:g.1015A>G", "NM_INTR.1")
             .expect("intronic substitution should project to c. with offset");
@@ -542,7 +813,6 @@ mod tests {
     fn project_no_overlap_returns_transcript_not_overlapping() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // chr1:5000 is far outside the transcript at 1000..1009.
         let err = vp
             .project("NC_000001.11:g.5000A>G", "NM_TEST.1")
             .expect_err("should fail to project outside the transcript");
@@ -558,9 +828,6 @@ mod tests {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
 
-        // g.1003 is the 4th base of the exon (0-based index 3 in "ATGCGCTAA" = 'C').
-        // HGVS: g.1003C>A (cdot 0-based genome coord 1003 → tx_pos 3 → c.4).
-        // CDS codon 2: CGC (Arg). Frame 0 substitution C>A → AGC (Ser) = missense.
         let result = vp
             .project("chr1:g.1003C>A", "NM_TEST.1")
             .expect("projection should succeed");
@@ -591,9 +858,6 @@ mod tests {
     fn project_single_base_deletion_is_frameshift() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1004del deletes a single base (c.5, the 'G' in the Arg codon CGC) — net=-1 → frameshift.
-        // Mutated CDS: "ATGCCTAA" → Met-Pro-Stop → alt=[Met,Pro].
-        // first_diff=1 (Arg≠Pro) → p.(Arg2Profs).
         let result = vp
             .project("NC_000001.11:g.1004del", "NM_TEST.1")
             .expect("deletion should project");
@@ -615,8 +879,6 @@ mod tests {
     fn project_three_base_deletion_in_frame() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1005del deletes 3 bases (c.4_6 = entire Arg codon CGC) — in-frame.
-        // Mutated CDS: "ATGTAA" → [Met] → p.(Arg2del).
         let result = vp
             .project("NC_000001.11:g.1003_1005del", "NM_TEST.1")
             .expect("3-base del should project");
@@ -635,13 +897,11 @@ mod tests {
     fn project_single_base_insertion_is_frameshift() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1004insA inserts one base — frameshift (net=+1).
         let result = vp
             .project("NC_000001.11:g.1003_1004insA", "NM_TEST.1")
             .expect("insertion should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("ins"), "expected ins notation, got: {}", c);
-        // p. should be produced (frameshift) — exact form depends on insertion position.
         assert!(result.protein.is_some(), "p. expected for CDS insertion");
         assert!(result.is_frameshift, "1-base insertion is frameshift");
     }
@@ -650,7 +910,6 @@ mod tests {
     fn project_duplication() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1004dup duplicates a single base (c.5 'G') — net=+1 → frameshift.
         let result = vp
             .project("NC_000001.11:g.1004dup", "NM_TEST.1")
             .expect("dup should project");
@@ -664,10 +923,6 @@ mod tests {
     fn project_delins() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1004delinsAT — replace 2 bases (c.4_5, first 2 bases of Arg codon CGC)
-        // with AT → new codon "ATC" = Ile. Mutated CDS: "ATGATCTAA" → [Met, Ile].
-        // In-frame (net=0), straddles codon → build_inframe_delins.
-        // first_diff=1 (Arg≠Ile) → p.(Arg2delinsIle).
         let result = vp
             .project("NC_000001.11:g.1003_1004delinsAT", "NM_TEST.1")
             .expect("delins should project");
@@ -689,8 +944,6 @@ mod tests {
     fn project_inversion() {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // g.1003_1005inv — inversion of c.4_6 (CGC → GCG = Ala). Preserves length.
-        // Mutated CDS: "ATGGCGTAA" → [Met, Ala] → p.(Arg2delinsAla).
         let result = vp
             .project("NC_000001.11:g.1003_1005inv", "NM_TEST.1")
             .expect("inv should project");
@@ -768,6 +1021,214 @@ mod tests {
             result.protein.is_none(),
             "expected no protein for accession with no NM_/XM_ prefix and no cdot.protein, got: {:?}",
             result.protein
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // project_normalized tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn project_normalized_same_result_as_project_variant() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        let variant = crate::parse_hgvs("chr1:g.1003C>A").expect("parse should succeed");
+        let via_project = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("project_variant should succeed");
+        // Pre-normalize via the cached normalizer, then call project_normalized.
+        let normalized = vp.normalizer.normalize(&variant).expect("normalize failed");
+        let via_normalized = vp
+            .project_normalized(&normalized, "NM_TEST.1")
+            .expect("project_normalized should succeed");
+
+        assert_eq!(
+            via_project.coding.as_ref().map(|v| v.to_string()),
+            via_normalized.coding.as_ref().map(|v| v.to_string()),
+            "project_normalized should produce same c. as project_variant"
+        );
+        assert_eq!(
+            via_project.protein.as_ref().map(|v| v.to_string()),
+            via_normalized.protein.as_ref().map(|v| v.to_string()),
+            "project_normalized should produce same p. as project_variant"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // project_all / project_variant_all tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn project_variant_all_returns_both_transcripts() {
+        let (projector, provider) = make_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        let results = vp
+            .project_all("chr1:g.1003C>A")
+            .expect("project_all should succeed");
+
+        assert_eq!(
+            results.len(),
+            2,
+            "expected projections onto both transcripts, got: {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn project_all_mane_select_sorts_first() {
+        let (projector, provider) = make_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        let results = vp
+            .project_all("chr1:g.1003C>A")
+            .expect("project_all should succeed");
+
+        // NM_TX2.1 is MANE Select → must be first.
+        assert_eq!(
+            results[0].transcript_id, "NM_TX2.1",
+            "MANE Select should be first"
+        );
+    }
+
+    #[test]
+    fn project_all_no_overlap_returns_empty() {
+        let (projector, provider) = make_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        // g.5000 is far outside all transcripts.
+        let results = vp
+            .project_all("NC_000001.11:g.5000A>G")
+            .expect("project_all should return Ok for no overlaps");
+
+        assert!(
+            results.is_empty(),
+            "expected empty result for non-overlapping variant"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Allele compound projection tests
+    // -------------------------------------------------------------------------
+
+    /// Helper: build a cis allele `[chr1:g.1003C>A;chr1:g.1006T>A]` and
+    /// project it onto NM_TEST.1.
+    fn project_cis_allele() -> VariantProjection {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        // Use parse → project_variant to build the allele naturally.
+        // g.1003 is C (c.4) and g.1006 is T (c.7) in the test fixture
+        // "ATGCGCTAA"; using the correct ref bases keeps the test
+        // valid HGVS rather than just exercising control flow.
+        let v1 = crate::parse_hgvs("chr1:g.1003C>A").expect("v1 parse");
+        let v2 = crate::parse_hgvs("chr1:g.1006T>A").expect("v2 parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
+        vp.project_variant(&allele, "NM_TEST.1")
+            .expect("cis allele projection should succeed")
+    }
+
+    #[test]
+    fn project_cis_allele_produces_cis_coding_allele() {
+        let result = project_cis_allele();
+        let coding = result.coding.as_ref().expect("c. allele should be present");
+        // The coding variant should itself be an Allele.
+        assert!(
+            matches!(coding, HgvsVariant::Allele(av) if av.phase == AllelePhase::Cis),
+            "expected Cis coding allele, got: {}",
+            coding
+        );
+        // Two inner c. variants.
+        if let HgvsVariant::Allele(av) = coding {
+            assert_eq!(
+                av.variants.len(),
+                2,
+                "expected 2 inner c. variants in cis allele"
+            );
+        }
+    }
+
+    #[test]
+    fn project_trans_allele_preserves_trans_phase() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        // Ref bases match the fixture: g.1003 = C, g.1006 = T.
+        let v1 = crate::parse_hgvs("chr1:g.1003C>A").expect("v1 parse");
+        let v2 = crate::parse_hgvs("chr1:g.1006T>A").expect("v2 parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::trans(vec![v1, v2]));
+        let result = vp
+            .project_variant(&allele, "NM_TEST.1")
+            .expect("trans allele projection should succeed");
+
+        let coding = result.coding.as_ref().expect("c. expected");
+        assert!(
+            matches!(coding, HgvsVariant::Allele(av) if av.phase == AllelePhase::Trans),
+            "expected Trans coding allele, got: {}",
+            coding
+        );
+    }
+
+    #[test]
+    fn project_allele_with_frameshift_inner_sets_is_frameshift() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        // g.1004del is a 1-base deletion → frameshift.
+        let v1 = crate::parse_hgvs("chr1:g.1003C>A").expect("v1 parse");
+        let v_fs = crate::parse_hgvs("NC_000001.11:g.1004del").expect("fs parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v_fs]));
+        let result = vp
+            .project_variant(&allele, "NM_TEST.1")
+            .expect("allele with frameshift should project");
+
+        assert!(
+            result.is_frameshift,
+            "allele containing a frameshift inner variant should set is_frameshift=true"
+        );
+    }
+
+    #[test]
+    fn project_allele_with_non_protein_inner_has_no_protein() {
+        // An allele where one inner variant has no protein (intronic) →
+        // the whole allele protein should be None.
+        let (projector, provider) = make_intronic_test_data();
+        let vp = VariantProjector::new(projector, provider);
+
+        // g.1003 (exonic, ref C in NM_INTR.1 fixture) + g.1015 (intronic, ref N
+        // since g.1015 is in the intron gap — the projector doesn't validate
+        // intronic ref bases against the genomic reference).
+        let v_exon = crate::parse_hgvs("NC_000001.11:g.1003C>G").expect("exon parse");
+        let v_intron = crate::parse_hgvs("NC_000001.11:g.1015N>G").expect("intron parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v_exon, v_intron]));
+        let result = vp
+            .project_variant(&allele, "NM_INTR.1")
+            .expect("allele with intronic variant should project");
+
+        assert!(
+            result.protein.is_none(),
+            "allele with intronic inner variant should have no protein"
+        );
+        assert!(result.is_intronic, "should be marked intronic");
+    }
+
+    #[test]
+    fn project_empty_allele_unknown_transcript_returns_reference_not_found() {
+        // Regression: the empty-allele fast path used to silently return Ok(...)
+        // for any transcript_id, even one not present in the cdot mapper. That
+        // was inconsistent with every other projection path, which surfaces
+        // ReferenceNotFound for unknown accessions.
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let empty_allele = HgvsVariant::Allele(AlleleVariant::cis(vec![]));
+        let err = vp
+            .project_variant(&empty_allele, "NM_DOES_NOT_EXIST.1")
+            .expect_err("empty allele on unknown transcript should error");
+        assert!(
+            matches!(err, FerroError::ReferenceNotFound { ref id } if id == "NM_DOES_NOT_EXIST.1"),
+            "expected ReferenceNotFound for unknown transcript, got: {:?}",
+            err
         );
     }
 }

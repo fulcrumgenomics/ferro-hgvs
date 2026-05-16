@@ -647,6 +647,92 @@ impl PyVariantProjector {
             .map(|inner| PyVariantProjection { inner })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
     }
+
+    /// Parse, normalize, and project a g. HGVS string onto ALL overlapping
+    /// transcripts.
+    ///
+    /// Returns projections in clinical priority order (MANE Select first).
+    /// Individual transcript failures are silently skipped.
+    ///
+    /// Args:
+    ///     hgvs_string: A g. HGVS variant string.
+    ///
+    /// Returns:
+    ///     List of VariantProjection objects, one per overlapping transcript.
+    ///     Empty list when no transcripts overlap the variant.
+    ///
+    /// Raises:
+    ///     RuntimeError: If parsing or normalization fails.
+    fn project_all(&self, hgvs_string: &str) -> PyResult<Vec<PyVariantProjection>> {
+        self.inner
+            .project_all(hgvs_string)
+            .map(|projections| {
+                projections
+                    .into_iter()
+                    .map(|inner| PyVariantProjection { inner })
+                    .collect()
+            })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+
+    /// Project an already-normalized g. variant onto a single transcript,
+    /// skipping the normalization step.
+    ///
+    /// This is more efficient than `project` when the caller has pre-normalized
+    /// the variant and wants to project it against many transcripts.
+    ///
+    /// **Warning**: passing a non-normalized variant will produce coordinates
+    /// that may not match other tools' canonical form.
+    ///
+    /// Args:
+    ///     variant: An already-normalized HgvsVariant.
+    ///     transcript: Transcript accession (e.g., "NM_000088.3").
+    ///
+    /// Returns:
+    ///     VariantProjection with g./c./p. representations and flags.
+    ///
+    /// Raises:
+    ///     RuntimeError: If projection fails.
+    fn project_normalized(
+        &self,
+        variant: &PyHgvsVariant,
+        transcript: &str,
+    ) -> PyResult<PyVariantProjection> {
+        self.inner
+            .project_normalized(&variant.inner, transcript)
+            .map(|inner| PyVariantProjection { inner })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+
+    /// Project an already-normalized g. variant onto ALL overlapping
+    /// transcripts, skipping re-normalization.
+    ///
+    /// Callers that pre-normalize once and then fan-out should use this method
+    /// to avoid repeated normalization overhead.
+    ///
+    /// Args:
+    ///     variant: An already-normalized HgvsVariant.
+    ///
+    /// Returns:
+    ///     List of VariantProjection objects in clinical priority order.
+    ///     Empty list when no transcripts overlap the variant.
+    ///
+    /// Raises:
+    ///     RuntimeError: If projection fails.
+    fn project_normalized_all(
+        &self,
+        variant: &PyHgvsVariant,
+    ) -> PyResult<Vec<PyVariantProjection>> {
+        self.inner
+            .project_normalized_all(&variant.inner)
+            .map(|projections| {
+                projections
+                    .into_iter()
+                    .map(|inner| PyVariantProjection { inner })
+                    .collect()
+            })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
 }
 
 impl PyVariantProjector {

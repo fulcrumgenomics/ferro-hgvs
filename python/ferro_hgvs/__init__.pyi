@@ -1518,3 +1518,60 @@ class VariantProjector:
             RuntimeError: If parsing or projection fails.
         """
         ...
+
+    def project_all(self, hgvs_string: str) -> list[VariantProjection]:
+        """Parse, normalize, and project a g. HGVS string onto ALL overlapping transcripts.
+
+        Returns projections in clinical priority order (MANE Select first, then Plus Clinical,
+        then canonical, then longest CDS). Individual transcript failures are silently skipped.
+
+        Args:
+            hgvs_string: A g. HGVS variant string.
+
+        Returns:
+            List of VariantProjection objects, one per overlapping transcript.
+            Empty list when no transcripts overlap the variant.
+
+        Raises:
+            RuntimeError: If parsing or normalization fails.
+        """
+        ...
+
+    def project_normalized(self, variant: HgvsVariant, transcript: str) -> VariantProjection:
+        """Project an already-normalized g. variant onto a single transcript, skipping normalization.
+
+        More efficient than `project` when the caller has pre-normalized the variant and wants to
+        project it against many transcripts.
+
+        Warning: passing a non-normalized variant will produce coordinates that may not match
+        other tools' canonical form.
+
+        Args:
+            variant: An already-normalized HgvsVariant (g.).
+            transcript: Transcript accession (e.g., "NM_000088.3").
+
+        Returns:
+            VariantProjection with g./c./p. representations and flags.
+
+        Raises:
+            RuntimeError: If projection fails.
+        """
+        ...
+
+    def project_normalized_all(self, variant: HgvsVariant) -> list[VariantProjection]:
+        """Project an already-normalized g. variant onto ALL overlapping transcripts, skipping re-normalization.
+
+        Callers that pre-normalize once and then fan-out across transcripts should use this method
+        to avoid repeated normalization overhead.
+
+        Args:
+            variant: An already-normalized HgvsVariant (g.).
+
+        Returns:
+            List of VariantProjection objects in clinical priority order.
+            Empty list when no transcripts overlap the variant.
+
+        Raises:
+            RuntimeError: If projection fails.
+        """
+        ...
