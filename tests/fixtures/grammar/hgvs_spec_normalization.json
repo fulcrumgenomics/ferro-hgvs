@@ -10,10 +10,10 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 42,
-      "diverges": 187,
+      "diverges": 183,
       "false-acceptance": 86,
       "parse-error": 341,
-      "preserved": 616
+      "preserved": 620
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10289,21 +10289,9 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_003997.2:p.Ter110GlnextTer17",
-      "current": "NP_003997.2:p.Ter110Glnext*17",
-      "spec_expected": "NP_003997.2:p.Ter110GlnextTer17",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "syntax_yaml",
-      "source_paths": [
-        "docs/syntax.yaml"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "p.(*110Glnext*17)",
       "input_prefixed": "NP_003997.1:p.(*110Glnext*17)",
-      "current": "NP_003997.1:p.(Ter110Glnext*17)",
+      "current": "NP_003997.1:p.(Ter110GlnextTer17)",
       "spec_expected": "NP_003997.1:p.(*110Glnext*17)",
       "status": "diverges",
       "coordinate_system": "p",
@@ -10353,19 +10341,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "p.(Ter110GlnextTer17)",
-      "input_prefixed": "NP_003997.1:p.(Ter110GlnextTer17)",
-      "current": "NP_003997.1:p.(Ter110Glnext*17)",
-      "spec_expected": "NP_003997.1:p.(Ter110GlnextTer17)",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/extension.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "p.(Tyr4*)",
       "input_prefixed": "NP_003997.1:p.(Tyr4*)",
       "current": "NP_003997.1:p.(Tyr4Ter)",
@@ -10381,7 +10356,7 @@
     {
       "input": "p.*110Glnext*17",
       "input_prefixed": "NP_003997.1:p.*110Glnext*17",
-      "current": "NP_003997.1:p.Ter110Glnext*17",
+      "current": "NP_003997.1:p.Ter110GlnextTer17",
       "spec_expected": "NP_003997.1:p.*110Glnext*17",
       "status": "diverges",
       "coordinate_system": "p",
@@ -10394,7 +10369,7 @@
     {
       "input": "p.*327Argext*?",
       "input_prefixed": "NP_003997.1:p.*327Argext*?",
-      "current": "NP_003997.1:p.Ter327Argext*?",
+      "current": "NP_003997.1:p.Ter327ArgextTer?",
       "spec_expected": "NP_003997.1:p.*327Argext*?",
       "status": "diverges",
       "coordinate_system": "p",
@@ -10525,7 +10500,7 @@
     {
       "input": "p.Met1ext",
       "input_prefixed": "NP_003997.1:p.Met1ext",
-      "current": "NP_003997.1:p.Met1ext*?",
+      "current": "NP_003997.1:p.Met1extTer?",
       "spec_expected": "NP_003997.1:p.Met1ext",
       "status": "diverges",
       "coordinate_system": "p",
@@ -10547,32 +10522,6 @@
         "docs/consultation/SVD-WG010.md"
       ],
       "working_group": "SVD-WG010",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.Ter110GlnextTer17",
-      "input_prefixed": "NP_003997.1:p.Ter110GlnextTer17",
-      "current": "NP_003997.1:p.Ter110Glnext*17",
-      "spec_expected": "NP_003997.1:p.Ter110GlnextTer17",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/extension.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.Ter327ArgextTer?",
-      "input_prefixed": "NP_003997.1:p.Ter327ArgextTer?",
-      "current": "NP_003997.1:p.Ter327Argext*?",
-      "spec_expected": "NP_003997.1:p.Ter327ArgextTer?",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/extension.md"
-      ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -11673,6 +11622,17 @@
       ]
     },
     {
+      "input": "NP_003997.2:p.Ter110GlnextTer17",
+      "current": "NP_003997.2:p.Ter110GlnextTer17",
+      "spec_expected": "NP_003997.2:p.Ter110GlnextTer17",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "syntax_yaml",
+      "source_paths": [
+        "docs/syntax.yaml"
+      ]
+    },
+    {
       "input": "NP_003997.2:p.Trp4del",
       "current": "NP_003997.2:p.Trp4del",
       "spec_expected": "NP_003997.2:p.Trp4del",
@@ -12161,6 +12121,18 @@
       ]
     },
     {
+      "input": "p.(Ter110GlnextTer17)",
+      "input_prefixed": "NP_003997.1:p.(Ter110GlnextTer17)",
+      "current": "NP_003997.1:p.(Ter110GlnextTer17)",
+      "spec_expected": "NP_003997.1:p.(Ter110GlnextTer17)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/extension.md"
+      ]
+    },
+    {
       "input": "p.(Val89_Gln119dup)",
       "input_prefixed": "NP_003997.1:p.(Val89_Gln119dup)",
       "current": "NP_003997.1:p.(Val89_Gln119dup)",
@@ -12610,6 +12582,30 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/alleles.md"
+      ]
+    },
+    {
+      "input": "p.Ter110GlnextTer17",
+      "input_prefixed": "NP_003997.1:p.Ter110GlnextTer17",
+      "current": "NP_003997.1:p.Ter110GlnextTer17",
+      "spec_expected": "NP_003997.1:p.Ter110GlnextTer17",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/extension.md"
+      ]
+    },
+    {
+      "input": "p.Ter327ArgextTer?",
+      "input_prefixed": "NP_003997.1:p.Ter327ArgextTer?",
+      "current": "NP_003997.1:p.Ter327ArgextTer?",
+      "spec_expected": "NP_003997.1:p.Ter327ArgextTer?",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/extension.md"
       ]
     },
     {

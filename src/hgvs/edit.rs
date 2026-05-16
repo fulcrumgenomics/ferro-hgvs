@@ -1108,10 +1108,16 @@ impl fmt::Display for ProteinEdit {
                     write!(f, "{}", aa)?;
                 }
                 write!(f, "ext")?;
+                // Three-letter `Ter` is the spec-preferred canonical form
+                // for the translation termination codon
+                // (`background/standards.md`); `*` is an accepted
+                // alternative on input. Display emits `Ter` for both
+                // C-terminal extensions and frameshifts so the
+                // canonical Display form is uniform across edit kinds.
                 match (direction, count) {
                     (ExtDirection::NTerminal, Some(n)) => write!(f, "{}", n)?,
-                    (ExtDirection::CTerminal, Some(n)) => write!(f, "*{}", n)?,
-                    (ExtDirection::CTerminal, None) => write!(f, "*?")?,
+                    (ExtDirection::CTerminal, Some(n)) => write!(f, "Ter{}", n)?,
+                    (ExtDirection::CTerminal, None) => write!(f, "Ter?")?,
                     (ExtDirection::NTerminal, None) => {} // No suffix for unknown N-terminal
                 }
                 Ok(())
