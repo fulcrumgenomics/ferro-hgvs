@@ -202,6 +202,50 @@ class TestNormalizeMergeConsecutive:
         assert ";" in result
 
 
+class TestNormalizeDelinsSubOnlyDecompose:
+    """Issue #81 item A10 (sub-only branch, tracked in #165): a delins whose
+    span contains two or more independent single-base mismatches separated
+    by at least one unchanged nucleotide decomposes to the individual
+    `[X>A; B>Y]` form per `general.md:56` (sub > delins). The codon-frame
+    exception (`general.md:35-38`) preserves an embedded
+    `[Sub; Identity; Sub]` triplet whose endpoints share a codon.
+
+    Reference: NM_000088.3 has CDS sequence
+    `ATGCCCAAGGTGCTGCCCCAGATGCTGCCAGTGCTGCTGCTGCTGCTGCTGCTGCTGCTG`,
+    so c.10 = G, c.11 = T, c.12 = G, c.13 = C, c.14 = T. Codon 4 spans
+    c.10..c.12 and codon 5 spans c.13..c.15."""
+
+    def test_coding_delins_codon_frame_pair_preserved(self) -> None:
+        # ref c.10..c.12 = GTG, alt = ATC → [Sub(G>A); Identity(T);
+        # Sub(G>C)]. Endpoints 10 and 12 share codon 4, so the spec
+        # codon-frame exception keeps the form as a 3-base delins.
+        result = ferro_hgvs.normalize("NM_000088.3:c.10_12delinsATC")
+        assert result == "NM_000088.3:c.10_12delinsATC"
+
+    def test_coding_cross_codon_pair_decomposes(self) -> None:
+        # ref c.12..c.14 = GCT, alt = ACA → [Sub(G>A); Identity(C);
+        # Sub(T>A)]. Endpoints 12 and 14 sit in codons 4 and 5
+        # respectively, so the codon-frame exception does NOT apply and
+        # the spec's sub > delins priority splits the pair.
+        result = ferro_hgvs.normalize("NM_000088.3:c.12_14delinsACA")
+        assert "12G>A" in result
+        assert "14T>A" in result
+        # No 3-base delins should remain.
+        assert "12_14delins" not in result
+
+    def test_coding_embedded_codon_frame_triplet_within_longer_span(
+        self,
+    ) -> None:
+        # ref c.10..c.13 = GTGC, alt = ATCA → [Sub(G>A); Identity(T);
+        # Sub(G>C); Sub(C>A)]. The (10, 12) pair is in codon 4 and
+        # preserves as a 3-base delins; c.13 sits in codon 5, so the
+        # spec exception "two variants together affecting one amino
+        # acid" does not extend to it and it emits as a separate sub.
+        result = ferro_hgvs.normalize("NM_000088.3:c.10_13delinsATCA")
+        assert "10_12delinsATC" in result
+        assert "13C>A" in result
+
+
 class TestNormalizeEmptyInsertDelinsToDel:
     """Issue #81 item A3: a delins with an empty inserted sequence -> del."""
 

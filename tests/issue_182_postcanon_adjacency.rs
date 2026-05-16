@@ -1,7 +1,7 @@
 //! Issue #182: post-canonicalization adjacency of substitution flanks
 //! produced by the inv-split pass (#160 / #166).
 //!
-//! When `decompose_delins_inv` splits a merged delins into `[…; inv; …]`,
+//! When `decompose_delins` splits a merged delins into `[…; inv; …]`,
 //! the non-inv positions are emitted as per-position `Substitution`
 //! sub-edits. Two or more strictly-adjacent (no gap) Substitutions in that
 //! emission stream represent a multi-nucleotide substitution and must

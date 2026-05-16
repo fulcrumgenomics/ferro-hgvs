@@ -685,21 +685,39 @@ fn test_no_codon_frame_genomic() {
 
 #[test]
 fn test_codon_frame_then_strict_chain() {
-    // Issue #79 specifies that the codon-frame merge feeds back into
-    // the strictly-consecutive walk so a third SNV one base 3' of the
-    // pair still merges. Here: c.10 + c.12 codon-frame-merge into a
-    // delins at [10, 12], then c.13 is strictly-adjacent and folds
-    // into it.
-    //   Sequence: ATGCAAAAACCCCC... → c.10=C, c.11=C, c.12=C, c.13=C.
-    //   First merge alt = G + ref(c.11)=C + C = "GCC" at [10, 12].
-    //   Strict-merge with c.13A>T extends end to 13 and appends T →
-    //   "GCCT" at [10, 13].
+    // The merge stage from issue #79 still extends a codon-frame pair
+    // with a strictly-adjacent third SNV — c.10A>G + c.12A>C codon-frame
+    // merge into `c.10_12delinsGCC`, then c.13A>T extends to
+    // `c.10_13delinsGCCT`. After A10 (issue #165) the post-merge
+    // `decompose_delins` pass runs over the 4-base result.
+    //
+    // Sequence: ATGCAAAAACCCCC... → c.10..c.13 = `CCCC` (the user's
+    // declared "A" refs are ignored by the merge and recovered from the
+    // provider during decomposition). Pair-by-pair canonicalization:
+    //   pos 10: ref C, alt G (sub)
+    //   pos 11: ref C, alt C (identity — codon-frame synthesized middle)
+    //   pos 12: ref C, alt C (identity — user-declared `12A>C` is a
+    //                         no-op against the actual reference)
+    //   pos 13: ref C, alt T (sub)
+    //
+    // Per `general.md:34` the canonical form is two separate subs at
+    // c.10 and c.13 — they are >1 unchanged nucleotide apart, so neither
+    // adjacency (`substitution.md`) nor the codon-frame exception
+    // (`general.md:35-38`) applies. The intermediate 4-base delins
+    // produced by #79's chain extension was a ferro-internal stop on the
+    // way to this canonical form; A10 collapses it.
+    //
+    // Spec basis for the chain undoing itself: the codon-frame exception
+    // is defined for a *pair* of variants ("two variants … together
+    // affecting one amino acid"), not for a chain. c.10 and c.13 sit in
+    // codons 4 and 5 respectively, so the chain spans two amino acids
+    // and the exception does not extend to it.
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
             "NM_TEST.1:c.[10A>G;12A>C;13A>T]",
         ),
-        "NM_TEST.1:c.10_13delinsGCCT",
+        "NM_TEST.1:c.[10C>G;13C>T]",
     );
 }
 
