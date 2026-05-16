@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.5.0...v0.6.0) - 2026-05-16
+
+### Added
+
+- *(project)* compound alleles + project_all + project_normalized (PR 3: closes #200) ([#204](https://github.com/fulcrumgenomics/ferro-hgvs/pull/204))
+- *(cli)* add build-transcript subcommand for FASTA + CDS construction (closes #184) ([#199](https://github.com/fulcrumgenomics/ferro-hgvs/pull/199))
+- *(project)* protein consequence for CDS indels (PR 2: indel p. nomenclature) ([#203](https://github.com/fulcrumgenomics/ferro-hgvs/pull/203))
+- *(project)* variant-level projection g. -> c./p. (PR 1: foundation + substitutions) ([#202](https://github.com/fulcrumgenomics/ferro-hgvs/pull/202))
+- *(loader)* Phase 4 - FASTA validation + complete migration off shims ([#190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/190)) ([#196](https://github.com/fulcrumgenomics/ferro-hgvs/pull/196))
+- *(loader,cli)* Phase 3 - diagnostics registry + CLI flags + cross-format tests ([#190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/190)) ([#195](https://github.com/fulcrumgenomics/ferro-hgvs/pull/195))
+- *(loader)* Phase 2 - CDS phase/start_codon/stop_codon, UTR-merge, MANE wiring ([#190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/190)) ([#194](https://github.com/fulcrumgenomics/ferro-hgvs/pull/194))
+
+### Fixed
+
+- *(loader)* rewrite GFF/GTF loader pipeline, close #183 ([#191](https://github.com/fulcrumgenomics/ferro-hgvs/pull/191))
+- *(mock)* accept version/genome_build metadata keys in from_json (closes #185) ([#198](https://github.com/fulcrumgenomics/ferro-hgvs/pull/198))
+- *(normalize)* group consecutive sub-flanks of inv-split into delins ([#182](https://github.com/fulcrumgenomics/ferro-hgvs/pull/182)) ([#188](https://github.com/fulcrumgenomics/ferro-hgvs/pull/188))
+- *(normalize)* apply 3' rule to allele-merged del/dup/ins ([#180](https://github.com/fulcrumgenomics/ferro-hgvs/pull/180)) ([#187](https://github.com/fulcrumgenomics/ferro-hgvs/pull/187))
+
+### Other
+
+- *(loader)* Phase 5 - swap parser internals for noodles ([#190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/190)) ([#197](https://github.com/fulcrumgenomics/ferro-hgvs/pull/197))
+- *(spec)* refresh vendored hgvs-nomenclature spec snapshot ([#193](https://github.com/fulcrumgenomics/ferro-hgvs/pull/193))
+
 ### Added
 
 - *(loader)* unified `load_annotations` entry point with `LoaderConfig`/`LoaderReport`; auto-detects GFF3 vs GTF by extension and content (#191, #194, #195)
