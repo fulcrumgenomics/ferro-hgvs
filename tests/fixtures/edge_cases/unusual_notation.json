@@ -266,8 +266,8 @@
       "input": "NC_000023.11:g.[33038255C>T]/[33038255=]",
       "description": "Mosaic using allele notation",
       "valid": true,
-      "supported": false,
-      "notes": "Alternative mosaic notation"
+      "supported": true,
+      "notes": "Bracketed inner alleles in mosaic — wired by #216"
     },
     {
       "category": "uncertain",
@@ -289,7 +289,7 @@
       "conversions": 2,
       "complex": 6
     },
-    "supported_count": 14,
-    "unsupported_count": 19
+    "supported_count": 15,
+    "unsupported_count": 18
   }
 }
