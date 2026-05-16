@@ -419,8 +419,14 @@ fn parse_bracketed_inserted_sequence(input: &str) -> IResult<&str, InsertedSeque
     // Check for reference location inside brackets (e.g., [NC_000022.11:g.100_200])
     // Reference accession prefixes: NC_, NG_, NM_, NP_, NR_, NT_, NW_, XM_, XP_, XR_, ENST, ENSP, LRG_
     if is_reference_accession_prefix(input) {
-        // Find the closing bracket
-        if let Some(close_pos) = input.find(']') {
+        // Depth-aware close lookup: the reference payload itself can
+        // legally contain `[N]` repeat counts or nested `delins[…]`
+        // groups, so a plain `input.find(']')` would truncate at the
+        // first inner `]`. The `char('[')` combinator above already
+        // consumed the opening bracket, hence the
+        // `find_close_after_consumed_open` (depth-1) variant.
+        if let Some(close_pos) = crate::hgvs::parser::variant::find_close_after_consumed_open(input)
+        {
             let reference = &input[..close_pos];
             let remaining = &input[close_pos + 1..];
             return Ok((

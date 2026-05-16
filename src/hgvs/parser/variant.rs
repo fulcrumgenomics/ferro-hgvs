@@ -971,18 +971,33 @@ impl GenomeKind {
     }
 }
 
-/// Find the index of the `]` that closes the leading `[` in `input`, scanning
-/// at bracket depth 0. Returns `None` if `input` does not start with `[` or if
-/// the bracket is unbalanced.
+/// Find the index of the `]` that closes the leading `[` in `input`,
+/// scanning at bracket depth 0. Returns `None` if `input` does not start
+/// with `[` or if the bracket is unbalanced.
 ///
 /// Plain `input.find(']')` would truncate at any inner edit bracket
-/// (`delins[ACC:g.x_y]`, `delins[A;T]`, etc.); plain `input.rfind(']')` would
-/// over-consume on trans-form `[a];[b]`. The depth-tracking scan handles both.
-fn find_top_level_close_bracket(input: &str) -> Option<usize> {
+/// (`delins[ACC:g.x_y]`, `delins[A;T]`, `TG[14]`, etc.); plain
+/// `input.rfind(']')` would over-consume on trans-form `[a];[b]`. The
+/// depth-tracking scan handles both.
+pub(crate) fn find_top_level_close_bracket(input: &str) -> Option<usize> {
     if !input.starts_with('[') {
         return None;
     }
-    let mut depth: i32 = 0;
+    // Skip the leading `[` and delegate to the after-open primitive,
+    // shifting the returned index back into the original slice.
+    find_close_after_consumed_open(&input[1..]).map(|i| i + 1)
+}
+
+/// Variant of [`find_top_level_close_bracket`] for callers that have
+/// already consumed the opening `[` (typically via a `nom` combinator).
+/// Treats the slice as the bracket's content and returns the index of
+/// the matching `]` (relative to `input`). See
+/// `parse_bracketed_inserted_sequence` in `parser/edit.rs` for a
+/// caller.
+pub(crate) fn find_close_after_consumed_open(input: &str) -> Option<usize> {
+    // Caller has already passed one level deep; start depth at 1 so
+    // the scan returns when the first un-paired `]` brings it back to 0.
+    let mut depth: i32 = 1;
     for (i, b) in input.bytes().enumerate() {
         match b {
             b'[' => depth += 1,
@@ -1174,7 +1189,7 @@ fn parse_genome_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -1645,7 +1660,7 @@ fn parse_cds_trans_allele_shorthand(
         }
 
         // Find closing bracket
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -1764,7 +1779,7 @@ fn parse_tx_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -2035,7 +2050,7 @@ fn parse_mt_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -2280,7 +2295,7 @@ fn parse_protein_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -3094,7 +3109,7 @@ fn parse_rna_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -3218,7 +3233,7 @@ fn parse_circular_trans_allele_shorthand(
             break;
         }
 
-        let close_bracket = remaining.find(']').ok_or_else(|| {
+        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
             nom::Err::Error(nom::error::Error::new(
                 remaining,
                 nom::error::ErrorKind::Tag,
@@ -3575,11 +3590,12 @@ fn parse_trans_allele(input: &str) -> Result<HgvsVariant, FerroError> {
         }
 
         // Find closing bracket
-        let close_bracket = remaining.find(']').ok_or_else(|| FerroError::Parse {
-            pos: input.len() - remaining.len(),
-            msg: "Missing closing ']' in trans allele".to_string(),
-            diagnostic: None,
-        })?;
+        let close_bracket =
+            find_top_level_close_bracket(remaining).ok_or_else(|| FerroError::Parse {
+                pos: input.len() - remaining.len(),
+                msg: "Missing closing ']' in trans allele".to_string(),
+                diagnostic: None,
+            })?;
 
         // Parse the variant inside the brackets
         let variant_str = &remaining[1..close_bracket].trim();
