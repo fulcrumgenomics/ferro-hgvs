@@ -923,7 +923,7 @@ fn parse_genome_variant(
     move |input: &str| {
         let (input, _) = tag("g.").parse(input)?;
 
-        // First try whole-genome identity (g.=) - no position
+        // First try whole-genome identity (g.= or g.(=)) - no position
         if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
             let dummy_pos = crate::hgvs::location::GenomePos::new(1);
             let dummy_interval = GenomeInterval::point(dummy_pos);
@@ -932,12 +932,12 @@ fn parse_genome_variant(
                 HgvsVariant::Genome(GenomeVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
 
-        // Try whole-genome unknown (g.?) - no position
+        // Try whole-genome unknown (g.? or g.(?)) - no position
         if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
             let dummy_pos = crate::hgvs::location::GenomePos::new(1);
             let dummy_interval = GenomeInterval::point(dummy_pos);
@@ -946,7 +946,7 @@ fn parse_genome_variant(
                 HgvsVariant::Genome(GenomeVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
@@ -1436,14 +1436,21 @@ fn parse_genome_trans_allele_shorthand(
 }
 
 /// Parse whole-genome identity: g.=
-fn parse_whole_genome_identity(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+fn parse_whole_genome_identity(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    // Predicted: g.(=)
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(=)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_identity()),
+        ));
+    }
     map(tag("="), |_| {
-        crate::hgvs::edit::NaEdit::whole_entity_identity()
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_identity())
     })
     .parse(input)
 }
 
-/// Parse whole-genome unknown: g.?
+/// Parse whole-genome unknown: g.? or g.(?)
 ///
 /// Only matches a terminal `?`: rejects `?` followed by an interval
 /// continuation (`_`), an offset (`+`/`-`), an edit keyword (`dup`,
@@ -1451,7 +1458,16 @@ fn parse_whole_genome_identity(input: &str) -> IResult<&str, crate::hgvs::edit::
 /// `>`) so that those forms fall through to the position-based
 /// parser (`?<edit>` means edit at unknown position, not whole-entity
 /// unknown). #239.
-fn parse_whole_genome_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+///
+/// The `g.(?)` predicted form is returned as `Mu::Uncertain`. #245.
+fn parse_whole_genome_unknown(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    // Predicted: g.(?)
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(?)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+        ));
+    }
     let (remaining, _) = tag("?").parse(input)?;
     if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -1459,7 +1475,10 @@ fn parse_whole_genome_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::N
             nom::error::ErrorKind::Tag,
         )));
     }
-    Ok((remaining, crate::hgvs::edit::NaEdit::whole_entity_unknown()))
+    Ok((
+        remaining,
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+    ))
 }
 
 /// Returns true when `remaining` (the input after a `?`) starts with
@@ -1502,19 +1521,34 @@ fn is_edit_continuation_after_unknown(remaining: &str) -> bool {
     false
 }
 
-/// Parse whole-CDS identity: c.=
-fn parse_whole_cds_identity(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+/// Parse whole-CDS identity: c.= or c.(=)
+fn parse_whole_cds_identity(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(=)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_identity()),
+        ));
+    }
     map(tag("="), |_| {
-        crate::hgvs::edit::NaEdit::whole_entity_identity()
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_identity())
     })
     .parse(input)
 }
 
-/// Parse whole-CDS unknown: c.?
-/// Only matches if ? is at end (not followed by `_`, `+`/`-`, edit
+/// Parse whole-CDS unknown: c.? or c.(?)
+///
+/// Only matches if `?` is at end (not followed by `_`, `+`/`-`, edit
 /// keywords, or a substitution pattern — those route to the
 /// position-based parser as edits at unknown position). #239.
-fn parse_whole_cds_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+///
+/// The `c.(?)` predicted form is returned as `Mu::Uncertain`. #245.
+fn parse_whole_cds_unknown(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(?)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+        ));
+    }
     let (remaining, _) = tag("?").parse(input)?;
     if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -1522,7 +1556,10 @@ fn parse_whole_cds_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEd
             nom::error::ErrorKind::Tag,
         )));
     }
-    Ok((remaining, crate::hgvs::edit::NaEdit::whole_entity_unknown()))
+    Ok((
+        remaining,
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+    ))
 }
 
 /// Parse CDS variant (c.)
@@ -1544,7 +1581,7 @@ fn parse_cds_variant(
             return parse_cds_position_unknown_phase(input, accession.clone(), gene_symbol.clone());
         }
 
-        // First try whole-CDS identity (c.=) - no position
+        // First try whole-CDS identity (c.= or c.(=)) - no position
         if let Ok((remaining, edit)) = parse_whole_cds_identity(input) {
             // Use a dummy interval for whole-entity identity
             let dummy_pos = crate::hgvs::location::CdsPos {
@@ -1558,12 +1595,12 @@ fn parse_cds_variant(
                 HgvsVariant::Cds(CdsVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
 
-        // Try whole-CDS unknown (c.?) - no position
+        // Try whole-CDS unknown (c.? or c.(?)) - no position
         if let Ok((remaining, edit)) = parse_whole_cds_unknown(input) {
             // Use a dummy interval for whole-entity unknown
             let dummy_pos = crate::hgvs::location::CdsPos {
@@ -1577,7 +1614,7 @@ fn parse_cds_variant(
                 HgvsVariant::Cds(CdsVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
@@ -2967,7 +3004,7 @@ fn parse_rna_variant(
             return parse_rna_position_unknown_phase(input, accession.clone(), gene_symbol.clone());
         }
 
-        // First try whole-RNA identity (r.=) - no position
+        // First try whole-RNA identity (r.= or r.(=)) - no position
         if let Ok((remaining, edit)) = parse_whole_rna_identity(input) {
             let dummy_pos = crate::hgvs::location::RnaPos {
                 base: 1,
@@ -2980,12 +3017,12 @@ fn parse_rna_variant(
                 HgvsVariant::Rna(RnaVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
 
-        // Try whole-RNA unknown (r.?) - no position
+        // Try whole-RNA unknown (r.? or r.(?)) - no position
         if let Ok((remaining, edit)) = parse_whole_rna_unknown(input) {
             let dummy_pos = crate::hgvs::location::RnaPos {
                 base: 1,
@@ -2998,7 +3035,7 @@ fn parse_rna_variant(
                 HgvsVariant::Rna(RnaVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
@@ -3021,7 +3058,7 @@ fn parse_rna_variant(
             ));
         }
 
-        // Try RNA-specific no product pattern (r.0)
+        // Try RNA-specific no product pattern (r.0 or predicted r.(0))
         if let Ok((remaining, edit)) = parse_rna_no_product(input) {
             let dummy_pos = crate::hgvs::location::RnaPos {
                 base: 1,
@@ -3034,7 +3071,7 @@ fn parse_rna_variant(
                 HgvsVariant::Rna(RnaVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(dummy_interval, edit),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
                 }),
             ));
         }
@@ -3085,19 +3122,34 @@ fn parse_rna_variant(
     }
 }
 
-/// Parse whole-RNA identity: r.=
-fn parse_whole_rna_identity(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+/// Parse whole-RNA identity: r.= or r.(=)
+fn parse_whole_rna_identity(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(=)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_identity()),
+        ));
+    }
     map(tag("="), |_| {
-        crate::hgvs::edit::NaEdit::whole_entity_identity()
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_identity())
     })
     .parse(input)
 }
 
-/// Parse whole-RNA unknown: r.?
-fn parse_whole_rna_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
-    // Only match terminal ? (not ? followed by `_`, edit keywords, or
-    // a substitution pattern — those route to the position-based
-    // parser as edits at unknown position). #239.
+/// Parse whole-RNA unknown: r.? or r.(?)
+///
+/// Only matches a terminal `?` (not `?` followed by `_`, edit keywords,
+/// or a substitution pattern — those route to the position-based
+/// parser as edits at unknown position). #239.
+///
+/// The `r.(?)` predicted form is returned as `Mu::Uncertain`. #245.
+fn parse_whole_rna_unknown(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(?)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+        ));
+    }
     let (remaining, _) = tag("?").parse(input)?;
     if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -3105,7 +3157,10 @@ fn parse_whole_rna_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEd
             nom::error::ErrorKind::Tag,
         )));
     }
-    Ok((remaining, crate::hgvs::edit::NaEdit::whole_entity_unknown()))
+    Ok((
+        remaining,
+        Mu::Certain(crate::hgvs::edit::NaEdit::whole_entity_unknown()),
+    ))
 }
 
 /// Parse RNA splice pattern: `spl` (very-likely-affected) or `spl?` (might-be-affected).
@@ -3140,8 +3195,14 @@ fn parse_whole_rna_predicted_splice(input: &str) -> IResult<&str, crate::hgvs::e
     Ok((input, edit))
 }
 
-/// Parse RNA no product pattern: r.0
-fn parse_rna_no_product(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
+/// Parse RNA no product pattern: r.0 or predicted r.(0)
+fn parse_rna_no_product(input: &str) -> IResult<&str, Mu<crate::hgvs::edit::NaEdit>> {
+    if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("(0)").parse(input) {
+        return Ok((
+            remaining,
+            Mu::Uncertain(crate::hgvs::edit::NaEdit::NoProduct),
+        ));
+    }
     // Match "0" but only as a standalone symbol (not followed by digits or other edit characters)
     let (remaining, _) = tag("0").parse(input)?;
     // Make sure it's not followed by more digits (would be a position)
@@ -3151,7 +3212,7 @@ fn parse_rna_no_product(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit>
             nom::error::ErrorKind::Tag,
         )));
     }
-    Ok((remaining, crate::hgvs::edit::NaEdit::NoProduct))
+    Ok((remaining, Mu::Certain(crate::hgvs::edit::NaEdit::NoProduct)))
 }
 
 /// Parse predicted RNA variant: r.(100_101insAUG)
