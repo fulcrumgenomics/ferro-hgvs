@@ -283,17 +283,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let merged_raw =
             merge::merge_consecutive_edits(allele.variants.clone(), allele.phase, &self.provider);
 
-        // Issue #160: any merged delins (or pre-existing delins that survived
-        // merge unchanged) may decompose into [..., inv, ...] when an inv-
-        // eligible sub-span is present. Run the split per merged variant; the
-        // helper is a no-op for non-Delins variants and for Delins without an
-        // inv sub-span. Only applies in cis phase — trans alleles aren't
+        // Issue #160 + #165: any merged delins (or pre-existing delins
+        // that survived merge unchanged) may decompose into a sequence of
+        // higher-priority forms per `general.md:56` — `[..., inv, ...]`
+        // when an inv-eligible sub-span is present (#160) and/or into
+        // separate substitutions when interior positions match the
+        // reference (#165). Run the split per merged variant; the helper
+        // is a no-op for non-Delins variants and for Delins with nothing
+        // to split out. Only applies in cis phase — trans alleles aren't
         // collapsible in the first place.
         let merged_split: Vec<HgvsVariant> =
             if allele.phase == crate::hgvs::variant::AllelePhase::Cis {
                 merged_raw
                     .into_iter()
-                    .flat_map(|v| self.split_inv_for_variant(v))
+                    .flat_map(|v| self.canonical_split_for_variant(v))
                     .collect()
             } else {
                 merged_raw
@@ -439,10 +442,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         };
 
-        // Issue #160: a normalized Delins may decompose into [..., inv, ...]
-        // when an inv-eligible sub-span is present. Returns the variant
-        // unchanged for non-Delins or no-decomposition cases.
-        let split = self.apply_inv_split(HV::Genome(new_variant));
+        // Issue #160 + #165: a normalized Delins may decompose under the
+        // spec's edit-priority rule (`general.md:56`) — into `[..., inv,
+        // ...]` for rev-comp sub-spans and/or into separate subs across
+        // interior identities. Returns the variant unchanged for
+        // non-Delins or no-decomposition cases.
+        let split = self.apply_canonical_split(HV::Genome(new_variant));
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -560,8 +565,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
         };
 
-        // Issue #160 inv sub-span split (CDS-proper positions only).
-        let split = self.apply_inv_split(HV::Cds(new_variant));
+        // Issue #160 + #165 post-canonicalization split. The codon-frame
+        // exception applies only to CDS-proper positions, which the
+        // helper filters internally via `simple_cds_pos`.
+        let split = self.apply_canonical_split(HV::Cds(new_variant));
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -659,8 +666,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
         };
 
-        // Issue #160 inv sub-span split.
-        let split = self.apply_inv_split(HV::Tx(new_variant));
+        // Issue #160 + #165 post-canonicalization split.
+        let split = self.apply_canonical_split(HV::Tx(new_variant));
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -1019,8 +1026,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
         };
 
-        // Issue #160 inv sub-span split (T/U-equivalent comparison).
-        let split = self.apply_inv_split(HV::Rna(new_variant));
+        // Issue #160 + #165 post-canonicalization split (T/U-equivalent
+        // comparison for the rev-comp scan and per-position emissions).
+        let split = self.apply_canonical_split(HV::Rna(new_variant));
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -1096,7 +1104,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &crate::hgvs::variant::MtVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // MT variants are similar to genomic. We canonicalize `con` -> `delins`
-        // (SVD-WG009) up front, then route through apply_inv_split so any
+        // (SVD-WG009) up front, then route through apply_canonical_split so any
         // delins whose ref/alt span contains an inv-eligible sub-span
         // decomposes the same way it does for g. (issue #160). Full
         // window-based normalization and the per-edit canonicalization that
@@ -1113,11 +1121,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                     ),
                 };
-                let split = self.apply_inv_split(HV::Mt(new_variant));
+                let split = self.apply_canonical_split(HV::Mt(new_variant));
                 return Ok((wrap_allele_if_split(split), vec![]));
             }
         }
-        let split = self.apply_inv_split(HV::Mt(variant.clone()));
+        let split = self.apply_canonical_split(HV::Mt(variant.clone()));
         Ok((wrap_allele_if_split(split), vec![]))
     }
 
@@ -2550,15 +2558,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
-    /// Issue #160 inv sub-span split for a single normalized variant.
+    /// Post-canonicalization split for a single normalized variant.
     /// Coord-system-agnostic: handles `g.`, `m.`, `c.` (CDS-proper positions
     /// only), `n.`, and `r.`. Fetches the per-coord-system reference window
-    /// internally, calls `decompose_delins_inv`, and rebuilds N variants when
+    /// internally, calls `decompose_delins`, and rebuilds N variants when
     /// the decomposition fires. Returns `vec![variant]` if the variant
     /// doesn't decompose (non-Delins, complex location, no provider data,
-    /// no inv sub-span).
+    /// nothing to split out).
     ///
-    /// Position math: `decompose_delins_inv` returns 0-indexed offsets into
+    /// Implements two spec-priority rules from `general.md:56`
+    /// (substitution > deletion > inversion > duplication > insertion):
+    /// - Inversion priority: a delins whose span contains a rev-comp
+    ///   sub-span splits into `[…; inv; …]` (issue #160).
+    /// - Substitution priority: a delins whose post-trim span contains
+    ///   two or more independent single-base mismatches separated by at
+    ///   least one unchanged nucleotide splits into separate substitutions
+    ///   (issue #165 / item A10). The narrow codon-frame exception
+    ///   (`general.md:35-38`) is preserved by `build_split_variants`,
+    ///   which re-groups `[Sub; Identity; Sub]` triplets whose endpoints
+    ///   share a codon when the variant is in CDS.
+    ///
+    /// Position math: `decompose_delins` returns 0-indexed offsets into
     /// the fetched `ref_bytes` slice. `ref_bytes[0]` corresponds to the
     /// variant's HGVS start position, so absolute HGVS pos = `hgvs_start +
     /// offset`.
@@ -2567,9 +2587,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// are `T`. Both slices are normalized to `T` before comparison so the
     /// rev-comp scan works uniformly; the emitted `Substitution` sub-edits
     /// preserve the original alt `Base` (which may be `Base::U`).
-    fn apply_inv_split(&self, variant: HgvsVariant) -> Vec<HgvsVariant> {
+    fn apply_canonical_split(&self, variant: HgvsVariant) -> Vec<HgvsVariant> {
         let Some((hgvs_start, hgvs_end, alt_bytes, ref_bytes)) =
-            self.fetch_ref_for_inv_split(&variant)
+            self.fetch_ref_for_canonical_split(&variant)
         else {
             return vec![variant];
         };
@@ -2581,15 +2601,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         );
         let ref_norm = normalize_t_u(&ref_bytes);
         let alt_norm = normalize_t_u(&alt_bytes);
-        let Some(subedits) = rules::decompose_delins_inv(&ref_norm, 0, n, &alt_norm) else {
+        let Some(subedits) = rules::decompose_delins(&ref_norm, 0, n, &alt_norm) else {
             return vec![variant];
         };
         // Substitution sub-edits inherit `alt_norm` bytes (T-form) from
-        // decompose_delins_inv, but the user's literal alt may have been U
+        // `decompose_delins`, but the user's literal alt may have been U
         // (r. inputs). Re-derive the substitution `alternative` from the
         // pre-normalized `alt_bytes` so r. variants render `g>u` instead of
         // a silently coerced `g>t`. The position field is a 0-indexed offset
-        // into the same window passed to decompose_delins_inv, so it indexes
+        // into the same window passed to `decompose_delins`, so it indexes
         // alt_bytes directly.
         let subedits = subedits
             .into_iter()
@@ -2610,19 +2630,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 other => other,
             })
             .collect();
-        build_split_variants(&variant, subedits, hgvs_start)
+        // The codon-frame exception (`general.md:35-38`) only applies to
+        // `c.` variants on CDS-proper positions; `fetch_ref_for_canonical_split`
+        // already filters to those via `simple_cds_pos`, so the discriminant
+        // check below is sufficient. The exception fires inside
+        // `build_split_variants` for every embedded `[Sub; Identity; Sub]`
+        // triplet whose endpoints share a codon.
+        let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_));
+        build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware)
     }
 
     /// Per-coord-system extraction of `(hgvs_start, hgvs_end, alt_bytes,
-    /// ref_bytes)` for inv-split. Returns `None` when the variant is not a
-    /// single-Delins at simple positions, or when the provider can't supply
-    /// the ref window.
+    /// ref_bytes)` for the post-canonicalization split. Returns `None`
+    /// when the variant is not a single-Delins at simple positions, or
+    /// when the provider can't supply the ref window.
     ///
     /// The `ref_bytes` slice is sized exactly to the variant's HGVS interval
     /// (`hgvs_end - hgvs_start + 1` bytes), with `ref_bytes[0]` aligned to
     /// HGVS pos `hgvs_start`. This invariant lets the caller use a uniform
     /// `hgvs_pos = hgvs_start + offset` formula regardless of coord system.
-    fn fetch_ref_for_inv_split(
+    fn fetch_ref_for_canonical_split(
         &self,
         variant: &HgvsVariant,
     ) -> Option<(u64, u64, Vec<u8>, Vec<u8>)> {
@@ -2694,23 +2721,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Some((hgvs_start, hgvs_end, alt, ref_bytes))
     }
 
-    /// Issue #160 post-merge canonicalization for a single variant. Used by
-    /// the cis-allele merge path; `normalize_allele` applies this per merged
-    /// variant. Conservatively returns `vec![v]` for variants the helper
-    /// can't process.
+    /// Issue #160 + #165 post-merge canonicalization for a single
+    /// variant. Used by the cis-allele merge path; `normalize_allele`
+    /// applies this per merged variant. Conservatively returns
+    /// `vec![v]` for variants the helper can't process.
     ///
-    /// Two spec rules are folded together by re-running normalization on the
-    /// merged variant:
+    /// Three spec rules are folded together by re-running normalization
+    /// on the merged variant:
     /// - Full-span canonicalization (identity / dup / sub / del / ins /
     ///   full-span inv with outer-pair shortening) handled by
     ///   `canonicalize_delins` inside `normalize_na_edit`.
     /// - Sub-span inv decomposition (the issue #160 case) handled by
-    ///   `apply_inv_split` wired into each per-coord-system `normalize_*`.
+    ///   `apply_canonical_split` wired into each per-coord-system
+    ///   `normalize_*`.
+    /// - Sub-only decomposition for delins containing interior identities
+    ///   (issue #165 / item A10), with the spec's codon-frame exception
+    ///   (`general.md:35-38`) preserved inside `build_split_variants`.
     ///
-    /// If the result is an `HgvsVariant::Allele` (sub-span split fired),
-    /// unwrap its inner variants so they flatten into the outer cis-allele
-    /// list rather than nesting.
-    fn split_inv_for_variant(&self, v: HgvsVariant) -> Vec<HgvsVariant> {
+    /// If the result is an `HgvsVariant::Allele` (the split fired and
+    /// produced multiple variants), unwrap its inner variants so they
+    /// flatten into the outer cis-allele list rather than nesting.
+    fn canonical_split_for_variant(&self, v: HgvsVariant) -> Vec<HgvsVariant> {
         if !matches!(
             v,
             HgvsVariant::Genome(_)
@@ -2783,27 +2814,33 @@ fn unflip_intronic_positions(
 }
 
 // =============================================================================
-// Issue #160: inv sub-span split helpers
+// Issue #160 + #165: delins post-canonicalization split helpers
 // =============================================================================
 //
 // After `normalize_na_edit` (or `merge_consecutive_edits` for cis alleles)
-// produces a Delins variant, we may discover the delins span actually contains
-// an `inv`-eligible sub-span. The HGVS spec puts `inv` higher than `delins`
-// in the edit-priority order, so the canonical form is to split the delins
-// into a sequence of [..., inv, ...] sub-edits and wrap them back in a cis
-// allele.
+// produces a Delins variant, the resulting span may be expressible in a
+// higher-priority form under `general.md:56` (sub > del > inv > dup > ins).
+// Two cases fire here:
+// - Inversion sub-span: the delins span contains a rev-comp sub-region —
+//   split into `[…; inv; …]` (issue #160).
+// - Independent substitutions: the delins span contains two or more
+//   single-base mismatches separated by at least one unchanged nucleotide
+//   — split each into its own sub variant (issue #165 / tracking issue
+//   #81 item A10). The codon-frame exception (`general.md:35-38`) is
+//   preserved when applicable (see `build_split_variants`).
 //
 // The split is implemented as a post-pass over an already-built variant. It
 // fetches a reference window via the provider, calls
-// `rules::decompose_delins_inv`, and rebuilds N variants when the
+// `rules::decompose_delins`, and rebuilds N variants when the
 // decomposition fires. For variants that don't decompose (most cases), the
 // helper returns `vec![input]` and is effectively a no-op.
 
 /// Per-coord-system-aware extraction of `(hgvs_start, hgvs_end, alt_bytes)`
 /// from a variant whose edit is a literal `Delins` at simple positions
 /// (no offsets, no uncertainty). Returns `None` for any variant shape that
-/// can't be decomposed by the inv-split rule (non-Delins, intronic, uncertain
-/// boundary, non-literal insert, etc.).
+/// can't be decomposed by the post-canonicalization split rules
+/// (issues #160 / #165): non-Delins, intronic, uncertain boundary,
+/// non-literal insert, etc.
 fn extract_simple_delins(variant: &HgvsVariant) -> Option<(u64, u64, Vec<u8>)> {
     let (start, end, edit) = match variant {
         HgvsVariant::Genome(v) => simple_genome_loc_edit(&v.loc_edit)?,
@@ -2887,7 +2924,7 @@ fn simple_rna_pos(mu: &Mu<RnaPos>) -> Option<u64> {
 /// Build a single HgvsVariant matching `template`'s coord-system kind /
 /// accession / gene_symbol, with a new `[start_1based, end_1based]` location
 /// and the given edit. Used by `build_split_variants` to spread the output
-/// of `decompose_delins_inv` back into a sequence of HgvsVariants.
+/// of `decompose_delins` back into a sequence of HgvsVariants.
 fn build_variant_at(
     template: &HgvsVariant,
     start_1based: u64,
@@ -2953,21 +2990,40 @@ fn build_variant_at(
 /// 1-based HGVS positions are recovered as `offset + hgvs_start`, where
 /// `hgvs_start` is the variant's HGVS start position.
 ///
-/// Consecutive `Substitution` sub-edits whose positions are strictly
-/// adjacent (no gap, no `Inversion` or `IdentityAt` between them) are
-/// grouped into a single `delins` variant per HGVS spec — `substitution.md`:
-/// "changes involving two or more consecutive nucleotides are described as
-/// deletion/insertion (delins)" (issue #182). Singleton sub-runs stay as
-/// `Substitution`; an `Inversion` or `IdentityAt` always breaks a run and
-/// emits separately. `Inversion` therefore acts as a hard barrier — adjacent
-/// sub flanks on either side of an inv are NOT re-merged into the inv span,
-/// preserving the inv-priority decomposition introduced by #166 (which was
-/// adopted to align with the spec's edit-priority list `general.md:45`:
-/// sub > del > inv > dup > ins).
+/// Spec rules implemented (see `general.md`, `substitution.md`):
+///
+/// 1. **Codon-frame exception** (`general.md:35-38`, issue #79 / #165).
+///    When `codon_frame_aware` is true, the scan looks ahead at each
+///    position for a `[Sub@i; Identity@i+1; Sub@i+2]` triplet whose CDS
+///    endpoints (`hgvs_start + i`, `hgvs_start + i + 2`) share a codon.
+///    Such a triplet emits as a single 3-base `delins` with alt
+///    sequence `[Sub@i.alt, Identity@i+1.base, Sub@i+2.alt]`. The flag
+///    is true only for `c.` (CDS) variants — `g.`, `n.`, `r.`, and `m.`
+///    have no codon-frame and skip this branch. The exception is
+///    deliberately narrow (length-3, exact pattern, in-codon endpoints)
+///    so it matches the spec text "two variants separated by one
+///    nucleotide, together affecting one amino acid".
+///
+/// 2. **Adjacent-substitution coalescence** (`substitution.md`,
+///    issue #182). Consecutive `Substitution` sub-edits whose positions
+///    are strictly adjacent (no gap, no `Inversion` or `IdentityAt`
+///    between them) group into a single `delins` variant — "changes
+///    involving two or more consecutive nucleotides are described as
+///    deletion/insertion".
+///
+/// 3. **Inversion as a hard barrier** (issue #166). An `Inversion`
+///    always emits standalone and breaks any in-flight substitution
+///    run, preserving the inv-priority decomposition.
+///
+/// Singleton sub-runs stay as `Substitution`. `IdentityAt` not consumed
+/// by a codon-frame triplet drops (an unchanged base is not an edit) and
+/// always ends any in-flight substitution run — the gap means the
+/// surrounding subs are no longer "consecutive".
 fn build_split_variants(
     template: &HgvsVariant,
     subedits: Vec<DelinsSubedit>,
     hgvs_start: u64,
+    codon_frame_aware: bool,
 ) -> Vec<HgvsVariant> {
     let abs = |idx: usize| -> u64 { idx as u64 + hgvs_start };
 
@@ -2977,26 +3033,84 @@ fn build_split_variants(
     // with `position` the 0-indexed offset into the variant's ref window.
     let mut run: Vec<(usize, Base, Base)> = Vec::new();
 
-    for se in subedits {
-        match se {
+    let n = subedits.len();
+    let mut i = 0;
+    while i < n {
+        // Codon-frame triplet lookahead: try to consume `[Sub; Identity; Sub]`
+        // at offsets `[i, i+1, i+2]` whose endpoints share a codon. Only
+        // fires for CDS variants (`codon_frame_aware`) and is the post-merge
+        // half of issue #79: a pair of in-codon SNVs separated by one
+        // unchanged base must render as a 3-base `delins`, even when the
+        // pair sits inside a longer decomposition.
+        if codon_frame_aware && i + 2 < n {
+            if let (
+                DelinsSubedit::Substitution {
+                    position: p1,
+                    alternative: a1,
+                    ..
+                },
+                DelinsSubedit::IdentityAt {
+                    position: pm,
+                    base: bm,
+                },
+                DelinsSubedit::Substitution {
+                    position: p3,
+                    alternative: a3,
+                    ..
+                },
+            ) = (&subedits[i], &subedits[i + 1], &subedits[i + 2])
+            {
+                if *pm == *p1 + 1 && *p3 == *p1 + 2 {
+                    let cds_p1 = abs(*p1) as i64;
+                    let cds_p3 = abs(*p3) as i64;
+                    if merge::same_codon(cds_p1, cds_p3) {
+                        // Codon-frame triplet preserved as a 3-base
+                        // delins. `bm` is the unchanged ref byte from
+                        // `decompose_delins`. The codon-frame branch is
+                        // CDS-only (`codon_frame_aware` is `true` only
+                        // for `HgvsVariant::Cds`), so T/U recovery for
+                        // r. inputs is unnecessary here — r. variants
+                        // never reach this branch.
+                        flush_substitution_run(&mut output, template, hgvs_start, &mut run);
+                        let s = abs(*p1);
+                        let e = abs(*p3);
+                        let alt_bases = vec![*a1, *bm, *a3];
+                        output.push(build_variant_at(
+                            template,
+                            s,
+                            e,
+                            NaEdit::Delins {
+                                sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
+                                deleted: None,
+                                deleted_length: None,
+                            },
+                        ));
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        match &subedits[i] {
             DelinsSubedit::Substitution {
                 position,
                 reference,
                 alternative,
             } => {
-                let breaks_run = matches!(run.last(), Some((prev, _, _)) if *prev + 1 != position);
+                let breaks_run = matches!(run.last(), Some((prev, _, _)) if *prev + 1 != *position);
                 if breaks_run {
                     flush_substitution_run(&mut output, template, hgvs_start, &mut run);
                 }
-                run.push((position, reference, alternative));
+                run.push((*position, *reference, *alternative));
             }
             DelinsSubedit::Inversion { start, end } => {
                 flush_substitution_run(&mut output, template, hgvs_start, &mut run);
                 // Half-open 0-indexed [start, end) of length L=end-start.
                 // HGVS inclusive interval covers L bases starting at
                 // abs(start) and ending at abs(start)+L-1 = abs(end-1).
-                let s = abs(start);
-                let e = abs(end) - 1;
+                let s = abs(*start);
+                let e = abs(*end) - 1;
                 output.push(build_variant_at(
                     template,
                     s,
@@ -3007,16 +3121,18 @@ fn build_split_variants(
                     },
                 ));
             }
-            // Drop IdentityAt: an unchanged base is not an edit, so emitting
-            // a `pos=` sub-variant would clutter the split allele. Both the
-            // codon-frame-merge interior identity (issue #79) and the outer
-            // bases absorbed by `shorten_inversion` map to IdentityAt. An
-            // identity also ends any in-flight substitution run — the gap
-            // means the surrounding subs are no longer "consecutive".
+            // Drop IdentityAt: an unchanged base is not an edit. Outside of
+            // the codon-frame triplet branch above, identities here are
+            // either codon-frame-merge interior bases (issue #79) that did
+            // not pair into a same-codon triplet, or outer bases absorbed
+            // by `shorten_inversion`. An identity also ends any in-flight
+            // substitution run — the gap means the surrounding subs are no
+            // longer "consecutive".
             DelinsSubedit::IdentityAt { .. } => {
                 flush_substitution_run(&mut output, template, hgvs_start, &mut run);
             }
         }
+        i += 1;
     }
     flush_substitution_run(&mut output, template, hgvs_start, &mut run);
     output
@@ -3067,9 +3183,10 @@ fn flush_substitution_run(
 }
 
 /// Normalize DNA `T` and RNA `U` to a single byte (`T`) so byte-wise
-/// comparison works across coord systems. Used by `apply_inv_split` to make
-/// the rev-comp scan T/U-agnostic for `r.` variants whose alt bytes contain
-/// `U` while the transcript ref contains `T`.
+/// comparison works across coord systems. Used by `apply_canonical_split`
+/// to make every decomposition scan (rev-comp inv detection, per-position
+/// sub / identity classification) T/U-agnostic for `r.` variants whose
+/// alt bytes contain `U` while the transcript ref contains `T`.
 fn normalize_t_u(seq: &[u8]) -> Vec<u8> {
     seq.iter()
         .map(|&b| match b {

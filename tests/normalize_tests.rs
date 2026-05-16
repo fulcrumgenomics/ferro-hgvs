@@ -4395,7 +4395,8 @@ mod cigar_cds_mapping {
 // rule (sub > del > inv > dup > ins). Applies to:
 //   - Cis allele inputs that merge into a delins, then decompose.
 //   - User-typed delins inputs whose post-trim range contains an inv sub-span.
-// Function: rules::decompose_delins_inv() in src/normalize/rules.rs
+// Function: rules::decompose_delins() in src/normalize/rules.rs
+// (item A10 of tracking issue #81; sub-only branch tracked in #165)
 mod issue_160_revcomp_inv_subspans {
     use super::*;
 
@@ -4475,7 +4476,7 @@ mod issue_160_revcomp_inv_subspans {
     fn split_drops_identity_subedit_no_eq_emitted() {
         // ref AGACC at 1300-1304, alt CTAGT decomposes to
         // [Inv(0,2); Identity(2); Sub(3 C>G); Sub(4 C>T)] inside
-        // decompose_delins_inv. The IdentityAt sub-edit must NOT render as a
+        // decompose_delins. The IdentityAt sub-edit must NOT render as a
         // spurious `g.1302=` variant. Per issue #182, the trailing two
         // strictly-adjacent Substitutions group into a single delins
         // (substitution.md: "changes involving two or more consecutive

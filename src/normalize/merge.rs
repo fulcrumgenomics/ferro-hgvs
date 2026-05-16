@@ -518,7 +518,11 @@ fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
 /// Two CDS positions share a codon if they fall in the same 1-indexed
 /// triplet: `c.1..3` is codon 1, `c.4..6` is codon 2, etc. The standard
 /// codon-number formula is `(base - 1) / 3` (integer division).
-fn same_codon(a: i64, b: i64) -> bool {
+///
+/// Exposed at `pub(crate)` so the post-merge `decompose_delins`
+/// pass can re-apply the spec's codon-frame exception (issue #165 /
+/// tracking issue #81 item A10).
+pub(crate) fn same_codon(a: i64, b: i64) -> bool {
     if a < 1 || b < 1 {
         return false;
     }
@@ -631,5 +635,10 @@ mod tests {
         assert!(!same_codon(3, 5)); // codon 1 vs codon 2
         assert!(!same_codon(0, 2)); // 0 invalid
         assert!(!same_codon(-3, -1));
+        // Large positions exercise the `(base - 1) / 3` formula far from
+        // its near-zero edge. c.99997..c.99999 falls in codon 33333;
+        // c.99998..c.100000 straddles codon 33333 and 33334.
+        assert!(same_codon(99997, 99999));
+        assert!(!same_codon(99998, 100000));
     }
 }
