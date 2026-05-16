@@ -12,8 +12,8 @@
       "correctly-rejected": 42,
       "diverges": 187,
       "false-acceptance": 86,
-      "parse-error": 343,
-      "preserved": 614
+      "parse-error": 341,
+      "preserved": 616
     },
     "by_coordinate_system": {
       "c": 464,
@@ -7605,18 +7605,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
-      "current": "parse error: Parse error at position 76: Unexpected trailing characters: ']'",
-      "spec_expected": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000008.11:g.(131500001_136400000)ins(127300001_131500000)_(131500001_136400000)inv",
       "current": "parse error: Parse error at position 82: Unexpected trailing characters: 'inv'",
       "spec_expected": "NC_000008.11:g.(131500001_136400000)ins(127300001_131500000)_(131500001_136400000)inv",
@@ -7649,18 +7637,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/complex.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
-      "current": "parse error: Parse error at position 41: Unexpected trailing characters: ';[101179660_101179695TG[18]]'",
-      "spec_expected": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
-      "status": "parse-error",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/repeated.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -8485,6 +8461,17 @@
       ]
     },
     {
+      "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+      "current": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+      "spec_expected": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ]
+    },
+    {
       "input": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754]",
       "current": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754]",
       "spec_expected": "NC_000006.11:g.8897754_8897755ins[N[543];8897743_8897754]",
@@ -8670,6 +8657,17 @@
       "source_kind": "syntax_yaml",
       "source_paths": [
         "docs/syntax.yaml"
+      ]
+    },
+    {
+      "input": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
+      "current": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
+      "spec_expected": "NC_000014.8:g.[101179660_101179695TG[14]];[101179660_101179695TG[18]]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/repeated.md"
       ]
     },
     {
