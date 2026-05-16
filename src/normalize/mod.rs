@@ -1741,19 +1741,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     return Ok((start, end, edit.clone(), warnings.clone()));
                 }
             }
-            NaEdit::Duplication { sequence, .. } => {
-                if let Some(seq) = sequence {
-                    seq.bases().iter().map(|b| b.to_u8()).collect()
+            NaEdit::Duplication { .. } => {
+                // Always read duplicated bytes from the reference,
+                // regardless of any user-stated bases on the input
+                // (`dup<base>` shapes). The canonical HGVS Display
+                // drops the stated bases anyway (see the dup output
+                // arm in `get_canonical_form`); using the stated
+                // bases here when they don't match the reference
+                // (the parser accepts them in lenient mode with a
+                // `RefSeqMismatch` warning) caused the shuffle to
+                // mis-shift and broke single-pass idempotency:
+                // `c.10dupA` against a `CCCCC` homopolymer
+                // canonicalized to `c.10dup` on pass 1 (stated-ref
+                // stripped without shifting) and only shifted to
+                // `c.14dup` on pass 2 (because the now-clean form
+                // reads bytes from reference and the shuffle fires
+                // correctly). Reading from reference up-front
+                // collapses both pass 1 and pass 2 behavior into a
+                // single pass. Issue #219.
+                let s = hgvs_pos_to_index(start);
+                let e = end as usize;
+                if e <= ref_seq.len() {
+                    ref_seq[s..e].to_vec()
                 } else {
-                    // Get duplicated sequence from reference
-                    // start is 1-based, convert to 0-based index for array access
-                    let s = hgvs_pos_to_index(start);
-                    let e = end as usize;
-                    if e <= ref_seq.len() {
-                        ref_seq[s..e].to_vec()
-                    } else {
-                        vec![]
-                    }
+                    vec![]
                 }
             }
             NaEdit::Delins { sequence, .. } => {
