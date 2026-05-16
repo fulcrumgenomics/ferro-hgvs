@@ -15,7 +15,7 @@
 use crate::coords::hgvs_pos_to_index;
 use crate::error::FerroError;
 use crate::error_handling::ResolvedAction;
-use crate::hgvs::edit::{Base, NaEdit};
+use crate::hgvs::edit::{Base, NaEdit, RepeatUnit, Sequence};
 use crate::normalize::config::NormalizeConfig;
 
 /// Result of reference validation
@@ -97,9 +97,182 @@ pub fn validate_reference(edit: &NaEdit, ref_seq: &[u8], start: u64, end: u64) -
                 ValidationResult::ok()
             }
         }
+        NaEdit::Repeat {
+            sequence: Some(unit),
+            additional_counts,
+            trailing,
+            ..
+        } => {
+            // Mirror the skip-list used by `normalize_na_edit`'s repeat
+            // arm: genotype notation (`A[6][1]`, `additional_counts`
+            // non-empty) and VEP-style trailing sequences
+            // (`c.212-18CTG[3]T`, `trailing.is_some()`) extend the
+            // reference span semantics beyond `unit_len × k`. The
+            // normalizer declines to rewrite these shapes — so running
+            // the strict span × unit_len check on them would surface a
+            // `ReferenceMismatch` without any compensating normalization
+            // benefit. Defer to the existing pass-through behavior.
+            if trailing.is_some() || !additional_counts.is_empty() {
+                ValidationResult::ok()
+            } else {
+                validate_repeat_tract(unit, ref_seq, start, end)
+            }
+        }
+        NaEdit::MultiRepeat { units } => validate_multirepeat_tract(units, ref_seq, start, end),
         // Other edit types don't have stated reference bases
         _ => ValidationResult::ok(),
     }
+}
+
+/// Validate that the reference span `[start, end]` is a clean tandem
+/// repeat of `unit` (HGVS `repeated.md` invariant).
+///
+/// Per HGVS v21.0 the span `[start, end]` of a `unit[N]` description
+/// covers the reference repeat tract. The two invariants are:
+///   1. `span_len % unit_len == 0` (the span divides cleanly into whole
+///      units), and
+///   2. The reference bases at `[start, end]` equal `unit` repeated
+///      `span_len / unit_len` times.
+///
+/// The variant count `N` is the alt-allele count and is independent of
+/// the reference repeat count — `normalize_repeat` re-derives the
+/// reference count by scanning. The consistency check is between the
+/// *span* and the *reference bases* only.
+fn validate_repeat_tract(
+    unit: &Sequence,
+    ref_seq: &[u8],
+    start: u64,
+    end: u64,
+) -> ValidationResult {
+    let unit_bases = unit.bases();
+    if unit_bases.is_empty() {
+        return ValidationResult::ok();
+    }
+    let start_idx = hgvs_pos_to_index(start);
+    let end_idx = end as usize; // 1-based inclusive end = 0-based exclusive end
+
+    if end_idx > ref_seq.len() || start_idx > end_idx {
+        // Out-of-range or inverted span: leave to other validation gates
+        // (range/position checks elsewhere catch this with a clearer
+        // message than a "ref mismatch" would).
+        return ValidationResult::ok();
+    }
+    let span = end_idx - start_idx;
+    let unit_len = unit_bases.len();
+    let unit_str: String = unit_bases.iter().map(|b| b.to_char()).collect();
+    let actual_bytes = &ref_seq[start_idx..end_idx];
+    let actual_str: String = actual_bytes
+        .iter()
+        .map(|&b| (b as char).to_ascii_uppercase())
+        .collect();
+
+    if !span.is_multiple_of(unit_len) {
+        // Divisibility gate: span length must be a whole multiple of
+        // unit_len. Report the unit and span explicitly so the
+        // ReferenceMismatch error is actionable.
+        return ValidationResult::mismatch(
+            format!("{}[k] (k whole copies)", unit_str),
+            format!(
+                "{} ({} bp; unit_len {} does not divide span)",
+                actual_str, span, unit_len
+            ),
+        );
+    }
+    let k = span / unit_len;
+    // Build the expected reference tract: unit repeated k times.
+    let mut expected = Vec::with_capacity(span);
+    let unit_bytes: Vec<u8> = unit_bases.iter().map(|b| b.to_u8()).collect();
+    for _ in 0..k {
+        expected.extend_from_slice(&unit_bytes);
+    }
+    // Case-insensitive compare (matches `validate_sequence`).
+    let matches = expected
+        .iter()
+        .zip(actual_bytes.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b));
+    if matches {
+        return ValidationResult::ok();
+    }
+    let expected_str: String = expected
+        .iter()
+        .map(|&b| (b as char).to_ascii_uppercase())
+        .collect();
+    ValidationResult::mismatch(
+        format!("{}[{}] ({})", unit_str, k, expected_str),
+        actual_str,
+    )
+}
+
+/// Validate that the reference span is the concatenation of the
+/// declared mixed-repeat units (e.g. `CTG[2]TTG[1]CTG[11]`).
+///
+/// Multi-repeat notation describes the reference structure exactly: the
+/// per-unit counts must reproduce the reference bases at `[start, end]`
+/// when expanded and concatenated. Skips validation when any unit has a
+/// non-Exact count (Range / MinUncertain / MaxUncertain / Unknown) —
+/// the expected length is ambiguous in those cases.
+fn validate_multirepeat_tract(
+    units: &[RepeatUnit],
+    ref_seq: &[u8],
+    start: u64,
+    end: u64,
+) -> ValidationResult {
+    use crate::hgvs::edit::RepeatCount;
+
+    if units.is_empty() {
+        return ValidationResult::ok();
+    }
+    // Skip if any count is not Exact — can't form a deterministic
+    // expected sequence to compare against.
+    let mut expected = Vec::new();
+    let mut expected_str = String::new();
+    for u in units {
+        let n = match u.count {
+            RepeatCount::Exact(n) => n,
+            _ => return ValidationResult::ok(),
+        };
+        let unit_bytes: Vec<u8> = u.sequence.bases().iter().map(|b| b.to_u8()).collect();
+        let unit_str: String = u.sequence.bases().iter().map(|b| b.to_char()).collect();
+        expected_str.push_str(&format!("{}[{}]", unit_str, n));
+        for _ in 0..n {
+            expected.extend_from_slice(&unit_bytes);
+        }
+    }
+    let start_idx = hgvs_pos_to_index(start);
+    let end_idx = end as usize;
+    if end_idx > ref_seq.len() || start_idx > end_idx {
+        return ValidationResult::ok();
+    }
+    let actual_bytes = &ref_seq[start_idx..end_idx];
+    let actual_str: String = actual_bytes
+        .iter()
+        .map(|&b| (b as char).to_ascii_uppercase())
+        .collect();
+    if expected.len() != actual_bytes.len() {
+        return ValidationResult::mismatch(
+            format!(
+                "{} ({} bp from declared multi-repeat units)",
+                expected_str,
+                expected.len()
+            ),
+            format!("{} ({} bp)", actual_str, actual_bytes.len()),
+        );
+    }
+    let matches = expected
+        .iter()
+        .zip(actual_bytes.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b));
+    if matches {
+        return ValidationResult::ok();
+    }
+    let expected_bases_str: String = expected
+        .iter()
+        .map(|&b| (b as char).to_ascii_uppercase())
+        .collect();
+    ValidationResult::mismatch(
+        format!("{} ({})", expected_str, expected_bases_str),
+        actual_str,
+    )
 }
 
 /// Validate a single base against the reference

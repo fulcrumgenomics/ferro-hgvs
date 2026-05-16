@@ -30,6 +30,7 @@ pub fn needs_normalization(edit: &NaEdit) -> bool {
             | NaEdit::Delins { .. }
             | NaEdit::Inversion { .. }
             | NaEdit::Repeat { .. }
+            | NaEdit::MultiRepeat { .. }
     ) {
         return true;
     }
