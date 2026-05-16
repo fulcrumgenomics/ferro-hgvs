@@ -305,9 +305,10 @@ fn test_verified_roundtrip(#[case] input: &str) {
 #[case("NG_008029.2:g.5049>A", "NG_008029.2:g.5049>A")]
 #[case("NM_002055.4:c.1086>C", "NM_002055.4:c.1086>C")]
 #[case("NG_016621.2:g.17350>T", "NG_016621.2:g.17350>T")]
-// Uncertain substitution (ferro moves parens differently)
-#[case("NM_002016.2:c.(9740C>A)", "NM_002016.2:c.9740(C>A)")]
-#[case("NM_006767.4:c.(742G>A)", "NM_006767.4:c.742(G>A)")]
+// Uncertain substitution (`c.(<pos><edit>)` round-trip per #241 / G3
+// — these formerly Display'd as `c.<pos>(<edit>)`).
+#[case("NM_002016.2:c.(9740C>A)", "NM_002016.2:c.(9740C>A)")]
+#[case("NM_006767.4:c.(742G>A)", "NM_006767.4:c.(742G>A)")]
 // Numeric protein position (ferro uses Xaa)
 #[case("YP_003024032.1:p.78", "YP_003024032.1:p.Xaa78?")]
 #[case("LRG_766p1:p.4894Q", "LRG_766p1:p.Xaa4894Gln")]
