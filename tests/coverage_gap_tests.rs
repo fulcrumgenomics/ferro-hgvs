@@ -390,14 +390,21 @@ mod intronic_duplications {
     #[test]
     fn test_minus_strand_intronic_multi_base_dup() {
         // Transcript-view AAA tract at c.30+2..c.30+4 duplicated to
-        // AAAAAA. Per HGVS spec (repeated.md codon-frame exception): in c.
-        // context, repeat notation requires unit_len % 3 == 0. With unit_len=1
-        // the canonical form is `ins<literal>` at the 3' tract flanking
-        // position, not `A[6]`. Issue #98 ensured the minus-strand orientation
-        // produces transcript-view `A`s rather than genomic-view `T`s.
+        // AAAAAA. Per HGVS spec (repeated.md):
+        //
+        //   > This restriction only applies to the coding sequence,
+        //   > which does not include the introns or the UTR sequence.
+        //
+        // The codon-frame `unit_len % 3 == 0` restriction does NOT apply
+        // to intronic positions, so `normalize_intronic_cds` passes
+        // `is_coding=false` and the canonical form is `A[6]` over the
+        // reference-tract extent, not the gated `ins<literal>` fallback.
+        // Issue #98 ensured the minus-strand orientation produces
+        // transcript-view `A`s rather than genomic-view `T`s.
+        // (B4-remaining, issue #209.)
         let provider = make_provider_with_minus_strand();
         let result = normalize(provider, "NM_MINUS.1:c.30+2_30+4dup");
-        assert_eq!(result, "NM_MINUS.1:c.30+4_30+5insAAA");
+        assert_eq!(result, "NM_MINUS.1:c.30+2_30+4A[6]");
     }
 }
 

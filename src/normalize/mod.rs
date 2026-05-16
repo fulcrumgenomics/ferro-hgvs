@@ -552,8 +552,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
+        // HGVS spec (repeated.md): the codon-frame restriction
+        // (`unit_len % 3 == 0` for repeat notation in `c.` context)
+        // applies only to bases inside the CDS proper. UTR positions
+        // are exempt:
+        //   > This restriction only applies to the coding sequence,
+        //   > which does not include the introns or the UTR sequence.
+        // The variant is entirely within the CDS iff its transcript-
+        // frame span sits between `cds_start` and `cds_end` (inclusive).
+        // 5' UTR (`c.-N`) maps to `tx_start < cds_start`; 3' UTR
+        // (`c.*N`) maps to `tx_start > cds_end`. Pass `is_coding=false`
+        // for any variant whose footprint touches UTR. If `cds_end` is
+        // unset we cannot verify the variant lies within CDS proper, so
+        // we conservatively treat it as UTR-touching and skip the gate.
+        let is_coding = match transcript.cds_end {
+            Some(cds_end) => tx_start >= cds_start && tx_end <= cds_end,
+            None => false,
+        };
         let (new_tx_start, new_tx_end, new_edit, warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, true)?;
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
 
         // Convert back to CDS coordinates
         let new_start = self.tx_to_cds_pos(new_tx_start, cds_start, transcript.cds_end)?;
@@ -1241,6 +1258,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         );
 
         // Perform normalization in transcript-view space (CDS intronic context).
+        // HGVS spec (repeated.md): the codon-frame restriction
+        // (`unit_len % 3 == 0` for repeat notation in `c.` context)
+        // applies only to bases inside the CDS proper. Introns are
+        // exempt:
+        //   > This restriction only applies to the coding sequence,
+        //   > which does not include the introns or the UTR sequence.
+        // Pass `is_coding=false` so an intronic homopolymer dup/del
+        // can emit `[N±k]` repeat notation instead of falling back to
+        // the gated `ins<literal>` / plain `del` forms.
         let seq_bytes = work_seq.as_bytes();
         let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
             seq_bytes,
@@ -1248,7 +1274,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            true,
+            false,
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -1508,6 +1534,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &boundaries,
         );
 
+        // HGVS spec (repeated.md): the codon-frame restriction applies
+        // only to bases inside the CDS proper. Boundary-spanning
+        // variants cross an exon/intron boundary, so their footprint
+        // is not entirely within coding sequence — pass
+        // `is_coding=false` to match the intronic exemption. (A
+        // hypothetical purely-exonic-span variant won't enter this
+        // function; the exonic CDS path in `normalize_cds` makes its
+        // own UTR/CDS-aware choice.)
         let seq_bytes = work_seq.as_bytes();
         let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
             seq_bytes,
@@ -1515,7 +1549,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            true,
+            false,
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -4393,11 +4427,18 @@ mod tests {
 
     #[test]
     fn test_boundary_spanning_dup() {
-        // Test: c.40_40+3dup - duplication spanning exon-intron boundary.
-        // The dup is 4 A's in a poly-A region. Per HGVS spec (repeated.md
-        // codon-frame exception): in c. context, repeat notation requires
-        // unit_len % 3 == 0, so unit_len=1 routes the multi-copy dup to
-        // `ins<literal>` form rather than `A[N]` or a multi-base dup.
+        // Test: c.40_40+3dup — duplication spanning exon-intron boundary,
+        // landing on a 4-A poly-A region. Per HGVS spec (repeated.md):
+        //
+        //   > This restriction only applies to the coding sequence,
+        //   > which does not include the introns or the UTR sequence.
+        //
+        // The codon-frame `unit_len % 3 == 0` restriction does NOT apply
+        // to boundary-spanning variants (mixed exon/intron context is
+        // not "purely coding sequence"), so `normalize_boundary_spanning_cds`
+        // passes `is_coding=false` to `normalize_na_edit`. The dup must
+        // therefore canonicalize to `A[N]` repeat notation, not the gated
+        // `ins<literal>` fallback. (B4-remaining, issue #209.)
         let provider = make_boundary_test_provider();
         let normalizer = Normalizer::new(provider);
 
@@ -4412,9 +4453,10 @@ mod tests {
 
         let output = format!("{}", result.unwrap());
         assert!(
-            output.contains("ins") && !output.contains("A["),
-            "Boundary-spanning multi-copy dup in c. with unit_len=1 must emit \
-             ins<literal> per codon-frame gate, got: {}",
+            output.contains("A[") && !output.contains("ins"),
+            "Boundary-spanning multi-copy dup spanning into intron must emit \
+             `A[N]` repeat notation (intron exempts the codon-frame gate per \
+             repeated.md), got: {}",
             output
         );
     }
@@ -4424,8 +4466,11 @@ mod tests {
         // Minus-strand mirror of `test_boundary_spanning_dup`. Pins the
         // strand-specific flip in `normalize_boundary_spanning_cds`: the
         // genomic-strand window is RC of the transcript view, so without
-        // flipping, the codon-frame gate would inspect the wrong alphabet
-        // and the gated `ins<literal>` rewrite would not fire.
+        // flipping, repeat detection would inspect the wrong alphabet and
+        // miss the A homopolymer. With `is_coding=false` (the
+        // boundary-spanning context's intronic exemption — B4-remaining),
+        // the canonical form is `A[N]` repeat notation on the transcript-
+        // view bytes.
         let provider = make_boundary_test_provider_minus();
         let normalizer = Normalizer::new(provider);
 
@@ -4440,9 +4485,43 @@ mod tests {
 
         let output = format!("{}", result.unwrap());
         assert!(
-            output.contains("ins") && !output.contains("A["),
-            "Minus-strand boundary-spanning multi-copy dup in c. with \
-             unit_len=1 must emit ins<literal> per codon-frame gate, got: {}",
+            output.contains("A[") && !output.contains("ins"),
+            "Minus-strand boundary-spanning multi-copy dup must emit `A[N]` \
+             repeat notation (intron exempts the codon-frame gate per \
+             repeated.md), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_boundary_spanning_del_emits_repeat_notation() {
+        // Test: `c.40_40+3del` — deletion spanning exon-intron boundary
+        // into the same 4-A poly-A region used by
+        // `test_boundary_spanning_dup`. Symmetric counterpart on the
+        // `del` branch (`deletion_to_repeat`) of the codon-frame gate
+        // fix. Per the intronic exemption (issue #209 B4-remaining),
+        // boundary-spanning context passes `is_coding=false`, so the
+        // del of repeat-unit bases must canonicalize to `A[N-k]` over
+        // the reference-tract extent rather than falling back to plain
+        // `del`.
+        let provider = make_boundary_test_provider();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_BOUNDARY.1:c.40_40+3del").unwrap();
+        let result = normalizer.normalize(&variant);
+
+        assert!(
+            result.is_ok(),
+            "Boundary-spanning deletion should normalize, got error: {:?}",
+            result.err()
+        );
+
+        let output = format!("{}", result.unwrap());
+        assert!(
+            output.contains("A[") && !output.contains("del"),
+            "Boundary-spanning multi-copy del spanning into intron must \
+             emit `A[N]` repeat notation (intron exempts the codon-frame \
+             gate per repeated.md), got: {}",
             output
         );
     }
