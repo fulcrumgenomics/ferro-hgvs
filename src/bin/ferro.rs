@@ -2657,6 +2657,7 @@ fn code_to_error_type(code: &str) -> Option<ErrorType> {
         "W3004" => Some(ErrorType::OldAlleleFormat),
         "W3005" => Some(ErrorType::TrailingAnnotation),
         "W3006" => Some(ErrorType::MissingCoordinatePrefix),
+        "W3016" => Some(ErrorType::LengthMismatch),
         "W4001" => Some(ErrorType::SwappedPositions),
         "W4002" => Some(ErrorType::PositionZero),
         "W5001" => Some(ErrorType::RefSeqMismatch),

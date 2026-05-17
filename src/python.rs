@@ -1951,6 +1951,7 @@ pub enum PyErrorType {
     SinglePositionRange = 24,
     DeprecatedIvsNotation = 25,
     DeprecatedConSyntax = 26,
+    LengthMismatch = 27,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -1983,6 +1984,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::SinglePositionRange => PyErrorType::SinglePositionRange,
             ErrorType::DeprecatedIvsNotation => PyErrorType::DeprecatedIvsNotation,
             ErrorType::DeprecatedConSyntax => PyErrorType::DeprecatedConSyntax,
+            ErrorType::LengthMismatch => PyErrorType::LengthMismatch,
         }
     }
 }
@@ -2017,6 +2019,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::SinglePositionRange => ErrorType::SinglePositionRange,
             PyErrorType::DeprecatedIvsNotation => ErrorType::DeprecatedIvsNotation,
             PyErrorType::DeprecatedConSyntax => ErrorType::DeprecatedConSyntax,
+            PyErrorType::LengthMismatch => ErrorType::LengthMismatch,
         }
     }
 }

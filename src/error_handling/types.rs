@@ -215,6 +215,17 @@ pub enum ErrorType {
     /// `c.100_200conNM_001:c.5_105` → `c.100_200delinsNM_001:c.5_105` in
     /// lenient/silent modes; strict mode rejects the deprecated form.
     DeprecatedConSyntax,
+
+    /// Length mismatch between an explicit reference sequence and the
+    /// position range it spans.
+    ///
+    /// For `del` / `dup` / `inv` / `delins` with an explicit reference
+    /// sequence, the sequence length must equal the range length
+    /// (`end - start + 1`). `g.100_110delAAAATTTGCC` has range 11 but
+    /// sequence length 10. Lenient mode emits W3016 without rewriting
+    /// (the principled correction depends on which endpoint is wrong,
+    /// which the parser cannot decide); strict mode rejects.
+    LengthMismatch,
 }
 
 impl ErrorType {
@@ -244,6 +255,7 @@ impl ErrorType {
             ErrorType::RedundantRepeatLabel => "W3013",
             ErrorType::DeprecatedIvsNotation => "W3014",
             ErrorType::DeprecatedConSyntax => "W3015",
+            ErrorType::LengthMismatch => "W3016",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
             ErrorType::SinglePositionRange => "W4003",
@@ -287,6 +299,9 @@ impl ErrorType {
             ErrorType::RefSeqMismatch => "reference sequence mismatch",
             ErrorType::DeprecatedIvsNotation => "retracted c.IVS intronic notation",
             ErrorType::DeprecatedConSyntax => "deprecated con (conversion) edit syntax",
+            ErrorType::LengthMismatch => {
+                "explicit reference sequence length does not match position range"
+            }
         }
     }
 
@@ -329,6 +344,9 @@ impl ErrorType {
             ErrorType::DeprecatedIvsNotation => false,
             // `con` is rewritten to `delins` per SVD-WG009
             ErrorType::DeprecatedConSyntax => true,
+            // Length-mismatch input has no safe auto-correction — the user
+            // could have meant either endpoint or a different ref seq.
+            ErrorType::LengthMismatch => false,
         }
     }
 
@@ -374,6 +392,7 @@ impl ErrorType {
                 "c.100_200conNM_001.1:c.5_105",
                 "c.100_200delinsNM_001.1:c.5_105",
             ),
+            ErrorType::LengthMismatch => ("g.100_110delAAAATTTGCC", "(no auto-correct)"),
         }
     }
 }
@@ -546,6 +565,7 @@ mod tests {
         assert!(ErrorType::RefSeqMismatch.is_correctable());
         assert!(!ErrorType::DeprecatedIvsNotation.is_correctable());
         assert!(ErrorType::DeprecatedConSyntax.is_correctable());
+        assert!(!ErrorType::LengthMismatch.is_correctable());
     }
 
     #[test]
@@ -588,6 +608,7 @@ mod tests {
         assert_eq!(ErrorType::RedundantRepeatLabel.code(), "W3013");
         assert_eq!(ErrorType::DeprecatedIvsNotation.code(), "W3014");
         assert_eq!(ErrorType::DeprecatedConSyntax.code(), "W3015");
+        assert_eq!(ErrorType::LengthMismatch.code(), "W3016");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");

@@ -10,8 +10,8 @@ use super::corrections::{
     correct_old_substitution_syntax, correct_protein_arrow, correct_quote_characters,
     correct_redundant_repeat_label, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_missing_versions, detect_position_zero,
-    strip_trailing_annotation, DetectedCorrection,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch, detect_missing_versions,
+    detect_position_zero, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -845,6 +845,43 @@ impl InputPreprocessor {
                 }
                 ResolvedAction::WarnCorrect => {
                     for c in &del_size_hits {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                }
+                ResolvedAction::SilentCorrect | ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 13a: Flag explicit ref-seq length mismatch on del/dup/inv
+        // (W3016 — HGVS spec recommendations/general.md range semantics).
+        // `warn_accept` semantics: lenient warns without rewriting (no safe
+        // auto-correction), strict rejects.
+        let length_mismatch_hits = detect_length_mismatch(&current);
+        if !length_mismatch_hits.is_empty() {
+            let action = self.action_for(ErrorType::LengthMismatch);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &length_mismatch_hits[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Reference sequence length does not match position range in '{}'",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(
+                                    "HGVS requires len(reference_sequence) == end - start + 1; fix either the range or the sequence",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &length_mismatch_hits {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
                 }
