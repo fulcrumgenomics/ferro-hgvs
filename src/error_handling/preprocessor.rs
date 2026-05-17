@@ -928,8 +928,8 @@ impl InputPreprocessor {
 
         // Phase 15a: Swap inverted-order interval positions (W4001 — HGVS spec
         // recommendations/general.md, range semantics start ≤ end). Covers
-        // simple integer pairs like `c.200_100del`; offset-bearing forms
-        // (`c.100+5_99+3`) are not handled and fall through to the parser.
+        // integer pairs, offset-bearing forms (`c.100+5_99+3del`), and 3'UTR
+        // star positions (`c.*5_*1del`).
         let (corrected, corrections) = correct_swapped_positions(&current);
         if !corrections.is_empty() {
             let action = self.action_for(ErrorType::SwappedPositions);

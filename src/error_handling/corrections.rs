@@ -993,26 +993,134 @@ fn classify_accession_prefix(prefix: &str) -> (bool, bool) {
     }
 }
 
+/// One endpoint of a range. Captures the raw substring (for splicing on
+/// rewrite) and a comparable sort key.
+///
+/// Layout: a position is `[-|*]?<digits>([+-]<digits>)?`. The main axis
+/// value is signed: `-N` is negative (5'UTR / upstream), bare `N` is the
+/// CDS integer, and `*N` is mapped to `CDS_END_SENTINEL + N` so that any
+/// `*` position sorts strictly after any non-`*` position on the same
+/// transcript. Offsets are signed integers that refine the position.
+#[derive(Debug, Clone)]
+struct EndpointToken {
+    /// Original substring of the input from `start`..`end`.
+    raw: String,
+    /// Byte offset of the start of `raw` in the original input.
+    start: usize,
+    /// Byte offset of the end of `raw` (exclusive) in the original input.
+    end: usize,
+    /// Comparable sort key: `(main_axis, offset)`.
+    sort_key: (i64, i64),
+}
+
+/// Sentinel added to `*N` positions to ensure they sort after any
+/// non-`*` position. The HGVS coding axis tops out around `c.4548` on
+/// COL1A1 (~5 kb genes go up to ~10 kb CDS); 10^12 is comfortably above
+/// any conceivable real position.
+const STAR_MARKER_SENTINEL: i64 = 1_000_000_000_000;
+
+/// Parse one endpoint starting at `chars`. On success returns
+/// `EndpointToken` and advances `chars` past the consumed bytes.
+/// On any malformed input returns `None`.
+fn parse_endpoint_token(
+    after_marker: &str,
+    base_offset: usize,
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+) -> Option<EndpointToken> {
+    let start_idx = chars.peek().map(|(i, _)| *i)?;
+    let mut raw = String::new();
+    let mut main_str = String::new();
+    let mut is_star = false;
+    let mut is_neg = false;
+
+    // Optional class prefix: `-` (5'UTR / upstream) or `*` (3'UTR /
+    // downstream). Bare digit means CDS body / transcript body.
+    match chars.peek() {
+        Some(&(_, '-')) => {
+            is_neg = true;
+            raw.push('-');
+            chars.next();
+        }
+        Some(&(_, '*')) => {
+            is_star = true;
+            raw.push('*');
+            chars.next();
+        }
+        _ => {}
+    }
+
+    // Main axis digits.
+    while let Some(&(_, c)) = chars.peek() {
+        if c.is_ascii_digit() {
+            raw.push(c);
+            main_str.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if main_str.is_empty() {
+        return None;
+    }
+    let main_val: i64 = main_str.parse().ok()?;
+    let signed_main = if is_neg { -main_val } else { main_val };
+    let class_main = if is_star {
+        STAR_MARKER_SENTINEL + main_val
+    } else {
+        signed_main
+    };
+
+    // Optional offset: `+N` or `-N`.
+    let mut offset: i64 = 0;
+    if let Some(&(_, c)) = chars.peek() {
+        if c == '+' || c == '-' {
+            let sign = c;
+            raw.push(c);
+            chars.next();
+            let mut off_str = String::new();
+            while let Some(&(_, oc)) = chars.peek() {
+                if oc.is_ascii_digit() {
+                    raw.push(oc);
+                    off_str.push(oc);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if off_str.is_empty() {
+                // Trailing `+` / `-` with no digits — malformed; bail.
+                return None;
+            }
+            let off_val: i64 = off_str.parse().ok()?;
+            offset = if sign == '-' { -off_val } else { off_val };
+        }
+    }
+
+    let end_idx = chars.peek().map(|(i, _)| *i).unwrap_or(after_marker.len());
+    Some(EndpointToken {
+        raw,
+        start: base_offset + start_idx,
+        end: base_offset + end_idx,
+        sort_key: (class_main, offset),
+    })
+}
+
 /// Detect swapped interval positions.
 ///
-/// Looks for patterns like `c.200_100del` where start > end.
-/// Returns Some with the detected swap information and a suggested correction.
+/// Looks for patterns like `c.200_100del` where start > end, including
+/// offset-bearing forms (`c.100+5_99+3del`) and 3'UTR `*N` markers
+/// (`c.*5_*1del`). Returns Some with the detected swap information and
+/// the swapped endpoint pair (with offsets and markers preserved).
 pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
-    // Look for interval patterns: number_number
-    // Pattern: .123_456 (position after coordinate type marker)
-
-    // Find coordinate marker
+    // Find coordinate marker.
     let coord_markers = [".c.", ".g.", ".n.", ".m.", ".o.", ".r."];
     let mut search_start = 0;
-
     for marker in &coord_markers {
         if let Some(pos) = input.find(marker) {
             search_start = pos + marker.len();
             break;
         }
     }
-
-    // Also check without accession: "c.100_200del"
     if search_start == 0 {
         if let Some(pos) = input.find(['c', 'g', 'n', 'm', 'r']) {
             if input.get(pos + 1..pos + 2) == Some(".") {
@@ -1020,101 +1128,25 @@ pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
             }
         }
     }
-
     if search_start == 0 {
         return None;
     }
 
     let after_marker = &input[search_start..];
-
-    // Parse first number (may have offset like 100+5)
     let mut chars = after_marker.char_indices().peekable();
-    let mut first_num_str = String::new();
-
-    // Handle negative positions (like c.-100)
-    if let Some(&(_, '-')) = chars.peek() {
-        first_num_str.push('-');
-        chars.next();
-    }
-
-    // Collect digits for first position
-    while let Some(&(_, c)) = chars.peek() {
-        if c.is_ascii_digit() {
-            first_num_str.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if first_num_str.is_empty() || first_num_str == "-" {
-        return None;
-    }
-
-    // Bail on offset-bearing first position (e.g. `100+5_99+3`) — the
-    // bare-integer swap below would silently drop the offset.
-    if let Some(&(_, c)) = chars.peek() {
-        if c == '+' || c == '-' {
-            return None;
-        }
-    }
-
-    // Check for underscore (interval marker)
+    let first = parse_endpoint_token(after_marker, search_start, &mut chars)?;
     if chars.next().map(|(_, c)| c) != Some('_') {
         return None;
     }
+    let second = parse_endpoint_token(after_marker, search_start, &mut chars)?;
 
-    let _second_start = chars.peek().map(|(i, _)| *i).unwrap_or(0);
-    let mut second_num_str = String::new();
-
-    // Handle negative positions for second number
-    if let Some(&(_, '-')) = chars.peek() {
-        second_num_str.push('-');
-        chars.next();
-    }
-
-    // Collect digits for second position
-    while let Some(&(_, c)) = chars.peek() {
-        if c.is_ascii_digit() {
-            second_num_str.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if second_num_str.is_empty() || second_num_str == "-" {
-        return None;
-    }
-
-    // Bail on offset-bearing second position (e.g. `100_99+3`) — same
-    // reason: bare-integer swap would drop the offset.
-    if let Some(&(_, c)) = chars.peek() {
-        if c == '+' || c == '-' {
-            return None;
-        }
-    }
-
-    // Parse the numbers
-    let first_num: i64 = first_num_str.parse().ok()?;
-    let second_num: i64 = second_num_str.parse().ok()?;
-
-    // Check if swapped (start > end)
-    if first_num > second_num {
-        // Construct corrected string
-        let prefix = &input[..search_start];
-        let suffix_start =
-            search_start + chars.peek().map(|(i, _)| *i).unwrap_or(after_marker.len());
-        let suffix = &input[suffix_start..];
-
-        let _corrected = format!("{}{}_{}{}", prefix, second_num_str, first_num_str, suffix);
-
+    if first.sort_key > second.sort_key {
         return Some(DetectedCorrection::new(
             ErrorType::SwappedPositions,
-            format!("{}_{}", first_num_str, second_num_str),
-            format!("{}_{}", second_num_str, first_num_str),
-            search_start,
-            suffix_start,
+            format!("{}_{}", first.raw, second.raw),
+            format!("{}_{}", second.raw, first.raw),
+            first.start,
+            second.end,
         ));
     }
 

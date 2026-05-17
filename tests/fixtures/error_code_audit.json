@@ -362,8 +362,8 @@
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
-      "status": "partial",
-      "spec_section_notes": "Wired as preprocessor Phase 15a via correct_swapped_positions; lenient mode emits W4001 and rewrites c.200_100del -> c.100_200del. Strict mode currently still produces a generic parse error before the preprocessor diagnostic is observed because correct_swapped_positions only handles simple integer pairs and the parser rejection precedes the preprocessor fail path in some shapes. Partial because offset-bearing inverted forms (c.100+5_99+3, c.*1_50) are not detected (corrector is integer-only) and fall through to the parser; closes #81 L2 SVA for the simple-pair surface."
+      "status": "enforced",
+      "spec_section_notes": "Wired as preprocessor Phase 15a via correct_swapped_positions. Lenient mode emits W4001 and rewrites c.200_100del -> c.100_200del. Endpoint tokenizer captures (main_axis, offset) sort keys per endpoint, so intronic offsets (c.100+5_99+3del), 3'UTR markers (c.*5_*1del), 5'UTR markers (c.-3_-5del), and cross-region swaps (c.5_-3del, c.*1_100del) are all detected and rewritten with offsets/markers preserved on each endpoint (#265). Closes #81 L2 follow-up to #264."
     },
     {
       "code": "W4002",
