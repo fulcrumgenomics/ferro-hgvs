@@ -4,6 +4,8 @@
 //! following conventions similar to VEP and SnpEff.
 
 use crate::error::FerroError;
+use crate::hgvs::edit::ProteinEdit;
+use crate::hgvs::location::AminoAcid;
 use crate::hgvs::variant::HgvsVariant;
 use crate::reference::loader::TranscriptDb;
 
@@ -218,27 +220,34 @@ pub fn determine_consequence(ann: &HgvsAnnotation) -> Consequence {
         HgvsVariant::Tx(_) => Consequence::NonCoding,
         HgvsVariant::Rna(_) => Consequence::NonCoding,
         HgvsVariant::Protein(v) => {
-            let edit_str = format!("{:?}", v.loc_edit.edit);
-
-            if edit_str.contains("Frameshift") {
-                return Consequence::Frameshift;
+            // Classify by the parsed `ProteinEdit` enum variant directly.
+            // The prior implementation matched substrings on the Debug
+            // format of the edit and on the raw HGVS string, which
+            // mis-fired on stop-loss extensions like
+            // `p.Ter315TyrextTer10` whose HGVS text contains `Ter`
+            // (both in the start position and, post-#225, in the
+            // canonical `Ter{count}` extension suffix). Issue #228.
+            //
+            // The edit is wrapped in `Mu<ProteinEdit>` to carry the
+            // predicted-vs-confirmed paren distinction; classification
+            // is the same for both, so we unwrap and dispatch on the
+            // inner edit. `Mu::Unknown` (a `p.?` shape) has no
+            // classifiable structure and falls through to `Unknown`.
+            match v.loc_edit.edit.inner() {
+                Some(ProteinEdit::Frameshift { .. }) => Consequence::Frameshift,
+                Some(ProteinEdit::Extension { .. }) => Consequence::StopLoss,
+                Some(ProteinEdit::Substitution { alternative, .. })
+                    if *alternative == AminoAcid::Ter =>
+                {
+                    Consequence::Nonsense
+                }
+                Some(ProteinEdit::Substitution { .. }) => Consequence::Missense,
+                Some(ProteinEdit::Insertion { .. }) => Consequence::InframeInsertion,
+                Some(ProteinEdit::Deletion { .. }) | Some(ProteinEdit::Delins { .. }) => {
+                    Consequence::InframeDeletion
+                }
+                _ => Consequence::Unknown,
             }
-            if edit_str.contains("Nonsense") || hgvs.contains("Ter") {
-                return Consequence::Nonsense;
-            }
-            if edit_str.contains("Extension") {
-                return Consequence::StopLoss;
-            }
-            if edit_str.contains("Insertion") {
-                return Consequence::InframeInsertion;
-            }
-            if edit_str.contains("Deletion") {
-                return Consequence::InframeDeletion;
-            }
-            if edit_str.contains("Substitution") {
-                return Consequence::Missense;
-            }
-            Consequence::Unknown
         }
         HgvsVariant::Mt(_) => Consequence::Unknown,
         HgvsVariant::Circular(_) => Consequence::Unknown,
@@ -916,8 +925,11 @@ mod tests {
     fn test_determine_consequence_protein_extension() {
         use crate::hgvs::parser::parse_hgvs;
 
-        // Note: Extension variants with "Ter" in the string match the Nonsense check first
-        // because the code checks hgvs.contains("Ter") before checking for Extension
+        // After #228: the classifier dispatches on the parsed
+        // `ProteinEdit` enum variant directly, so an extension at the
+        // stop codon (with `Ter` in both the start position and, post-
+        // #225, the extension count) correctly surfaces as StopLoss
+        // rather than Nonsense.
         let variant = parse_hgvs("NP_000079.2:p.Ter100GlyextTer50").unwrap();
         let ann = HgvsAnnotation {
             variant,
@@ -932,7 +944,6 @@ mod tests {
         };
 
         let consequence = determine_consequence(&ann);
-        // Due to current logic order, this matches Nonsense (Ter in string) before StopLoss
-        assert_eq!(consequence, Consequence::Nonsense);
+        assert_eq!(consequence, Consequence::StopLoss);
     }
 }
