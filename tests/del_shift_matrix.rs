@@ -774,12 +774,10 @@ mod rna_plus {
     #[case("acgcagcagcaugacguacg", "r.{0}_{1}del", &[3u64, 8u64], "r.{0}_{1}gca[1]", &[3u64, 11u64])]
     #[case("acaaaacguacguacguac", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}del", &[3u64, 6u64])]
     #[case("uugcagcagcauuacguacgu", "r.{0}_{1}del", &[4u64, 9u64], "r.{0}_{1}gca[1]", &[3u64, 11u64])]
-    // Case 6 (finer periodicity) uses an AC tandem rather than AT to avoid
-    // a pre-existing limitation in the RNA Display path for repeat-form output:
-    // when the unit contains 'T' (DNA), the lowercase RNA emission keeps the
-    // 't' instead of converting to 'u'. Filed as a follow-up. The genomic/cds/
-    // noncoding modules use the AT tandem which is correct for DNA emission.
-    #[case("ccacacacacacccguacgu", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}ac[3]", &[3u64, 12u64])]
+    // Case 6 (finer periodicity): AU tandem mirrors the genomic/cds/noncoding
+    // AT tandem after #276's RNA `Display` canonicalization (T→u). Prior to
+    // that fix this case used an AC tandem as a workaround.
+    #[case("ccauauauauauccguacgu", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}au[3]", &[3u64, 12u64])]
     fn multi_base_del_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -908,8 +906,8 @@ mod rna_minus {
     #[case("acgcagcagcaugacguacg", "r.{0}_{1}del", &[3u64, 8u64], "r.{0}_{1}gca[1]", &[3u64, 11u64])]
     #[case("acaaaacguacguacguac", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}del", &[3u64, 6u64])]
     #[case("uugcagcagcauuacguacgu", "r.{0}_{1}del", &[4u64, 9u64], "r.{0}_{1}gca[1]", &[3u64, 11u64])]
-    // Case 6 (finer periodicity): see comment in rna_plus module.
-    #[case("ccacacacacacccguacgu", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}ac[3]", &[3u64, 12u64])]
+    // Finer-periodicity case: see comment in rna_plus module.
+    #[case("ccauauauauauccguacgu", "r.{0}_{1}del", &[3u64, 6u64], "r.{0}_{1}au[3]", &[3u64, 12u64])]
     fn multi_base_del_in_tandem_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
