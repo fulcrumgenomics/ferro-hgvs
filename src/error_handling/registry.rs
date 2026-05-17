@@ -920,6 +920,72 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
     );
 
     map.insert(
+        "W3017",
+        CodeInfo {
+            code: "W3017",
+            name: "AlleleFractionAnnotation",
+            summary: "Allele-fraction / heteroplasmy annotation appended to an HGVS expression.",
+            explanation:
+                "Annotations such as `[level=70%]`, `[heteroplasmy=70%]`, `[mosaic=80%]`, or \
+                `(80%)` are sometimes appended to mitochondrial or somatic HGVS expressions to \
+                record heteroplasmy / variant allele fraction. The HGVS spec does not encode \
+                allele fraction inside the variant string; fraction belongs in accompanying \
+                metadata (VCF `FORMAT/AF`, ClinVar's heteroplasmy field, etc.). ferro rejects \
+                this annotation in all modes and emits this code so downstream tooling can \
+                recognize the intent rather than seeing a generic trailing-character parse \
+                error. The remediation is to strip the annotation from the HGVS string and \
+                record the fraction in the appropriate metadata channel (e.g. VCF \
+                `FORMAT/AF`, ClinVar's heteroplasmy field, or a sibling column in the \
+                caller's data model).",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NC_012920.1:m.3243A>G[level=70%]",
+                "NC_012920.1:m.3243A>G(80%)",
+                "NC_012920.1:m.3243A>G[heteroplasmy=70%]",
+            ],
+            good_examples: &["NC_012920.1:m.3243A>G"],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+            ),
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
+        "W3018",
+        CodeInfo {
+            code: "W3018",
+            name: "ClinVarProseMultiAllelic",
+            summary: "ClinVar prose multi-allelic shorthand m.<pos><ref>><alt>/<alt2>.",
+            explanation: "Some ClinVar submissions report two alternative alleles at the same \
+                mitochondrial position with the prose shorthand `m.<pos><ref>><alt>/<alt2>` \
+                (e.g. `m.3243A>G/T`), where the RHS of the slash is a bare nucleotide letter — \
+                no edit operator, no accession, no `=` reference marker. The HGVS spec does \
+                not define this form: the mosaic `/` separator requires either two fully \
+                qualified variants, or the spec compact mosaic `<pos>=/<alt-edit>` form (`=` \
+                stands in for the reference, edit names the alternative). All modes reject \
+                this shape and emit this code so downstream tooling can recognize the intent. \
+                Three spec-supported alternatives: (a) compound brackets \
+                `<acc>:m.[3243A>G;3243A>T]`; (b) dual fully qualified slash \
+                `<acc>:m.3243A>G/<acc>:m.3243A>T`; (c) spec compact mosaic \
+                `<acc>:m.3243=/A>T`.",
+            category: CodeCategory::Format,
+            bad_examples: &["NC_012920.1:m.3243A>G/T", "NC_012920.1:m.3243A>G/C"],
+            good_examples: &[
+                "NC_012920.1:m.[3243A>G;3243A>T]",
+                "NC_012920.1:m.3243A>G/NC_012920.1:m.3243A>T",
+                "NC_012920.1:m.3243=/A>T",
+            ],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+            ),
+            related_codes: &["W3017"],
+        },
+    );
+
+    map.insert(
         "W3020",
         CodeInfo {
             code: "W3020",

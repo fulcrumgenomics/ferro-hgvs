@@ -366,6 +366,22 @@
       "spec_section_notes": "Wired as InputPreprocessor Phase 13a via detect_length_mismatch. Lenient mode emits W3016 without rewriting (no safe auto-correction — either endpoint or the ref seq could be wrong); strict mode rejects with E1004 InvalidEdit. Detector handles g./c./n./m./o./r. ranges with simple integer endpoints; offset and *N/-N marker endpoints fall through (cannot compute length without provider). Covers del<ref>, dup<ref>, inv<ref>; delins<ins> is skipped (the inserted sequence is intentionally allowed to differ in length). Closes #81 K1 follow-up to #259."
     },
     {
+      "code": "W3017",
+      "description": "AlleleFractionAnnotation — trailing '[level=NN%]', '[heteroplasmy=NN%]', '[mosaic=NN%]', or '(NN%)' rejected with a targeted SVA diagnostic.",
+      "spec_section": "recommendations/DNA/substitution.md (mosaic '/' and chimeric '//' markers are presence-only; the spec carries no allele fraction in the HGVS string)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+      "status": "enforced",
+      "spec_section_notes": "Parser-level rejection at the trailing-content check in src/hgvs/parser/variant.rs::parse_variant. Closes the diagnostic gap left by issue #133 work-item 4 (allele-fraction soft-warning code follow-up, issue #278). Cannot be auto-corrected: the fraction belongs in accompanying metadata (VCF FORMAT/AF, ClinVar heteroplasmy field, etc.), not in the HGVS string."
+    },
+    {
+      "code": "W3018",
+      "description": "ClinVarProseMultiAllelic — ClinVar prose shorthand 'm.<pos><ref>><alt>/<alt2>' (bare-base RHS) rejected with a targeted SVA diagnostic pointing at the three spec-supported alternatives.",
+      "spec_section": "recommendations/DNA/substitution.md (mosaic '/' requires fully qualified RHS or the compact '<pos>=/<alt-edit>' form; the bare-base prose shape is not a spec form)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+      "status": "enforced",
+      "spec_section_notes": "Parser-level rejection in src/hgvs/parser/variant.rs::parse_phase_allele when the bare-base prose RHS is detected after the spec-compact fallback fails. Closes the diagnostic gap left by issue #133 work-item 4 (mosaic prose follow-up, issue #278)."
+    },
+    {
       "code": "W3020",
       "description": "RnaThymineCanonicalized — 't'/'T' inside an r. (RNA) description rewritten to 'u'.",
       "spec_section": "recommendations/RNA/substitution.md and adjacent RNA edit pages (RNA alphabet is a/c/g/u; t is non-canonical)",

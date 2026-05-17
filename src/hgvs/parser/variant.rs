@@ -3,6 +3,7 @@
 //! Parses complete HGVS variant strings into the HgvsVariant type.
 
 use crate::error::FerroError;
+use crate::error_handling::ErrorType;
 use crate::hgvs::edit::ProteinEdit;
 use crate::hgvs::interval::{
     CdsInterval, GenomeInterval, Interval, ProtInterval, RnaInterval, TxInterval, UncertainBoundary,
@@ -4805,7 +4806,37 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
                             // type + position from `<pos>=` LHS.
                             match parse_compact_mosaic_rhs(chunk, lhs)? {
                                 Some(v) => v,
-                                None => return Err(prefix_err),
+                                None => {
+                                    // Targeted diagnostic for the
+                                    // ClinVar-prose multi-allelic
+                                    // shorthand `m.<pos><ref>><alt>/<alt2>`
+                                    // (issue #278). Only fire on the
+                                    // recognizable bare-base RHS shape,
+                                    // when the LHS has already parsed
+                                    // (so this is genuinely a mosaic-RHS
+                                    // rejection), and when the LHS is a
+                                    // mitochondrial variant — the W3018
+                                    // diagnostic text and code are
+                                    // specifically for `m.` heteroplasmy
+                                    // prose; firing it on non-mito LHS
+                                    // would mislabel unrelated parse
+                                    // failures.
+                                    if matches!(lhs, HgvsVariant::Mt(_))
+                                        && is_prose_multi_allelic_rhs(chunk)
+                                    {
+                                        use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+                                        let _w3018 = ErrorType::ClinVarProseMultiAllelic;
+                                        let diag = Diagnostic::new()
+                                            .with_code(ErrorCode::ClinVarProseMultiAllelic)
+                                            .with_span(SourceSpan::new(0, chunk.len()));
+                                        return Err(FerroError::parse_with_diagnostic(
+                                            0,
+                                            prose_multi_allelic_diagnostic_msg(chunk),
+                                            diag,
+                                        ));
+                                    }
+                                    return Err(prefix_err);
+                                }
                             }
                         }
                     }
@@ -5038,6 +5069,108 @@ fn parse_rna_fusion_breakpoint(input: &str) -> Result<RnaFusionBreakpoint, Ferro
     })
 }
 
+/// Returns `true` if `s` looks like an allele-fraction / heteroplasmy
+/// annotation appended to an otherwise-complete HGVS expression.
+///
+/// Recognized shapes (issue #278 / SVA W3017):
+///
+/// - `[level=NN%]` — ClinVar prose heteroplasmy
+/// - `[heteroplasmy=NN%]`, `[mosaic=NN%]`, `[mosaicism=NN%]` — synonyms
+/// - `(NN%)` — bare-percent paren shorthand
+///
+/// The match is intentionally narrow: it only fires on a trailing
+/// bracket-or-paren group whose content carries `%`. This keeps the
+/// diagnostic out of the way of other unrelated trailing failures.
+fn is_allele_fraction_annotation(s: &str) -> bool {
+    let s = s.trim();
+    // Paren form: `(NN%)` or `(NN.NN%)`. Require at least one digit
+    // before any `.` so degenerate shapes like `(.5%)` or `( . %)`
+    // don't slip through as fraction annotations.
+    if let Some(inner) = s.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        let inner = inner.trim();
+        if inner.ends_with('%') {
+            let num = inner.trim_end_matches('%').trim();
+            // Split on `.` and require ≥1 ASCII digit in the integer
+            // part. The fractional part may be empty (e.g. `80.%`) or
+            // a string of digits.
+            let (int_part, frac_ok) = match num.split_once('.') {
+                Some((int_part, frac)) => (
+                    int_part,
+                    frac.chars().all(|c| c.is_ascii_digit() || c == ' '),
+                ),
+                None => (num, true),
+            };
+            let int_has_digit = int_part.chars().any(|c| c.is_ascii_digit());
+            let int_ok = int_part.chars().all(|c| c.is_ascii_digit() || c == ' ');
+            return int_has_digit && int_ok && frac_ok;
+        }
+    }
+    // Bracket form: `[<key>=NN%]` with a `%` somewhere in the body. Limit
+    // the key to the documented heteroplasmy/mosaicism synonyms so that
+    // unrelated trailing `[<key>=NN%]` annotations aren't mislabeled as
+    // W3017 AlleleFractionAnnotation.
+    if let Some(inner) = s.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        if inner.contains('%') && inner.contains('=') {
+            let (key, _rest) = inner.split_once('=').unwrap_or((inner, ""));
+            let key_lc = key.trim().to_ascii_lowercase();
+            return matches!(
+                key_lc.as_str(),
+                "level" | "heteroplasmy" | "mosaic" | "mosaicism"
+            );
+        }
+    }
+    false
+}
+
+/// Returns `true` if `chunk` looks like the ClinVar-prose
+/// multi-allelic shorthand RHS (a bare nucleotide letter, optionally
+/// short like `T` or `AT`), with no edit operator, no `=`, no `:`, no
+/// type prefix, no parens, no brackets.
+///
+/// This is the RHS shape that produces `m.<pos><ref>><alt>/<alt2>`
+/// (e.g. `m.3243A>G/T`). Pinned by issue #278.
+fn is_prose_multi_allelic_rhs(chunk: &str) -> bool {
+    let chunk = chunk.trim();
+    if chunk.is_empty() || chunk.len() > 8 {
+        return false;
+    }
+    // Reject anything with structural HGVS markers — those would be
+    // legitimate (mis-)attempts, not the prose form.
+    let forbidden = [
+        '=', ':', '.', '>', '+', '-', '(', ')', '[', ']', '_', ',', ';', '*', '?',
+    ];
+    if chunk.chars().any(|c| forbidden.contains(&c)) {
+        return false;
+    }
+    // Body must be entirely nucleotide letters (case-insensitive,
+    // ACGTU) so we keep the diagnostic targeted on the actual prose
+    // shape seen in submitter notes.
+    chunk
+        .chars()
+        .all(|c| matches!(c.to_ascii_uppercase(), 'A' | 'C' | 'G' | 'T' | 'U'))
+}
+
+/// Build the targeted ClinVar-prose-multi-allelic diagnostic message
+/// for a rejected mosaic/chimeric RHS like `m.3243A>G/T`.
+///
+/// Pinned by issue #278. The message names the three spec-supported
+/// alternatives so the caller can choose the correct one:
+///   1. Compound brackets `<acc>:m.[a;b]`.
+///   2. Dual fully-qualified slash `<acc>:m.<...>/<acc>:m.<...>`.
+///   3. Spec compact mosaic `<acc>:m.<pos>=/<alt-edit>`.
+fn prose_multi_allelic_diagnostic_msg(rhs: &str) -> String {
+    format!(
+        "ClinVar prose multi-allelic shorthand `<acc>:m.<pos><ref>><alt>/{rhs}` is not a HGVS \
+         spec form (the RHS `{rhs}` elides the reference base and accession). Use one of the \
+         three spec-supported alternatives instead: \
+         (a) compound brackets, e.g. `<acc>:m.[3243A>G;3243A>T]`; \
+         (b) dual fully-qualified slash, e.g. `<acc>:m.3243A>G/<acc>:m.3243A>T`; or \
+         (c) spec compact mosaic, e.g. `<acc>:m.3243=/A>T` (= for the reference, edit for the \
+         alternative).",
+        rhs = rhs.trim()
+    )
+}
+
 /// Parse a complete HGVS variant string
 ///
 /// The parser is optimized with:
@@ -5072,6 +5205,36 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
         // Parse as single variant
         let (remaining, v) = parse_single_variant(input)?;
         if !remaining.is_empty() {
+            // Trailing allele-fraction / heteroplasmy annotations such as
+            // `[level=70%]`, `[heteroplasmy=70%]`, `[mosaic=80%]`, or
+            // `(80%)` are out-of-spec but appear in real-world
+            // submissions. Emit the dedicated SVA code (W3017 /
+            // `ErrorType::AlleleFractionAnnotation`) so downstream
+            // tooling can recognize the intent rather than seeing a
+            // generic trailing-character parse error. See issue #278
+            // (follow-up to #133 work-item 4).
+            if is_allele_fraction_annotation(remaining) {
+                use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+                // Bind the SVA `ErrorType::*` here so the audit's
+                // emission-site scan (see tests/error_code_audit.rs) sees
+                // a real reference for this W-code in the parser path.
+                let _w3017 = ErrorType::AlleleFractionAnnotation;
+                let pos = input.len() - remaining.len();
+                let diag = Diagnostic::new()
+                    .with_code(ErrorCode::AlleleFractionAnnotation)
+                    .with_span(SourceSpan::new(pos, input.len()));
+                return Err(FerroError::parse_with_diagnostic(
+                    pos,
+                    format!(
+                        "Allele-fraction / heteroplasmy annotation '{}' is not part of the HGVS \
+                         spec; allele fraction belongs in accompanying metadata (VCF \
+                         FORMAT/AF, ClinVar's heteroplasmy field, etc.), not in the HGVS \
+                         expression. Strip the annotation and record the fraction separately.",
+                        remaining
+                    ),
+                    diag,
+                ));
+            }
             return Err(FerroError::Parse {
                 pos: input.len() - remaining.len(),
                 msg: format!("Unexpected trailing characters: '{}'", remaining),
