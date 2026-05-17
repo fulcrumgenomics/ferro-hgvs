@@ -1013,6 +1013,70 @@ pub(crate) fn find_close_after_consumed_open(input: &str) -> Option<usize> {
     None
 }
 
+/// Locate the next top-level `/` (mosaic) or `//` (chimeric) separator
+/// in `input`, scanning at bracket depth 0. A "top-level" separator
+/// is one not enclosed in `[ ]` brackets — so the bracketed-inner
+/// forms `[a;b]//[c;d]` and `[a;b]/[c;d]` split cleanly even though
+/// plain `input.find("/")` / `input.split("//")` would stumble.
+///
+/// When `want_double` is `true`, returns the position of the first
+/// `/` of any top-level `//`. When `want_double` is `false`, returns
+/// the position of any top-level `/` that is *not* part of `//`
+/// (the mosaic single-slash separator).
+///
+/// Used by `parse_chimeric_allele` and `parse_mosaic_allele`.
+pub(crate) fn find_top_level_slash(input: &str, want_double: bool) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b'/' if depth == 0 => {
+                let is_double = i + 1 < bytes.len() && bytes[i + 1] == b'/';
+                if want_double && is_double {
+                    return Some(i);
+                }
+                if !want_double && !is_double {
+                    return Some(i);
+                }
+                // Skip the second `/` of a `//` so the next iteration
+                // doesn't see it as a fresh `/` in single-slash mode.
+                if is_double {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Bracket-depth-aware top-level split for chimeric (`//`) or mosaic
+/// (`/`) separators. Mirrors `str::split(sep)` semantics but respects
+/// `[ ]` nesting. Empty chunks are preserved (callers reject them
+/// with a context-specific error).
+pub(crate) fn split_top_level_slashes(input: &str, want_double: bool) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let sep_len = if want_double { 2 } else { 1 };
+    let mut s = input;
+    loop {
+        match find_top_level_slash(s, want_double) {
+            Some(pos) => {
+                chunks.push(&s[..pos]);
+                s = &s[pos + sep_len..];
+            }
+            None => {
+                chunks.push(s);
+                break;
+            }
+        }
+    }
+    chunks
+}
+
 /// Parse a compound allele with genomic variants:
 ///   `[pos1edit1;pos2edit2;...]`   (cis)
 ///   `[pos1edit1(;)pos2edit2;...]` (unknown phase)
@@ -3734,151 +3798,11 @@ fn create_identity_variant_from(reference: &HgvsVariant) -> Result<HgvsVariant, 
 }
 
 /// Parse a mosaic: var1/var2 (single slash)
-/// Supports "=" as shorthand for reference allele (no change)
-/// Supports accession inheritance: NM_000088.3:c.100A>G/c.200C>T
+/// Supports "=" as shorthand for reference allele (no change).
+/// Supports accession inheritance: NM_000088.3:c.100A>G/c.200C>T.
+/// Supports bracketed inner alleles: `[a;b]/[c;d]`.
 fn parse_mosaic_allele(input: &str) -> Result<HgvsVariant, FerroError> {
-    let input = input.trim();
-
-    // Split by single slash (but not double slash)
-    let mut variants = Vec::with_capacity(2);
-    let mut start = 0;
-    let mut first_variant: Option<HgvsVariant> = None;
-    let mut first_accession: Option<Accession> = None;
-    let mut first_gene_symbol: Option<String> = None;
-
-    while start < input.len() {
-        // Find next single slash (not double)
-        let mut found_slash = None;
-        let bytes = input.as_bytes();
-        for i in start..input.len() {
-            if bytes[i] == b'/' {
-                // Check if double slash
-                if i + 1 < input.len() && bytes[i + 1] == b'/' {
-                    // This is a chimeric separator, not mosaic
-                    return Err(FerroError::Parse {
-                        pos: i,
-                        msg: "Found '//' (chimeric) but expected '/' (mosaic)".to_string(),
-                        diagnostic: None,
-                    });
-                }
-                found_slash = Some(i);
-                break;
-            }
-        }
-
-        let end = found_slash.unwrap_or(input.len());
-        let variant_str = &input[start..end].trim();
-
-        // Check for "=" shorthand meaning reference allele
-        let variant = if *variant_str == "=" {
-            // Need a reference variant to determine the type
-            match &first_variant {
-                Some(ref_var) => create_identity_variant_from(ref_var)?,
-                None => {
-                    return Err(FerroError::Parse {
-                        pos: start,
-                        msg: "Cannot use '=' as first variant in mosaic notation".to_string(),
-                        diagnostic: None,
-                    });
-                }
-            }
-        } else {
-            // Try parsing as a full variant first
-            match parse_single_variant(variant_str) {
-                Ok((remaining, var)) => {
-                    if !remaining.trim().is_empty() {
-                        return Err(FerroError::Parse {
-                            pos: 0,
-                            msg: format!("Unexpected content after variant: '{}'", remaining),
-                            diagnostic: None,
-                        });
-                    }
-                    var
-                }
-                Err(_) if first_accession.is_some() => {
-                    // First fallback: parse with inherited accession + type prefix
-                    // (long form `<acc>:m.<pos>=/m.<pos><ref>><alt>`).
-                    match parse_variant_with_inherited_accession(
-                        variant_str,
-                        first_accession.as_ref().unwrap(),
-                        first_gene_symbol.as_ref(),
-                    ) {
-                        Ok(var) => var,
-                        Err(prefix_err) => {
-                            // Second fallback: HGVS spec compact mosaic form
-                            // `<acc>:<type>.<pos>=/<edit>` — RHS is a bare
-                            // NaEdit, all metadata inherited from LHS. Only
-                            // applies when LHS is `<pos>=` identity.
-                            let lhs = first_variant
-                                .as_ref()
-                                .expect("first_accession set implies first_variant set");
-                            match parse_compact_mosaic_rhs(variant_str, lhs)? {
-                                Some(var) => var,
-                                None => return Err(prefix_err),
-                            }
-                        }
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        };
-
-        if first_variant.is_none() {
-            first_variant = Some(variant.clone());
-            // Extract accession and gene symbol from first variant
-            match &variant {
-                HgvsVariant::Cds(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Genome(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Tx(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Rna(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Protein(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Mt(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                HgvsVariant::Circular(v) => {
-                    first_accession = Some(v.accession.clone());
-                    first_gene_symbol = v.gene_symbol.clone();
-                }
-                _ => {}
-            }
-        }
-        variants.push(variant);
-
-        if found_slash.is_some() {
-            start = end + 1;
-        } else {
-            break;
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(FerroError::Parse {
-            pos: 0,
-            msg: "Mosaic allele requires at least two variants".to_string(),
-            diagnostic: None,
-        });
-    }
-
-    Ok(HgvsVariant::Allele(AlleleVariant::new(
-        variants,
-        AllelePhase::Mosaic,
-    )))
+    parse_phase_allele(input, AllelePhase::Mosaic)
 }
 
 /// Parse the RHS of a HGVS spec compact mosaic / chimeric form.
@@ -4209,11 +4133,34 @@ fn parse_variant_with_inherited_accession(
             gene_symbol: gene_symbol.cloned(),
             loc_edit: LocEdit::new(interval, edit),
         }))
+    } else if let Some(rest) = input.strip_prefix("o.") {
+        let (remaining, interval) = parse_genome_interval(rest).map_err(|e| FerroError::Parse {
+            pos: 2,
+            msg: format!("Failed to parse circular interval: {:?}", e),
+            diagnostic: None,
+        })?;
+        let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
+            pos: input.len() - remaining.len(),
+            msg: format!("Failed to parse edit: {:?}", e),
+            diagnostic: None,
+        })?;
+        if !remaining.trim().is_empty() {
+            return Err(FerroError::Parse {
+                pos: input.len() - remaining.len(),
+                msg: format!("Unexpected content: '{}'", remaining),
+                diagnostic: None,
+            });
+        }
+        Ok(HgvsVariant::Circular(CircularVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.cloned(),
+            loc_edit: LocEdit::new(interval, edit),
+        }))
     } else {
         Err(FerroError::Parse {
             pos: 0,
             msg: format!(
-                "Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found '{}'",
+                "Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '{}'",
                 input.chars().take(3).collect::<String>()
             ),
             diagnostic: None,
@@ -4222,84 +4169,145 @@ fn parse_variant_with_inherited_accession(
 }
 
 /// Parse a chimeric: var1//var2 (double slash)
-/// Supports "=" as shorthand for reference allele (no change)
+/// Supports "=" as shorthand for reference allele (no change).
+/// Supports bracketed inner alleles: `[a;b]//[c;d]`.
 fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    parse_phase_allele(input, AllelePhase::Chimeric)
+}
+
+/// Shared chunk-driver for `parse_mosaic_allele` and
+/// `parse_chimeric_allele`. Splits `input` at top-level slash separators
+/// using a bracket-depth-aware scan (`split_top_level_slashes`), parses
+/// each chunk via the full `parse_variant` so bracketed inner alleles
+/// like `[a;b]//[c;d]` recurse correctly, and applies the three
+/// existing fallbacks for chunks that aren't stand-alone variants:
+///
+///   1. inherited-accession long form (`<acc>:c.X` LHS, `c.Y` RHS),
+///   2. HGVS spec compact form (`<acc>:c.<pos>=` LHS, bare edit RHS).
+///
+/// The third path (`=` shorthand for the reference allele) is checked
+/// before any parse path so the synthetic identity is created against
+/// the recorded LHS.
+///
+/// Triple-slash inputs like `var1///var2` surface as a chunk with a
+/// leading `/`, which this driver rejects with a clear error rather
+/// than silently round-tripping a malformed description.
+fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, FerroError> {
     let input = input.trim();
+    let want_double = matches!(phase, AllelePhase::Chimeric);
+    let phase_name = match phase {
+        AllelePhase::Mosaic => "mosaic",
+        AllelePhase::Chimeric => "chimeric",
+        _ => unreachable!("parse_phase_allele only handles Mosaic / Chimeric"),
+    };
+    let sep_str = if want_double { "//" } else { "/" };
 
-    // Split by double slash
-    let parts: Vec<&str> = input.split("//").collect();
-
-    if parts.len() < 2 {
+    let chunks = split_top_level_slashes(input, want_double);
+    if chunks.len() < 2 {
         return Err(FerroError::Parse {
             pos: 0,
-            msg: "Chimeric allele requires '//' separator".to_string(),
+            msg: format!(
+                "{} allele requires '{}' separator",
+                capitalize(phase_name),
+                sep_str
+            ),
             diagnostic: None,
         });
     }
 
-    let mut variants = Vec::with_capacity(parts.len());
+    let mut variants: Vec<HgvsVariant> = Vec::with_capacity(chunks.len());
     let mut first_variant: Option<HgvsVariant> = None;
 
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
+    for chunk in chunks {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
             return Err(FerroError::Parse {
                 pos: 0,
-                msg: "Empty variant in chimeric allele".to_string(),
+                msg: format!("Empty variant in {} allele", phase_name),
                 diagnostic: None,
             });
         }
-
-        // Check for "=" shorthand meaning reference allele
-        let variant = if part == "=" {
+        // A chunk starting with `/` means the input contained either
+        // `///` (triple-slash) or, in single-slash mode, an unsplit
+        // `//`. Both are malformed.
+        if chunk.starts_with('/') {
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: format!(
+                    "Unexpected '/' inside {} allele chunk `{}` (triple-slash or stray separator)",
+                    phase_name, chunk
+                ),
+                diagnostic: None,
+            });
+        }
+        // Reject mixing mosaic and chimeric phase markers at the same
+        // nesting level. After splitting a chimeric input on `//`, a
+        // chunk that still contains a top-level (depth-0) `/` would be
+        // silently re-parsed by `parse_variant` as a nested mosaic
+        // allele — yielding a chimeric-of-mosaic that the HGVS spec
+        // does not define. Reject with a clean error rather than pick
+        // an interpretation. (Mosaic chunks cannot carry top-level `//`
+        // because `detect_allele_type` routes any top-level `//` to
+        // chimeric up-front, so this guard is only meaningful for the
+        // chimeric arm; checking the mosaic arm too is defensive — it
+        // costs a single bracket-aware scan per chunk.)
+        let chunk_has_inner_slash = if want_double {
+            find_top_level_slash(chunk, false).is_some()
+        } else {
+            find_top_level_slash(chunk, true).is_some()
+        };
+        if chunk_has_inner_slash {
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: format!(
+                    "{} allele chunk `{}` contains a top-level '{}' (the other phase marker); \
+                     mixing mosaic and chimeric markers at the same nesting level is not \
+                     defined by the HGVS spec",
+                    capitalize(phase_name),
+                    chunk,
+                    if want_double { "/" } else { "//" }
+                ),
+                diagnostic: None,
+            });
+        }
+        let variant = if chunk == "=" {
             match &first_variant {
                 Some(ref_var) => create_identity_variant_from(ref_var)?,
                 None => {
                     return Err(FerroError::Parse {
                         pos: 0,
-                        msg: "Cannot use '=' as first variant in chimeric notation".to_string(),
+                        msg: format!("Cannot use '=' as first variant in {} notation", phase_name),
                         diagnostic: None,
                     });
                 }
             }
         } else {
-            match parse_single_variant(part) {
-                Ok((remaining, var)) => {
-                    if !remaining.trim().is_empty() {
-                        return Err(FerroError::Parse {
-                            pos: 0,
-                            msg: format!("Unexpected content after variant: '{}'", remaining),
-                            diagnostic: None,
-                        });
-                    }
-                    var
-                }
-                Err(single_err) => match &first_variant {
-                    Some(lhs) => {
-                        // First fallback: parse with inherited accession + type
-                        // prefix (long form `<acc>:m.<pos>=//m.<pos><ref>><alt>`).
-                        // Mirrors the mosaic path so chimeric and mosaic accept
-                        // the same set of equivalent input shapes.
-                        let inherited = lhs.accession().and_then(|acc| {
-                            let gs = lhs.gene_symbol().map(|s| s.to_string());
-                            parse_variant_with_inherited_accession(part, acc, gs.as_ref()).ok()
-                        });
-                        match inherited {
-                            Some(var) => var,
-                            None => {
-                                // Second fallback: HGVS spec compact chimeric
-                                // form `<acc>:<type>.<pos>=//<edit>` — RHS is a
-                                // bare NaEdit, all metadata inherited from LHS.
-                                // Only applies when LHS is `<pos>=` identity.
-                                match parse_compact_mosaic_rhs(part, lhs)? {
-                                    Some(var) => var,
-                                    None => return Err(single_err),
-                                }
+            match parse_variant(chunk) {
+                Ok(v) => v,
+                Err(primary_err) => {
+                    // Fallback 1: inherited-accession long form.
+                    let lhs = match &first_variant {
+                        Some(lhs) => lhs,
+                        None => return Err(primary_err),
+                    };
+                    let acc = match lhs.accession() {
+                        Some(a) => a,
+                        None => return Err(primary_err),
+                    };
+                    let gs = lhs.gene_symbol().map(|s| s.to_string());
+                    match parse_variant_with_inherited_accession(chunk, acc, gs.as_ref()) {
+                        Ok(v) => v,
+                        Err(prefix_err) => {
+                            // Fallback 2: HGVS spec compact form — bare
+                            // NaEdit RHS inheriting accession + coord
+                            // type + position from `<pos>=` LHS.
+                            match parse_compact_mosaic_rhs(chunk, lhs)? {
+                                Some(v) => v,
+                                None => return Err(prefix_err),
                             }
                         }
                     }
-                    None => return Err(single_err),
-                },
+                }
             }
         };
 
@@ -4309,10 +4317,17 @@ fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
         variants.push(variant);
     }
 
-    Ok(HgvsVariant::Allele(AlleleVariant::new(
-        variants,
-        AllelePhase::Chimeric,
-    )))
+    Ok(HgvsVariant::Allele(AlleleVariant::new(variants, phase)))
+}
+
+/// Title-case the first ASCII letter of `s`. Tiny local helper used
+/// only by `parse_phase_allele` error messages.
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + c.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Parse an unknown phase allele: [var1(;)var2(;)...]
@@ -4374,6 +4389,34 @@ fn parse_unknown_phase_allele(input: &str) -> Result<HgvsVariant, FerroError> {
 fn detect_allele_type(input: &str) -> Option<&'static str> {
     let input = input.trim();
 
+    // Top-level slash check happens BEFORE the bracket-wrapping checks
+    // so that bracketed chimeric / mosaic forms like
+    // `[a;b]//[c;d]` and `[a;b]/[c;d]` route to chimeric / mosaic
+    // instead of being misclassified as cis (`[a;b]` wrapping with
+    // unparsed trailing content). Depth-aware so the slash inside
+    // a nested edit (e.g. a delins source like `delins[ACC:c.1_2/3]`,
+    // which is not currently emitted but kept structurally safe) is
+    // ignored. See `find_top_level_slash`.
+    if find_top_level_slash(input, true).is_some() {
+        return Some("chimeric");
+    }
+    if let Some(pos) = find_top_level_slash(input, false) {
+        // Bare `/foo` (slash at position 0, before any accession /
+        // coord prefix) is not a valid mosaic — let downstream parsing
+        // produce a clean error. Mirror the prior heuristic of
+        // requiring some structural content (a `:`, a `[`, or the `=`
+        // shorthand for the reference allele) before the first
+        // top-level slash before classifying as mosaic. The bare-`=`
+        // case lets `parse_phase_allele` emit its targeted
+        // "Cannot use '=' as first variant" diagnostic, matching the
+        // chimeric branch's behavior (which has no before-slash guard
+        // since `//` is unambiguous).
+        let before = input[..pos].trim();
+        if before == "=" || before.contains(':') || before.starts_with('[') {
+            return Some("mosaic");
+        }
+    }
+
     // Check for trans: [var];[var] pattern
     if input.starts_with('[') && input.contains("];[") {
         return Some("trans");
@@ -4384,30 +4427,17 @@ fn detect_allele_type(input: &str) -> Option<&'static str> {
         return Some("unknown_phase");
     }
 
-    // Check for cis: [var;var] pattern (single bracket wrapping all)
+    // Check for cis: [var;var] pattern. The HGVS DNA cis grammar
+    // (syntax.yaml lines 134-135) is
+    // `"[" position_edit ";" position_edit "]"` — `;` separator and
+    // ≥2 entries required. Standalone `c.[a]` is not generated by
+    // any production and is explicitly addressed and rejected by the
+    // committee in alleles.md lines 99-101: "the recommended
+    // description is `LRG_199t1:c.[76A>C];[76=]`".
     if input.starts_with('[') && input.ends_with(']') && !input.contains("];[") {
-        // Verify it contains ; inside brackets
         let inner = &input[1..input.len() - 1];
         if inner.contains(';') {
             return Some("cis");
-        }
-    }
-
-    // Check for chimeric: var//var (double slash - check before single slash)
-    if input.contains("//") {
-        return Some("chimeric");
-    }
-
-    // Check for mosaic: var/var (single slash)
-    // But not if it looks like a regular variant (no slash in accession part)
-    if input.contains('/') {
-        // Make sure the slash is between variants, not inside one
-        // A simple heuristic: if there's a colon before the slash, it might be a mosaic
-        if let Some(slash_pos) = input.find('/') {
-            let before_slash = &input[..slash_pos];
-            if before_slash.contains(':') {
-                return Some("mosaic");
-            }
         }
     }
 

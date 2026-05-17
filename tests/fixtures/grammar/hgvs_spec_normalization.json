@@ -10181,7 +10181,7 @@
     {
       "input": "p.2366Gln/Lys",
       "input_prefixed": "NP_003997.1:p.2366Gln/Lys",
-      "current": "parse error: Parse error at position 0: Unexpected content after variant: 'ln'",
+      "current": "parse error: Parse error at position 19: Unexpected trailing characters: 'ln'",
       "spec_expected": null,
       "status": "correctly-rejected",
       "coordinate_system": "p",
@@ -10855,7 +10855,7 @@
     },
     {
       "input": "LRG_199p1:p.Trp24=/Cys",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'Cys'",
+      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'Cys'",
       "spec_expected": "LRG_199p1:p.Trp24=/Cys",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -10927,7 +10927,7 @@
     },
     {
       "input": "NP_003997.1:p.Val7=/del",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'del'",
+      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'del'",
       "spec_expected": "NP_003997.1:p.Val7=/del",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -10939,7 +10939,7 @@
     },
     {
       "input": "NP_003997.1:p.Val7=/dup",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found 'dup'",
+      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'dup'",
       "spec_expected": "NP_003997.1:p.Val7=/dup",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -13494,7 +13494,7 @@
     },
     {
       "input": "LRG_199t1:r.=/6_8del",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.' but found '6_8'",
+      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '6_8'",
       "spec_expected": "LRG_199t1:r.=/6_8del",
       "status": "parse-error",
       "coordinate_system": "r",
