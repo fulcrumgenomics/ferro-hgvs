@@ -507,18 +507,22 @@ fn test_expected_parse_errors(#[case] input: &str, #[case] _description: &str) {
 #[case("NP_066970.3:p.Val90SerfsTer6", "NP_066970.3:p.Val90SerfsTer6")]
 #[case("NP_004412.2:p.Ser539AlafsTer110", "NP_004412.2:p.Ser539AlafsTer110")]
 #[case("NP_060609.2:p.Gly406ArgfsTer90", "NP_060609.2:p.Gly406ArgfsTer90")]
-// Protein extensions
-#[case("NP_001166937.1:p.Ter514LeuextTer?", "NP_001166937.1:p.Ter514Leuext*?")]
-#[case("NP_056480.1:p.Ter547LeuextTer?", "NP_056480.1:p.Ter547Leuext*?")]
-#[case("NP_000654.2:p.Ter501LysextTer?", "NP_000654.2:p.Ter501Lysext*?")]
+// Protein extensions — canonical Display emits `Ter` (matching Frameshift),
+// not `*` (the accepted-alternative input form). See #224.
+#[case(
+    "NP_001166937.1:p.Ter514LeuextTer?",
+    "NP_001166937.1:p.Ter514LeuextTer?"
+)]
+#[case("NP_056480.1:p.Ter547LeuextTer?", "NP_056480.1:p.Ter547LeuextTer?")]
+#[case("NP_000654.2:p.Ter501LysextTer?", "NP_000654.2:p.Ter501LysextTer?")]
 // Protein deletion with wrong AA
 #[case("NP_000026.2:p.L288delC", "NP_000026.2:p.Leu288delCys")]
 // Protein duplication
 #[case("AAK07616.1:p.Asp200dup", "AAK07616.1:p.Asp200dup")]
 // Protein repeat with uncertain count
 #[case("NP_002102.4:p.Gln18[(40_?)]", "NP_002102.4:p.Gln18[40_?]")]
-// Protein extension notation
-#[case("LRG_763p1:p.Gln40(41_?)", "LRG_763p1:p.Gln40ext*41")]
+// Protein extension notation — canonical Display emits `Ter`, see #224
+#[case("LRG_763p1:p.Gln40(41_?)", "LRG_763p1:p.Gln40extTer41")]
 // Allele with separate brackets
 #[case(
     "NM_000350.2:c.[2588G>C];[5882G>A]",

@@ -1447,10 +1447,12 @@ mod clinvar_normalization {
     #[case("NP_066970.3:p.Val90SerfsTer6", "NP_066970.3:p.Val90SerfsTer6")]
     #[case("NP_004412.2:p.Ser539AlafsTer110", "NP_004412.2:p.Ser539AlafsTer110")]
     #[case("NP_060609.2:p.Gly406ArgfsTer90", "NP_060609.2:p.Gly406ArgfsTer90")]
-    // Extension variants (stop-loss)
-    #[case("NP_001166937.1:p.Ter514Leuext*?", "NP_001166937.1:p.Ter514Leuext*?")]
-    #[case("NP_056480.1:p.Ter547Leuext*?", "NP_056480.1:p.Ter547Leuext*?")]
-    #[case("NP_000654.2:p.Ter501Lysext*?", "NP_000654.2:p.Ter501Lysext*?")]
+    // Extension variants (stop-loss) — canonical Display emits `Ter`
+    // (matching Frameshift), not `*` (accepted alternative input form).
+    // See #224.
+    #[case("NP_001166937.1:p.Ter514Leuext*?", "NP_001166937.1:p.Ter514LeuextTer?")]
+    #[case("NP_056480.1:p.Ter547Leuext*?", "NP_056480.1:p.Ter547LeuextTer?")]
+    #[case("NP_000654.2:p.Ter501Lysext*?", "NP_000654.2:p.Ter501LysextTer?")]
     fn test_protein_frameshift_extension(#[case] input: &str, #[case] expected: &str) {
         let provider = MockProvider::new();
         let normalizer = Normalizer::new(provider);
