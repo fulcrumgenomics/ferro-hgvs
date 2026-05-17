@@ -1343,6 +1343,30 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
                 sequence: InsertedSequence::Literal(ins_seq),
             },
         )
+    } else if !spdi.deletion.is_empty()
+        && spdi.deletion.len() == spdi.insertion.len()
+        && spdi.deletion.len() >= 2
+        && reverse_complement(&spdi.deletion).eq_ignore_ascii_case(&spdi.insertion)
+    {
+        // Inversion recovery (#270): SPDI delins where the inserted seq
+        // is the reverse complement of the deleted seq is canonically a
+        // tandem inversion. Length-1 cases are SNVs and handled above;
+        // self-RC palindromes of length 2+ (e.g. `AT:AT`, `GC:GC`) only
+        // recover when the seqs differ from a plain identity — which
+        // they don't, so identity catches them first.
+        let inv_seq = string_to_sequence(&spdi.deletion)?;
+        let del_len = spdi.deletion.len();
+        let interval = Interval::new(
+            GenomePos::new(hgvs_pos),
+            GenomePos::new(hgvs_pos + del_len as u64 - 1),
+        );
+        (
+            interval,
+            NaEdit::Inversion {
+                sequence: Some(inv_seq),
+                length: None,
+            },
+        )
     } else {
         // Delins (different lengths or MNV)
         let del_len = spdi.deletion.len();
@@ -1365,11 +1389,34 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
         )
     };
 
+    // m. coord system recovery (#270): NC_012920.* is the canonical
+    // human mitochondrial accession; SPDI carries no coord-system tag
+    // so the bare reverse path defaults to g. Emit m. when the
+    // accession matches a known mitochondrial reference.
+    if is_mitochondrial_accession(&accession) {
+        return Ok(HgvsVariant::Mt(MtVariant {
+            accession,
+            gene_symbol: None,
+            loc_edit: LocEdit::new(interval, edit),
+        }));
+    }
+
     Ok(HgvsVariant::Genome(GenomeVariant {
         accession,
         gene_symbol: None,
         loc_edit: LocEdit::new(interval, edit),
     }))
+}
+
+/// Returns true if `accession` is a known mitochondrial reference. Used
+/// by `spdi_to_hgvs` to emit `m.` instead of `g.` for these accessions
+/// (SPDI carries no coord-system tag).
+fn is_mitochondrial_accession(accession: &Accession) -> bool {
+    let prefix: &str = accession.prefix.as_ref();
+    let number: &str = accession.number.as_ref();
+    // NC_012920 = human GRCh38 mitochondrion (rCRS).
+    // NC_001807 = older rCRS draft (deprecated but still seen).
+    matches!((prefix, number), ("NC", "012920") | ("NC", "001807"))
 }
 
 /// Convert an SPDI variant to HGVS, using a reference provider to recover
@@ -1531,20 +1578,22 @@ where
         uncertain_extent: None,
     };
 
-    // Reuse the accession (and gene_symbol, which is None for SPDI inputs)
-    // from the base ins-form variant. SPDI→HGVS only produces Genome
-    // variants, so we expect HgvsVariant::Genome here.
-    let HgvsVariant::Genome(g) = base else {
-        // Defensive: SPDI→HGVS should always produce Genome. If it doesn't,
-        // do not attempt dup recovery.
-        return Ok(None);
-    };
-
-    Ok(Some(HgvsVariant::Genome(GenomeVariant {
-        accession: g.accession.clone(),
-        gene_symbol: g.gene_symbol.clone(),
-        loc_edit: LocEdit::new(interval, edit),
-    })))
+    // Reuse the accession + gene_symbol from the base ins-form variant.
+    // SPDI→HGVS produces either Genome or Mt (mitochondrial), depending
+    // on the accession; preserve whichever shape the base has.
+    match base {
+        HgvsVariant::Genome(g) => Ok(Some(HgvsVariant::Genome(GenomeVariant {
+            accession: g.accession.clone(),
+            gene_symbol: g.gene_symbol.clone(),
+            loc_edit: LocEdit::new(interval, edit),
+        }))),
+        HgvsVariant::Mt(m) => Ok(Some(HgvsVariant::Mt(MtVariant {
+            accession: m.accession.clone(),
+            gene_symbol: m.gene_symbol.clone(),
+            loc_edit: LocEdit::new(interval, edit),
+        }))),
+        _ => Ok(None),
+    }
 }
 
 /// Helper to convert a string to a Sequence.
@@ -2631,9 +2680,10 @@ mod tests {
 
         let spdi = SpdiVariant::insertion("NC_012920.1", 101, "ATG");
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
-        // Even for mito, the SPDI→HGVS path produces a g. variant; this
-        // matches the existing convention in this module.
-        assert_eq!(hgvs.to_string(), "NC_012920.1:g.100_102dupATG");
+        // After #270, SPDI→HGVS preserves the m. coord system for known
+        // mitochondrial accessions (NC_012920.*); dup recovery applies
+        // uniformly to genomic and mitochondrial variants.
+        assert_eq!(hgvs.to_string(), "NC_012920.1:m.100_102dupATG");
     }
 
     #[test]
