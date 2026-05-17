@@ -2812,13 +2812,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 other => other,
             })
             .collect();
-        // The codon-frame exception (`general.md:35-38`) only applies to
-        // `c.` variants on CDS-proper positions; `fetch_ref_for_canonical_split`
-        // already filters to those via `simple_cds_pos`, so the discriminant
-        // check below is sufficient. The exception fires inside
-        // `build_split_variants` for every embedded `[Sub; Identity; Sub]`
-        // triplet whose endpoints share a codon.
-        let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_));
+        // The codon-frame exception (`general.md:35-38`) applies to any
+        // variant on the CDS-relative axis: `c.` (CDS proper) and `r.`
+        // (RNA CDS-relative; issue #275 item 1).
+        // `fetch_ref_for_canonical_split` already filters to CDS-proper
+        // positions via `simple_cds_pos` / `simple_rna_pos`, so the
+        // discriminant check below is sufficient. The exception fires
+        // inside `build_split_variants` for every embedded
+        // `[Sub; Identity; Sub]` triplet whose endpoints share a codon.
+        // Caveat: the `r.` branch of `fetch_ref_for_canonical_split`
+        // does not translate the RNA axis through `cds_start`, so for
+        // transcripts with `cds_start > 1` the ref window can be
+        // mis-aligned. The codon-frame split path inherits that latent
+        // bug. See #291 — the fix is to apply `rna_to_tx_pos` (or
+        // equivalent) before reading bytes.
+        let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_) | HgvsVariant::Rna(_));
         build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware)
     }
 
@@ -3248,11 +3256,17 @@ fn build_split_variants(
                     if merge::same_codon(cds_p1, cds_p3) {
                         // Codon-frame triplet preserved as a 3-base
                         // delins. `bm` is the unchanged ref byte from
-                        // `decompose_delins`. The codon-frame branch is
-                        // CDS-only (`codon_frame_aware` is `true` only
-                        // for `HgvsVariant::Cds`), so T/U recovery for
-                        // r. inputs is unnecessary here — r. variants
-                        // never reach this branch.
+                        // `decompose_delins`. Both `c.` and `r.` flow
+                        // through this branch (issue #275 item 1 set
+                        // `codon_frame_aware = true` for
+                        // `HgvsVariant::Cds` and `HgvsVariant::Rna`),
+                        // but no T/U recovery is needed here: the
+                        // emitted delins is rendered by the per-variant
+                        // formatter, and the `r.` formatter lowercases
+                        // all of its bases (T → u included) when it
+                        // prints the alt sequence. Forwarding the raw
+                        // ref byte from `decompose_delins` is therefore
+                        // safe for both coordinate systems.
                         flush_substitution_run(&mut output, template, hgvs_start, &mut run);
                         let s = abs(*p1);
                         let e = abs(*p3);

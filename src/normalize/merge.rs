@@ -109,20 +109,32 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
             // `c.-3 + 1 == c.-2` is `-3 + 1 == -2`).
             let strict_adjacent = prev_a.end.checked_add(1) == Some(next_start);
 
-            // Codon-frame exception (issue #79): two `c.` exonic SNVs in
-            // the CDS proper, separated by exactly one nucleotide, that
-            // fall within the same codon merge into a delins with the
-            // unchanged middle reference base preserved. Eligibility is
-            // narrow: same accession+region (`Cds`), gap of exactly 1 on
-            // the axis, both endpoints in the same codon, and a
-            // `prev_a` that is still a single-base SUB anchor (so this
-            // doesn't fire on a delins that's already grown via an
-            // earlier merge).
+            // Codon-frame exception (issue #79, extended by issue #275):
+            // two exonic edits on the CDS axis (`c.` or `r.`), separated
+            // by exactly one nucleotide, that fall within the same codon
+            // merge into a delins with the unchanged middle reference base
+            // preserved verbatim. Eligibility:
+            //   * same accession + same kind (checked below).
+            //   * region is `Cds` (for `c.`) or `Rna` (for `r.`) — both
+            //     share a codon-relative axis. `g.` / `n.` / UTR / intron
+            //     are excluded.
+            //   * `prev_a.end + 2 == next_start` (gap of exactly 1 nt).
+            //   * `same_codon(prev_a.end, next_start)` — both endpoints
+            //     fall in the same 1-indexed codon. The right edge of
+            //     `prev_a` is what matters, so a chain that has already
+            //     grown via earlier strict merges can still extend via
+            //     codon-frame (issue #275 item 2).
+            //   * `prev_a.start <= prev_a.end` — `prev_a` is not an
+            //     insertion anchor (those use `start == end + 1`).
+            //   * `next_anchor` is a 1-position substitution OR deletion
+            //     (checked below): `next_anchor.start == next_anchor.end`
+            //     and `next_anchor.alt.len() <= 1`. Issue #275 item 3
+            //     relaxes the original `alt.len() == 1` requirement to
+            //     allow `sub`+`del` (and `del`+`sub` mirror) pairs.
             let codon_frame_eligible = !strict_adjacent
-                && prev_a.region == Region::Cds
+                && (prev_a.region == Region::Cds || prev_a.region == Region::Rna)
                 && prev_a.end.checked_add(2) == Some(next_start)
-                && prev_a.alt.len() == 1
-                && prev_a.start == prev_a.end
+                && prev_a.start <= prev_a.end
                 && same_codon(prev_a.end, next_start);
 
             if !strict_adjacent && !codon_frame_eligible {
@@ -135,8 +147,15 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
                 break 'try_merge false;
             };
             if codon_frame_eligible {
-                // Next must also be a single-base SUB anchor.
-                if next_anchor.alt.len() != 1 || next_anchor.start != next_anchor.end {
+                // Next must be a 1-position substitution OR deletion
+                // (issue #275 item 3 — `del` partners are eligible too).
+                // Insertions and multi-position delins are excluded:
+                // their position semantics ("between p and p+1" for ins,
+                // ranged for delins) don't satisfy "one variant
+                // separated by one nucleotide". A 1-position del has
+                // `start == end` and `alt.len() == 0`; a 1-position sub
+                // has `start == end` and `alt.len() == 1`.
+                if next_anchor.start != next_anchor.end || next_anchor.alt.len() > 1 {
                     break 'try_merge false;
                 }
                 // Look up the unchanged middle reference base. If the
@@ -144,7 +163,7 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
                 // gap position, gracefully decline the codon-frame merge
                 // rather than erroring.
                 let Some(middle_ref) =
-                    lookup_cds_middle_ref(provider, output.last().unwrap(), prev_a.end + 1)
+                    lookup_codon_middle_ref(provider, output.last().unwrap(), prev_a.end + 1)
                 else {
                     break 'try_merge false;
                 };
@@ -529,28 +548,46 @@ pub(crate) fn same_codon(a: i64, b: i64) -> bool {
     (a - 1) / 3 == (b - 1) / 3
 }
 
-/// Look up the reference base at a CDS position on the head variant's
-/// transcript. Returns `None` if the head is not a `CdsVariant`, the
-/// provider has no transcript for the accession, the transcript has no
-/// `cds_start`, or the indexed position falls outside the transcript
-/// sequence. Used by the codon-frame merge to insert the unchanged
-/// middle nucleotide between two SUBs separated by one base; failure
-/// to look it up means the codon-frame merge is silently declined and
-/// the variants pass through unmerged.
-fn lookup_cds_middle_ref<P: ReferenceProvider>(
+/// Look up the reference base at a CDS-axis position on the head variant's
+/// transcript. Used by the codon-frame merge (issue #79, extended for
+/// `r.` and chains in #275) to insert the unchanged middle nucleotide
+/// between two edits separated by one base on the codon axis.
+///
+/// Returns `None` if:
+///   * the head is not a coding-axis variant (`c.` or `r.`);
+///   * the provider has no transcript for the accession;
+///   * the transcript has no `cds_start`;
+///   * `cds_axis < 1` (the codon-frame eligibility check already gates
+///     on `same_codon`, which requires positive values, but we still
+///     guard defensively);
+///   * the resolved transcript index falls outside the sequence.
+///
+/// Both `c.` and `r.` share the CDS-relative axis: in this codebase,
+/// `RnaPos` (see `hgvs/location.rs`) represents positions on the
+/// CDS-relative axis, and `Normalizer::rna_to_tx_pos` (in
+/// `normalize/mod.rs`) maps `r.N` to `cds_start + N - 1` in transcript
+/// coordinates — identical to the `c.N` mapping. This is a property
+/// of the in-repo coordinate model, not a generic HGVS-spec claim:
+/// other implementations sometimes use a transcript-relative `r.`
+/// axis instead. A single lookup therefore handles both `c.` and
+/// `r.`. Failure to look up the byte makes the codon-frame merge
+/// silently decline — the input pair passes through unmerged with
+/// no error.
+fn lookup_codon_middle_ref<P: ReferenceProvider>(
     provider: &P,
     head: &HgvsVariant,
     cds_axis: i64,
 ) -> Option<Base> {
-    let cds_var = match head {
-        HgvsVariant::Cds(v) => v,
+    let accession = match head {
+        HgvsVariant::Cds(v) => &v.accession,
+        HgvsVariant::Rna(v) => &v.accession,
         _ => return None,
     };
     if cds_axis < 1 {
         return None;
     }
     let tx = provider
-        .get_transcript(&cds_var.accession.transcript_accession())
+        .get_transcript(&accession.transcript_accession())
         .ok()?;
     let cds_start = tx.cds_start?;
     let tx_idx_1based = cds_start.checked_add(cds_axis as u64)?.checked_sub(1)?;

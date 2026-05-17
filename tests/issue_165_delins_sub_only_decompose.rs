@@ -121,16 +121,34 @@ fn tx_cis_allele_with_gap_decomposes() {
 }
 
 // =============================================================================
-// RNA (`r.`) — no codon frame, lowercase preserved.
+// RNA (`r.`) — codon-frame aware (issue #275 item 1), lowercase preserved.
 // =============================================================================
 
 #[test]
-fn rna_delins_with_gap_decomposes_lowercase() {
-    // r. spec requires lowercase rendering; the decomposition must
-    // preserve case on both the substituted ref and alt.
+fn rna_delins_with_gap_preserves_codon_frame_triplet_lowercase() {
+    // r. shares the CDS-relative axis with c. and follows the same
+    // codon-frame exception (issue #275 item 1). A `[Sub; Identity; Sub]`
+    // triplet whose endpoints share a codon stays as a single 3-base
+    // delins under the spec's `general.md:35-38` carve-out. Codon 4
+    // covers r.10..r.12, so the input round-trips. RNA display preserves
+    // lowercase on the user-declared alt bases.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:r.10_12delinsaca"),
-        "NM_TEST.1:r.[10c>a;12c>a]",
+        "NM_TEST.1:r.10_12delinsaca",
+    );
+}
+
+#[test]
+fn rna_delins_with_gap_decomposes_when_pair_straddles_codon_boundary() {
+    // r.12 sits in codon 4 and r.14 in codon 5, so the codon-frame
+    // exception does NOT apply. The `[Sub; Identity; Sub]` triplet must
+    // decompose into two separate subs per `general.md:34` (variants
+    // separated by ≥1 unchanged nt are described individually). Ref at
+    // r.12..r.14 is `CCC`; insert `aca` produces `c>a` at 12 and `c>a`
+    // at 14 with an unchanged middle.
+    assert_eq!(
+        normalize_with(provider_simple(), "NM_TEST.1:r.12_14delinsaca"),
+        "NM_TEST.1:r.[12c>a;14c>a]",
     );
 }
 
