@@ -374,10 +374,11 @@ mod normalize_each_independently {
 
     /// Cis: `NM_TEST.1:c.10dupA` (resolved) paired with
     /// `NM_OTHER.1:c.5A>G` (un-resolved on the same coord system).
-    /// The resolved variant must drop its stated-ref `A` and emit
-    /// `c.10dup`; the un-resolved partner must ride through unchanged.
-    /// Distinct from `compound_cross_reference.rs` (which pairs c.+g.)
-    /// — this is the same-coord, different-accession case.
+    /// The resolved variant drops its mismatched stated-ref `A` AND
+    /// 3'-shifts through the `CCCCC` homopolymer to `c.14dup` (single
+    /// pass per #219); the un-resolved partner rides through
+    /// unchanged. Distinct from `compound_cross_reference.rs` (which
+    /// pairs c.+g.) — this is the same-coord, different-accession case.
     #[test]
     fn cis_partial_provider_resolves_only_known_accession() {
         let normalizer = Normalizer::new(provider_with_test_transcript());
@@ -385,7 +386,7 @@ mod normalize_each_independently {
         let normalized = normalizer.normalize(&parsed).expect("normalize");
         assert_eq!(
             format!("{}", normalized),
-            "[NM_TEST.1:c.10dup;NM_OTHER.1:c.5A>G]",
+            "[NM_TEST.1:c.14dup;NM_OTHER.1:c.5A>G]",
         );
     }
 
@@ -396,16 +397,14 @@ mod normalize_each_independently {
         let normalized = normalizer.normalize(&parsed).expect("normalize");
         assert_eq!(
             format!("{}", normalized),
-            "[NM_TEST.1:c.10dup];[NM_OTHER.1:c.5A>G]",
+            "[NM_TEST.1:c.14dup];[NM_OTHER.1:c.5A>G]",
         );
     }
 
     // Idempotency on a `dupA` input with a same-coord different-accession
-    // partner surfaces a separate pre-existing two-pass-drift bug (pass 1
-    // drops the mismatched stated-ref base without shifting; pass 2
-    // shifts). Tracked in #219 as a dedicated follow-up; deliberately
-    // out of scope for this audit. Not introduced or worsened by the
-    // mixed-accession lattice.
+    // partner was the two-pass drift bug filed as #219 — fixed by the
+    // sibling PR. The cis and trans assertions above now lock the
+    // post-fix single-pass shifted output.
 }
 
 // =============================================================================

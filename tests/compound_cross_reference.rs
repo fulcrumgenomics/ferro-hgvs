@@ -264,10 +264,11 @@ fn test_unknown_phase_cross_reference_round_trip() {
 
 #[test]
 fn test_each_variant_normalizes_against_own_ref() {
-    // c.10dupA at the start of a `CCCCC` run normalizes to c.10dup
-    // (drop redundant base) against the transcript reference. The g.
-    // companion has no resolvable ref data and must round-trip
-    // unchanged. Pins both:
+    // c.10dupA at the start of a `CCCCC` run normalizes to c.14dup
+    // (drop the mismatched stated-ref base AND 3'-shift to the
+    // rightmost copy of the homopolymer, both in a single pass —
+    // see #219). The g. companion has no resolvable ref data and must
+    // round-trip unchanged. Pins both:
     //   * per-variant normalization is independent
     //   * the un-resolvable companion does not block normalization of
     //     its sibling
@@ -276,21 +277,22 @@ fn test_each_variant_normalizes_against_own_ref() {
     let normalized = normalizer.normalize(&parsed).expect("normalize");
     assert_eq!(
         format!("{}", normalized),
-        "[NM_TEST.1:c.10dup;NC_000001.11:g.100A>G]",
+        "[NM_TEST.1:c.14dup;NC_000001.11:g.100A>G]",
     );
 }
 
 #[test]
 fn test_unresolved_companion_does_not_break_resolved_variant_normalize() {
     // Mirror the previous case in trans phase. Each bracket group
-    // normalizes independently; the c.10dupA still collapses to
-    // c.10dup, the g. variant rides through.
+    // normalizes independently; c.10dupA 3'-shifts through the CCCCC
+    // homopolymer to c.14dup (single pass per #219), the g. variant
+    // rides through.
     let normalizer = Normalizer::new(provider_with_simple_transcript());
     let parsed = parse_hgvs("[NM_TEST.1:c.10dupA];[NC_000001.11:g.100A>G]").expect("parse");
     let normalized = normalizer.normalize(&parsed).expect("normalize");
     assert_eq!(
         format!("{}", normalized),
-        "[NM_TEST.1:c.10dup];[NC_000001.11:g.100A>G]",
+        "[NM_TEST.1:c.14dup];[NC_000001.11:g.100A>G]",
     );
 }
 
