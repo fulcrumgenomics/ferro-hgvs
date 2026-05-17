@@ -1325,16 +1325,48 @@ fn parse_whole_genome_identity(input: &str) -> IResult<&str, crate::hgvs::edit::
 }
 
 /// Parse whole-genome unknown: g.?
+///
+/// Only matches a terminal `?`: rejects `?` followed by an interval
+/// continuation (`_`), an offset (`+`/`-`), an edit keyword (`dup`,
+/// `del`, `ins`, `inv`), or a substitution pattern (`<base>>` or
+/// `>`) so that those forms fall through to the position-based
+/// parser (`?<edit>` means edit at unknown position, not whole-entity
+/// unknown). #239.
 fn parse_whole_genome_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
-    // Only match terminal ? (not ? followed by _ which indicates uncertain position)
     let (remaining, _) = tag("?").parse(input)?;
-    if remaining.starts_with('_') {
+    if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
         )));
     }
     Ok((remaining, crate::hgvs::edit::NaEdit::whole_entity_unknown()))
+}
+
+/// Returns true when `remaining` (the input after a `?`) starts with
+/// anything that should route `?` to the position-based parser rather
+/// than treating it as whole-entity unknown.
+fn is_edit_continuation_after_unknown(remaining: &str) -> bool {
+    if remaining.starts_with('_')
+        || remaining.starts_with('+')
+        || remaining.starts_with('-')
+        || remaining.starts_with('=')
+        || remaining.starts_with("dup")
+        || remaining.starts_with("del")
+        || remaining.starts_with("ins")
+        || remaining.starts_with("inv")
+    {
+        return true;
+    }
+    // Substitution `?<base>>` (e.g. `?A>G`) or no-ref `?>G`.
+    let bytes = remaining.as_bytes();
+    if bytes.first() == Some(&b'>') {
+        return true;
+    }
+    if bytes.len() >= 2 && bytes[1] == b'>' && bytes[0].is_ascii_alphabetic() {
+        return true;
+    }
+    false
 }
 
 /// Parse whole-CDS identity: c.=
@@ -1346,20 +1378,12 @@ fn parse_whole_cds_identity(input: &str) -> IResult<&str, crate::hgvs::edit::NaE
 }
 
 /// Parse whole-CDS unknown: c.?
-/// Only matches if ? is at end (not followed by _, +, -, or edit keywords like dup/del/ins)
+/// Only matches if ? is at end (not followed by `_`, `+`/`-`, edit
+/// keywords, or a substitution pattern — those route to the
+/// position-based parser as edits at unknown position). #239.
 fn parse_whole_cds_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
     let (remaining, _) = tag("?").parse(input)?;
-    // If followed by '_', this is an interval with unknown start, not whole entity unknown
-    // If followed by '+' or '-', this has an offset (e.g., ?-232)
-    // If followed by edit keywords, it's an unknown position with edit (e.g., ?dup)
-    if remaining.starts_with('_')
-        || remaining.starts_with('+')
-        || remaining.starts_with('-')
-        || remaining.starts_with("dup")
-        || remaining.starts_with("del")
-        || remaining.starts_with("ins")
-        || remaining.starts_with("inv")
-    {
+    if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -2917,9 +2941,11 @@ fn parse_whole_rna_identity(input: &str) -> IResult<&str, crate::hgvs::edit::NaE
 
 /// Parse whole-RNA unknown: r.?
 fn parse_whole_rna_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::NaEdit> {
-    // Only match terminal ? (not ? followed by _ which indicates uncertain position)
+    // Only match terminal ? (not ? followed by `_`, edit keywords, or
+    // a substitution pattern — those route to the position-based
+    // parser as edits at unknown position). #239.
     let (remaining, _) = tag("?").parse(input)?;
-    if remaining.starts_with('_') {
+    if is_edit_continuation_after_unknown(remaining) {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
