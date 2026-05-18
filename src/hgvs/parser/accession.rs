@@ -6,7 +6,6 @@
 use crate::hgvs::variant::Accession;
 use memchr::memchr;
 use nom::{
-    branch::alt,
     bytes::complete::{tag, take_while, take_while1},
     character::complete::digit1,
     combinator::{map, opt},
@@ -465,17 +464,39 @@ fn parse_ensembl_accession(input: &str) -> IResult<&str, Accession> {
     ))
 }
 
-/// Parse Ensembl prefix (ENST, ENSG, ENSP, ENSE, ENSR)
+/// Parse an Ensembl prefix of the shape `ENS<species_code><feature>`.
+///
+/// `species_code` is 0–5 uppercase letters (`""` for human, `MUS` for mouse,
+/// `RNO` for rat, `BTA` for cow, `DAR` for zebrafish, etc.). `feature` is one
+/// of `G` (gene), `T` (transcript), `P` (peptide), `E` (exon), or `R`
+/// (regulatory). Examples: `ENST`, `ENSP`, `ENSMUST`, `ENSRNOT`.
 #[inline]
 fn parse_ensembl_prefix(input: &str) -> IResult<&str, &str> {
-    alt((
-        tag("ENST"),
-        tag("ENSG"),
-        tag("ENSP"),
-        tag("ENSE"),
-        tag("ENSR"),
-    ))
-    .parse(input)
+    let (after_ens, _) = tag("ENS").parse(input)?;
+    let (after_letters, letters) =
+        take_while1(|c: char| c.is_ascii_uppercase()).parse(after_ens)?;
+    // letters = species_code + feature. Per the Ensembl stable-ID convention
+    // the species code is 0..=5 uppercase letters, so the total length of
+    // `letters` must be at most 6 (5 species + 1 feature). This rejects
+    // arbitrarily long uppercase runs that would otherwise be misparsed as
+    // Ensembl accessions.
+    if letters.len() > 6 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // The last letter of the alpha run is the feature suffix; any preceding
+    // letters are the species code.
+    let last = letters.as_bytes()[letters.len() - 1];
+    if !matches!(last, b'G' | b'T' | b'P' | b'E' | b'R') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let prefix_len = 3 + letters.len();
+    Ok((after_letters, &input[..prefix_len]))
 }
 
 /// Parse accession prefix (letters like NC, NM, NP, LRG)
@@ -589,6 +610,51 @@ mod tests {
         assert_eq!(acc.version, None);
         assert!(acc.ensembl_style);
         assert_eq!(acc.full(), "ENST00000012345");
+    }
+
+    #[test]
+    fn test_parse_ensembl_mouse_transcript() {
+        // Mouse Ensembl IDs have species code "MUS" between "ENS" and the
+        // feature suffix.
+        let (remaining, acc) = parse_accession("ENSMUST00000123456.7:c").unwrap();
+        assert_eq!(remaining, ":c");
+        assert_eq!(&*acc.prefix, "ENSMUST");
+        assert_eq!(&*acc.number, "00000123456");
+        assert_eq!(acc.version, Some(7));
+        assert!(acc.ensembl_style);
+        assert_eq!(acc.full(), "ENSMUST00000123456.7");
+    }
+
+    #[test]
+    fn test_parse_ensembl_rat_protein() {
+        let (remaining, acc) = parse_accession("ENSRNOP00000001234.2:p").unwrap();
+        assert_eq!(remaining, ":p");
+        assert_eq!(&*acc.prefix, "ENSRNOP");
+        assert!(acc.ensembl_style);
+        assert_eq!(acc.full(), "ENSRNOP00000001234.2");
+    }
+
+    #[test]
+    fn test_parse_ensembl_zebrafish_gene() {
+        let (remaining, acc) = parse_accession("ENSDARG00000056789:g").unwrap();
+        assert_eq!(remaining, ":g");
+        assert_eq!(&*acc.prefix, "ENSDARG");
+        assert_eq!(acc.version, None);
+        assert!(acc.ensembl_style);
+        assert_eq!(acc.full(), "ENSDARG00000056789");
+    }
+
+    #[test]
+    fn test_parse_ensembl_invalid_feature_suffix_falls_through() {
+        // `A` is not in the feature suffix set {G,T,P,E,R}, so this string is
+        // not recognized as an Ensembl accession by the dedicated path — the
+        // dispatcher falls through to `parse_simple_accession`, which treats
+        // the whole string as an opaque accession.  The structural check is
+        // that the prefix is not "ENSA" (which is what a malformed Ensembl
+        // parse would yield) but the entire name.
+        let (_, acc) = parse_accession("ENSA00000000001:c.100A>G").unwrap();
+        assert_eq!(&*acc.prefix, "ENSA00000000001");
+        assert!(!Accession::is_ensembl_prefix(&acc.prefix));
     }
 
     #[test]
