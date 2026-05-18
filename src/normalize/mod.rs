@@ -988,6 +988,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // often omit cds_start/end). Choosing per endpoint keeps mixed
         // intervals like `r.50_*1del` from rerouting the positive end
         // through `rna_to_tx_pos` — issue #163 follow-up.
+        //
+        // Axis convention (pinned by `tests/issue_291_rna_axis_convention.rs`,
+        // closes #291): `r.` positive non-UTR bases are
+        // **transcript-1-relative**, NOT CDS-relative. `r.10` against a
+        // transcript with `cds_start = 100` maps to tx index 10, not tx 109.
+        // This is consistent across `fetch_ref_for_canonical_split`,
+        // `simple_rna_pos`, and `normalize_na_edit`. Only `r.*N`/`r.-N`
+        // (and base 0) translate through `cds_start`/`cds_end` via
+        // `rna_to_tx_pos`.
         let cds_info = transcript.cds_start.zip(transcript.cds_end);
         let map_in = |pos: &crate::hgvs::location::RnaPos| -> Option<u64> {
             if pos.utr3 || pos.base < 1 {
@@ -1025,6 +1034,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // both the original issue #163 case (UTR input shuffling within the
         // UTR) and a positive-base input that shifts past `cds_end` during
         // normalization. Without `cds_info` we keep the simple base-1 mapping.
+        //
+        // For positions that stay inside the CDS-proper window
+        // (`cds_start <= pos <= cds_end`), the tx index is emitted directly
+        // as `r.{pos}` — i.e. the transcript-1-relative axis is preserved on
+        // the way out, matching the convention enforced by `map_in` above.
+        // See `tests/issue_291_rna_axis_convention.rs` for the pin.
         use crate::hgvs::location::RnaPos;
         let map_out = |pos: u64| -> Result<RnaPos, FerroError> {
             if let Some((cds_start, cds_end)) = cds_info {
@@ -2886,6 +2901,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 bytes[s..e].to_vec()
             }
             HgvsVariant::Rna(r) => {
+                // `r.` positive non-UTR bases use the transcript-1-relative
+                // axis in this codebase (NOT CDS-relative): `r.N` for `N > 0`
+                // and non-UTR maps directly to tx index `N`. This matches the
+                // convention used by `simple_rna_pos`, `normalize_rna::map_in`/
+                // `map_out`, and `normalize_na_edit` for the r. arm.
+                // `simple_rna_pos` filters intronic positions, 3'-UTR
+                // positions (the `r.*N` form), and non-positive bases. It
+                // does NOT filter 5'-UTR positions because under the tx-1
+                // axis convention those have positive bases below
+                // `cds_start` and are themselves valid tx indices — the
+                // `hgvs_start - 1` slice against the full transcript
+                // sequence is therefore correct for any position reaching
+                // this arm (including tx-1 5'-UTR).
+                // Pinned by `tests/issue_291_rna_axis_convention.rs` (closes #291).
                 let tx = self
                     .provider
                     .get_transcript(&r.accession.transcript_accession())
