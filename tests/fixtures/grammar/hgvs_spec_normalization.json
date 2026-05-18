@@ -12,8 +12,8 @@
       "correctly-rejected": 42,
       "diverges": 160,
       "false-acceptance": 86,
-      "parse-error": 341,
-      "preserved": 643
+      "parse-error": 339,
+      "preserved": 645
     },
     "by_coordinate_system": {
       "c": 464,
@@ -13462,32 +13462,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "r.(=)",
-      "input_prefixed": "NM_004006.3:r.(=)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(=)\", code: Digit })",
-      "spec_expected": "NM_004006.3:r.(=)",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(?)",
-      "input_prefixed": "NM_004006.3:r.(?)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(?)\", code: Digit })",
-      "spec_expected": "NM_004006.3:r.(?)",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "r.*1924",
       "input_prefixed": "NM_004006.3:r.*1924",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: TakeWhile1 })",
@@ -15202,6 +15176,30 @@
       "input_prefixed": "NM_004006.3:r.(76a>c)",
       "current": "NM_004006.3:r.(76a>c)",
       "spec_expected": "NM_004006.3:r.(76a>c)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "r.(=)",
+      "input_prefixed": "NM_004006.3:r.(=)",
+      "current": "NM_004006.3:r.(=)",
+      "spec_expected": "NM_004006.3:r.(=)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "r.(?)",
+      "input_prefixed": "NM_004006.3:r.(?)",
+      "current": "NM_004006.3:r.(?)",
+      "spec_expected": "NM_004006.3:r.(?)",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",
