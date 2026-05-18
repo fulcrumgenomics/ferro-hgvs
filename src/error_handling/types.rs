@@ -226,6 +226,17 @@ pub enum ErrorType {
     /// (the principled correction depends on which endpoint is wrong,
     /// which the parser cannot decide); strict mode rejects.
     LengthMismatch,
+
+    /// Bracketed amino-acid list inside a protein insertion edit
+    /// (e.g., `p.Arg97_Trp98ins[Ala;Pro]`).
+    ///
+    /// HGVS v21's protein insertion notation concatenates 3-letter codes
+    /// without separators (`p.Arg97_Trp98insAlaPro`); brackets are reserved
+    /// for alleles at the variant level, not for amino-acid lists inside an
+    /// edit. Cannot be auto-rewritten without ambiguity (single-letter vs
+    /// three-letter mixing), so all modes reject with an actionable hint
+    /// pointing at the canonical `insAlaPro` form.
+    ProteinBracketedAaInsertion,
 }
 
 impl ErrorType {
@@ -256,6 +267,7 @@ impl ErrorType {
             ErrorType::DeprecatedIvsNotation => "W3014",
             ErrorType::DeprecatedConSyntax => "W3015",
             ErrorType::LengthMismatch => "W3016",
+            ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
             ErrorType::SinglePositionRange => "W4003",
@@ -302,6 +314,9 @@ impl ErrorType {
             ErrorType::LengthMismatch => {
                 "explicit reference sequence length does not match position range"
             }
+            ErrorType::ProteinBracketedAaInsertion => {
+                "bracketed amino-acid list inside protein insertion edit"
+            }
         }
     }
 
@@ -347,6 +362,10 @@ impl ErrorType {
             // Length-mismatch input has no safe auto-correction — the user
             // could have meant either endpoint or a different ref seq.
             ErrorType::LengthMismatch => false,
+            // Bracketed AA list inside an insertion has no spec-defined
+            // rewrite: mixing 3-letter and 1-letter inside `[...]` is
+            // ambiguous, so all modes reject with a hint.
+            ErrorType::ProteinBracketedAaInsertion => false,
         }
     }
 
@@ -393,6 +412,9 @@ impl ErrorType {
                 "c.100_200delinsNM_001.1:c.5_105",
             ),
             ErrorType::LengthMismatch => ("g.100_110delAAAATTTGCC", "(no auto-correct)"),
+            ErrorType::ProteinBracketedAaInsertion => {
+                ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
+            }
         }
     }
 }

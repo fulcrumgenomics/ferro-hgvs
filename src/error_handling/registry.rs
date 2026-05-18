@@ -919,6 +919,37 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3021",
+        CodeInfo {
+            code: "W3021",
+            name: "ProteinBracketedAaInsertion",
+            summary: "Bracketed amino-acid list inside a protein insertion edit.",
+            explanation:
+                "HGVS v21's protein insertion notation concatenates 3-letter amino-acid codes \
+                with no separators (`p.Arg97_Trp98insAlaPro`). The bracketed form \
+                `p.Arg97_Trp98ins[Ala;Pro]` is not in the spec: brackets are reserved for \
+                alleles at the variant level, not for amino-acid lists inside an edit. \
+                ferro cannot auto-rewrite the bracketed form because mixing 1-letter and \
+                3-letter codes inside `[...]` is ambiguous; all modes reject with a hint \
+                pointing at the canonical `insAlaPro` shape.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NP_000088.3:p.Arg97_Trp98ins[Ala;Pro]",
+                "NP_000088.3:p.Arg97_Trp98ins[A;P]",
+            ],
+            good_examples: &[
+                "NP_000088.3:p.Arg97_Trp98insAlaPro",
+                "NP_000088.3:p.Arg97_Trp98insAla",
+            ],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/insertion/",
+            ),
+            related_codes: &["E1004"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(

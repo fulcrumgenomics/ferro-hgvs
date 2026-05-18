@@ -366,6 +366,14 @@
       "spec_section_notes": "Wired as InputPreprocessor Phase 13a via detect_length_mismatch. Lenient mode emits W3016 without rewriting (no safe auto-correction — either endpoint or the ref seq could be wrong); strict mode rejects with E1004 InvalidEdit. Detector handles g./c./n./m./o./r. ranges with simple integer endpoints; offset and *N/-N marker endpoints fall through (cannot compute length without provider). Covers del<ref>, dup<ref>, inv<ref>; delins<ins> is skipped (the inserted sequence is intentionally allowed to differ in length). Closes #81 K1 follow-up to #259."
     },
     {
+      "code": "W3021",
+      "description": "ProteinBracketedAaInsertion — 'p.…ins[Ala;Pro]' rejected; canonical form is 'p.…insAlaPro'.",
+      "spec_section": "recommendations/protein/variant/insertion.md (protein insertions concatenate 3-letter codes with no separator; brackets are reserved for variant-level alleles)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/insertion/",
+      "status": "enforced",
+      "spec_section_notes": "Cannot be auto-rewritten because mixing 1-letter and 3-letter codes inside [...] is ambiguous. Strict / lenient / silent all reject with E1004 InvalidEdit + hint naming the canonical insAlaPro shape. detect_protein_bracketed_aa_insertion runs as InputPreprocessor Phase 17, and reject_protein_bracketed_aa_insertion runs as a pre-parse check inside parse_variant so the bare parse_hgvs path produces the same diagnostic. Closes #290 (follow-up to #248)."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",

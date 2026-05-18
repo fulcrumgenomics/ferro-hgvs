@@ -11,7 +11,8 @@ use super::corrections::{
     correct_redundant_repeat_label, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
     detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch, detect_missing_versions,
-    detect_position_zero, strip_trailing_annotation, DetectedCorrection,
+    detect_position_zero, detect_protein_bracketed_aa_insertion, strip_trailing_annotation,
+    DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -1029,6 +1030,63 @@ impl InputPreprocessor {
                                 .with_hint(
                                     "Use the canonical intronic-offset form (e.g. c.88+2T>G) — IVS notation has been retracted by HGVS and is ambiguous without genomic context",
                                 ),
+                        ),
+                    );
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 17: Reject protein bracketed-amino-acid insertion forms
+        // like `p.…ins[Ala;Pro]` (W3021 — closes #290 / follow-up to
+        // #248). HGVS v21's protein insertion notation concatenates
+        // 3-letter codes (`insAlaPro`); brackets are reserved for the
+        // variant-level allele syntax, not for an inserted AA list.
+        // ferro cannot auto-rewrite (mixing 3-letter and 1-letter codes
+        // inside `[...]` is ambiguous), so all modes reject. Note that
+        // `parse_variant` already runs an unconditional pre-parse reject
+        // for this shape, so callers that bypass the preprocessor still
+        // surface the same diagnostic.
+        //
+        // Scan the *original* `input` (not `current`): earlier phases
+        // may have rewritten bytes ahead of the bracketed body, and the
+        // diagnostic below uses `input` as the source for span
+        // coordinates. Detecting against `current` would mis-align
+        // `first.start`/`first.end` with the bytes the caller sees.
+        let detections = detect_protein_bracketed_aa_insertion(input);
+        if !detections.is_empty() {
+            let action = self.action_for(ErrorType::ProteinBracketedAaInsertion);
+            match action {
+                ResolvedAction::Reject
+                | ResolvedAction::WarnCorrect
+                | ResolvedAction::SilentCorrect => {
+                    let first = &detections[0];
+                    // Compose a hint that includes the best-effort
+                    // canonical rewrite when the bracket contents parse
+                    // cleanly as `<Aa3>;<Aa3>;...`.
+                    let canonical_suggestion = if !first.corrected.is_empty() {
+                        format!(
+                            " — e.g. write `{}` instead of `{}`",
+                            first.corrected, first.original
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let hint = format!(
+                        "HGVS protein insertion uses concatenated 3-letter codes \
+                         (`ins<AA1><AA2>...`, e.g. `insAlaPro`), not a bracketed list \
+                         (`ins[AA1;AA2]`){canonical_suggestion}",
+                    );
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            "Bracketed amino-acid list inside protein insertion edit",
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(hint),
                         ),
                     );
                 }
