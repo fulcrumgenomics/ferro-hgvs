@@ -2286,6 +2286,166 @@ fn next_char_end(bytes: &[u8], i: usize) -> usize {
 /// W3011 is not auto-correctable because synthesizing the end position
 /// requires intronic / UTR-aware coordinate arithmetic that the preprocessor
 /// does not have.
+/// Detect mismatch between the position-range length and the explicit
+/// reference-sequence length on `del` / `dup` / `inv` / `delins<ref>ins<alt>`.
+///
+/// HGVS range syntax implies `len(ref) == end - start + 1`. ferro
+/// silently accepts mismatches today (`g.100_110delAAAATTTGCC` has
+/// range 11 but 10 bases). This detector flags them so the preprocessor
+/// can emit W3016.
+///
+/// Only handles ranges with simple integer endpoints (no offsets,
+/// no `-N` / `*N` markers, no `?`). Skips inputs where any endpoint
+/// involves an offset or marker — computing length requires a provider
+/// in those cases.
+pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return hits;
+    }
+
+    // Walk the input looking for any of the coord markers (`c.`, `g.`,
+    // `n.`, `m.`, `o.`, `r.`) preceded by `:`, `[`, `(`, `;`, or start of
+    // string. Multiple ranges per input (compound alleles) are handled
+    // by continuing past each match.
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';');
+        let is_coord =
+            matches!(bytes[i], b'c' | b'g' | b'n' | b'm' | b'o' | b'r') && bytes[i + 1] == b'.';
+        if !(prev_ok && is_coord) {
+            i += 1;
+            continue;
+        }
+        let start_idx = i + 2;
+        if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
+            hits.push(hit);
+        }
+        i = start_idx;
+    }
+
+    hits
+}
+
+/// Try to detect a length-mismatch at `pos` (right after a coord marker
+/// like `.c.`). Returns the detection on success.
+fn try_detect_length_mismatch_at(
+    bytes: &[u8],
+    input: &str,
+    pos: usize,
+) -> Option<DetectedCorrection> {
+    // Endpoint 1: bare integer (no `-` / `*` prefix, no `+`/`-` offset).
+    let (start_val, mut j) = parse_bare_int(bytes, pos)?;
+    // Underscore.
+    if j >= bytes.len() || bytes[j] != b'_' {
+        return None;
+    }
+    j += 1;
+    // Endpoint 2: bare integer.
+    let (end_val, mut k) = parse_bare_int(bytes, j)?;
+
+    if end_val < start_val {
+        // Swapped ranges are W4001's job; don't double-flag.
+        return None;
+    }
+    let range_len = (end_val - start_val + 1) as usize;
+
+    // Identify the edit keyword. Order matters: `delins` is a prefix of
+    // `del`, so check the longer first.
+    let edit_kind = match () {
+        _ if bytes.len() >= k + 6 && &bytes[k..k + 6] == b"delins" => EditKind::Delins,
+        _ if bytes.len() >= k + 3 && &bytes[k..k + 3] == b"del" => EditKind::Del,
+        _ if bytes.len() >= k + 3 && &bytes[k..k + 3] == b"dup" => EditKind::Dup,
+        _ if bytes.len() >= k + 3 && &bytes[k..k + 3] == b"inv" => EditKind::Inv,
+        _ => return None,
+    };
+    let keyword_end = k + match edit_kind {
+        EditKind::Delins => 6,
+        _ => 3,
+    };
+    k = keyword_end;
+
+    // For del/dup/inv: the ref sequence (if any) is alphabetic bases
+    // immediately following the keyword. For delins: the ref sequence
+    // (if any) appears between `del` and `ins`, i.e. for
+    // `delins<ref>` only the inserted seq is given. To compare lengths
+    // for delins we need the deleted-ref form `del<ref>ins<alt>`. Look
+    // it up by re-scanning: this branch only fires when the input is
+    // the explicit form `del<ref>ins<alt>` (legacy/clinvar).
+    let ref_seq = match edit_kind {
+        EditKind::Del | EditKind::Dup | EditKind::Inv => take_ref_seq_run(bytes, k),
+        EditKind::Delins => {
+            // The simple `delins<ins>` form has no `del<ref>` segment to
+            // measure; we'd be measuring the *inserted* seq against the
+            // range length, which is the wrong rule. Skip.
+            return None;
+        }
+    };
+    if ref_seq.is_empty() {
+        // No explicit ref seq → nothing to compare.
+        return None;
+    }
+    let end_of_seq = k + ref_seq.len();
+    if range_len == ref_seq.len() {
+        return None;
+    }
+    // Mismatch: emit a detection covering the position range + edit
+    // keyword + ref seq.
+    let span_text = &input[pos..end_of_seq];
+    Some(DetectedCorrection::new(
+        ErrorType::LengthMismatch,
+        span_text,
+        String::new(),
+        pos,
+        end_of_seq,
+    ))
+}
+
+/// Variant: scan also covers explicit `del<ref>ins<alt>` (legacy
+/// ClinVar shape). Public so the preprocessor can call it once across
+/// the input.
+#[derive(Copy, Clone)]
+enum EditKind {
+    Del,
+    Dup,
+    Inv,
+    Delins,
+}
+
+/// Parse a bare unsigned integer at `pos`. Returns `(value, end_idx)`.
+/// Refuses anything not starting with a digit (e.g. `-`, `*`, `+`).
+fn parse_bare_int(bytes: &[u8], pos: usize) -> Option<(i64, usize)> {
+    if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
+        return None;
+    }
+    let mut j = pos;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    let n: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
+    // Reject if followed by `+`/`-` (offset) or `_` and then `*` (3'UTR
+    // marker on the other endpoint) — we only handle simple integer
+    // ranges here.
+    if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+        return None;
+    }
+    Some((n, j))
+}
+
+/// Consume an IUPAC nucleotide run at `pos`. Returns the substring; empty
+/// if no IUPAC base follows. Using IUPAC (rather than any alphabetic byte)
+/// ensures the scan stops at the `ins` boundary when reading the ref-seq
+/// of a legacy `del<ref>ins<alt>` form (the lowercase `i` is not a valid
+/// IUPAC base, so consumption halts there).
+fn take_ref_seq_run(bytes: &[u8], pos: usize) -> &str {
+    let mut j = pos;
+    while j < bytes.len() && is_iupac_base(bytes[j] as char) {
+        j += 1;
+    }
+    std::str::from_utf8(&bytes[pos..j]).unwrap_or("")
+}
+
 pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();

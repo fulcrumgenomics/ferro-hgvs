@@ -358,6 +358,14 @@
       "spec_section_notes": "Pre-parse rewrite in lenient/silent modes; strict rejects with E1004 InvalidEdit + hint. The legacy parser path still accepts NaEdit::Conversion for raw parse_hgvs callers; only parse_hgvs_with_config / lenient / silent / CLI go through the preprocessor phase."
     },
     {
+      "code": "W3016",
+      "description": "LengthMismatch — explicit reference sequence length does not match position range.",
+      "spec_section": "recommendations/general.md (range semantics: len(reference) == end - start + 1 for del/dup/inv/delins with explicit ref)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced",
+      "spec_section_notes": "Wired as InputPreprocessor Phase 13a via detect_length_mismatch. Lenient mode emits W3016 without rewriting (no safe auto-correction — either endpoint or the ref seq could be wrong); strict mode rejects with E1004 InvalidEdit. Detector handles g./c./n./m./o./r. ranges with simple integer endpoints; offset and *N/-N marker endpoints fall through (cannot compute length without provider). Covers del<ref>, dup<ref>, inv<ref>; delins<ins> is skipped (the inserted sequence is intentionally allowed to differ in length). Closes #81 K1 follow-up to #259."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",

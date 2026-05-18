@@ -898,6 +898,27 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3016",
+        CodeInfo {
+            code: "W3016",
+            name: "LengthMismatch",
+            summary: "Explicit reference sequence length does not match position range.",
+            explanation:
+                "For `del` / `dup` / `inv` / `delins` with an explicit reference sequence, the \
+                sequence length must equal the position range length (`end - start + 1`). \
+                `g.100_110delAAAATTTGCC` has range 11 but sequence length 10. Lenient mode emits \
+                W3016 without rewriting (the principled correction depends on which endpoint is \
+                wrong); strict mode rejects.",
+            category: CodeCategory::Format,
+            bad_examples: &["g.100_110delAAAATTTGCC", "g.100_105invTAGCA"],
+            good_examples: &["g.100_109delAAAATTTGCC", "g.100_104invTAGCA"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["W5001"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
