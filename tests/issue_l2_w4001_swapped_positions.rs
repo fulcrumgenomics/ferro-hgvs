@@ -97,39 +97,29 @@ mod strict_through_preprocessor {
 // SECTION 3 — Partial coverage: offset-bearing forms not handled
 // =============================================================================
 //
-// Pin the documented partial-coverage limit: the corrector handles only
-// simple integer pairs (`c.A_Bdel`). Offset-bearing inverted forms fall
-// through to the parser. These tests pin the gap so a future enhancement
-// surfaces them.
+// #265 extended the corrector to handle offset-bearing positions and
+// `*N` markers. The detailed coverage is in
+// `tests/issue_265_swapped_positions_offsets.rs`; this section keeps a
+// lightweight reminder so the partial-coverage gap label here matches
+// the audit. (Originally these tests pinned the "not rewritten" gap
+// before #265.)
 
-mod partial_offset_coverage {
+mod offset_and_marker_coverage_smoke {
     use super::*;
 
-    /// `c.100+5_99+3` has inverted positions across an intron offset;
-    /// the corrector explicitly bails on offset-bearing forms so the
-    /// input is not silently rewritten (which would drop the offset).
+    /// Offset-bearing swap now rewrites and preserves offsets.
     #[test]
-    fn offset_swapped_not_rewritten() {
+    fn offset_swapped_rewritten() {
         let r = parse_hgvs_lenient("NM_000088.3:c.100+5_99+3del").unwrap();
-        // No W4001 emitted; offset-bearing form is left unchanged.
-        assert!(
-            !r.warnings.iter().any(|w| w.error_type.code() == "W4001"),
-            "offset-bearing swapped form must not emit W4001 (corrector would drop the offset)"
-        );
-        // Round-trip is unchanged.
-        assert_eq!(format!("{}", r.result), "NM_000088.3:c.100+5_99+3del");
+        assert_eq!(format!("{}", r.result), "NM_000088.3:c.99+3_100+5del");
+        assert!(r.warnings.iter().any(|w| w.error_type.code() == "W4001"));
     }
 
-    /// `c.*5_*1del` (3'UTR `*N`) — also bails because `*` is not a bare
-    /// integer; the corrector is integer-only.
+    /// `*N` marker swap now rewrites.
     #[test]
-    fn three_prime_utr_swapped_not_rewritten() {
-        let r = parse_hgvs_lenient("NM_000088.3:c.*5_*1del");
-        if let Ok(r) = r {
-            assert!(
-                !r.warnings.iter().any(|w| w.error_type.code() == "W4001"),
-                "three-prime-UTR swapped form unexpectedly emitted W4001"
-            );
-        }
+    fn three_prime_utr_swapped_rewritten() {
+        let r = parse_hgvs_lenient("NM_000088.3:c.*5_*1del").unwrap();
+        assert_eq!(format!("{}", r.result), "NM_000088.3:c.*1_*5del");
+        assert!(r.warnings.iter().any(|w| w.error_type.code() == "W4001"));
     }
 }

@@ -3,8 +3,9 @@
 //! Three categories of behavior are pinned:
 //! 1. Syntactic round-trip: HGVS → SPDI → HGVS preserves the input verbatim.
 //! 2. Semantic round-trip: SPDI canonicalizes the HGVS form (e.g. dup→ins,
-//!    delins drops the deleted seq, inv→delins, m.→g.). Pinned as the expected
-//!    canonical re-emission, not a bug.
+//!    delins drops the deleted seq). Pinned as the expected canonical
+//!    re-emission, not a bug. `inv` and `m.` are recovered by inspection on
+//!    the reverse leg and round-trip verbatim (see syntactic section).
 //! 3. Provider-required / unsupported: returns a typed error.
 //!
 //! Out of scope: length-mismatch input (`g.100_110delAAAATTTGCC` with
@@ -76,6 +77,21 @@ mod syntactic_round_trip {
     fn lrg_del_with_seq_round_trips() {
         assert_syntactic_round_trip("LRG_199:g.100_102delATG");
     }
+
+    /// SPDI itself has no `inv` edit type — the forward leg encodes it as
+    /// the reverse-complement substring. The reverse leg recognises the
+    /// substring as a palindromic inversion and recovers `inv` verbatim.
+    #[test]
+    fn inv_with_seq_round_trips() {
+        assert_syntactic_round_trip("NC_000001.11:g.100_104invTAGCA");
+    }
+
+    /// SPDI has no coord-system tag, but `NC_012920.1` is the canonical
+    /// mitochondrial accession, so the reverse leg recovers `m.` verbatim.
+    #[test]
+    fn mt_substitution_round_trips() {
+        assert_syntactic_round_trip("NC_012920.1:m.100A>G");
+    }
 }
 
 // =============================================================================
@@ -103,22 +119,6 @@ mod semantic_round_trip {
             "NC_000001.11:g.100_102delATGinsTTCC",
             "NC_000001.11:g.100_102delinsTTCC",
         );
-    }
-
-    /// Inversion encodes as delins(reverse-complement); reverse emits delins.
-    #[test]
-    fn inv_canonicalizes_to_delins_reverse_complement() {
-        assert_semantic_round_trip(
-            "NC_000001.11:g.100_104invTAGCA",
-            "NC_000001.11:g.100_104delinsTGCTA",
-        );
-    }
-
-    /// `m.` carries no coord-system tag in SPDI (same accession works for
-    /// both); the reverse path emits the `g.` form.
-    #[test]
-    fn mt_canonicalizes_to_genomic() {
-        assert_semantic_round_trip("NC_012920.1:m.100A>G", "NC_012920.1:g.100A>G");
     }
 }
 
