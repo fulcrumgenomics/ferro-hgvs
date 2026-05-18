@@ -2034,6 +2034,38 @@ fn parse_tx_variant(
     }
 }
 
+/// Parse a single bracket-member position+edit (non-coding transcript /
+/// `n.`), recognising the predicted-wrapper form `(<pos><edit>)` and
+/// returning a `LocEdit` with `Mu::Uncertain` in that case. Falls back
+/// to `<pos>[<edit>]` (edit optional, defaults to identity). Mirrors
+/// `parse_cds_bracket_member`. #287 follow-up to #243 / PR #244.
+fn parse_tx_bracket_member(
+    part: &str,
+) -> IResult<&str, LocEdit<TxInterval, crate::hgvs::edit::NaEdit>> {
+    // Try predicted wrapper first
+    if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
+        if let Ok((remaining, (interval, edit))) =
+            delimited(char('('), (parse_tx_interval, parse_na_edit), char(')')).parse(part)
+        {
+            return Ok((remaining, LocEdit::new_predicted(interval, edit)));
+        }
+    }
+    // Bare position [+ edit]
+    let (remaining, interval) = parse_tx_interval(part)?;
+    let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
+        (r, e)
+    } else {
+        (
+            remaining,
+            crate::hgvs::edit::NaEdit::Identity {
+                sequence: None,
+                whole_entity: false,
+            },
+        )
+    };
+    Ok((remaining, LocEdit::new(interval, edit)))
+}
+
 /// Parse a non-coding transcript trans-allele compact-prefix shorthand:
 /// `[edit1];[edit2]` (with the `n.` already consumed by the caller). Each
 /// bracketed group holds a single sub-variant rendered with this allele's
@@ -2065,20 +2097,10 @@ fn parse_tx_trans_allele_shorthand(
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (edit_remaining, interval) = parse_tx_interval(content)?;
-            // Edit is optional - if not present, treat as identity (position-only),
-            // matching parse_genome_trans_allele_shorthand.
-            let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                (r, e)
-            } else {
-                (
-                    edit_remaining,
-                    crate::hgvs::edit::NaEdit::Identity {
-                        sequence: None,
-                        whole_entity: false,
-                    },
-                )
-            };
+            // Route through parse_tx_bracket_member so the predicted-wrapper
+            // form `(<pos><edit>)` is recognised on trans-shorthand members
+            // too. #287.
+            let (final_remaining, loc_edit) = parse_tx_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -2090,7 +2112,7 @@ fn parse_tx_trans_allele_shorthand(
             HgvsVariant::Tx(TxVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
@@ -2169,18 +2191,7 @@ fn parse_tx_compound_allele(
                 nom::error::ErrorKind::Verify,
             )));
         }
-        let (edit_remaining, interval) = parse_tx_interval(part)?;
-        let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-            (r, e)
-        } else {
-            (
-                edit_remaining,
-                crate::hgvs::edit::NaEdit::Identity {
-                    sequence: None,
-                    whole_entity: false,
-                },
-            )
-        };
+        let (final_remaining, loc_edit) = parse_tx_bracket_member(part)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
@@ -2190,7 +2201,7 @@ fn parse_tx_compound_allele(
         variants.push(HgvsVariant::Tx(TxVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
+            loc_edit,
         }));
     }
 
@@ -3291,6 +3302,38 @@ fn parse_rna_position_unknown_phase(
     ))
 }
 
+/// Parse a single bracket-member position+edit (RNA), recognising the
+/// predicted-wrapper form `(<pos><edit>)` and returning a `LocEdit`
+/// with `Mu::Uncertain` in that case. Falls back to `<pos>[<edit>]`
+/// (edit optional, defaults to identity). Mirrors
+/// `parse_cds_bracket_member`. #287 follow-up to #243 / PR #244.
+fn parse_rna_bracket_member(
+    part: &str,
+) -> IResult<&str, LocEdit<RnaInterval, crate::hgvs::edit::NaEdit>> {
+    // Try predicted wrapper first
+    if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
+        if let Ok((remaining, (interval, edit))) =
+            delimited(char('('), (parse_rna_interval, parse_na_edit), char(')')).parse(part)
+        {
+            return Ok((remaining, LocEdit::new_predicted(interval, edit)));
+        }
+    }
+    // Bare position [+ edit]
+    let (remaining, interval) = parse_rna_interval(part)?;
+    let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
+        (r, e)
+    } else {
+        (
+            remaining,
+            crate::hgvs::edit::NaEdit::Identity {
+                sequence: None,
+                whole_entity: false,
+            },
+        )
+    };
+    Ok((remaining, LocEdit::new(interval, edit)))
+}
+
 /// Parse RNA allele shorthand: [118_261del;118_373del], [100A>U(;)200del], or [100del];[0]
 fn parse_rna_allele_shorthand(
     input: &str,
@@ -3343,8 +3386,7 @@ fn parse_rna_allele_shorthand(
                     )));
                 }
 
-                let (edit_remaining, interval) = parse_rna_interval(part)?;
-                let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+                let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
 
                 if !final_remaining.trim().is_empty() {
                     return Err(nom::Err::Error(nom::error::Error::new(
@@ -3356,7 +3398,7 @@ fn parse_rna_allele_shorthand(
                 variants.push(HgvsVariant::Rna(RnaVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(interval, edit),
+                    loc_edit,
                 }));
             }
         }
@@ -3372,8 +3414,7 @@ fn parse_rna_allele_shorthand(
                 )));
             }
 
-            let (edit_remaining, interval) = parse_rna_interval(part)?;
-            let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+            let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3385,7 +3426,7 @@ fn parse_rna_allele_shorthand(
             variants.push(HgvsVariant::Rna(RnaVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }));
         }
     }
@@ -3431,8 +3472,10 @@ fn parse_rna_trans_allele_shorthand(
         } else if *content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (edit_remaining, interval) = parse_rna_interval(content)?;
-            let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+            // Route through parse_rna_bracket_member so the predicted-wrapper
+            // form `(<pos><edit>)` is recognised on trans-shorthand members
+            // too. #287.
+            let (final_remaining, loc_edit) = parse_rna_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3444,7 +3487,7 @@ fn parse_rna_trans_allele_shorthand(
             HgvsVariant::Rna(RnaVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
