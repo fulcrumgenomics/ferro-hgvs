@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- *(parser)* accept `?con<src>` and `?copy<N>` at unknown position, consistent with `?del`/`?dup`/`?ins`/`?inv` (closes #286)
+
 ## [0.6.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.5.0...v0.6.0) - 2026-05-16
 
 ### Added
