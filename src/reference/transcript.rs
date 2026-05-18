@@ -259,8 +259,15 @@ impl std::fmt::Display for ManeStatus {
     }
 }
 
-/// A transcript with its exon structure and sequence
-#[derive(Debug, Serialize, Deserialize)]
+/// A transcript with its exon structure and sequence.
+///
+/// `Default` is provided so test fixtures and reference producers can
+/// build a `Transcript` by setting only the fields they care about and
+/// leaving the rest at their zero/none values via the struct-update
+/// syntax `..Default::default()`. The Rust pattern avoids the 14-arg
+/// constructor and keeps fixtures stable when new optional fields are
+/// added.
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Transcript {
     /// Transcript accession (e.g., "NM_000088.3")
     pub id: String,
@@ -1036,31 +1043,73 @@ mod tests {
 
     /// A sequence-less transcript with a malformed exon (`end < start`) must
     /// not underflow `u64`; `Exon::len()` saturates to 0 instead.
+    ///
+    /// Uses the `..Default::default()` pattern enabled by `Transcript: Default`
+    /// to keep the fixture focused on the malformed-exon detail it actually
+    /// pins; new optional fields added to `Transcript` no longer require an
+    /// update here.
     #[test]
     fn test_transcript_sequence_length_fallback_handles_malformed_exon() {
         let mut bad_exon = Exon::new(1, 10, 20);
         bad_exon.end = 5; // end < start
         let tx = Transcript {
             id: "NM_BAD.1".to_string(),
-            gene_symbol: None,
-            strand: Strand::Plus,
-            sequence: None,
-            cds_start: None,
-            cds_end: None,
             exons: vec![bad_exon, Exon::new(2, 21, 30)],
-            chromosome: None,
-            genomic_start: None,
-            genomic_end: None,
-            genome_build: GenomeBuild::GRCh38,
-            mane_status: ManeStatus::default(),
-            refseq_match: None,
-            ensembl_match: None,
-            protein_id: None,
-            exon_cigars: Vec::new(),
-            cached_introns: OnceLock::new(),
+            ..Default::default()
         };
         // First exon contributes 0 (malformed); second contributes 10.
         assert_eq!(tx.sequence_length(), 10);
+    }
+
+    /// Pin `Transcript::default()` so test fixtures and reference producers
+    /// can rely on the spread-update pattern (`..Default::default()`).
+    ///
+    /// Future field additions to `Transcript` are non-breaking for any
+    /// callsite that uses the spread pattern. See #310 (where adding
+    /// `protein_id` required touching every literal that didn't).
+    #[test]
+    fn test_transcript_default_is_minimal_and_non_coding() {
+        let tx = Transcript::default();
+        assert_eq!(tx.id, "");
+        assert_eq!(tx.gene_symbol, None);
+        assert_eq!(tx.strand, Strand::Plus);
+        assert_eq!(tx.sequence, None);
+        assert_eq!(tx.cds_start, None);
+        assert_eq!(tx.cds_end, None);
+        assert!(tx.exons.is_empty());
+        assert_eq!(tx.chromosome, None);
+        assert_eq!(tx.genomic_start, None);
+        assert_eq!(tx.genomic_end, None);
+        assert_eq!(tx.genome_build, GenomeBuild::GRCh38);
+        assert_eq!(tx.mane_status, ManeStatus::None);
+        assert_eq!(tx.refseq_match, None);
+        assert_eq!(tx.ensembl_match, None);
+        assert_eq!(tx.protein_id, None);
+        assert!(tx.exon_cigars.is_empty());
+        assert!(!tx.is_coding());
+    }
+
+    /// Pin the spread-update ergonomic: build a `Transcript` with only the
+    /// fields that matter for the test, letting `Default` supply the rest.
+    #[test]
+    fn test_transcript_default_supports_spread_update() {
+        let tx = Transcript {
+            id: "NM_DEMO.1".to_string(),
+            gene_symbol: Some("DEMO".to_string()),
+            sequence: Some("ATGTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(6),
+            exons: vec![Exon::new(1, 1, 6)],
+            ..Default::default()
+        };
+        assert_eq!(tx.id, "NM_DEMO.1");
+        assert_eq!(tx.gene_symbol.as_deref(), Some("DEMO"));
+        assert_eq!(tx.sequence_length(), 6);
+        assert!(tx.is_coding());
+        // Everything else stays at the default — no boilerplate required.
+        assert_eq!(tx.strand, Strand::Plus);
+        assert_eq!(tx.refseq_match, None);
+        assert_eq!(tx.protein_id, None);
     }
 
     #[test]
