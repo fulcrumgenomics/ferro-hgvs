@@ -217,6 +217,77 @@ impl SyntheticBuilder {
     }
 }
 
+/// Builder for `MockProvider` fixtures that deliberately put a transcript
+/// id and a chromosome name into the same key space — the failure mode
+/// behind #311 / #312. The fixture mirrors the issue's reproducer:
+///
+/// - one transcript with caller-supplied `id` whose `chromosome` field
+///   is the contig name (no separate `genomic_sequences` entry).
+/// - the transcript sequence is laid out so that the genomic-coordinate
+///   bases at `g.1000..=1002` (= `GAC`) are observably different from
+///   the bases a wrong-frame lookup would return (`AAG`); a wrong-frame
+///   trim therefore collapses an `ACG` delins to a single residual
+///   `1001A>C`. The numerical positions match the issue's reproducer
+///   exactly so downstream cross-PR tests can share assertions.
+///
+/// Sequence layout, all 1102 bp:
+///   - 909 bp poly-A leader
+///   - 93 bp coding segment (`SEGMENT` below)
+///   - 100 bp poly-T trailer
+///
+/// With `genomic_start = 91`, genomic position 1000..=1002 maps to
+/// transcript positions 910..=912 (= `SEGMENT[0..3] = "GAC"`). The
+/// wrong-frame read at transcript indices 999..=1001 returns
+/// `SEGMENT[90..93] = "AAG"`, which is the buggy reference span that
+/// drove #311's collapse to `1001A>C`.
+pub struct AdversarialNamespaceBuilder {
+    transcript_id: String,
+    chromosome: String,
+}
+
+const ADVERSARIAL_SEGMENT: &str =
+    "GACCGGCGGTCTGCAAGTCTCCACCTTCCGAAGCTATCCATAACCGGAACCTATGACCTAAAATCAGTTCTGGGTCAGCTCGGTATCACGAAG";
+
+impl AdversarialNamespaceBuilder {
+    pub fn new(transcript_id: &str, chromosome: &str) -> Self {
+        Self {
+            transcript_id: transcript_id.to_string(),
+            chromosome: chromosome.to_string(),
+        }
+    }
+
+    pub fn build(self) -> MockProvider {
+        let mut s = String::with_capacity(1102);
+        s.extend(std::iter::repeat_n('A', 909));
+        s.push_str(ADVERSARIAL_SEGMENT);
+        s.extend(std::iter::repeat_n('T', 100));
+        debug_assert_eq!(s.len(), 1102);
+        debug_assert_eq!(&s[909..912], "GAC");
+
+        let exons = vec![Exon::with_genomic(1, 1, 1102, 91, 1192)];
+        let transcript = Transcript::new(
+            self.transcript_id,
+            None,
+            Strand::Plus,
+            s,
+            Some(1),
+            Some(1102),
+            exons,
+            Some(self.chromosome),
+            Some(91),
+            Some(1192),
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        );
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(transcript);
+        provider
+    }
+}
+
 /// Substitute 1-based numeric positions into an HGVS template by index.
 ///
 /// Replaces `{0}`, `{1}`, ... in `template` with `args[0]`, `args[1]`, ...
