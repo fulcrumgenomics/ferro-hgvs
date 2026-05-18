@@ -610,6 +610,7 @@ impl MultiFastaProvider {
                 exons,
                 genomic_start: None,
                 genomic_end: None,
+                protein_id: None,
                 exon_cigars: Vec::new(),
             }
         } else {
@@ -632,6 +633,7 @@ struct TranscriptMetadata {
     exons: Vec<crate::reference::transcript::Exon>,
     genomic_start: Option<u64>,
     genomic_end: Option<u64>,
+    protein_id: Option<String>,
     exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
 }
 
@@ -700,6 +702,7 @@ impl ReferenceProvider for MultiFastaProvider {
                                 exons,
                                 genomic_start,
                                 genomic_end,
+                                protein_id: tx.protein.clone(),
                                 exon_cigars: tx.exon_cigars.clone(),
                             }
                         }
@@ -739,7 +742,7 @@ impl ReferenceProvider for MultiFastaProvider {
                     mane_status: ManeStatus::default(),
                     refseq_match: None,
                     ensembl_match: None,
-                    protein_id: None,
+                    protein_id: meta.protein_id,
                     exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });
