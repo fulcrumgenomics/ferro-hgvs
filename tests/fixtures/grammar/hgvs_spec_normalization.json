@@ -10,10 +10,10 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 42,
-      "diverges": 183,
+      "diverges": 168,
       "false-acceptance": 86,
       "parse-error": 341,
-      "preserved": 620
+      "preserved": 635
     },
     "by_coordinate_system": {
       "c": 464,
@@ -222,62 +222,14 @@
       ]
     },
     {
-      "input": "LRG_199t1:c.(71_72)G>A",
-      "current": "LRG_199t1:c.(71)_(72)G>A",
-      "spec_expected": "LRG_199t1:c.(71_72)G>A",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_000044.3:c.(92_331)insN[33]",
-      "current": "NM_000044.3:c.(92)_(331)insN[33]",
-      "spec_expected": "NM_000044.3:c.(92_331)insN[33]",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/repeated.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_000333.3:c.(4_246)insN[(150_180)]",
-      "current": "NM_000333.3:c.(4)_(246)insN[150_180]",
+      "current": "NM_000333.3:c.(4_246)insN[150_180]",
       "spec_expected": "NM_000333.3:c.(4_246)insN[(150_180)]",
       "status": "diverges",
       "coordinate_system": "c",
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_000333.3:c.(4_246)insN[15]",
-      "current": "NM_000333.3:c.(4)_(246)insN[15]",
-      "spec_expected": "NM_000333.3:c.(4_246)insN[15]",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_000333.3:c.(4_246)insN[9]",
-      "current": "NM_000333.3:c.(4)_(246)insN[9]",
-      "spec_expected": "NM_000333.3:c.(4_246)insN[9]",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/repeated.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -295,25 +247,13 @@
     },
     {
       "input": "NM_002024.5:c.(-144_-16)insN[(1800_2400)]",
-      "current": "NM_002024.5:c.(-144)_(-16)insN[1800_2400]",
+      "current": "NM_002024.5:c.(-144_-16)insN[1800_2400]",
       "spec_expected": "NM_002024.5:c.(-144_-16)insN[(1800_2400)]",
       "status": "diverges",
       "coordinate_system": "c",
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/repeated.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.(222_226)insG",
-      "current": "NM_004006.2:c.(222)_(226)insG",
-      "spec_expected": "NM_004006.2:c.(222_226)insG",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2929,6 +2869,17 @@
       ]
     },
     {
+      "input": "LRG_199t1:c.(71_72)G>A",
+      "current": "LRG_199t1:c.(71_72)G>A",
+      "spec_expected": "LRG_199t1:c.(71_72)G>A",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
       "input": "LRG_199t1:c.123=",
       "current": "LRG_199t1:c.123=",
       "spec_expected": "LRG_199t1:c.123=",
@@ -3583,6 +3534,17 @@
       ]
     },
     {
+      "input": "NM_000044.3:c.(92_331)insN[33]",
+      "current": "NM_000044.3:c.(92_331)insN[33]",
+      "spec_expected": "NM_000044.3:c.(92_331)insN[33]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/repeated.md"
+      ]
+    },
+    {
       "input": "NM_000044.3:c.171_239GCA[34]",
       "current": "NM_000044.3:c.171_239GCA[34]",
       "spec_expected": "NM_000044.3:c.171_239GCA[34]",
@@ -3613,6 +3575,28 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/delins.md"
+      ]
+    },
+    {
+      "input": "NM_000333.3:c.(4_246)insN[15]",
+      "current": "NM_000333.3:c.(4_246)insN[15]",
+      "spec_expected": "NM_000333.3:c.(4_246)insN[15]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "NM_000333.3:c.(4_246)insN[9]",
+      "current": "NM_000333.3:c.(4_246)insN[9]",
+      "spec_expected": "NM_000333.3:c.(4_246)insN[9]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/repeated.md"
       ]
     },
     {
@@ -3772,6 +3756,17 @@
         "docs/consultation/SVD-WG001.md"
       ],
       "working_group": "SVD-WG001"
+    },
+    {
+      "input": "NM_004006.2:c.(222_226)insG",
+      "current": "NM_004006.2:c.(222_226)insG",
+      "spec_expected": "NM_004006.2:c.(222_226)insG",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ]
     },
     {
       "input": "NM_004006.2:c.123=",
@@ -5850,37 +5845,13 @@
     },
     {
       "input": "NC_000003.12:g.(63912602_63912844)insN[(150_180)]",
-      "current": "NC_000003.12:g.(63912602)_(63912844)insN[150_180]",
+      "current": "NC_000003.12:g.(63912602_63912844)insN[150_180]",
       "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[(150_180)]",
       "status": "diverges",
       "coordinate_system": "g",
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000003.12:g.(63912602_63912844)insN[15]",
-      "current": "NC_000003.12:g.(63912602)_(63912844)insN[15]",
-      "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[15]",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000003.12:g.(63912602_63912844)insN[9]",
-      "current": "NC_000003.12:g.(63912602)_(63912844)insN[9]",
-      "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[9]",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/repeated.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -5909,18 +5880,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000004.11:g.(3076562_3076732)insN[12]",
-      "current": "NC_000004.11:g.(3076562)_(3076732)insN[12]",
-      "spec_expected": "NC_000004.11:g.(3076562_3076732)insN[12]",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
       "current": "NC_000022.10:g.42522624_42522669delins[42536337_42536382]",
       "spec_expected": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
@@ -5932,18 +5891,6 @@
         "docs/recommendations/DNA/delins.md"
       ],
       "working_group": "SVD-WG009",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.10:g.(33038277_33038278)C>T",
-      "current": "NC_000023.10:g.(33038277)_(33038278)C>T",
-      "spec_expected": "NC_000023.10:g.(33038277_33038278)C>T",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -5983,18 +5930,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000023.11:g.(86200001_103700000)del",
-      "current": "NC_000023.11:g.(86200001)_(103700000)del",
-      "spec_expected": "NC_000023.11:g.(86200001_103700000)del",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000023.11:g.32343183",
       "current": "NC_000023.11:g.32343183=",
       "spec_expected": "NC_000023.11:g.32343183",
@@ -6018,19 +5953,6 @@
         "docs/consultation/SVD-WG004.md"
       ],
       "working_group": "SVD-WG004",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "g.(100_150)insN[25]",
-      "input_prefixed": "NC_000023.11:g.(100_150)insN[25]",
-      "current": "NC_000023.11:g.(100)_(150)insN[25]",
-      "spec_expected": "NC_000023.11:g.(100_150)insN[25]",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -8395,6 +8317,28 @@
       ]
     },
     {
+      "input": "NC_000003.12:g.(63912602_63912844)insN[15]",
+      "current": "NC_000003.12:g.(63912602_63912844)insN[15]",
+      "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[15]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "NC_000003.12:g.(63912602_63912844)insN[9]",
+      "current": "NC_000003.12:g.(63912602_63912844)insN[9]",
+      "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[9]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/repeated.md"
+      ]
+    },
+    {
       "input": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
       "current": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
       "spec_expected": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
@@ -8425,6 +8369,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/complex.md"
+      ]
+    },
+    {
+      "input": "NC_000004.11:g.(3076562_3076732)insN[12]",
+      "current": "NC_000004.11:g.(3076562_3076732)insN[12]",
+      "spec_expected": "NC_000004.11:g.(3076562_3076732)insN[12]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
       ]
     },
     {
@@ -8707,6 +8662,17 @@
       "input": "NC_000023.10:g.(32218983_32238146)_(32984039_33252615)del",
       "current": "NC_000023.10:g.(32218983_32238146)_(32984039_33252615)del",
       "spec_expected": "NC_000023.10:g.(32218983_32238146)_(32984039_33252615)del",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "NC_000023.10:g.(33038277_33038278)C>T",
+      "current": "NC_000023.10:g.(33038277_33038278)C>T",
+      "spec_expected": "NC_000023.10:g.(33038277_33038278)C>T",
       "status": "preserved",
       "coordinate_system": "g",
       "source_kind": "recommendation",
@@ -9013,6 +8979,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/duplication.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11:g.(86200001_103700000)del",
+      "current": "NC_000023.11:g.(86200001_103700000)del",
+      "spec_expected": "NC_000023.11:g.(86200001_103700000)del",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
       ]
     },
     {
@@ -9338,6 +9315,18 @@
         "docs/consultation/SVD-WG004.md"
       ],
       "working_group": "SVD-WG004"
+    },
+    {
+      "input": "g.(100_150)insN[25]",
+      "input_prefixed": "NC_000023.11:g.(100_150)insN[25]",
+      "current": "NC_000023.11:g.(100_150)insN[25]",
+      "spec_expected": "NC_000023.11:g.(100_150)insN[25]",
+      "status": "preserved",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ]
     },
     {
       "input": "g.(123456_234567)_(345678_456789)del",
@@ -10298,32 +10287,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/extension.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.(Ala123_Pro131)Ter",
-      "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)Ter",
-      "current": "NP_003997.1:p.(Ala123)_(Pro131)Ter",
-      "spec_expected": "NP_003997.1:p.(Ala123_Pro131)Ter",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.(Ala123_Pro131)fs",
-      "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)fs",
-      "current": "NP_003997.1:p.(Ala123)_(Pro131)fs",
-      "spec_expected": "NP_003997.1:p.(Ala123_Pro131)fs",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -11784,6 +11747,30 @@
       ]
     },
     {
+      "input": "p.(Ala123_Pro131)Ter",
+      "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)Ter",
+      "current": "NP_003997.1:p.(Ala123_Pro131)Ter",
+      "spec_expected": "NP_003997.1:p.(Ala123_Pro131)Ter",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "p.(Ala123_Pro131)fs",
+      "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)fs",
+      "current": "NP_003997.1:p.(Ala123_Pro131)fs",
+      "spec_expected": "NP_003997.1:p.(Ala123_Pro131)fs",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
       "input": "p.(Arg123LysfsTer34)",
       "input_prefixed": "NP_003997.1:p.(Arg123LysfsTer34)",
       "current": "NP_003997.1:p.(Arg123LysfsTer34)",
@@ -13007,18 +12994,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NM_004006.2:r.(222_226)insg",
-      "current": "NM_004006.2:r.(222)_(226)insg",
-      "spec_expected": "NM_004006.2:r.(222_226)insg",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.2:r.2623_2803delins2804_2949",
       "current": "NM_004006.2:r.2623_2803delins[2804_2949]",
       "spec_expected": "NM_004006.2:r.2623_2803delins2804_2949",
@@ -13075,19 +13050,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(100_150)insn[25]",
-      "input_prefixed": "NM_004006.3:r.(100_150)insn[25]",
-      "current": "NM_004006.3:r.(100)_(150)insn[25]",
-      "spec_expected": "NM_004006.3:r.(100_150)insn[25]",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/insertion.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -14881,6 +14843,17 @@
       "working_group": "SVD-WG001"
     },
     {
+      "input": "NM_004006.2:r.(222_226)insg",
+      "current": "NM_004006.2:r.(222_226)insg",
+      "spec_expected": "NM_004006.2:r.(222_226)insg",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/insertion.md"
+      ]
+    },
+    {
       "input": "NM_004006.2:r.549_550insn",
       "current": "NM_004006.2:r.549_550insn",
       "spec_expected": "NM_004006.2:r.549_550insn",
@@ -15231,6 +15204,18 @@
         "docs/syntax.yaml"
       ],
       "working_group": "SVD-WG007"
+    },
+    {
+      "input": "r.(100_150)insn[25]",
+      "input_prefixed": "NM_004006.3:r.(100_150)insn[25]",
+      "current": "NM_004006.3:r.(100_150)insn[25]",
+      "spec_expected": "NM_004006.3:r.(100_150)insn[25]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/insertion.md"
+      ]
     },
     {
       "input": "r.-123ug[14]",

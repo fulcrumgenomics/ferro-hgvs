@@ -288,8 +288,10 @@ fn parse_genome_interval(input: &str) -> IResult<&str, GenomeInterval> {
 
     // Complex cases: starts with ( or ?
     alt((
-        // Simple uncertain interval: (pos_pos) NOT followed by _
-        // This produces (pos)_(pos) in output
+        // Single uncertain position bounded by a range: (pos_pos) NOT followed
+        // by _ — per HGVS v21 uncertain.md this is *one* position somewhere
+        // in [start, end], not a multi-base range. Encoded as the same Range
+        // on both Interval boundaries; Display collapses to `(a_b)` once.
         |input| {
             let (remaining, (start, _, end)) = delimited(
                 char('('),
@@ -304,16 +306,19 @@ fn parse_genome_interval(input: &str) -> IResult<&str, GenomeInterval> {
                     nom::error::ErrorKind::Verify,
                 )));
             }
-            // Reject inverted ranges
-            if start.base > end.base {
+            // Reject inverted ranges (skip ordering when either bound is a special
+            // position like pter/qter/cen — those carry base=0 sentinels so a raw
+            // base comparison wrongly rejects forms like (12345_qter)).
+            if !start.is_special() && !end.is_special() && start.base > end.base {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Verify,
                 )));
             }
+            let boundary = UncertainBoundary::range(Mu::certain(start), Mu::certain(end));
             Ok((
                 remaining,
-                Interval::with_uncertainty(Mu::uncertain(start), Mu::uncertain(end)),
+                Interval::with_complex_boundaries(boundary.clone(), boundary),
             ))
         },
         // Complex interval with range boundaries: (start_boundary)_(end_boundary)
@@ -377,11 +382,15 @@ fn parse_simple_uncertain_cds_interval(input: &str) -> IResult<&str, CdsInterval
         )));
     }
 
-    // Only if NEITHER has an offset, treat as simple uncertain interval
+    // Only if NEITHER has an offset, treat as simple uncertain interval.
+    // Per HGVS v21 uncertain.md, `(a_b)<edit>` is *one* position somewhere in
+    // [a, b], not a multi-base range. Encoded as the same Range on both
+    // Interval boundaries; Display collapses to `(a_b)` once.
     if start.offset.is_none() && end.offset.is_none() {
+        let boundary = UncertainBoundary::range(Mu::certain(start), Mu::certain(end));
         Ok((
             remaining,
-            Interval::with_uncertainty(Mu::uncertain(start), Mu::uncertain(end)),
+            Interval::with_complex_boundaries(boundary.clone(), boundary),
         ))
     } else {
         // Check if followed by another parenthesized range without underscore
@@ -595,7 +604,9 @@ fn parse_tx_boundary(
 
 fn parse_tx_interval(input: &str) -> IResult<&str, TxInterval> {
     alt((
-        // Whole interval uncertain: (100_200) NOT followed by _
+        // Single uncertain position bounded by a range: (a_b) NOT followed by _.
+        // Per HGVS v21 uncertain.md, `(a_b)<edit>` is *one* position somewhere
+        // in [a, b]; same Range on both Interval boundaries.
         |input| {
             let (remaining, (start, _, end)) =
                 delimited(char('('), (parse_tx_pos, tag("_"), parse_tx_pos), char(')'))
@@ -607,9 +618,10 @@ fn parse_tx_interval(input: &str) -> IResult<&str, TxInterval> {
                     nom::error::ErrorKind::Verify,
                 )));
             }
+            let boundary = UncertainBoundary::range(Mu::certain(start), Mu::certain(end));
             Ok((
                 remaining,
-                Interval::with_uncertainty(Mu::uncertain(start), Mu::uncertain(end)),
+                Interval::with_complex_boundaries(boundary.clone(), boundary),
             ))
         },
         // Complex interval with range boundaries: (pos_pos)_(pos_pos)
@@ -755,8 +767,10 @@ fn parse_prot_boundary(
 
 fn parse_prot_interval(input: &str) -> IResult<&str, ProtInterval> {
     alt((
-        // Simple uncertain interval: (pos_pos) NOT followed by _
-        // This is for patterns like (Lys23_Leu24)del where the whole interval is uncertain
+        // Single uncertain position bounded by a range: (Lys23_Leu24)<edit>.
+        // Per HGVS v21 uncertain.md, the parens wrap *one* residue somewhere
+        // in [start, end]; same Range on both Interval boundaries; Display
+        // collapses to `(Lys23_Leu24)` once.
         |input| {
             let (remaining, (start, _, end)) = delimited(
                 char('('),
@@ -771,9 +785,10 @@ fn parse_prot_interval(input: &str) -> IResult<&str, ProtInterval> {
                     nom::error::ErrorKind::Verify,
                 )));
             }
+            let boundary = UncertainBoundary::range(Mu::certain(start), Mu::certain(end));
             Ok((
                 remaining,
-                Interval::with_uncertainty(Mu::uncertain(start), Mu::uncertain(end)),
+                Interval::with_complex_boundaries(boundary.clone(), boundary),
             ))
         },
         // Complex interval with range boundaries: (?_pos)_pos, pos_(pos_?), etc.
@@ -806,17 +821,83 @@ fn parse_prot_interval(input: &str) -> IResult<&str, ProtInterval> {
     .parse(input)
 }
 
+fn parse_rna_range_boundary(
+    input: &str,
+) -> IResult<&str, UncertainBoundary<crate::hgvs::location::RnaPos>> {
+    delimited(
+        char('('),
+        alt((
+            // (?_pos)
+            map((tag("?"), tag("_"), parse_rna_pos), |(_, _, end)| {
+                UncertainBoundary::range(Mu::Unknown, Mu::certain(end))
+            }),
+            // (pos_?)
+            map((parse_rna_pos, tag("_"), tag("?")), |(start, _, _)| {
+                UncertainBoundary::range(Mu::certain(start), Mu::Unknown)
+            }),
+            // (pos_pos)
+            map(
+                (parse_rna_pos, tag("_"), parse_rna_pos),
+                |(start, _, end)| UncertainBoundary::range(Mu::certain(start), Mu::certain(end)),
+            ),
+        )),
+        char(')'),
+    )
+    .parse(input)
+}
+
+/// Parse an RNA boundary: (?_pos), (pos_?), (pos_pos), (pos), ?, or pos
+fn parse_rna_boundary(
+    input: &str,
+) -> IResult<&str, UncertainBoundary<crate::hgvs::location::RnaPos>> {
+    alt((
+        // Range boundary: (?_pos), (pos_?), or (pos_pos)
+        parse_rna_range_boundary,
+        // Single uncertain position: (pos)
+        map(
+            delimited(char('('), parse_rna_pos, char(')')),
+            UncertainBoundary::uncertain,
+        ),
+        // Unknown: ?
+        map(tag("?"), |_| UncertainBoundary::unknown()),
+        // Certain position: pos
+        map(parse_rna_pos, UncertainBoundary::certain),
+    ))
+    .parse(input)
+}
+
 fn parse_rna_interval(input: &str) -> IResult<&str, RnaInterval> {
     alt((
-        // Whole interval uncertain: (100_200)
-        map(
-            delimited(
+        // Single uncertain position bounded by a range: (a_b) NOT followed by _.
+        // Per HGVS v21 uncertain.md, `(a_b)<edit>` is *one* position somewhere
+        // in [a, b]; same Range on both Interval boundaries.
+        |input| {
+            let (remaining, (start, _, end)) = delimited(
                 char('('),
                 (parse_rna_pos, tag("_"), parse_rna_pos),
                 char(')'),
-            ),
-            |(start, _, end)| Interval::with_uncertainty(Mu::uncertain(start), Mu::uncertain(end)),
-        ),
+            )
+            .parse(input)?;
+            // If followed by _, this is a complex boundary, not a simple uncertain interval
+            if remaining.starts_with('_') {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
+            let boundary = UncertainBoundary::range(Mu::certain(start), Mu::certain(end));
+            Ok((
+                remaining,
+                Interval::with_complex_boundaries(boundary.clone(), boundary),
+            ))
+        },
+        // Complex interval with range boundaries: (pos_pos)_(pos_pos),
+        // (?_pos)_(pos_?), (pos_pos)_pos, pos_(pos_pos), etc.
+        |input| {
+            let (remaining, (start, _, end)) =
+                (parse_rna_boundary, tag("_"), parse_rna_boundary).parse(input)?;
+            Ok((remaining, Interval::with_complex_boundaries(start, end)))
+        },
         // Range with individual uncertainty
         map(
             (parse_uncertain_rna_pos, tag("_"), parse_uncertain_rna_pos),
@@ -4816,18 +4897,20 @@ mod tests {
 
     #[test]
     fn test_parse_uncertain_genomic_deletion() {
-        // Uncertain range deletion: (100_200)del
+        // Uncertain single position bounded by [12345,12350]: round-trips
+        // as the single-paren spec form per HGVS v21 uncertain.md (#237).
         let variant = parse_variant("NC_000001.11:g.(12345_12350)del").unwrap();
         assert!(matches!(variant, HgvsVariant::Genome(_)));
-        assert_eq!(format!("{}", variant), "NC_000001.11:g.(12345)_(12350)del");
+        assert_eq!(format!("{}", variant), "NC_000001.11:g.(12345_12350)del");
     }
 
     #[test]
     fn test_parse_uncertain_cds_deletion() {
-        // Uncertain range deletion
+        // Uncertain single position bounded by [100,200]: round-trips as
+        // the single-paren spec form per HGVS v21 uncertain.md (#237).
         let variant = parse_variant("NM_000088.3:c.(100_200)del").unwrap();
         assert!(matches!(variant, HgvsVariant::Cds(_)));
-        assert_eq!(format!("{}", variant), "NM_000088.3:c.(100)_(200)del");
+        assert_eq!(format!("{}", variant), "NM_000088.3:c.(100_200)del");
     }
 
     #[test]
@@ -4880,9 +4963,11 @@ mod tests {
 
     #[test]
     fn test_parse_rna_uncertain() {
+        // Uncertain single position bounded by [100,200]: round-trips as
+        // the single-paren spec form per HGVS v21 uncertain.md (#237).
         let variant = parse_variant("NM_000088.3:r.(100_200)del").unwrap();
         assert!(matches!(variant, HgvsVariant::Rna(_)));
-        assert_eq!(format!("{}", variant), "NM_000088.3:r.(100)_(200)del");
+        assert_eq!(format!("{}", variant), "NM_000088.3:r.(100_200)del");
     }
 
     #[test]
