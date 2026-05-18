@@ -18,8 +18,21 @@
 //! `/tmp/ferro-xfail/<axis>.{txt,tsv}` so contributors can regenerate the
 //! committed `baseline-failures/` snapshot or feed
 //! `tests/fixtures/mutalyzer-normalize/failure-patterns.md`.
+//!
+//! **Regression layer (CI-always):** `regression_under_mock_normalized` runs
+//! every `to_test` case with a `normalized` expectation through ferro under
+//! `MockProvider` and diffs against `mock-pin/normalized.txt`. This catches
+//! refactor-side regressions even on CI without a manifest. The pin file is
+//! intentionally distinct from `cases.json` — `cases.json` holds upstream
+//! truth (durable), `mock-pin/normalized.txt` holds ferro's current
+//! MockProvider behavior (ephemeral, regenerable). See
+//! `tests/fixtures/CORPUS_LAYOUT.md` for the unified shape.
+//!
+//! Regenerate the mock pin (after intentional changes):
+//!     `BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock_normalized)'`
 
 use ferro_hgvs::data::projection::Projector;
+use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::{
     parse_hgvs, FerroError, HgvsVariant, MultiFastaProvider, Normalizer, ReferenceProvider,
@@ -654,4 +667,100 @@ fn axis_infos() {
         t.record(&case.input, &expected, actual);
     }
     t.finish();
+}
+
+// ----------------------------------------------------------------------------
+// Regression layer: MockProvider-pinned `normalized` axis (CI-always)
+// ----------------------------------------------------------------------------
+//
+// The axis_* tests above gate on a real reference manifest, so CI cannot
+// detect refactor-side regressions in ferro's mock-mode behavior. This test
+// fills that gap by pinning ferro's output under `MockProvider::new()` for
+// every `normalized`-bearing case, then diffing against the committed
+// `mock-pin/normalized.txt` snapshot.
+//
+// Crucially, the pin records *ferro's current behavior*, not upstream truth.
+// A line reading `INPUT\tINPUT` means ferro returned the input verbatim (no
+// shift possible without reference bases) — that's the regression baseline,
+// not a correctness claim. Correctness is asserted by `axis_normalized`
+// against `cases.json`.
+//
+// The pin format is one line per case: `<input>\t<ferro_output_or_error>`.
+// Inputs are emitted in cases.json order for byte-stable diffs.
+
+const MOCK_PIN_PATH: &str = "tests/fixtures/mutalyzer-normalize/mock-pin/normalized.txt";
+
+fn render_mock_normalized() -> String {
+    let normalizer = Normalizer::new(MockProvider::new());
+    let mut lines: Vec<String> = Vec::new();
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        if case.normalized.is_none() {
+            continue;
+        }
+        let output = catch_panics(|| -> Result<String, String> {
+            let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e}"))?;
+            let n = normalizer
+                .normalize(&v)
+                .map_err(|e| format!("normalize error: {e}"))?;
+            Ok(format!("{n}"))
+        })
+        .unwrap_or_else(|e| e);
+        lines.push(format!("{}\t{}", case.input, output));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+#[test]
+fn regression_under_mock_normalized() {
+    let observed = render_mock_normalized();
+
+    if std::env::var("BLESS_MOCK_PIN").is_ok() {
+        fs::write(MOCK_PIN_PATH, &observed)
+            .unwrap_or_else(|e| panic!("write {MOCK_PIN_PATH}: {e}"));
+        eprintln!("blessed {MOCK_PIN_PATH} ({} bytes)", observed.len());
+        return;
+    }
+
+    let expected = fs::read_to_string(MOCK_PIN_PATH)
+        .unwrap_or_else(|e| panic!("read {MOCK_PIN_PATH}: {e}; if this is a fresh corpus, run `BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock_normalized)'`"));
+
+    if observed == expected {
+        let total = observed.lines().count();
+        println!(
+            "regression_under_mock_normalized: {} cases pinned, all match",
+            total
+        );
+        return;
+    }
+
+    // Find the first few diverging lines for a tight error message.
+    let mut diffs = Vec::new();
+    for (i, (o, e)) in observed.lines().zip(expected.lines()).enumerate() {
+        if o != e {
+            diffs.push(format!("  line {i}:\n    pinned:   {e}\n    observed: {o}"));
+            if diffs.len() >= 10 {
+                break;
+            }
+        }
+    }
+    let observed_total = observed.lines().count();
+    let expected_total = expected.lines().count();
+    if observed_total != expected_total {
+        diffs.push(format!(
+            "  line count differs: observed={observed_total}, expected={expected_total} (cases.json may have changed without a re-bless)"
+        ));
+    }
+
+    panic!(
+        "mock pin drifted ({} divergence(s) shown).\n\n{}\n\n\
+         If this drift is intentional, regenerate the pin:\n  \
+         BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock_normalized)'",
+        diffs.len(),
+        diffs.join("\n"),
+    );
 }
