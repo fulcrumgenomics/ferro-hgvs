@@ -345,7 +345,9 @@ fn test_no_merge_uncertain_edit() {
         provider_with_simple_transcript(),
         "[NM_TEST.1:c.(10A>G);NM_TEST.1:c.11A>C]",
     );
-    assert!(result.contains("10(A>G)"), "got {}", result);
+    // Per #241, the canonical Display wraps position+edit together,
+    // mirroring the protein predicted form (`p.(Arg248Gln)`).
+    assert!(result.contains("(10A>G)"), "got {}", result);
     assert!(result.contains("11A>C"), "got {}", result);
     assert!(!result.contains("delins"), "got {}", result);
 }

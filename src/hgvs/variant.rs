@@ -1195,6 +1195,12 @@ impl GenomeVariant {
                 return write!(f, "{}", self.loc_edit.edit);
             }
         }
+        // Predicted form: wrap position+edit in parens. #241.
+        if self.loc_edit.edit.is_uncertain() {
+            if let Some(edit) = self.loc_edit.edit.inner() {
+                return write!(f, "({}{})", self.loc_edit.location, edit);
+            }
+        }
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -1224,6 +1230,13 @@ impl CdsVariant {
                 return write!(f, "{}", self.loc_edit.edit);
             }
         }
+        // Predicted form: wrap position+edit in parens (mirrors the
+        // protein canonical form). #241.
+        if self.loc_edit.edit.is_uncertain() {
+            if let Some(edit) = self.loc_edit.edit.inner() {
+                return write!(f, "({}{})", self.loc_edit.location, edit);
+            }
+        }
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -1246,6 +1259,12 @@ pub struct TxVariant {
 
 impl TxVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Predicted form: wrap position+edit in parens. #241.
+        if self.loc_edit.edit.is_uncertain() {
+            if let Some(edit) = self.loc_edit.edit.inner() {
+                return write!(f, "({}{})", self.loc_edit.location, edit);
+            }
+        }
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -1285,7 +1304,9 @@ impl RnaVariant {
                 if edit.is_whole_entity() {
                     write!(f, "({})", edit.to_rna_string())
                 } else {
-                    write!(f, "{}({})", self.loc_edit.location, edit.to_rna_string())
+                    // Predicted form wraps position+edit in parens
+                    // (mirrors the protein canonical form). #241.
+                    write!(f, "({}{})", self.loc_edit.location, edit.to_rna_string())
                 }
             }
             Mu::Unknown => write!(f, "?"),
@@ -1350,6 +1371,12 @@ pub struct MtVariant {
 
 impl MtVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Predicted form: wrap position+edit in parens. #241.
+        if self.loc_edit.edit.is_uncertain() {
+            if let Some(edit) = self.loc_edit.edit.inner() {
+                return write!(f, "({}{})", self.loc_edit.location, edit);
+            }
+        }
         write!(f, "{}", self.loc_edit)
     }
 }
@@ -1375,6 +1402,12 @@ pub struct CircularVariant {
 
 impl CircularVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Predicted form: wrap position+edit in parens. #241.
+        if self.loc_edit.edit.is_uncertain() {
+            if let Some(edit) = self.loc_edit.edit.inner() {
+                return write!(f, "({}{})", self.loc_edit.location, edit);
+            }
+        }
         write!(f, "{}", self.loc_edit)
     }
 }

@@ -981,6 +981,22 @@ fn parse_genome_variant(
             );
         }
 
+        // Predicted variant: g.(positionEdit). #241.
+        if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
+            if let Ok((remaining, (interval, edit))) =
+                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            {
+                return Ok((
+                    remaining,
+                    HgvsVariant::Genome(GenomeVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::new_predicted(interval, edit),
+                    }),
+                ));
+            }
+        }
+
         let (input, interval) = parse_genome_interval(input)?;
 
         // Try to parse an edit; if no edit found, use position-only identity
@@ -1544,34 +1560,25 @@ fn parse_cds_variant(
             ));
         }
 
-        // Try predicted variant: c.(positionEdit) where the whole position+edit is in parens
-        // e.g., c.(9740C>A) or c.(742G>A)
-        if input.starts_with('(') && !input.starts_with("(?") {
-            // Check if this is a predicted variant pattern (simple position+edit in parens)
-            // vs an uncertain interval like (100_200)
-            if let Some(close_paren) = input.find(')') {
-                let inner = &input[1..close_paren];
-                // If inner contains a simple substitution pattern (no underscore for range)
-                // and doesn't start with a digit followed by underscore, it's likely a predicted variant
-                if inner.contains('>') && !inner.contains('_') {
-                    // Parse the inner content as position + edit
-                    if let Ok((after_edit, interval)) = parse_cds_interval(inner) {
-                        if let Ok((remaining_inner, edit)) = parse_na_edit(after_edit) {
-                            if remaining_inner.is_empty() {
-                                // Mark as predicted by wrapping in uncertainty
-                                let remaining = &input[close_paren + 1..];
-                                return Ok((
-                                    remaining,
-                                    HgvsVariant::Cds(CdsVariant {
-                                        accession: accession.clone(),
-                                        gene_symbol: gene_symbol.clone(),
-                                        loc_edit: LocEdit::new_predicted(interval, edit),
-                                    }),
-                                ));
-                            }
-                        }
-                    }
-                }
+        // Try predicted variant: c.(positionEdit) where the whole
+        // position + edit is wrapped in parentheses. Mirrors the
+        // working protein predicted-change path at parse_protein_variant.
+        // The `delimited` falls through to `parse_cds_interval` only if
+        // `parse_na_edit` succeeds inside the parens — so the G1 form
+        // `c.(123_127)A>G` (uncertain *position*, certain edit) goes to
+        // the normal path where the bare position parser handles it.
+        if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
+            if let Ok((remaining, (interval, edit))) =
+                delimited(char('('), (parse_cds_interval, parse_na_edit), char(')')).parse(input)
+            {
+                return Ok((
+                    remaining,
+                    HgvsVariant::Cds(CdsVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::new_predicted(interval, edit),
+                    }),
+                ));
             }
         }
 
@@ -1931,6 +1938,22 @@ fn parse_tx_variant(
             return parse_tx_position_unknown_phase(input, accession.clone(), gene_symbol.clone());
         }
 
+        // Predicted variant: n.(positionEdit). #241.
+        if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
+            if let Ok((remaining, (interval, edit))) =
+                delimited(char('('), (parse_tx_interval, parse_na_edit), char(')')).parse(input)
+            {
+                return Ok((
+                    remaining,
+                    HgvsVariant::Tx(TxVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::new_predicted(interval, edit),
+                    }),
+                ));
+            }
+        }
+
         let (input, interval) = parse_tx_interval(input)?;
         let (input, edit) = parse_na_edit(input)?;
 
@@ -2200,6 +2223,22 @@ fn parse_mt_variant(
                 gene_symbol.clone(),
                 GenomeKind::Mt,
             );
+        }
+
+        // Predicted variant: m.(positionEdit). #241.
+        if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
+            if let Ok((remaining, (interval, edit))) =
+                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            {
+                return Ok((
+                    remaining,
+                    HgvsVariant::Mt(MtVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::new_predicted(interval, edit),
+                    }),
+                ));
+            }
         }
 
         let (input, interval) = parse_genome_interval(input)?;
@@ -3116,7 +3155,10 @@ fn parse_predicted_rna_variant(
         HgvsVariant::Rna(RnaVariant {
             accession,
             gene_symbol,
-            loc_edit: LocEdit::new(interval, edit),
+            // The parens around `(interval edit)` denote a predicted change
+            // — wrap as Mu::Uncertain so `RnaVariant::fmt_loc_edit` emits
+            // the spec-canonical `r.(<pos><edit>)` shape. #241.
+            loc_edit: LocEdit::new_predicted(interval, edit),
         }),
     ))
 }
@@ -3385,6 +3427,22 @@ fn parse_circular_variant(
                 gene_symbol.clone(),
                 GenomeKind::Circular,
             );
+        }
+
+        // Predicted variant: o.(positionEdit). #241.
+        if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
+            if let Ok((remaining, (interval, edit))) =
+                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            {
+                return Ok((
+                    remaining,
+                    HgvsVariant::Circular(CircularVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::new_predicted(interval, edit),
+                    }),
+                ));
+            }
         }
 
         let (input, interval) = parse_genome_interval(input)?;
@@ -5941,15 +5999,16 @@ mod tests {
 
     #[test]
     fn test_parse_predicted_substitution_in_parens() {
-        // Predicted substitution in parens: c.(9740C>A)
-        // This is a predicted variant where the whole edit is wrapped in parentheses
+        // Predicted substitution in parens: c.(9740C>A). Per #241 the
+        // canonical Display form wraps position+edit together, mirroring
+        // the protein predicted form `p.(Arg248Gln)`.
         let variant = parse_variant("NM_002016.2:c.(9740C>A)").unwrap();
         assert!(matches!(variant, HgvsVariant::Cds(_)));
-        assert_eq!(format!("{}", variant), "NM_002016.2:c.9740(C>A)");
+        assert_eq!(format!("{}", variant), "NM_002016.2:c.(9740C>A)");
 
         let variant = parse_variant("NM_006767.4:c.(742G>A)").unwrap();
         assert!(matches!(variant, HgvsVariant::Cds(_)));
-        assert_eq!(format!("{}", variant), "NM_006767.4:c.742(G>A)");
+        assert_eq!(format!("{}", variant), "NM_006767.4:c.(742G>A)");
     }
 
     #[test]

@@ -10,10 +10,10 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 42,
-      "diverges": 168,
+      "diverges": 160,
       "false-acceptance": 86,
       "parse-error": 341,
-      "preserved": 635
+      "preserved": 643
     },
     "by_coordinate_system": {
       "c": 464,
@@ -12874,18 +12874,6 @@
       ]
     },
     {
-      "input": "LRG_199t1:r.(4072_5145del)",
-      "current": "LRG_199t1:r.4072_5145del",
-      "spec_expected": "LRG_199t1:r.(4072_5145del)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:r.186_187ins186+1_186+4",
       "current": "LRG_199t1:r.186_187ins[186+1_186+4]",
       "spec_expected": "LRG_199t1:r.186_187ins186+1_186+4",
@@ -12918,18 +12906,6 @@
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11(NM_004006.2):r.(76a>c)",
-      "current": "NC_000023.11(NM_004006.2):r.76a>c",
-      "spec_expected": "NC_000023.11(NM_004006.2):r.(76a>c)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/splicing.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -13018,18 +12994,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NM_004006.3:r.(1388g>a)",
-      "current": "NM_004006.3:r.1388g>a",
-      "spec_expected": "NM_004006.3:r.(1388g>a)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.3:r.85=//u>c",
       "current": "NM_004006.3:r.85=//U>C",
       "spec_expected": "NM_004006.3:r.85=//u>c",
@@ -13050,71 +13014,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(1339a>g)",
-      "input_prefixed": "NM_004006.3:r.(1339a>g)",
-      "current": "NM_004006.3:r.1339a>g",
-      "spec_expected": "NM_004006.3:r.(1339a>g)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(1680del)",
-      "input_prefixed": "NM_004006.3:r.(1680del)",
-      "current": "NM_004006.3:r.1680del",
-      "spec_expected": "NM_004006.3:r.(1680del)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(306g>u)",
-      "input_prefixed": "NM_004006.3:r.(306g>u)",
-      "current": "NM_004006.3:r.306g>u",
-      "spec_expected": "NM_004006.3:r.(306g>u)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(578c>u)",
-      "input_prefixed": "NM_004006.3:r.(578c>u)",
-      "current": "NM_004006.3:r.578c>u",
-      "spec_expected": "NM_004006.3:r.(578c>u)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.(76a>c)",
-      "input_prefixed": "NM_004006.3:r.(76a>c)",
-      "current": "NM_004006.3:r.76a>c",
-      "spec_expected": "NM_004006.3:r.(76a>c)",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -14618,6 +14517,17 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
+      "input": "LRG_199t1:r.(4072_5145del)",
+      "current": "LRG_199t1:r.(4072_5145del)",
+      "spec_expected": "LRG_199t1:r.(4072_5145del)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/deletion.md"
+      ]
+    },
+    {
       "input": "LRG_199t1:r.10del",
       "current": "LRG_199t1:r.10del",
       "spec_expected": "LRG_199t1:r.10del",
@@ -14703,6 +14613,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/deletion.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11(NM_004006.2):r.(76a>c)",
+      "current": "NC_000023.11(NM_004006.2):r.(76a>c)",
+      "spec_expected": "NC_000023.11(NM_004006.2):r.(76a>c)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/splicing.md"
       ]
     },
     {
@@ -14906,6 +14827,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "NM_004006.3:r.(1388g>a)",
+      "current": "NM_004006.3:r.(1388g>a)",
+      "spec_expected": "NM_004006.3:r.(1388g>a)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/substitution.md"
       ]
     },
     {
@@ -15215,6 +15147,66 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/insertion.md"
+      ]
+    },
+    {
+      "input": "r.(1339a>g)",
+      "input_prefixed": "NM_004006.3:r.(1339a>g)",
+      "current": "NM_004006.3:r.(1339a>g)",
+      "spec_expected": "NM_004006.3:r.(1339a>g)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "r.(1680del)",
+      "input_prefixed": "NM_004006.3:r.(1680del)",
+      "current": "NM_004006.3:r.(1680del)",
+      "spec_expected": "NM_004006.3:r.(1680del)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "r.(306g>u)",
+      "input_prefixed": "NM_004006.3:r.(306g>u)",
+      "current": "NM_004006.3:r.(306g>u)",
+      "spec_expected": "NM_004006.3:r.(306g>u)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "r.(578c>u)",
+      "input_prefixed": "NM_004006.3:r.(578c>u)",
+      "current": "NM_004006.3:r.(578c>u)",
+      "spec_expected": "NM_004006.3:r.(578c>u)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "r.(76a>c)",
+      "input_prefixed": "NM_004006.3:r.(76a>c)",
+      "current": "NM_004006.3:r.(76a>c)",
+      "spec_expected": "NM_004006.3:r.(76a>c)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
       ]
     },
     {
