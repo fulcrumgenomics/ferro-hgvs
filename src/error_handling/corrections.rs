@@ -757,6 +757,80 @@ pub fn correct_accession_prefix_case(input: &str) -> (String, Vec<DetectedCorrec
 
 /// Correct mixed case edit types.
 ///
+/// Full-string corrector for mixed-case edit-type tokens.
+///
+/// Per HGVS recommendations/general.md lines 87-104, edit-type tokens
+/// (`del`, `ins`, `dup`, `inv`, `delins`, `con`) are spelled in
+/// lowercase. Inputs like `c.100Del`, `c.100_101INSATG`, or
+/// `c.100_200CONNM_001:c.5_105` are rewritten by this corrector to the
+/// canonical lowercase form and tagged with W1004.
+///
+/// Detection anchors the token after a digit, `]`, `)`, or `?` (the
+/// shapes that legitimately precede an edit type in HGVS syntax) and
+/// requires at least one uppercase letter in the token to fire.
+/// Already-lowercase tokens are passed through. `delins` is checked
+/// before `del` (longer prefix).
+pub fn correct_edit_type_case_full(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let bytes = input.as_bytes();
+    let mut corrections = Vec::new();
+    let mut result = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let prev_ok = i > 0
+            && (matches!(bytes[i - 1], b']' | b')' | b'?' | b'*') || bytes[i - 1].is_ascii_digit());
+        if prev_ok {
+            // Try longest tokens first: `delins` (6), then 3-char ones.
+            let three = bytes.get(i..i + 3);
+            let six = bytes.get(i..i + 6);
+            let mut matched: Option<(&'static str, usize)> = None;
+            if let Some(s) = six {
+                if eq_ignore_case(s, b"delins") {
+                    matched = Some(("delins", 6));
+                }
+            }
+            if matched.is_none() {
+                if let Some(s) = three {
+                    if eq_ignore_case(s, b"del") {
+                        matched = Some(("del", 3));
+                    } else if eq_ignore_case(s, b"ins") {
+                        matched = Some(("ins", 3));
+                    } else if eq_ignore_case(s, b"dup") {
+                        matched = Some(("dup", 3));
+                    } else if eq_ignore_case(s, b"inv") {
+                        matched = Some(("inv", 3));
+                    } else if eq_ignore_case(s, b"con") {
+                        matched = Some(("con", 3));
+                    }
+                }
+            }
+            if let Some((canonical, len)) = matched {
+                let raw = &input[i..i + len];
+                if raw != canonical {
+                    corrections.push(DetectedCorrection::new(
+                        ErrorType::MixedCaseEditType,
+                        raw,
+                        canonical.to_string(),
+                        i,
+                        i + len,
+                    ));
+                }
+                result.push_str(canonical);
+                i += len;
+                continue;
+            }
+        }
+        let ch_end = next_char_end(bytes, i);
+        result.push_str(&input[i..ch_end]);
+        i = ch_end;
+    }
+    (result, corrections)
+}
+
+#[inline]
+fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
 /// Converts `Del`, `INS`, `DELINS` to `del`, `ins`, `delins`.
 ///
 /// Note: This function will be used by the smart error correction feature.

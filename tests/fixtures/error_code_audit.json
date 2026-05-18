@@ -204,8 +204,8 @@
       "description": "MixedCaseEditType — 'Del' / 'INS' instead of 'del' / 'ins'.",
       "spec_section": "recommendations/general.md lines 87-104 (edit-type tokens shown in lowercase: del, ins, dup, inv, delins)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
-      "status": "registered",
-      "spec_section_notes": "correct_edit_type_case in src/error_handling/corrections.rs returns ErrorType::MixedCaseEditType but the preprocessor never calls it. Empirically, NM_000088.3:c.100Del produces a generic parse error in lenient mode with no W1004 emission."
+      "status": "enforced",
+      "spec_section_notes": "Wired as InputPreprocessor Phase 6b1 via correct_edit_type_case_full (#268). Walks the input for case-insensitive edit-type tokens (del, ins, dup, inv, delins, con) anchored after a digit / ']' / ')' / '?' / '*' and lowercases them. Runs BEFORE Phase 6c (single-letter AA expansion) so 'p.Arg8_Lys10DEL' is lowercased to 'del' rather than mis-expanded to AspGluLeu. Lenient/silent mode emits W1004 and rewrites; strict rejects with E1004 InvalidEdit + hint. Closes #81 L2 follow-up to #264."
     },
     {
       "code": "W2001",
