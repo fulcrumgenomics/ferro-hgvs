@@ -2176,6 +2176,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     return Ok((start, end, edit.clone(), warnings.clone()));
                 };
 
+                // Range, UncertainRange, MinUncertain, MaxUncertain, Unknown:
+                // no concrete count to 3'-shift against, so pass through unchanged.
                 let RepeatCount::Exact(specified_count) = count else {
                     return Ok((start, end, edit.clone(), warnings.clone()));
                 };

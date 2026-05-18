@@ -1093,6 +1093,8 @@ where
                 })?;
             let n_post = match count {
                 RepeatCount::Exact(n) => *n as usize,
+                // Range, UncertainRange, MinUncertain, MaxUncertain, Unknown:
+                // no single expanded ins-string exists, so SPDI cannot encode.
                 _ => {
                     return Err(ConversionError::UnsupportedEditType {
                         description:

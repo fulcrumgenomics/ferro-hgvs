@@ -1171,7 +1171,13 @@ fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
             }
             // Total consumed: [ + ( + num1 + _ + num2 + ) + ] = 1 + 1 + consumed1 + 1 + consumed2 + 1 + 1
             let total_consumed = 5 + consumed1 + consumed2;
-            Ok((&input[total_consumed..], RepeatCount::Range(num1, num2)))
+            // `[(m_n)]` is the **uncertain-range** form — distinct from the
+            // bare `[m_n]` fixed-range form so Display can preserve the
+            // parens (closes #285).
+            Ok((
+                &input[total_consumed..],
+                RepeatCount::UncertainRange(num1, num2),
+            ))
         }
         b'?' => {
             // Could be: [?], [?_?], [?_20]
