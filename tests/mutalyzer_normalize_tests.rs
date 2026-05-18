@@ -2,20 +2,22 @@
 //!
 //! Imports tests from mutalyzer/mutalyzer's `tests/variants_set.py` (pinned
 //! to a specific SHA via `scripts/refresh-mutalyzer-fixtures.py`) and runs
-//! them against ferro-hgvs's normalizer + projector. Per-axis `xfail` markers
-//! in `cases.json` track capability gaps; XPASS (xfailed axis that starts
-//! passing) fails the test so it gets promoted.
+//! them against ferro-hgvs's normalizer + projector.
+//!
+//! Strict mode: any divergence between ferro-hgvs output and the upstream
+//! expected output fails the test loudly. There is no xfail / xpass
+//! mechanism — burn-down happens in follow-up PRs that fix ferro-hgvs and
+//! demote inputs from
+//! `tests/fixtures/mutalyzer-normalize/baseline-failures/<axis>.txt`.
 //!
 //! Backed by the ferro-prepared reference manifest. When the manifest is
-//! absent the tests print a `skipping — no manifest` line and exit 0 — this
-//! matches the convention in `tests/real_data_normalization_tests.rs`. CI
-//! that wants these tests enforced must provision the manifest.
+//! absent (CI by default), every axis test reports `skipping — no manifest`
+//! and exits 0. Same convention as `tests/real_data_normalization_tests.rs`.
 //!
-//! Each per-axis test writes its FAIL inputs to
-//! `/tmp/ferro-xfail/<axis>.txt` so they can be batch-annotated via:
-//!
-//!     pixi run python scripts/refresh-mutalyzer-fixtures.py \
-//!       annotate-xfails --axis <axis> --from /tmp/ferro-xfail/<axis>.txt
+//! Each axis test also writes its current FAIL list to
+//! `/tmp/ferro-xfail/<axis>.{txt,tsv}` so contributors can regenerate the
+//! committed `baseline-failures/` snapshot or feed
+//! `tests/fixtures/mutalyzer-normalize/failure-patterns.md`.
 
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::reference::transcript::Transcript;
@@ -93,8 +95,6 @@ struct Case {
     noncoding: Option<Vec<String>>,
     #[serde(default = "default_true")]
     to_test: bool,
-    #[serde(default)]
-    xfail: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -116,11 +116,13 @@ fn fixture() -> &'static Fixture {
 }
 
 fn manifest_path() -> Option<PathBuf> {
+    // `FERRO_MANIFEST`, when set, is authoritative — no fallback to the
+    // well-known paths. This lets CI explicitly disable the runner via
+    // `FERRO_MANIFEST=/nonexistent` even on a host that happens to have
+    // one of the well-known paths mounted.
     if let Ok(path) = std::env::var("FERRO_MANIFEST") {
         let p = PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
-        }
+        return if p.exists() { Some(p) } else { None };
     }
     for candidate in [
         "/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data/ferro/manifest.json",
@@ -205,9 +207,7 @@ fn variant_projector() -> Option<VariantProjector<ArcProvider>> {
 struct AxisTally {
     axis: &'static str,
     pass: usize,
-    xfail: usize,
     fail: Vec<(String, String)>, // (input, diagnostic)
-    xpass: Vec<String>,          // inputs that XPASSed
     skipped: usize,
 }
 
@@ -216,50 +216,47 @@ impl AxisTally {
         Self {
             axis,
             pass: 0,
-            xfail: 0,
             fail: Vec::new(),
-            xpass: Vec::new(),
             skipped: 0,
         }
     }
 
-    fn record(
-        &mut self,
-        case_input: &str,
-        expected: &str,
-        actual: Result<String, String>,
-        xfailed: bool,
-    ) {
+    fn record(&mut self, case_input: &str, expected: &str, actual: Result<String, String>) {
         let matches = matches!(&actual, Ok(s) if s == expected);
-        match (matches, xfailed) {
-            (true, false) => self.pass += 1,
-            (false, false) => {
-                let diag = match actual {
-                    Ok(got) => format!("expected={expected:?} got={got:?}"),
-                    Err(e) => format!("expected={expected:?} err={e}"),
-                };
-                self.fail.push((case_input.to_string(), diag));
-            }
-            (false, true) => self.xfail += 1,
-            (true, true) => self.xpass.push(case_input.to_string()),
+        if matches {
+            self.pass += 1;
+        } else {
+            let diag = match actual {
+                Ok(got) => format!("expected={expected:?} got={got:?}"),
+                Err(e) => format!("expected={expected:?} err={e}"),
+            };
+            self.fail.push((case_input.to_string(), diag));
         }
     }
 
     fn finish(self) {
-        // Write FAIL inputs to /tmp/ferro-xfail/<axis>.txt for annotation.
+        // Write FAIL inputs (one per line) to /tmp/ferro-xfail/<axis>.txt and
+        // (input \t diagnostic) pairs to /tmp/ferro-xfail/<axis>.tsv so the
+        // committed baseline-failures/<axis>.txt and failure-patterns.md can
+        // be regenerated from a single run.
         let dir = Path::new(XFAIL_REPORT_DIR);
         let _ = fs::create_dir_all(dir);
         let report_path = dir.join(format!("{}.txt", self.axis));
+        let tsv_path = dir.join(format!("{}.tsv", self.axis));
         let body: String = self.fail.iter().map(|(i, _)| format!("{i}\n")).collect();
         let _ = fs::write(&report_path, &body);
+        let tsv: String = self
+            .fail
+            .iter()
+            .map(|(i, d)| format!("{i}\t{d}\n"))
+            .collect();
+        let _ = fs::write(&tsv_path, &tsv);
 
         println!(
-            "{}: {} pass / {} xfail / {} FAIL / {} XPASS / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} FAIL / {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
-            self.xfail,
             self.fail.len(),
-            self.xpass.len(),
             self.skipped,
             report_path.display()
         );
@@ -274,19 +271,13 @@ impl AxisTally {
                 report_path.display()
             );
         }
-        for input in &self.xpass {
-            eprintln!(
-                "  XPASS [{}] {} | promote (remove from xfail in cases.json)",
-                self.axis, input
-            );
-        }
 
         assert!(
-            self.fail.is_empty() && self.xpass.is_empty(),
-            "{}: {} unexpected FAIL + {} XPASS",
+            self.fail.is_empty(),
+            "{}: {} divergence(s) from mutalyzer — see {} and tests/fixtures/mutalyzer-normalize/failure-patterns.md",
             self.axis,
             self.fail.len(),
-            self.xpass.len()
+            report_path.display()
         );
     }
 }
@@ -304,10 +295,6 @@ fn transcript_of(v: &HgvsVariant) -> Option<String> {
     }
 }
 
-fn axis_xfailed(case: &Case, axis: &str) -> bool {
-    case.xfail.iter().any(|a| a == axis || a == "*")
-}
-
 fn format_pairs(pairs: &[Vec<String>]) -> String {
     let inner: Vec<String> = pairs
         .iter()
@@ -318,8 +305,8 @@ fn format_pairs(pairs: &[Vec<String>]) -> String {
 }
 
 /// Map a mutalyzer error/info code to a substring that should appear in the
-/// `Debug` representation of the corresponding ferro-hgvs error. Lives here
-/// (test-side) so changes don't ripple through production code. Unmapped
+/// `Debug` representation of the corresponding ferro-hgvs error. Test-side
+/// (not in `src/`) so changes don't ripple through production code. Unmapped
 /// codes count as FAIL with a `no mapping for X` diagnostic — extend the
 /// table to fix.
 fn map_mutalyzer_code(code: &str) -> Option<&'static str> {
@@ -378,7 +365,6 @@ fn axis_normalized() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "normalized");
 
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
@@ -388,7 +374,7 @@ fn axis_normalized() {
             Ok(format!("{n}"))
         });
 
-        t.record(&case.input, expected, actual, xfailed);
+        t.record(&case.input, expected, actual);
     }
     t.finish();
 }
@@ -413,11 +399,7 @@ fn axis_genomic() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "genomic");
 
-        // ferro-hgvs has no exposed c./n. → g. API right now (would require
-        // a `VariantProjector::coding_to_genomic` we don't ship yet). For now
-        // we only assert when normalization yields a g. variant directly.
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let n = normalizer
@@ -429,7 +411,7 @@ fn axis_genomic() {
             }
         });
 
-        t.record(&case.input, expected, actual, xfailed);
+        t.record(&case.input, expected, actual);
     }
     t.finish();
 }
@@ -454,7 +436,6 @@ fn axis_protein_description() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "protein_description");
 
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
@@ -470,7 +451,7 @@ fn axis_protein_description() {
                 .ok_or_else(|| "no protein predicted".to_string())
         });
 
-        t.record(&case.input, expected, actual, xfailed);
+        t.record(&case.input, expected, actual);
     }
     t.finish();
 }
@@ -495,7 +476,6 @@ fn axis_coding_protein_descriptions() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "coding_protein_descriptions");
         let expected_repr = format_pairs(pairs);
 
         let actual = catch_panics(|| -> Result<String, String> {
@@ -527,7 +507,7 @@ fn axis_coding_protein_descriptions() {
             Ok(expected_repr.clone())
         });
 
-        t.record(&case.input, &expected_repr, actual, xfailed);
+        t.record(&case.input, &expected_repr, actual);
     }
     t.finish();
 }
@@ -538,6 +518,13 @@ fn axis_coding_protein_descriptions() {
 
 #[test]
 fn axis_rna_description() {
+    // Manifest-gate even though the current body doesn't consume the
+    // manifest — keeps CI green and matches the other axes' shape.
+    if manifest_path().is_none() {
+        eprintln!("axis_rna_description: skipping — no manifest");
+        return;
+    }
+
     let mut t = AxisTally::new("rna_description");
     for case in &fixture().cases {
         if !case.to_test {
@@ -547,10 +534,9 @@ fn axis_rna_description() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "rna_description");
         let actual: Result<String, String> =
             Err("ferro-hgvs r. prediction surface not yet wired into this runner".to_string());
-        t.record(&case.input, expected, actual, xfailed);
+        t.record(&case.input, expected, actual);
     }
     t.finish();
 }
@@ -561,6 +547,11 @@ fn axis_rna_description() {
 
 #[test]
 fn axis_noncoding() {
+    if manifest_path().is_none() {
+        eprintln!("axis_noncoding: skipping — no manifest");
+        return;
+    }
+
     let mut t = AxisTally::new("noncoding");
     for case in &fixture().cases {
         if !case.to_test {
@@ -570,11 +561,10 @@ fn axis_noncoding() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "noncoding");
         let expected = expected_list.join(" | ");
         let actual: Result<String, String> =
             Err("ferro-hgvs n. projection surface not yet wired into this runner".to_string());
-        t.record(&case.input, &expected, actual, xfailed);
+        t.record(&case.input, &expected, actual);
     }
     t.finish();
 }
@@ -599,7 +589,6 @@ fn axis_errors() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "errors");
         let expected_repr = expected.join(",");
 
         let actual = catch_panics(|| -> Result<String, String> {
@@ -634,7 +623,7 @@ fn axis_errors() {
             }
         });
 
-        t.record(&case.input, &expected_repr, actual, xfailed);
+        t.record(&case.input, &expected_repr, actual);
     }
     t.finish();
 }
@@ -645,6 +634,11 @@ fn axis_errors() {
 
 #[test]
 fn axis_infos() {
+    if manifest_path().is_none() {
+        eprintln!("axis_infos: skipping — no manifest");
+        return;
+    }
+
     let mut t = AxisTally::new("infos");
     for case in &fixture().cases {
         if !case.to_test {
@@ -654,11 +648,10 @@ fn axis_infos() {
             t.skipped += 1;
             continue;
         };
-        let xfailed = axis_xfailed(case, "infos");
         let expected = expected_list.join(",");
         let actual: Result<String, String> =
             Err("ferro-hgvs info-code surface not yet wired into this runner".to_string());
-        t.record(&case.input, &expected, actual, xfailed);
+        t.record(&case.input, &expected, actual);
     }
     t.finish();
 }

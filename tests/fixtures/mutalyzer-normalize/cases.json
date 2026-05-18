@@ -19,11 +19,7 @@
         ]
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54_Gly55delinsSer)",
-      "to_test": true,
-      "xfail": [
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -44,13 +40,7 @@
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444insGAT"
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsIleSer)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -72,14 +62,7 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444insGAT"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -99,13 +82,7 @@
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -125,12 +102,7 @@
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true,
-      "xfail": [
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -151,13 +123,7 @@
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -179,14 +145,7 @@
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
       "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -201,10 +160,7 @@
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true,
-      "xfail": [
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -217,10 +173,7 @@
       "infos": [
         "ICORRECTEDCOORDINATESYSTEM"
       ],
-      "to_test": true,
-      "xfail": [
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -234,11 +187,7 @@
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true,
-      "xfail": [
-        "protein_description",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -248,10 +197,7 @@
       "input": "NM_003002.2:c.274del",
       "normalized": "NM_003002.2:c.274del",
       "protein_description": "NM_003002.2(NP_002993.1):p.(Asp92ThrfsTer43)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -260,8 +206,7 @@
       ],
       "input": "NM_000088.3:g.459del",
       "normalized": "",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -270,8 +215,7 @@
       ],
       "input": "NM_000088.3:g.494del",
       "normalized": "",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -280,8 +224,7 @@
       ],
       "input": "NM_000088.3:g.460del",
       "normalized": "NM_000088.3:n.460del",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -305,10 +248,7 @@
           "NG_012337.1(NP_060665.3):p.(=)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -331,11 +271,7 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+26260_616+26261insTAG"
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -345,11 +281,7 @@
       "input": "NM_000143.3:c.-1_1insCAT",
       "normalized": "NM_000143.3:c.-1_1insCAT",
       "protein_description": "NM_000143.3(NP_000134.2):p.(=)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -359,11 +291,7 @@
       "input": "NM_000143.3:c.1_2insCAT",
       "normalized": "NM_000143.3:c.1_2insCAT",
       "protein_description": "NM_000143.3(NP_000134.2):p.?",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -373,11 +301,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_670del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_670del",
       "genomic": "NG_012772.1:g.18959_19002del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -387,11 +311,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_681+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_681+7del",
       "genomic": "NG_012772.1:g.18959_19020del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -401,11 +321,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.632_681del",
       "normalized": "NG_012772.1(NM_000059.3):c.632_681del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -415,11 +331,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.68-7_316+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.68-7_316+7del",
       "genomic": "NG_012772.1:g.8591_8853del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -429,11 +341,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_793+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_793+7del",
       "genomic": "NG_012772.1:g.18959_20558del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -444,12 +352,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_674del",
       "genomic": "NG_012772.1:g.16125_19006del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208TyrfsTer3)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -459,11 +362,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.681+1_682-1del",
       "normalized": "NG_012772.1(NM_000059.3):c.681+1_682-1del",
       "genomic": "NG_012772.1:g.19014_20439del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -474,12 +373,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_672del",
       "genomic": "NG_012772.1:g.16125_19004del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208_Asp224del)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -491,8 +385,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.632-?_681+?del",
       "genomic": "NG_012772.1:g.(17550_19725)del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -503,8 +396,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.68-?_316+?del",
       "genomic": "NG_012772.1:g.(7324_11720)del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Asp23_Leu105del)",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -520,8 +412,7 @@
           "NG_012772.1(NP_000050.2):p.?"
         ]
       ],
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -530,8 +421,7 @@
         "To be adapted and implemented"
       ],
       "input": "AL449423.14(CDKN2A_v001):c.151-?_457+?del",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -541,8 +431,7 @@
       "input": "NM_000143.3:c.739_904del",
       "normalized": "NM_000143.3:c.739_904del",
       "protein_description": "NM_000143.3(NP_000134.2):p.(Glu247AlafsTer27)",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -557,10 +446,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -572,12 +458,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -592,11 +473,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -611,11 +488,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsAlaArg)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -631,11 +504,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -648,12 +517,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -670,12 +534,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -692,12 +551,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsAlaArg)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -713,12 +567,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -729,12 +578,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insTTTGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCAAAG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5PhefsTer22)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -750,12 +594,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -771,12 +610,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysCysGlnIleMet)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -792,12 +626,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -813,12 +642,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysCysGlnIleMet)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -834,12 +658,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -855,12 +674,7 @@
           "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insSerThrGlyProLeuSerGly)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -871,12 +685,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -888,12 +697,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -904,12 +708,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -921,12 +720,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53AlafsTer5)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -938,12 +732,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188inv",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53PhefsTer11)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -956,12 +745,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53AlafsTer5)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -974,12 +758,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188inv",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53PhefsTer11)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -995,10 +774,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1014,12 +790,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1035,12 +806,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1057,12 +823,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1079,12 +840,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1101,12 +857,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1122,12 +873,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1143,12 +889,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1164,12 +905,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsAlaGlnAspHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1185,12 +921,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1206,12 +937,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsSerCysAlaAlaArg)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1227,12 +953,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1248,12 +969,7 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsAlaGlnAspHisTyrLeuAla)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1264,12 +980,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1281,12 +992,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1297,12 +1003,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1313,11 +1014,7 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins180_188",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1328,11 +1025,7 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins180_188inv",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1344,11 +1037,7 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins[180_188]",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1360,11 +1049,7 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1377,10 +1062,7 @@
       "errors": [
         "ESYNTAXUEOF"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1395,12 +1077,7 @@
         "ICORRECTEDLRGREFERENCE",
         "ILRGWARNING"
       ],
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1409,10 +1086,7 @@
       ],
       "input": "NM_002001.2:c.1_3delinsATG",
       "normalized": "NM_002001.2:c.=",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1432,10 +1106,7 @@
           "NG_007485.1(NP_478102.2):p.(Pro64del)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1451,10 +1122,7 @@
           "NG_007485.1(NP_478102.2):p.(Pro64del)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1465,11 +1133,7 @@
       "input": "NG_012337.1(NM_012459.2):c.12_13delCA",
       "normalized": "NG_012337.1(NM_012459.2):c.12_13del",
       "genomic": "NG_012337.1:g.4913_4914del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1480,11 +1144,7 @@
       "input": "NG_012337.1(NM_012459.2):c.12_13del2",
       "normalized": "NG_012337.1(NM_012459.2):c.12_13del",
       "genomic": "NG_012337.1:g.4913_4914del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1496,12 +1156,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.155_157del",
       "genomic": "NG_008939.1:g.5206_5208del",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52del)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1513,12 +1168,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.155_157del",
       "genomic": "NG_008939.1:g.5206_5208del",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52del)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1530,12 +1180,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.274_275inv",
       "genomic": "NG_008939.1:g.10622_10623inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Asp92Ser)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1544,10 +1189,7 @@
       ],
       "input": "NM_000193.2:c.108_109del2insG",
       "protein_description": "NM_000193.2(NP_000184.1):p.(Lys38SerfsTer2)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1558,8 +1200,7 @@
       "input": "L41870.1:c.1del",
       "normalized": "L41870.1:c.1del",
       "infos": [],
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -1569,8 +1210,7 @@
       "input": "NM_003002.2:c.1del",
       "normalized": "NM_003002.2:c.1del",
       "infos": [],
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [
@@ -1579,10 +1219,7 @@
       ],
       "input": "NM_001199.3:c.2188dup",
       "protein_description": "NM_001199.3(NP_001190.1):p.(Gln730ProfsTer?)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1591,10 +1228,7 @@
       ],
       "input": "NM_000193.2:c.1388G>C",
       "protein_description": "NM_000193.2(NP_000184.1):p.(Ter463SerextTer?)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1604,10 +1238,7 @@
       ],
       "input": "NM_000193.2:c.1388_1389insC",
       "protein_description": "NM_000193.2(NP_000184.1):p.(Ter463CysextTer?)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1617,10 +1248,7 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.276C>T",
       "protein_description": "NG_012337.1(NP_002993.1):p.(=)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1629,10 +1257,7 @@
       ],
       "input": "NM_024426.4:c.1107A>G",
       "protein_description": "NM_024426.4(NP_077744.3):p.(=)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1642,10 +1267,7 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1A>G",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1655,10 +1277,7 @@
       ],
       "input": "NM_024426.4:c.1C>G",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1668,10 +1287,7 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1A>T",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1681,10 +1297,7 @@
       ],
       "input": "NM_024426.4:c.1C>A",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1694,10 +1307,7 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1_4delinsTTGA",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1707,10 +1317,7 @@
       ],
       "input": "NM_024426.4:c.1_4delinsATGA",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1719,10 +1326,7 @@
       ],
       "input": "NM_000143.3:c.1531T>G",
       "protein_description": "NM_000143.3(NP_000134.2):p.(Ter511GlyextTer3)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1731,8 +1335,7 @@
       ],
       "input": "NM_000143.3:c.45del",
       "normalized": "NM_000143.3:c.45del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1741,8 +1344,7 @@
       ],
       "input": "NM_000143.3:c.45delG",
       "normalized": "NM_000143.3:c.45del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1753,10 +1355,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1767,10 +1366,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1779,8 +1375,7 @@
       ],
       "input": "NM_000143.3:c.45del1",
       "normalized": "NM_000143.3:c.45del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1791,10 +1386,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1803,8 +1395,7 @@
       ],
       "input": "NM_000143.3:c.44_47del",
       "normalized": "NM_000143.3:c.44_47del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1813,8 +1404,7 @@
       ],
       "input": "NM_000143.3:c.44_47delTGCG",
       "normalized": "NM_000143.3:c.44_47del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1825,10 +1415,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1839,10 +1426,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1851,8 +1435,7 @@
       ],
       "input": "NM_000143.3:c.44_47del4",
       "normalized": "NM_000143.3:c.44_47del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1863,10 +1446,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1875,8 +1455,7 @@
       ],
       "input": "NM_000143.3:c.45delinsATC",
       "normalized": "NM_000143.3:c.45delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1885,8 +1464,7 @@
       ],
       "input": "NM_000143.3:c.45delGinsATC",
       "normalized": "NM_000143.3:c.45delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1897,10 +1475,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1911,10 +1486,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1923,8 +1495,7 @@
       ],
       "input": "NM_000143.3:c.45del1insATC",
       "normalized": "NM_000143.3:c.45delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1935,10 +1506,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1947,8 +1515,7 @@
       ],
       "input": "NM_000143.3:c.44_47delinsATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1957,8 +1524,7 @@
       ],
       "input": "NM_000143.3:c.44_47delTGCGinsATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -1969,10 +1535,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1983,10 +1546,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -1995,8 +1555,7 @@
       ],
       "input": "NM_000143.3:c.44_47del4insATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2007,10 +1566,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2019,8 +1575,7 @@
       ],
       "input": "NM_000143.3:c.45dup",
       "normalized": "NM_000143.3:c.45dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2029,8 +1584,7 @@
       ],
       "input": "NM_000143.3:c.45dupG",
       "normalized": "NM_000143.3:c.45dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2041,10 +1595,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2055,10 +1606,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2067,8 +1615,7 @@
       ],
       "input": "NM_000143.3:c.45dup1",
       "normalized": "NM_000143.3:c.45dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2079,10 +1626,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2091,8 +1635,7 @@
       ],
       "input": "NM_000143.3:c.44_47dup",
       "normalized": "NM_000143.3:c.44_47dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2101,8 +1644,7 @@
       ],
       "input": "NM_000143.3:c.44_47dupTGCG",
       "normalized": "NM_000143.3:c.44_47dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2113,10 +1655,7 @@
       "errors": [
         "ENODNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2130,10 +1669,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2146,8 +1682,7 @@
         "NM_000143.3:106:TGCG:TGCGTGCG"
       ],
       "normalized": "NM_000143.3:c.44_47dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2158,10 +1693,7 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2171,10 +1703,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12delC",
       "normalized": "NG_012337.1(NM_012459.2):c.12del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2183,10 +1712,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12_15delCAGC",
       "normalized": "NG_012337.1(NM_012459.2):c.12_15del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2195,10 +1721,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12delCinsAT",
       "normalized": "NG_012337.1(NM_012459.2):c.12delinsAT",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2207,10 +1730,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12_15delCAGCinsTTT",
       "normalized": "NG_012337.1(NM_012459.2):c.12_15delinsTTT",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2235,13 +1755,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5GlnfsTer20)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2266,13 +1780,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6GlnfsTer20)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2282,11 +1790,7 @@
       "input": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2296,10 +1800,7 @@
       "errors": [
         "ENOSELECTORFOUND"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2308,10 +1809,7 @@
       ],
       "input": "NG_012337.1(NM_012459.2):c.4_5insGTA",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insSer)",
-      "to_test": true,
-      "xfail": [
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2321,12 +1819,7 @@
       "genomic": "LRG_199:g.[499798A>T;499800G>T]",
       "normalized": "LRG_199t1:c.[235A>T;237G>T]",
       "protein_description": "LRG_199p1:p.(Lys79Tyr)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2341,8 +1834,7 @@
       ],
       "input": "NG_012337.1:g.4C>T",
       "normalized": "NG_012337.1:g.4C>T",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2357,8 +1849,7 @@
       ],
       "input": "NG_017013.2:g.17013_17014del",
       "normalized": "NG_017013.2:g.17013_17014del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2373,10 +1864,7 @@
       ],
       "input": "NG_012337.1:g.4delins7_31",
       "normalized": "NG_012337.1:g.4delins7_31",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2391,8 +1879,7 @@
       ],
       "input": "NG_017013.2:g.19258dup",
       "normalized": "NG_017013.2:g.19258dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2407,8 +1894,7 @@
       ],
       "input": "NG_017013.2:g.16508_16509dup",
       "normalized": "NG_017013.2:g.16508_16509dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2423,8 +1909,7 @@
       ],
       "input": "NG_012337.1:g.90_91insC",
       "normalized": "NG_012337.1:g.90_91insC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2440,10 +1925,7 @@
       "input": "NG_007485.1(NM_000077.4):c.274G>T",
       "normalized": "NG_007485.1(NM_000077.4):c.274G>T",
       "genomic": "NG_007485.1:g.28407G>T",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2459,8 +1941,7 @@
       "input": "NG_012337.1:g.26_31del",
       "normalized": "NG_012337.1:g.29_34del",
       "warnings": "Deletion at position 26_31 was given, however, the HGVS notation prescribes that on the forward strand it should be at position 29_34.",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -2475,165 +1956,124 @@
       ],
       "input": "NG_017013.2:g.17011_17012del",
       "normalized": "NG_017013.2:g.17013_17014del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.17415_17417delinsGCG",
       "normalized": "NG_017013.2:g.[17415C>G;17417A>G]",
       "genomic": "NG_017013.2:g.[17415C>G;17417A>G]",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.17496_17497insAGCTGCTCAGATAGCGA",
       "normalized": "NG_017013.2:g.17496_17497ins[A;17481_17496]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.1_32772del",
       "normalized": "NG_017013.2:g.1_32772del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.[16985A>T;17013_17014del]",
       "normalized": "NG_017013.2:g.[16985A>T;17013_17014del]",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.[16985A>T;17011_17012del]",
       "normalized": "NG_017013.2:g.[16985A>T;17013_17014del]",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.17011_17012del",
       "normalized": "NG_017013.2:g.17013_17014del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1:g.4delins7_50",
       "normalized": "NG_012337.1:g.[3_4insGGTT;5_6insACCATATCTCTACTTTGTGTTTATGTTTGTGTATGCATT]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1:g.26_31del",
       "normalized": "NG_012337.1:g.29_34del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1:g.100_200delins100_101",
       "normalized": "NG_012337.1:g.102_200del",
       "genomic": "NG_012337.1:g.102_200del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.17471_17471del",
       "normalized": "NG_017013.2:g.17471del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.18748_18750delinsCAT",
       "normalized": "NG_017013.2:g.18749G>A",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_017013.2:g.17394_17395insC",
       "normalized": "NG_017013.2:g.17394dup",
       "genomic": "NG_017013.2:g.17394dup",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.1del",
       "normalized": "NG_012337.1(NM_003002.2):c.1del",
       "genomic": "NG_012337.1:g.5062del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.-1del",
       "normalized": "NG_012337.1(NM_003002.2):c.-1del",
       "genomic": "NG_012337.1:g.5061del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.52+1del",
       "normalized": "NG_012337.1(NM_003002.2):c.52+1del",
       "genomic": "NG_012337.1:g.5114del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.*824del",
       "normalized": "NG_012337.1(NM_003002.2):c.*824del",
       "genomic": "NG_012337.1:g.13948del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.*824+10del",
       "normalized": "NG_012337.1(NM_003002.2):c.*834del",
       "genomic": "NG_012337.1:g.13958del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -2643,235 +2083,171 @@
         "NM_003002.4:35:A:"
       ],
       "normalized": "NM_003002.4:c.1del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1(NM_004321.7):c.101del",
       "normalized": "NG_029724.1(NM_004321.7):c.102del",
       "genomic": "NG_029724.1:g.27557del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1(NM_004321.7):c.101del",
       "normalized": "",
       "genomic": "NG_029724.1:g.27557del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1:g.10_20del",
       "normalized": "NG_029724.1:g.10_20del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1:g.10_20del11",
       "normalized": "NG_029724.1:g.10_20del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1:g.10delG",
       "normalized": "NG_029724.1:g.10del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_029724.1:g.10_11delGT",
       "normalized": "NG_029724.1:g.10_11del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_022124.6):c.3306del",
       "normalized": "NG_008835.1(NM_022124.6):c.3306del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_022124.6):c.3304del",
       "normalized": "NG_008835.1(NM_022124.6):c.3306del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_022124.6):c.3304_3305del",
       "normalized": "NG_008835.1(NM_022124.6):c.3305_3306del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_001168390.2):c.*3188del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3188del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_001168390.2):c.*3187del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3188del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_001168390.2):c.*3186del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3188del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(NM_001168390.2):c.*3186_*3187del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1:g.320801del",
       "normalized": "NG_008835.1:g.320801del",
       "genomic": "NG_008835.1:g.320801del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1:g.320802del",
       "normalized": "NG_008835.1:g.320804del",
       "genomic": "NG_008835.1:g.320804del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1:g.320801_320802del",
       "normalized": "NG_008835.1:g.320801_320802del",
       "genomic": "NG_008835.1:g.320801_320802del",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1:g.320802_320803del",
       "normalized": "NG_008835.1:g.320803_320804del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_008835.1(CDH23_v001):c.1449+846delA",
       "normalized": "NG_008835.1(NM_022124.6):c.1449+858del",
       "genomic": "NG_008835.1:g.255529del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_009113.2(NM_014249.4):c.948delC",
       "normalized": "NG_009113.2(NM_014249.4):c.951del",
       "genomic": "NG_009113.2:g.8038del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_007107.2(NM_004992.3):c.378-17delT",
       "normalized": "NG_007107.2(NM_004992.3):c.378-17del",
       "genomic": "NG_007107.2:g.110661del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_009113.2(NR2E3_v002):c.948delC",
       "normalized": "",
       "genomic": "NG_009113.2:g.8038del",
-      "to_test": false,
-      "xfail": []
+      "to_test": false
     },
     {
       "keywords": [],
       "input": "NG_009113.2(NM_016346.4):c.948delC",
       "normalized": "NG_009113.2(NM_016346.4):c.951del",
       "genomic": "NG_009113.2:g.8038del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_009497.1(NM_206933.2):c.8682-19dupT",
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_009497.1(USH2A_v001):c.8682-19dup",
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -2889,14 +2265,7 @@
       ],
       "protein_description": "NG_007485.1(NP_478102.2):p.(Met48AlafsTer14)",
       "rna_description": "NG_007485.1(NM_058195.3):r.(141_142del)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "rna_description",
-        "noncoding"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -2905,12 +2274,7 @@
       "genomic": "NG_012337.1:g.6127T>A",
       "protein_description": "NG_012337.1(NP_002993.1):p.(Ser57Thr)",
       "rna_description": "NG_012337.1(NM_003002.2):r.(169u>a)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2918,10 +2282,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT",
       "normalized": "LRG_303:g.6908_6932dup",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2929,10 +2290,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[0]",
       "normalized": "LRG_303:g.=",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2940,10 +2298,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[1]",
       "normalized": "LRG_303:g.6908_6932dup",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2951,10 +2306,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[2]",
       "normalized": "LRG_303:g.6908_6932AGCAACGTGATCGCCTCCCTCACCT[3]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2962,10 +2314,7 @@
       ],
       "input": "LRG_303:g.6908_6932AGCAACGTGATCGCCTCCCTCACCT[0]",
       "normalized": "LRG_303:g.6908_6932del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2973,10 +2322,7 @@
       ],
       "input": "LRG_303:g.4_5insGT[5]",
       "normalized": "LRG_303:g.1_4GT[7]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2984,10 +2330,7 @@
       ],
       "input": "LRG_303:g.3_4GT[5]",
       "normalized": "LRG_303:g.1_4GT[6]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -2995,10 +2338,7 @@
       ],
       "input": "LRG_303:g.1_2GT[0]",
       "normalized": "LRG_303:g.3_4del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3006,10 +2346,7 @@
       ],
       "input": "LRG_303:g.3_4GT[0]",
       "normalized": "LRG_303:g.3_4del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3018,10 +2355,7 @@
       "input": "LRG_303:g.3_4GT[2]",
       "normalized": "LRG_303:g.3_4dup",
       "normalized-alt": "LRG_303:g.1_4[3]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3031,11 +2365,7 @@
       "input": "NG_009299.1(NM_017668.3):c.*16_*18T[8]",
       "normalized": "NG_009299.1(NM_017668.3):c.*16_*19T[9]",
       "genomic": "NG_009299.1:g.137761_137764A[9]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3045,11 +2375,7 @@
       "input": "NG_009299.1(NM_017668.3):c.33_35CAA[5]",
       "normalized": "NG_009299.1(NM_017668.3):c.34_39AAC[6]",
       "genomic": "NG_009299.1:g.137803_137808TTG[6]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3058,8 +2384,7 @@
       "input": "NG_012337.1:g.[7109T>A;7110del]",
       "normalized": "NG_012337.1:g.7109_7110delinsA",
       "genomic": "NG_012337.1:g.7109_7110delinsA",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -3068,11 +2393,7 @@
       "input": "NG_012337.1(SDHD_v001):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3081,11 +2402,7 @@
       "input": "NG_012337.1(SDHD):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3094,11 +2411,7 @@
       "input": "NG_012337.1(10683):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3123,13 +2436,7 @@
       ],
       "protein_description": "NG_009299.1(NP_060138.1):p.(Gln14ProfsTer68)",
       "rna_description": "NG_009299.1(NM_017668.3):r.(41a>c)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3140,10 +2447,7 @@
           "NG_012337.1(NP_002993.1):p.(Asp92Tyr)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3158,10 +2462,7 @@
           "LRG_24p2:p.(Gly43ArgfsTer65)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3170,24 +2471,14 @@
       "genomic": "NG_012337.1:g.4917_4918delinsCTA",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2LeufsTer23)",
       "rna_description": "NG_012337.1(NM_012459.2):r.(5_6delinsuag)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_012459.2):c.4_6delinsGTA",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2Val)",
       "rna_description": "NG_012337.1(NM_012459.2):r.(4_6delinsgua)",
-      "to_test": true,
-      "xfail": [
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3203,20 +2494,13 @@
         "ICORRECTEDLRGREFERENCE",
         "ILRGWARNING"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "LRG_303:g.[105_106del;6681G>C;6883_6884insTTTCGCCCCTTTCGCCCC]",
       "normalized": "LRG_303:g.[108_109del;6681G>C;6875_6883TTTCGCCCC[3]]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3232,10 +2516,7 @@
           "NG_012337.1(NP_002993.1):p.(Ter160CysextTer29)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3244,11 +2525,7 @@
       "input": "NG_012337.1(NM_012459.2):c.[10del;23_25del;36_37insAAT]",
       "normalized": "NG_012337.1(NM_012459.2):c.[10del;23_25del;37_38insATA]",
       "genomic": "NG_012337.1:g.[4886_4887insATT;4898_4900del;4913del]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3257,10 +2534,7 @@
       "infos": [
         "ICORRECTEDVARIANTTYPE"
       ],
-      "to_test": true,
-      "xfail": [
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3269,12 +2543,7 @@
       "genomic": "NG_012337.1:g.[7125G>T;7129A>G]",
       "protein_description": "NG_012337.1(NP_002993.1):p.(Asp92_Tyr93delinsTyrCys)",
       "rna_description": "NG_012337.1(NM_003002.2):r.([274g>u;278a>g])",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3282,10 +2551,7 @@
       ],
       "input": "NG_012337.1:274",
       "normalized": "NG_012337.1:g.274",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3294,11 +2560,7 @@
       "input": "NG_012337.1(NM_003002.2):c.[274;600]",
       "normalized": "NG_012337.1(NM_003002.2):c.[274;*120]",
       "genomic": "NG_012337.1:g.[7125;13244]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3309,13 +2571,7 @@
       "genomic": "NG_012337.1:g.3448_3449del",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ter99TyrextTer6)",
       "rna_description": "NG_012337.1(NM_012459.2):r.(297_*1del)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3324,10 +2580,7 @@
       "input": "NG_012337.1(NM_012459.2):c.-35_*1del",
       "normalized": "NG_012337.1(NM_012459.2):c.-35_*1del",
       "genomic": "NG_012337.1:g.3448_4957del",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3337,12 +2590,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.1_*2del",
       "genomic": "NG_012337.1:g.3449_4924del",
       "protein_description": "NG_012337.1(NP_036591.2):p.?",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3366,13 +2614,7 @@
         ]
       ],
       "protein_description": "NG_009299.1(NP_060138.1):p.?",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3384,11 +2626,7 @@
         "ICORRECTEDPOINT",
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3401,12 +2639,7 @@
         "ICORRECTEDVARIANTTYPE",
         "ICORRECTEDPOINT"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3419,11 +2652,7 @@
         "ICORRECTEDPOINT",
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3434,11 +2663,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3448,11 +2673,7 @@
         "ICORRECTEDCOORDINATESYSTEM",
         "ICORRECTEDPOINT"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3465,11 +2686,7 @@
       "errors": [
         "EOUTOFBOUNDARY"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3481,10 +2698,7 @@
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true,
-      "xfail": [
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3492,8 +2706,7 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.=",
       "normalized": "NG_012337.1(NM_003002.2):c.=",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3501,10 +2714,7 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3512,10 +2722,7 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3523,10 +2730,7 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3539,11 +2743,7 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3551,10 +2751,7 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3563,10 +2760,7 @@
       ],
       "input": "ENST00000375549:c.100del",
       "normalized": "ENST00000375549.8:c.102del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3575,10 +2769,7 @@
       ],
       "input": "ENST00000375549.8:c.100del",
       "normalized": "ENST00000375549.8:c.102del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3587,10 +2778,7 @@
       ],
       "input": "ENSG00000204370.13(ENST00000375549.8):c.100del",
       "normalized": "ENSG00000204370.13(ENST00000375549.8):c.102del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3600,10 +2788,7 @@
       "errors": [
         "ERETR"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3612,10 +2797,7 @@
       ],
       "input": "ENST00000452863.10:c.9del",
       "normalized": "ENST00000452863.10:c.10del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3624,10 +2806,7 @@
       ],
       "input": "ENSG00000184937.16(ENST00000452863.10):c.9del",
       "normalized": "ENSG00000184937.16(ENST00000452863.10):c.10del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3635,8 +2814,7 @@
       ],
       "input": "NG_012337.1:g.[104_105insA;105del;105_106insC]",
       "normalized": "NG_012337.1:g.105delinsAC",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -3647,11 +2825,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3662,11 +2836,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3677,11 +2847,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3692,11 +2858,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3707,11 +2869,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3720,8 +2878,7 @@
       ],
       "input": "NG_012337.1(NM_012459.2):c.[7_8insC;8del]",
       "normalized": "NG_012337.1(NM_012459.2):c.8A>C",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -3733,11 +2890,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3753,11 +2906,7 @@
       "infos": [
         "ICORRECTEDCOORDINATESYSTEM"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3766,8 +2915,7 @@
       ],
       "input": "NC_012920.1:m.3243A>G",
       "normalized": "NC_012920.1:m.3243A>G",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3776,10 +2924,7 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3787,10 +2932,7 @@
       "errors": [
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3799,10 +2941,7 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3811,10 +2950,7 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3823,17 +2959,13 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.[273_274insT;274G>T;274_275insA]",
       "normalized": "NG_012337.1(NM_003002.2):c.274delinsTTA",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3841,75 +2973,51 @@
       "errors": [
         "EOVERLAP"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.[273_274insT;274G>T;274_275insA]",
       "normalized": "NG_012337.1(NM_003002.2):c.274delinsTTA",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.pterdel",
       "normalized": "NG_012337.1(NM_003002.2):c.-5059del",
       "genomic": "NG_012337.1:g.3del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1:g.pterdel",
       "normalized": "NG_012337.1:g.3del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.qterdel",
       "normalized": "NG_012337.1(NM_003002.2):c.*2824del",
       "genomic": "NG_012337.1:g.15948del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NM_003002.2:c.pterdel",
       "normalized": "NM_003002.2:c.-61del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NM_003002.2:c.qterdel",
       "normalized": "NM_003002.2:c.*841del",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51",
       "normalized": "LRG_24:g.5525_5532delinsGTGGGAATTGT",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -3919,65 +3027,42 @@
         "LRG_24:5524:CGGGGCAC:AAAAAAA"
       ],
       "normalized": "LRG_24:g.5525_5532delinsAAAAAAA",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]",
       "normalized": "LRG_24t1:c.126_133delinsGTGGGAATTGTAAAAAAA",
       "genomic": "LRG_24:g.5525_5532delinsGTGGGAATTGTAAAAAAA",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.pter_qterdelinspter_qter",
       "normalized": "LRG_24t1:c.=",
       "genomic": "LRG_24:g.=",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]",
       "normalized": "LRG_24t1:c.*2327_*2328insAAAAAAA",
       "genomic": "LRG_24:g.11486_11487insAAAAAAA",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.[274=;275del]",
       "normalized": "NG_012337.1(NM_003002.2):c.275del",
       "genomic": "NG_012337.1:g.7126del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.[274del;275=]",
       "normalized": "NG_012337.1(NM_003002.2):c.274del",
       "genomic": "NG_012337.1:g.7125del",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -3991,8 +3076,7 @@
       ],
       "genomic": "NG_012337.1:g.4917_4920GC[5]",
       "normalized": "NG_012337.1:g.4917_4920GC[5]",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -4004,12 +3088,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.3_6GC[5]",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insAlaArg)",
       "genomic": "NG_012337.1:g.4917_4920GC[5]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4023,8 +3102,7 @@
       ],
       "genomic": "NG_012337.1:g.4911_4914GT[5]",
       "normalized": "NG_012337.1:g.4911_4914GT[5]",
-      "to_test": true,
-      "xfail": []
+      "to_test": true
     },
     {
       "keywords": [
@@ -4035,11 +3113,7 @@
       "input": "NG_012337.1(NM_012459.2):c.10CA[5]",
       "normalized": "NG_012337.1(NM_012459.2):c.10_13CA[5]",
       "genomic": "NG_012337.1:g.4911_4914GT[5]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4049,11 +3123,7 @@
       "input": "NG_012337.1(NM_012459.2):c.6delinsCCCC",
       "normalized": "NG_012337.1(NM_012459.2):c.6C[4]",
       "genomic": "NG_012337.1:g.4917G[4]",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4064,12 +3134,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.6C[4]",
       "genomic": "NG_012337.1:g.4917G[4]",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insPro)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4079,10 +3144,7 @@
       "input": "NG_012337.1(NM_012459.2):c.5_6dup",
       "normalized": "NG_012337.1(NM_012459.2):c.5_6dup",
       "genomic": "NG_012337.1:g.4919_4920dup",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4092,10 +3154,7 @@
       "input": "NG_012337.1(NM_012459.2):c.5dup",
       "normalized": "NG_012337.1(NM_012459.2):c.5dup",
       "genomic": "NG_012337.1:g.4918dup",
-      "to_test": true,
-      "xfail": [
-        "genomic"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4106,10 +3165,7 @@
         "EOUTOFBOUNDARY",
         "EOUTOFBOUNDARY"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4126,13 +3182,7 @@
       ],
       "protein_description": "NG_008835.1(NP_071436.1):p.(Asn190ThrfsTer14)",
       "rna_description": "NG_008835.1(NM_022153.2):r.(569del)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4147,12 +3197,7 @@
           "NG_008835.1(NP_071407.4):p.(=)"
         ]
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4176,12 +3221,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6dup)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4205,13 +3245,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6TrpfsTer13)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4235,12 +3269,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Gln43His)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4264,12 +3293,7 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Val44Met)",
-      "to_test": true,
-      "xfail": [
-        "genomic",
-        "protein_description",
-        "coding_protein_descriptions"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4279,11 +3303,7 @@
       "normalized": "NM_003002.4:c.169_170insATA",
       "rna_description": "NM_003002.4:r.(169_170insaua)",
       "protein_description": "NM_003002.4(NP_002993.1):p.(Ser57delinsTyrThr)",
-      "to_test": true,
-      "xfail": [
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4293,10 +3313,7 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4306,10 +3323,7 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4319,12 +3333,7 @@
       "normalized": "NG_008835.1(NM_022153.2):c.677-18_704+65del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4334,12 +3343,7 @@
       "normalized": "NG_008835.1(NM_022153.2):c.677-20_704+62del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4349,12 +3353,7 @@
       "normalized": "NM_003002.4:c.206_209delins191_220inv",
       "rna_description": "NM_003002.4:r.(206_209delinscacugacaacccucucgcuaguccagugga)",
       "protein_description": "NM_003002.4(NP_002993.1):p.(Glu69AlafsTer26)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4362,10 +3361,7 @@
       ],
       "input": "NG_012337.3:g.136delinsNG_012337.1(NM_012459.2):c.200",
       "normalized": "NG_012337.3:g.136A>C",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4375,12 +3371,7 @@
       "normalized": "NG_012337.3(NM_003002.4):c.274delinsCTGA",
       "rna_description": "NG_012337.3(NM_003002.4):r.(274delinscuga)",
       "protein_description": "NG_012337.3(NP_002993.1):p.(Asp92delinsLeuAsn)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4390,12 +3381,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.274delinsCTAG",
       "rna_description": "NG_012337.1(NM_012459.2):r.(274delinscuag)",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ile92delinsLeuVal)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4405,10 +3391,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4418,10 +3401,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4431,10 +3411,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4444,10 +3421,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4457,12 +3431,7 @@
       "normalized": "NM_003002.4:c.171_175del",
       "rna_description": "NM_003002.4:r.(171_175del)",
       "protein_description": "NM_003002.4(NP_002993.1):p.(Gly58GlnfsTer9)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "protein_description",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4472,10 +3441,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4485,10 +3451,7 @@
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4497,11 +3460,7 @@
       "input": "NG_007485.1(NM_058195.3):n.204_205insATC",
       "normalized": "NG_007485.1(NM_058195.3):c.44_45insATC",
       "rna_description": "NG_007485.1(NM_058195.3):r.(44_45insauc)",
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "rna_description"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4511,10 +3470,7 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4524,10 +3480,7 @@
       "errors": [
         "EREPEATUNSUPPORTED"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4537,10 +3490,7 @@
       "errors": [
         "EVARIANTNOTSUPPORTED"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4548,10 +3498,7 @@
       ],
       "input": "LRG_199t1:c.11LRG_199t1:c.11[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4559,10 +3506,7 @@
       ],
       "input": "LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true,
-      "xfail": [
-        "normalized"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4572,10 +3516,7 @@
       "errors": [
         "ESEQUENCEMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4585,10 +3526,7 @@
       "errors": [
         "EREPEATMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4596,10 +3534,7 @@
       "errors": [
         "EREPEATMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4609,10 +3544,7 @@
       "errors": [
         "EREPEATMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4620,10 +3552,7 @@
       "errors": [
         "EREPEATMISMATCH"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4631,10 +3560,7 @@
       "errors": [
         "ENOSELECTORFOUND"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4642,10 +3568,7 @@
       "errors": [
         "ECOORDINATESYSTEMINVALID"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4653,10 +3576,7 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4664,10 +3584,7 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4675,10 +3592,7 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [
@@ -4688,10 +3602,7 @@
       "errors": [
         "ESYNTAXNESTED"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4699,10 +3610,7 @@
       "errors": [
         "EINTRONICRNA"
       ],
-      "to_test": true,
-      "xfail": [
-        "errors"
-      ]
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4711,11 +3619,7 @@
       "infos": [
         "ICORRECTEDSELECTORID"
       ],
-      "to_test": true,
-      "xfail": [
-        "normalized",
-        "infos"
-      ]
+      "to_test": true
     }
   ]
 }
