@@ -315,6 +315,7 @@ fn build_single(
         mane_status,
         refseq_match,
         ensembl_match,
+        protein_id: None,
         exon_cigars: Vec::new(),
         cached_introns: OnceLock::new(),
     })

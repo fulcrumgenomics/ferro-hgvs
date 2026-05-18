@@ -739,6 +739,7 @@ impl ReferenceProvider for MultiFastaProvider {
                     mane_status: ManeStatus::default(),
                     refseq_match: None,
                     ensembl_match: None,
+                    protein_id: None,
                     exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });

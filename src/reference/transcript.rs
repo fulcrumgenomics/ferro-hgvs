@@ -319,6 +319,13 @@ pub struct Transcript {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ensembl_match: Option<String>,
 
+    /// Protein accession (e.g. "NP_000079.2"), used to drive c. → p.
+    /// projection when the transcript ID does not encode a RefSeq-style
+    /// `NM_*`/`XM_*` prefix. Populated by reference producers such as
+    /// `ferro convert-gff` when the protein accession is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protein_id: Option<String>,
+
     /// Per-exon CIGAR alignment data (from cdot gap info).
     /// Indexed in the same order as `exons`. Used for CIGAR-aware CDS→tx mapping.
     #[serde(skip)]
@@ -347,6 +354,7 @@ impl Clone for Transcript {
             mane_status: self.mane_status,
             refseq_match: self.refseq_match.clone(),
             ensembl_match: self.ensembl_match.clone(),
+            protein_id: self.protein_id.clone(),
             exon_cigars: self.exon_cigars.clone(),
             // Cache is reset on clone - will be lazily re-initialized
             cached_introns: OnceLock::new(),
@@ -371,6 +379,7 @@ impl PartialEq for Transcript {
             && self.mane_status == other.mane_status
             && self.refseq_match == other.refseq_match
             && self.ensembl_match == other.ensembl_match
+            && self.protein_id == other.protein_id
             && self.exon_cigars == other.exon_cigars
     }
 }
@@ -415,9 +424,21 @@ impl Transcript {
             mane_status,
             refseq_match,
             ensembl_match,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
+    }
+
+    /// Set the explicit protein accession for this transcript.
+    ///
+    /// Used by reference producers (e.g. `ferro convert-gff`) and tests
+    /// to drive c. → p. projection when no RefSeq-style prefix is
+    /// present on the transcript ID.
+    #[must_use]
+    pub fn with_protein_id(mut self, protein_id: impl Into<Option<String>>) -> Self {
+        self.protein_id = protein_id.into();
+        self
     }
 
     /// Length of the transcript in mRNA bases. Uses the cached `sequence`
@@ -975,6 +996,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
@@ -1000,6 +1022,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: Some("ENST00000123456.5".to_string()),
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
@@ -1032,6 +1055,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1352,6 +1376,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: std::sync::OnceLock::new(),
         };

@@ -213,6 +213,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: vec![],
             cached_introns: OnceLock::new(),
         }
@@ -282,6 +283,7 @@ mod tests {
             mane_status: ManeStatus::None,
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: vec![],
             cached_introns: OnceLock::new(),
         }
