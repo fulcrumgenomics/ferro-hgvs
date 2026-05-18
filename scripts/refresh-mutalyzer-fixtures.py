@@ -136,7 +136,15 @@ requirement. See the upstream LICENSE for the full text.
 
 def cmd_annotate_xfails(axis: str, failing_inputs_path: Path) -> None:
     """One-shot: add `axis` to xfail[] for every case whose `input` is listed
-    in failing_inputs_path (one input per line)."""
+    in failing_inputs_path (one input per line).
+
+    When upstream contains multiple cases with the same `input` (it occasionally
+    does — same variant, different expected `normalized`/`genomic` etc.), we
+    only mark the case if its actual axis output diverges from the expected
+    on inspection. The conservative thing is to mark every duplicate;
+    over-marked cases will surface as XPASS on the next run and can be
+    manually demoted.
+    """
     failing = {
         line.strip() for line in failing_inputs_path.read_text().splitlines() if line.strip()
     }

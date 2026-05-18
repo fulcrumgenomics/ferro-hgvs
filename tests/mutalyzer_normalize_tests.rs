@@ -25,8 +25,30 @@ use ferro_hgvs::{
 };
 use serde::Deserialize;
 use std::fs;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+/// Run `body` and convert any panic into a `Result::Err("panic: …")` so a
+/// single bad case (e.g. an arithmetic overflow inside the library) cannot
+/// abort the whole axis test before it has a chance to tally.
+fn catch_panics(body: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&'static str>()
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            Err(format!("panic: {msg}"))
+        }
+    }
+}
 
 const FIXTURE_PATH: &str = "tests/fixtures/mutalyzer-normalize/cases.json";
 const XFAIL_REPORT_DIR: &str = "/tmp/ferro-xfail";
@@ -358,13 +380,13 @@ fn axis_normalized() {
         };
         let xfailed = axis_xfailed(case, "normalized");
 
-        let actual = (|| -> Result<String, String> {
+        let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let n = normalizer
                 .normalize(&v)
                 .map_err(|e| format!("normalize: {e}"))?;
             Ok(format!("{n}"))
-        })();
+        });
 
         t.record(&case.input, expected, actual, xfailed);
     }
@@ -396,7 +418,7 @@ fn axis_genomic() {
         // ferro-hgvs has no exposed c./n. → g. API right now (would require
         // a `VariantProjector::coding_to_genomic` we don't ship yet). For now
         // we only assert when normalization yields a g. variant directly.
-        let actual = (|| -> Result<String, String> {
+        let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let n = normalizer
                 .normalize(&v)
@@ -405,7 +427,7 @@ fn axis_genomic() {
                 HgvsVariant::Genome(_) => Ok(format!("{n}")),
                 _ => Err("c→g projection API not yet exposed".to_string()),
             }
-        })();
+        });
 
         t.record(&case.input, expected, actual, xfailed);
     }
@@ -434,7 +456,7 @@ fn axis_protein_description() {
         };
         let xfailed = axis_xfailed(case, "protein_description");
 
-        let actual = (|| -> Result<String, String> {
+        let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let tx_id =
                 transcript_of(&v).ok_or_else(|| "could not infer transcript_id".to_string())?;
@@ -446,7 +468,7 @@ fn axis_protein_description() {
                 .as_ref()
                 .map(|p| format!("{p}"))
                 .ok_or_else(|| "no protein predicted".to_string())
-        })();
+        });
 
         t.record(&case.input, expected, actual, xfailed);
     }
@@ -476,7 +498,7 @@ fn axis_coding_protein_descriptions() {
         let xfailed = axis_xfailed(case, "coding_protein_descriptions");
         let expected_repr = format_pairs(pairs);
 
-        let actual = (|| -> Result<String, String> {
+        let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
                 .project_variant_all(&v)
@@ -503,7 +525,7 @@ fn axis_coding_protein_descriptions() {
                 }
             }
             Ok(expected_repr.clone())
-        })();
+        });
 
         t.record(&case.input, &expected_repr, actual, xfailed);
     }
@@ -580,7 +602,7 @@ fn axis_errors() {
         let xfailed = axis_xfailed(case, "errors");
         let expected_repr = expected.join(",");
 
-        let actual = (|| -> Result<String, String> {
+        let actual = catch_panics(|| -> Result<String, String> {
             let mapped: Vec<&str> = expected
                 .iter()
                 .map(|c| map_mutalyzer_code(c).unwrap_or("<unmapped>"))
@@ -610,7 +632,7 @@ fn axis_errors() {
                     Ok(expected_repr.clone())
                 }
             }
-        })();
+        });
 
         t.record(&case.input, &expected_repr, actual, xfailed);
     }
