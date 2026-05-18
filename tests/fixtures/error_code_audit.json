@@ -362,8 +362,8 @@
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
-      "status": "registered",
-      "spec_section_notes": "detect_swapped_positions and correct_swapped_positions in src/error_handling/corrections.rs return ErrorType::SwappedPositions, but the preprocessor's nine phases do not invoke them. Empirically, NM_000088.3:c.200_100del produces a generic parse error (nom Verify) in lenient mode with no W4001 emission."
+      "status": "partial",
+      "spec_section_notes": "Wired as preprocessor Phase 15a via correct_swapped_positions; lenient mode emits W4001 and rewrites c.200_100del -> c.100_200del. Strict mode currently still produces a generic parse error before the preprocessor diagnostic is observed because correct_swapped_positions only handles simple integer pairs and the parser rejection precedes the preprocessor fail path in some shapes. Partial because offset-bearing inverted forms (c.100+5_99+3, c.*1_50) are not detected (corrector is integer-only) and fall through to the parser; closes #81 L2 SVA for the simple-pair surface."
     },
     {
       "code": "W4002",
