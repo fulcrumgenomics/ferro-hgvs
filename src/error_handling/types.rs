@@ -259,6 +259,16 @@ pub enum ErrorType {
     /// Issue #282 (closes #232 follow-up).
     RnaThymineCanonicalized,
 
+    /// Non-spec mosaic / chimeric form: nested `/` + `//` at the same
+    /// nesting level (e.g. `m.[3243A>G/T]//[3243A>C/G]`,
+    /// chimeric-of-mosaic or mosaic-of-chimeric) **and** the
+    /// bracketed `[a/b]` / `[a//b]` mosaic group (a form HGVS does
+    /// not define). One code, two detectors — both surface the same
+    /// W3019 family so downstream tools can key off a single
+    /// diagnostic. Always-reject: no canonical alternative exists, so
+    /// auto-correction would be a guess.
+    NonSpecMosaicForm,
+
     /// Bracketed amino-acid list inside a protein insertion edit
     /// (e.g., `p.Arg97_Trp98ins[Ala;Pro]`).
     ///
@@ -301,6 +311,7 @@ impl ErrorType {
             ErrorType::LengthMismatch => "W3016",
             ErrorType::AlleleFractionAnnotation => "W3017",
             ErrorType::ClinVarProseMultiAllelic => "W3018",
+            ErrorType::NonSpecMosaicForm => "W3019",
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
@@ -355,6 +366,9 @@ impl ErrorType {
             }
             ErrorType::RnaThymineCanonicalized => {
                 "thymine (t) used in r. RNA description; canonicalized to u"
+            }
+            ErrorType::NonSpecMosaicForm => {
+                "non-spec mosaic/chimeric form (nested / + // or bracketed [a/b])"
             }
             ErrorType::ProteinBracketedAaInsertion => {
                 "bracketed amino-acid list inside protein insertion edit"
@@ -414,6 +428,9 @@ impl ErrorType {
             ErrorType::ClinVarProseMultiAllelic => false,
             // RNA thymine is rewritten to `u`
             ErrorType::RnaThymineCanonicalized => true,
+            // No canonical alternative for nested mosaic/chimeric or
+            // bracketed [a/b] — see W3019 explanation in registry.
+            ErrorType::NonSpecMosaicForm => false,
             // Bracketed AA list inside an insertion has no spec-defined
             // rewrite: mixing 3-letter and 1-letter inside `[...]` is
             // ambiguous, so all modes reject with a hint.
@@ -471,6 +488,10 @@ impl ErrorType {
                 ("NC_012920.1:m.3243A>G/T", "NC_012920.1:m.[3243A>G;3243A>T]")
             }
             ErrorType::RnaThymineCanonicalized => ("r.123a>t", "r.123a>u"),
+            ErrorType::NonSpecMosaicForm => (
+                "NM_000088.3:c.[100A>G/200T>C]",
+                "NM_000088.3:c.[100A>G;200T>C] or NM_000088.3:c.100A>G/NM_000088.3:c.200T>C",
+            ),
             ErrorType::ProteinBracketedAaInsertion => {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
@@ -691,6 +712,7 @@ mod tests {
         assert_eq!(ErrorType::DeprecatedIvsNotation.code(), "W3014");
         assert_eq!(ErrorType::DeprecatedConSyntax.code(), "W3015");
         assert_eq!(ErrorType::LengthMismatch.code(), "W3016");
+        assert_eq!(ErrorType::NonSpecMosaicForm.code(), "W3019");
         assert_eq!(ErrorType::RnaThymineCanonicalized.code(), "W3020");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
@@ -704,6 +726,9 @@ mod tests {
         assert!(!ErrorType::DeprecatedIvsNotation.is_correctable());
         // Con syntax CAN be rewritten to delins.
         assert!(ErrorType::DeprecatedConSyntax.is_correctable());
+        // Non-spec mosaic / chimeric forms have no canonical
+        // alternative and cannot be auto-corrected.
+        assert!(!ErrorType::NonSpecMosaicForm.is_correctable());
     }
 
     // ErrorOverride tests
