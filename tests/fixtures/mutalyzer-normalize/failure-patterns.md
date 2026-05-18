@@ -1,6 +1,6 @@
 # Mutalyzer-normalize failure patterns
 
-This document groups the **495 FAILs** that ferro-hgvs surfaces today against
+This document groups the **494 FAILs** that ferro-hgvs surfaces today against
 the imported mutalyzer normalizer fixtures (320 active cases × 8 output axes,
 many cases hitting multiple axes). Each section is one root-cause pattern, not
 one input — burn-down PRs fix the root cause and demote rows from the

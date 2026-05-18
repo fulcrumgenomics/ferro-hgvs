@@ -153,11 +153,15 @@ fn provider() -> Option<Arc<MultiFastaProvider>> {
     static PROVIDER: OnceLock<Option<Arc<MultiFastaProvider>>> = OnceLock::new();
     PROVIDER
         .get_or_init(|| {
+            // `manifest_path()` returning `None` is the legitimate "fixtures not
+            // generated yet" skip path. But if the manifest IS present, loading
+            // it must succeed — otherwise we'd silently mask a misconfigured
+            // manifest and report broken setups as no-op skips.
             let path = manifest_path()?;
-            MultiFastaProvider::from_manifest(&path)
-                .map_err(|e| eprintln!("from_manifest({}) failed: {e}", path.display()))
-                .ok()
-                .map(Arc::new)
+            Some(Arc::new(
+                MultiFastaProvider::from_manifest(&path)
+                    .unwrap_or_else(|e| panic!("from_manifest({}) failed: {e}", path.display())),
+            ))
         })
         .clone()
 }
@@ -609,7 +613,7 @@ fn axis_errors() {
                 .iter()
                 .map(|c| map_mutalyzer_code(c).unwrap_or("<unmapped>"))
                 .collect();
-            if mapped.iter().any(|s| *s == "<unmapped>") {
+            if mapped.contains(&"<unmapped>") {
                 return Err(format!("no mapping for one of {expected:?}"));
             }
 

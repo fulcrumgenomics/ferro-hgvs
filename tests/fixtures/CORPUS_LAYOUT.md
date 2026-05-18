@@ -7,7 +7,7 @@ it to every fixture.
 
 ## Directory structure
 
-```
+```text
 tests/fixtures/<upstream>-normalize/
 ├── cases.json                 # source of truth: upstream expected outputs
 ├── baseline-failures/         # current FAIL inputs per axis (manifest runs)
@@ -111,7 +111,7 @@ current behavior** — that pollutes the durable record and goes stale.
 
 Ephemeral. One line per `to_test`-and-axis-applicable case:
 
-```
+```text
 <input>\t<ferro_output_or_error>
 ```
 
