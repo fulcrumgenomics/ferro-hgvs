@@ -1048,24 +1048,63 @@ impl GenomeKind {
         interval: GenomeInterval,
         edit: crate::hgvs::edit::NaEdit,
     ) -> HgvsVariant {
+        self.build_variant_with_loc_edit(accession, gene_symbol, LocEdit::new(interval, edit))
+    }
+
+    /// Build a variant from a pre-constructed `LocEdit` (allowing
+    /// `Mu::Uncertain` for the predicted-wrapper form). #243.
+    fn build_variant_with_loc_edit(
+        self,
+        accession: Accession,
+        gene_symbol: Option<String>,
+        loc_edit: LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>,
+    ) -> HgvsVariant {
         match self {
             GenomeKind::Genome => HgvsVariant::Genome(GenomeVariant {
                 accession,
                 gene_symbol,
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }),
             GenomeKind::Mt => HgvsVariant::Mt(MtVariant {
                 accession,
                 gene_symbol,
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }),
             GenomeKind::Circular => HgvsVariant::Circular(CircularVariant {
                 accession,
                 gene_symbol,
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }),
         }
     }
+}
+
+/// Parse a single bracket-member position+edit (genome / m. / o.),
+/// recognising the predicted-wrapper form. Mirrors
+/// `parse_cds_bracket_member`. #243.
+fn parse_genome_bracket_member(
+    part: &str,
+) -> IResult<&str, LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>> {
+    if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
+        if let Ok((remaining, (interval, edit))) =
+            delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(part)
+        {
+            return Ok((remaining, LocEdit::new_predicted(interval, edit)));
+        }
+    }
+    let (remaining, interval) = parse_genome_interval(part)?;
+    let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
+        (r, e)
+    } else {
+        (
+            remaining,
+            crate::hgvs::edit::NaEdit::Identity {
+                sequence: None,
+                whole_entity: false,
+            },
+        )
+    };
+    Ok((remaining, LocEdit::new(interval, edit)))
 }
 
 /// Find the index of the `]` that closes the leading `[` in `input`,
@@ -1250,25 +1289,18 @@ fn parse_genome_kind_compound_allele(
                 nom::error::ErrorKind::Verify,
             )));
         }
-        let (edit_remaining, interval) = parse_genome_interval(part)?;
-        let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-            (r, e)
-        } else {
-            (
-                edit_remaining,
-                crate::hgvs::edit::NaEdit::Identity {
-                    sequence: None,
-                    whole_entity: false,
-                },
-            )
-        };
+        let (final_remaining, loc_edit) = parse_genome_bracket_member(part)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
                 nom::error::ErrorKind::Tag,
             )));
         }
-        variants.push(kind.build_variant(accession.clone(), gene_symbol.clone(), interval, edit));
+        variants.push(kind.build_variant_with_loc_edit(
+            accession.clone(),
+            gene_symbol.clone(),
+            loc_edit,
+        ));
     }
 
     // Singletons (`[a]`) are intentionally accepted by ferro: the bracketed
@@ -1364,19 +1396,9 @@ fn parse_genome_trans_allele_shorthand(
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (edit_remaining, interval) = parse_genome_interval(content)?;
-            // Edit is optional - if not present, treat as identity (position-only).
-            let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                (r, e)
-            } else {
-                (
-                    edit_remaining,
-                    crate::hgvs::edit::NaEdit::Identity {
-                        sequence: None,
-                        whole_entity: false,
-                    },
-                )
-            };
+            // Route through parse_genome_bracket_member so the predicted-wrapper
+            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
+            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -1388,7 +1410,7 @@ fn parse_genome_trans_allele_shorthand(
             HgvsVariant::Genome(GenomeVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
@@ -1689,6 +1711,37 @@ fn parse_cds_position_unknown_phase(
 }
 
 /// Parse CDS allele shorthand: [145C>T;147C>G], [145C>T(;)147C>G], or [76A>C];[0]
+/// Parse a single bracket-member position+edit (CDS), recognising the
+/// predicted-wrapper form `(<pos><edit>)` and returning a `LocEdit`
+/// with `Mu::Uncertain` in that case. Falls back to `<pos>[<edit>]`
+/// (edit optional, defaults to identity). #243 follow-up to #241.
+fn parse_cds_bracket_member(
+    part: &str,
+) -> IResult<&str, LocEdit<CdsInterval, crate::hgvs::edit::NaEdit>> {
+    // Try predicted wrapper first
+    if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
+        if let Ok((remaining, (interval, edit))) =
+            delimited(char('('), (parse_cds_interval, parse_na_edit), char(')')).parse(part)
+        {
+            return Ok((remaining, LocEdit::new_predicted(interval, edit)));
+        }
+    }
+    // Bare position [+ edit]
+    let (remaining, interval) = parse_cds_interval(part)?;
+    let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
+        (r, e)
+    } else {
+        (
+            remaining,
+            crate::hgvs::edit::NaEdit::Identity {
+                sequence: None,
+                whole_entity: false,
+            },
+        )
+    };
+    Ok((remaining, LocEdit::new(interval, edit)))
+}
+
 /// Also handles mixed phase: [123A>G;456C>T(;)789G>A] where some variants are cis
 /// and others have unknown phase relationship.
 fn parse_cds_allele_shorthand(
@@ -1749,19 +1802,7 @@ fn parse_cds_allele_shorthand(
                     )));
                 }
 
-                let (edit_remaining, interval) = parse_cds_interval(part)?;
-                // Edit is optional - if not present, treat as identity (no change)
-                let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                    (r, e)
-                } else {
-                    (
-                        edit_remaining,
-                        crate::hgvs::edit::NaEdit::Identity {
-                            sequence: None,
-                            whole_entity: false,
-                        },
-                    )
-                };
+                let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
 
                 if !final_remaining.trim().is_empty() {
                     return Err(nom::Err::Error(nom::error::Error::new(
@@ -1773,7 +1814,7 @@ fn parse_cds_allele_shorthand(
                 variants.push(HgvsVariant::Cds(CdsVariant {
                     accession: accession.clone(),
                     gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::new(interval, edit),
+                    loc_edit,
                 }));
             }
         }
@@ -1790,20 +1831,9 @@ fn parse_cds_allele_shorthand(
                 )));
             }
 
-            // Parse interval + edit (e.g., "145C>T" or "100_200del")
-            let (edit_remaining, interval) = parse_cds_interval(part)?;
-            // Edit is optional - if not present, treat as identity (no change)
-            let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                (r, e)
-            } else {
-                (
-                    edit_remaining,
-                    crate::hgvs::edit::NaEdit::Identity {
-                        sequence: None,
-                        whole_entity: false,
-                    },
-                )
-            };
+            // Parse interval + edit (e.g., "145C>T" or "100_200del" or
+            // predicted "(145C>T)").
+            let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -1815,7 +1845,7 @@ fn parse_cds_allele_shorthand(
             variants.push(HgvsVariant::Cds(CdsVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }));
         }
     }
@@ -1865,9 +1895,8 @@ fn parse_cds_trans_allele_shorthand(
         } else if *content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            // Parse as CDS variant (interval + edit)
-            let (edit_remaining, interval) = parse_cds_interval(content)?;
-            let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+            // Parse as CDS variant (interval + edit, with predicted-wrapper support).
+            let (final_remaining, loc_edit) = parse_cds_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -1879,7 +1908,7 @@ fn parse_cds_trans_allele_shorthand(
             HgvsVariant::Cds(CdsVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
@@ -2286,18 +2315,9 @@ fn parse_mt_trans_allele_shorthand(
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (edit_remaining, interval) = parse_genome_interval(content)?;
-            let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                (r, e)
-            } else {
-                (
-                    edit_remaining,
-                    crate::hgvs::edit::NaEdit::Identity {
-                        sequence: None,
-                        whole_entity: false,
-                    },
-                )
-            };
+            // Route through parse_genome_bracket_member so the predicted-wrapper
+            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
+            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -2309,7 +2329,7 @@ fn parse_mt_trans_allele_shorthand(
             HgvsVariant::Mt(MtVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
@@ -3490,18 +3510,9 @@ fn parse_circular_trans_allele_shorthand(
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (edit_remaining, interval) = parse_genome_interval(content)?;
-            let (final_remaining, edit) = if let Ok((r, e)) = parse_na_edit(edit_remaining) {
-                (r, e)
-            } else {
-                (
-                    edit_remaining,
-                    crate::hgvs::edit::NaEdit::Identity {
-                        sequence: None,
-                        whole_entity: false,
-                    },
-                )
-            };
+            // Route through parse_genome_bracket_member so the predicted-wrapper
+            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
+            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3513,7 +3524,7 @@ fn parse_circular_trans_allele_shorthand(
             HgvsVariant::Circular(CircularVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 
