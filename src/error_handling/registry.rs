@@ -920,6 +920,39 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
     );
 
     map.insert(
+        "W3020",
+        CodeInfo {
+            code: "W3020",
+            name: "RnaThymineCanonicalized",
+            summary: "Thymine ('t'/'T') used as a base in an r. (RNA) description.",
+            explanation:
+                "Per HGVS v21.0 RNA nomenclature, the RNA alphabet is `a/c/g/u`. Thymine is \
+                non-canonical input inside an `r.` description. In lenient/silent modes ferro \
+                rewrites each `t`/`T` to `u` (lowercased) and emits one warning per occurrence. \
+                In strict mode the input is rejected. This applies to every RNA edit shape \
+                where a base byte appears: substitution (ref/alt), deletion (stated ref), \
+                insertion (alt), duplication (stated ref), inversion (stated ref), delins \
+                (stated ref and alt), and repeat unit.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NM_000088.3:r.123a>t",
+                "NM_000088.3:r.123_125delAUT",
+                "NM_000088.3:r.123aut[5]",
+            ],
+            good_examples: &[
+                "NM_000088.3:r.123a>u",
+                "NM_000088.3:r.123_125delauu",
+                "NM_000088.3:r.123auu[5]",
+            ],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/RNA/substitution/",
+            ),
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
         "W3021",
         CodeInfo {
             code: "W3021",
