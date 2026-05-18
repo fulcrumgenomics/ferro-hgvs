@@ -1346,6 +1346,18 @@ fn parse_whole_genome_unknown(input: &str) -> IResult<&str, crate::hgvs::edit::N
 /// Returns true when `remaining` (the input after a `?`) starts with
 /// anything that should route `?` to the position-based parser rather
 /// than treating it as whole-entity unknown.
+///
+/// Covers every `?<edit>` continuation accepted by the position-based
+/// parser:
+///   - interval continuation `_`
+///   - intronic offsets `+` / `-`
+///   - identity `=`
+///   - keyword-keyed edits: `dup`, `del`, `ins`, `inv`, `con`, `copy`
+///   - substitutions: `<base>>` (e.g. `?A>G`) and `>` (no-ref)
+///
+/// `con` / `copy` were added per #286 to allow `?conNM_...:c.X_Y`
+/// and `?copy<N>` at an unknown position, consistent with the other
+/// `?<edit>` shapes accepted by #239 / PR #240.
 fn is_edit_continuation_after_unknown(remaining: &str) -> bool {
     if remaining.starts_with('_')
         || remaining.starts_with('+')
@@ -1355,6 +1367,8 @@ fn is_edit_continuation_after_unknown(remaining: &str) -> bool {
         || remaining.starts_with("del")
         || remaining.starts_with("ins")
         || remaining.starts_with("inv")
+        || remaining.starts_with("con")
+        || remaining.starts_with("copy")
     {
         return true;
     }
