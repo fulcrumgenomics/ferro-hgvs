@@ -154,8 +154,15 @@ fn display_preserves_gene_selector_refseq_nr() {
 }
 
 #[test]
-fn display_preserves_gene_selector_refseq_np() {
-    assert_display_preserves_gene_selector("NP_000079.2(COL1A1):p.(Arg8Gln)");
+fn display_drops_gene_selector_refseq_np() {
+    // Per HGVS syntax.yaml 119–128 the `accession(selector):p.` form is not
+    // part of the protein-variant grammar; the parenthesized selector is only
+    // defined for genomic-to-transcript projection on c./n. (syntax.yaml 213).
+    // Parsing remains permissive — `gene_symbol` round-trips on the struct —
+    // but Display emits the spec-compliant `accession:p.` form. See #310.
+    let v = parse_hgvs("NP_000079.2(COL1A1):p.(Arg8Gln)").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("COL1A1"));
+    assert_eq!(v.to_string(), "NP_000079.2:p.(Arg8Gln)");
 }
 
 #[test]
@@ -243,8 +250,14 @@ fn display_preserves_gene_selector_lrg_transcript_rna() {
 }
 
 #[test]
-fn display_preserves_gene_selector_lrg_protein() {
-    assert_display_preserves_gene_selector("LRG_199p1(BRCA1):p.(Arg8Gln)");
+fn display_drops_gene_selector_lrg_protein() {
+    // Per HGVS syntax.yaml 119–128 the protein-variant grammar has no
+    // parenthesized selector position; Display emits the spec-compliant
+    // `LRG_*p*:p.` form even when the parser accepted a `(GENE)` selector.
+    // See #310.
+    let v = parse_hgvs("LRG_199p1(BRCA1):p.(Arg8Gln)").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("BRCA1"));
+    assert_eq!(v.to_string(), "LRG_199p1:p.(Arg8Gln)");
 }
 
 // =============================================================================
@@ -586,10 +599,13 @@ fn normalize_is_idempotent_with_gene_symbol() {
 
 #[test]
 fn reparse_preserves_gene_symbol() {
+    // Only non-protein accession families round-trip byte-stably — `p.`
+    // Display intentionally drops the gene-symbol selector (#310), so a
+    // protein variant is not identity-preserving across Display in this
+    // sense and is covered separately in `display_drops_gene_selector_refseq_np`.
     let cases: &[(&str, &str)] = &[
         ("NM_000088.3(COL1A1):c.459A>G", "COL1A1"),
         ("NR_046018.2(DDX11L1):n.100A>G", "DDX11L1"),
-        ("NP_000079.2(COL1A1):p.(Arg8Gln)", "COL1A1"),
         ("ENST00000380152.7(BRCA2):c.100A>G", "BRCA2"),
         ("LRG_199t1(BRCA1):c.100A>G", "BRCA1"),
         ("MYREF_SEQ(GENE1):c.100A>G", "GENE1"),

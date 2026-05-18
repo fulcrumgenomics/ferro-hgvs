@@ -272,8 +272,18 @@ mod lrg_with_gene_symbol {
     }
 
     #[test]
-    fn protein_with_gene_round_trips() {
-        assert_round_trips("LRG_199p1(BRCA1):p.Arg8Gln");
+    fn protein_with_gene_drops_selector_on_display() {
+        // Per HGVS syntax.yaml 119–128 the protein-variant grammar has no
+        // parenthesized selector position. The parser still accepts the
+        // `LRG_*p*(GENE):p.` form and stores the selector text in
+        // `gene_symbol`, but Display emits the spec-compliant form without
+        // the selector. See #310.
+        let v = parse_hgvs("LRG_199p1(BRCA1):p.Arg8Gln")
+            .unwrap_or_else(|e| panic!("parse failed: {e}"));
+        // Parser remains permissive: gene selector text is retained on the
+        // struct even though Display drops it.
+        assert_eq!(v.gene_symbol(), Some("BRCA1"));
+        assert_eq!(format!("{}", v), "LRG_199p1:p.Arg8Gln");
     }
 }
 

@@ -75,7 +75,7 @@ class TestVariantProjector:
         assert result.gene_symbol == "TESTGENE"
         assert result.c_name is not None
         assert ":c.4C>A" in result.c_name
-        assert result.p_name == "NP_TEST.1(TESTGENE):p.(Arg2Ser)"
+        assert result.p_name == "NP_TEST.1:p.(Arg2Ser)"
         assert result.is_frameshift is False
         assert result.is_intronic is False
         assert result.is_utr is False
@@ -186,14 +186,14 @@ class TestIndelProteinNomenclature:
         result = long_projector.project("NC_000002.12:g.2006_2008del", transcript="NM_LONG.1")
         assert result.c_name is not None
         assert "del" in result.c_name
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2del)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2del)"
         assert result.is_frameshift is False
 
     def test_del_two_whole_codons(self, long_projector: ferro_hgvs.VariantProjector) -> None:
         # Delete Arg+Lys codons (c.4_9 = g.2006_2014del): p.(Arg2_Lys3del).
         result = long_projector.project("NC_000002.12:g.2006_2011del", transcript="NM_LONG.1")
         assert result.c_name is not None
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2_Lys3del)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2_Lys3del)"
         assert result.is_frameshift is False
 
     def test_del_single_base_frameshift(self, long_projector: ferro_hgvs.VariantProjector) -> None:
@@ -209,7 +209,7 @@ class TestIndelProteinNomenclature:
         result = long_projector.project("NC_000002.12:g.2006_2008dup", transcript="NM_LONG.1")
         assert result.c_name is not None
         assert "dup" in result.c_name
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2dup)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2dup)"
         assert result.is_frameshift is False
 
     def test_dup_single_base_frameshift(self, long_projector: ferro_hgvs.VariantProjector) -> None:

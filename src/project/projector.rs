@@ -730,7 +730,7 @@ mod tests {
             .as_ref()
             .expect("p. should be present")
             .to_string();
-        assert_eq!(p, "NP_TEST_MINUS.1(TESTGENE):p.(Arg2Cys)");
+        assert_eq!(p, "NP_TEST_MINUS.1:p.(Arg2Cys)");
         assert!(!result.is_frameshift);
         assert!(!result.is_intronic);
         assert!(!result.is_utr);
@@ -851,7 +851,7 @@ mod tests {
             .as_ref()
             .expect("p. should be present")
             .to_string();
-        assert_eq!(p, "NP_TEST.1(TESTGENE):p.(Arg2Ser)");
+        assert_eq!(p, "NP_TEST.1:p.(Arg2Ser)");
 
         assert!(!result.is_frameshift);
         assert!(!result.is_intronic);
