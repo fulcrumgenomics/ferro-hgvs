@@ -260,6 +260,20 @@ impl MockProvider {
     pub fn all_transcripts(&self) -> impl Iterator<Item = &Transcript> {
         self.transcripts.values()
     }
+
+    /// True when `id` is declared as a chromosome/contig name — either an
+    /// entry in `genomic_sequences` or the `chromosome` field on any
+    /// transcript. Used by `get_sequence` to disambiguate genomic lookups
+    /// from transcript-id lookups when the two name spaces collide
+    /// (e.g. a transcript whose id is `chr1-gene.1`; see #311).
+    fn is_known_contig(&self, id: &str) -> bool {
+        if self.genomic_sequences.contains_key(id) {
+            return true;
+        }
+        self.transcripts
+            .values()
+            .any(|tx| tx.chromosome.as_deref() == Some(id))
+    }
 }
 
 impl Default for MockProvider {
@@ -275,11 +289,21 @@ impl ReferenceProvider for MockProvider {
             return Ok(tx.clone());
         }
 
-        // Try without version
-        let base_id = id.split('.').next().unwrap_or(id);
-        for (key, tx) in &self.transcripts {
-            if key.starts_with(base_id) {
-                return Ok(tx.clone());
+        // Try without version: only match a stored key whose base id (the
+        // segment before the version dot) equals the requested id. A bare
+        // `starts_with` would also match unrelated keys that merely share
+        // a prefix (e.g. `chr1-gene.1` for a `chr1` lookup), causing a
+        // genomic accession to be resolved as a transcript — see #311.
+        //
+        // Gated on an unversioned query: a versioned miss (`NM_000088.5`
+        // against a stored `NM_000088.3`) must NOT silently return a
+        // different version. The fallback only bridges `NM_000088` →
+        // `NM_000088.3`.
+        if !id.contains('.') {
+            for (key, tx) in &self.transcripts {
+                if key.split('.').next().unwrap_or(key) == id {
+                    return Ok(tx.clone());
+                }
             }
         }
 
@@ -287,7 +311,19 @@ impl ReferenceProvider for MockProvider {
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
-        // Try as transcript ID first (matches FastaProvider behavior).
+        // If the requested id is registered as a contig — either as a key
+        // in `genomic_sequences` or as the `chromosome` field on any
+        // transcript — resolve it strictly against the genomic path.
+        // Without this dispatch, a transcript whose own id (or, before
+        // #311, whose id merely shared a prefix with the contig name)
+        // would short-circuit the lookup and silently interpret genomic
+        // coordinates as transcript-relative indices.
+        if self.is_known_contig(id) {
+            return self.get_genomic_sequence(id, start, end);
+        }
+
+        // Otherwise treat the id as a transcript accession (matches
+        // FastaProvider's transcript-first ordering for transcript ids).
         if let Ok(transcript) = self.get_transcript(id) {
             return transcript
                 .get_sequence(start, end)
@@ -312,12 +348,17 @@ impl ReferenceProvider for MockProvider {
         // Handle versioned and unversioned lookups
         let protein_seq = if let Some(seq) = self.proteins.get(accession) {
             seq.clone()
-        } else {
-            // Try without version
-            let base_id = accession.split('.').next().unwrap_or(accession);
+        } else if !accession.contains('.') {
+            // Try without version: match a stored key whose base accession
+            // (the segment before the version dot) equals the requested
+            // accession. Strict base-id equality avoids the prefix-collision
+            // failure mode that `get_transcript` had pre-#311.
+            //
+            // Gated on an unversioned query — a versioned miss must not
+            // cross-version fall back (mirrors `get_transcript` above).
             let mut found = None;
             for (key, seq) in &self.proteins {
-                if key.starts_with(base_id) {
+                if key.split('.').next().unwrap_or(key) == accession {
                     found = Some(seq.clone());
                     break;
                 }
@@ -327,6 +368,12 @@ impl ReferenceProvider for MockProvider {
                 start,
                 end,
             })?
+        } else {
+            return Err(FerroError::ProteinReferenceNotAvailable {
+                accession: accession.to_string(),
+                start,
+                end,
+            });
         };
 
         let start = start as usize;
