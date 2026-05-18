@@ -388,22 +388,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Predict protein consequence for CDS variants.
         let mut protein = None;
         if !is_intronic && !is_utr && is_coding {
-            // Prefer the explicit cdot.protein accession; otherwise infer NP_/XP_
-            // from NM_/XM_ by stripping the prefix (not by substring replace, which
-            // would mangle accessions whose suffix happens to contain "NM_"). If
-            // we cannot infer a protein accession, skip protein prediction rather
-            // than fabricate a bogus one.
-            let prot_acc = match cdot_protein {
-                Some(p) => Some(p),
-                None => transcript_id
-                    .strip_prefix("NM_")
-                    .map(|rest| format!("NP_{rest}"))
-                    .or_else(|| {
-                        transcript_id
-                            .strip_prefix("XM_")
-                            .map(|rest| format!("XP_{rest}"))
-                    }),
-            };
+            // Resolve the protein accession in priority order:
+            //   1. `cdot_protein` — explicit value from cdot.protein or from the
+            //      ferro reference JSON's `protein_id` field (which the cdot
+            //      mapper builders plumb into `CdotTranscript.protein`).
+            //   2. RefSeq inference: `NM_*` → `NP_*`, `XM_*` → `XP_*`. Substring
+            //      stripping (not replace) avoids mangling accessions whose
+            //      suffix happens to contain `NM_`.
+            //   3. The transcript ID itself, used as the `p.` accession prefix.
+            //      Keeps protein prediction live for references whose transcript
+            //      IDs do not match a RefSeq convention (e.g. `MY_GENE-gene.1`
+            //      from `ferro convert-gff`). The HGVS protein grammar requires
+            //      a `sequence_identifier`, so accession-less `p.` is not a valid
+            //      alternative. See #310.
+            let prot_acc: Option<String> = cdot_protein
+                .or_else(|| {
+                    transcript_id
+                        .strip_prefix("NM_")
+                        .map(|rest| format!("NP_{rest}"))
+                })
+                .or_else(|| {
+                    transcript_id
+                        .strip_prefix("XM_")
+                        .map(|rest| format!("XP_{rest}"))
+                })
+                .or_else(|| Some(transcript_id.to_string()));
             if let Some(prot_acc) = prot_acc {
                 match &c_edit {
                     NaEdit::Substitution { .. } => {
@@ -967,8 +976,9 @@ mod tests {
     fn make_ensembl_provider_and_projector() -> (Projector, MockProvider) {
         // Same CDS as make_test_provider_and_projector but the transcript ID is
         // an Ensembl accession (no NM_/XM_ prefix) and cdot.protein is absent.
-        // The projector must NOT fabricate a bogus protein accession via
-        // substring substitution; it should skip protein prediction instead.
+        // The projector must not fabricate a bogus accession via substring
+        // substitution; per #310 it falls back to using the transcript id as
+        // the `p.` accession prefix.
         let mut cdot = CdotMapper::new();
         cdot.add_transcript(
             "ENST00000000001.1".to_string(),
@@ -1013,7 +1023,13 @@ mod tests {
     }
 
     #[test]
-    fn project_substitution_no_protein_accession_skips_protein() {
+    fn project_substitution_falls_back_to_transcript_id_as_protein_accession() {
+        // Per #310: when no cdot.protein and no NM_/XM_ prefix is available
+        // to infer NP_/XP_ from, the projector falls back to using the
+        // transcript id directly as the `p.` accession prefix rather than
+        // silently dropping the protein prediction. The HGVS protein
+        // grammar requires a sequence_identifier, so the alternative would
+        // be a non-conformant accession-less `p.` form.
         let (projector, provider) = make_ensembl_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
         let result = vp
@@ -1021,12 +1037,12 @@ mod tests {
             .expect("projection should succeed");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains(":c.4C>A"), "expected c.4C>A, got: {}", c);
-        // Neither NM_/XM_ prefix nor cdot.protein: must skip protein prediction.
-        assert!(
-            result.protein.is_none(),
-            "expected no protein for accession with no NM_/XM_ prefix and no cdot.protein, got: {:?}",
-            result.protein
-        );
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. should be present via transcript-id fallback")
+            .to_string();
+        assert_eq!(p, "ENST00000000001.1:p.(Arg2Ser)");
     }
 
     // -------------------------------------------------------------------------
