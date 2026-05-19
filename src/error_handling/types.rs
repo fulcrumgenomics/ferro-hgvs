@@ -227,6 +227,30 @@ pub enum ErrorType {
     /// which the parser cannot decide); strict mode rejects.
     LengthMismatch,
 
+    /// Allele-fraction / heteroplasmy annotation appended to an HGVS
+    /// expression (e.g. `m.3243A>G[level=70%]`, `m.3243A>G(80%)`).
+    ///
+    /// The HGVS spec does not encode allele fraction inside the variant
+    /// string; fraction belongs in accompanying metadata (VCF FORMAT/AF,
+    /// ClinVar's heteroplasmy field, etc.). All modes reject this
+    /// annotation with a targeted W3017 diagnostic so downstream tooling
+    /// can recognize the intent rather than seeing a generic
+    /// trailing-character parse error.
+    AlleleFractionAnnotation,
+
+    /// ClinVar prose multi-allelic shorthand
+    /// `<acc>:m.<pos><ref>><alt>/<alt2>` (e.g. `m.3243A>G/T`) where the
+    /// RHS of the slash is a bare nucleotide letter — no edit operator,
+    /// no accession, no `=` reference marker.
+    ///
+    /// This shape is not a HGVS spec form: the spec's mosaic `/`
+    /// separator requires either two fully-qualified variants on each
+    /// side, or the spec compact mosaic `<pos>=/<alt-edit>` form (`=`
+    /// stands in for the reference, edit names the alternative). All
+    /// modes reject this annotation with a targeted W3018 diagnostic
+    /// pointing at the three spec-supported alternatives.
+    ClinVarProseMultiAllelic,
+
     /// Thymine (`t`/`T`) used as a base in an `r.` (RNA) description.
     ///
     /// Per HGVS v21.0 RNA nomenclature the RNA alphabet is `a/c/g/u`;
@@ -275,6 +299,8 @@ impl ErrorType {
             ErrorType::DeprecatedIvsNotation => "W3014",
             ErrorType::DeprecatedConSyntax => "W3015",
             ErrorType::LengthMismatch => "W3016",
+            ErrorType::AlleleFractionAnnotation => "W3017",
+            ErrorType::ClinVarProseMultiAllelic => "W3018",
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
@@ -322,6 +348,10 @@ impl ErrorType {
             ErrorType::DeprecatedConSyntax => "deprecated con (conversion) edit syntax",
             ErrorType::LengthMismatch => {
                 "explicit reference sequence length does not match position range"
+            }
+            ErrorType::AlleleFractionAnnotation => "allele-fraction / heteroplasmy annotation",
+            ErrorType::ClinVarProseMultiAllelic => {
+                "ClinVar prose multi-allelic shorthand m.<pos><ref>><alt>/<alt2>"
             }
             ErrorType::RnaThymineCanonicalized => {
                 "thymine (t) used in r. RNA description; canonicalized to u"
@@ -374,6 +404,14 @@ impl ErrorType {
             // Length-mismatch input has no safe auto-correction — the user
             // could have meant either endpoint or a different ref seq.
             ErrorType::LengthMismatch => false,
+            // Allele-fraction annotations carry data that does not belong
+            // in an HGVS string; no auto-correction is meaningful.
+            ErrorType::AlleleFractionAnnotation => false,
+            // The malformed ClinVar prose shape carries no shared
+            // structure with the spec-supported alternatives; ferro
+            // cannot pick one for the caller, so this is never
+            // auto-corrected.
+            ErrorType::ClinVarProseMultiAllelic => false,
             // RNA thymine is rewritten to `u`
             ErrorType::RnaThymineCanonicalized => true,
             // Bracketed AA list inside an insertion has no spec-defined
@@ -426,6 +464,12 @@ impl ErrorType {
                 "c.100_200delinsNM_001.1:c.5_105",
             ),
             ErrorType::LengthMismatch => ("g.100_110delAAAATTTGCC", "(no auto-correct)"),
+            ErrorType::AlleleFractionAnnotation => {
+                ("NC_012920.1:m.3243A>G[level=70%]", "NC_012920.1:m.3243A>G")
+            }
+            ErrorType::ClinVarProseMultiAllelic => {
+                ("NC_012920.1:m.3243A>G/T", "NC_012920.1:m.[3243A>G;3243A>T]")
+            }
             ErrorType::RnaThymineCanonicalized => ("r.123a>t", "r.123a>u"),
             ErrorType::ProteinBracketedAaInsertion => {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")

@@ -75,12 +75,34 @@ pub enum ErrorCode {
     IoError = 9001,
     /// JSON parsing error
     JsonError = 9002,
+
+    // Parser-emitted warning codes that surface via the structured
+    // `Diagnostic.code` channel rather than only as message text. The
+    // discriminants below `0x8000` are reserved for `E`-codes (matching
+    // the `E{:04}` layout above); W-codes shift into the high half so
+    // `as_str()` can tell them apart and format them as `W{:04}`.
+    /// W3017 — allele-fraction / heteroplasmy annotation appended to an HGVS string
+    AlleleFractionAnnotation = 0x8000 | 3017,
+    /// W3018 — ClinVar prose multi-allelic shorthand `m.<pos><ref>><alt>/<alt2>`
+    ClinVarProseMultiAllelic = 0x8000 | 3018,
 }
 
 impl ErrorCode {
-    /// Get the error code as a string (e.g., "E1001")
+    /// Get the error code as a string (e.g., "E1001" or "W3017").
+    ///
+    /// E-codes (the parser/normalizer error taxonomy) use the low four
+    /// digits of the discriminant directly. W-codes (warning-level
+    /// diagnostics that the parser raises through the structured
+    /// `Diagnostic.code` channel) carry the high bit (`0x8000`) so
+    /// `as_str` can format them with a `W` prefix without colliding
+    /// with the E-code numbering.
     pub fn as_str(&self) -> String {
-        format!("E{:04}", *self as u16)
+        let raw = *self as u16;
+        if raw & 0x8000 != 0 {
+            format!("W{:04}", raw & 0x7FFF)
+        } else {
+            format!("E{:04}", raw)
+        }
     }
 
     /// Get a brief description of this error code
@@ -110,6 +132,12 @@ impl ErrorCode {
             ErrorCode::NoOverlappingTranscript => "no overlapping transcript",
             ErrorCode::IoError => "file I/O error",
             ErrorCode::JsonError => "JSON parsing error",
+            ErrorCode::AlleleFractionAnnotation => {
+                "allele-fraction / heteroplasmy annotation appended to an HGVS expression"
+            }
+            ErrorCode::ClinVarProseMultiAllelic => {
+                "ClinVar prose multi-allelic shorthand m.<pos><ref>><alt>/<alt2>"
+            }
         }
     }
 }

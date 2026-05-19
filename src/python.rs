@@ -1986,8 +1986,10 @@ pub enum PyErrorType {
     DeprecatedIvsNotation = 25,
     DeprecatedConSyntax = 26,
     LengthMismatch = 27,
-    // Discriminants 28–29 are reserved for in-flight PRs (#295 W3017/W3018,
-    // #298 W3019). This PR claims 30 for W3020. The W-code is the canonical
+    AlleleFractionAnnotation = 28,
+    ClinVarProseMultiAllelic = 29,
+    // 30 is W3020 RnaThymineCanonicalized (in main). 31 is W3021
+    // ProteinBracketedAaInsertion (in main). The W-code is the canonical
     // identity; the integer is only a Python-side ABI tag.
     RnaThymineCanonicalized = 30,
     ProteinBracketedAaInsertion = 31,
@@ -2024,6 +2026,8 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::DeprecatedIvsNotation => PyErrorType::DeprecatedIvsNotation,
             ErrorType::DeprecatedConSyntax => PyErrorType::DeprecatedConSyntax,
             ErrorType::LengthMismatch => PyErrorType::LengthMismatch,
+            ErrorType::AlleleFractionAnnotation => PyErrorType::AlleleFractionAnnotation,
+            ErrorType::ClinVarProseMultiAllelic => PyErrorType::ClinVarProseMultiAllelic,
             ErrorType::RnaThymineCanonicalized => PyErrorType::RnaThymineCanonicalized,
             ErrorType::ProteinBracketedAaInsertion => PyErrorType::ProteinBracketedAaInsertion,
         }
@@ -2061,6 +2065,8 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::DeprecatedIvsNotation => ErrorType::DeprecatedIvsNotation,
             PyErrorType::DeprecatedConSyntax => ErrorType::DeprecatedConSyntax,
             PyErrorType::LengthMismatch => ErrorType::LengthMismatch,
+            PyErrorType::AlleleFractionAnnotation => ErrorType::AlleleFractionAnnotation,
+            PyErrorType::ClinVarProseMultiAllelic => ErrorType::ClinVarProseMultiAllelic,
             PyErrorType::RnaThymineCanonicalized => ErrorType::RnaThymineCanonicalized,
             PyErrorType::ProteinBracketedAaInsertion => ErrorType::ProteinBracketedAaInsertion,
         }
