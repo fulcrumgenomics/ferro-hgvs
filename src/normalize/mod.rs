@@ -118,6 +118,23 @@ pub enum NormalizationWarning {
         /// Edit kinds, e.g. ["sub", "sub"] or ["del", "inv"]
         edit_kinds: Vec<String>,
     },
+
+    /// `apply_canonical_split` was unable to canonicalize because the
+    /// reference window returned by the provider did not span the same
+    /// number of bytes as the HGVS interval (e.g. a cdot exon alignment
+    /// collapsed gap-positions in the genomic-to-tx projection). The
+    /// variant is returned unchanged. Closes-after: #354.
+    /// Code: `CANONICAL_SPLIT_SKIPPED`.
+    CanonicalSplitSkipped {
+        /// Human-readable description
+        message: String,
+        /// Accession of the reference sequence
+        accession: String,
+        /// Number of bytes the HGVS span demanded
+        expected_span: usize,
+        /// Number of bytes the provider returned
+        actual_bytes: usize,
+    },
 }
 
 impl NormalizationWarning {
@@ -126,6 +143,7 @@ impl NormalizationWarning {
         match self {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
+            Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
         }
     }
 
@@ -134,6 +152,7 @@ impl NormalizationWarning {
         match self {
             Self::RefSeqMismatch { message, .. } => message,
             Self::OverlapConflict { message, .. } => message,
+            Self::CanonicalSplitSkipped { message, .. } => message,
         }
     }
 }
@@ -459,7 +478,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // ...]` for rev-comp sub-spans and/or into separate subs across
         // interior identities. Returns the variant unchanged for
         // non-Delins or no-decomposition cases.
-        let split = self.apply_canonical_split(HV::Genome(new_variant));
+        let (split, mut split_warnings) = self.apply_canonical_split(HV::Genome(new_variant));
+        let mut warnings = warnings;
+        warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -597,7 +618,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Issue #160 + #165 post-canonicalization split. The codon-frame
         // exception applies only to CDS-proper positions, which the
         // helper filters internally via `simple_cds_pos`.
-        let split = self.apply_canonical_split(HV::Cds(new_variant));
+        let (split, mut split_warnings) = self.apply_canonical_split(HV::Cds(new_variant));
+        let mut warnings = warnings;
+        warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -696,7 +719,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // Issue #160 + #165 post-canonicalization split.
-        let split = self.apply_canonical_split(HV::Tx(new_variant));
+        let (split, mut split_warnings) = self.apply_canonical_split(HV::Tx(new_variant));
+        let mut warnings = warnings;
+        warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -1072,7 +1097,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Issue #160 + #165 post-canonicalization split (T/U-equivalent
         // comparison for the rev-comp scan and per-position emissions).
-        let split = self.apply_canonical_split(HV::Rna(new_variant));
+        let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(new_variant));
+        let mut warnings = warnings;
+        warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -1201,18 +1228,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // when the wider shuffle window does not.
         let mt_fallback = |v: &crate::hgvs::variant::MtVariant| {
             let canonical = self.canonicalize_mt_variant(v);
-            let split = self.apply_canonical_split(HV::Mt(canonical));
-            wrap_allele_if_split(split)
+            let (split, warnings) = self.apply_canonical_split(HV::Mt(canonical));
+            (wrap_allele_if_split(split), warnings)
         };
 
         let accession = variant.accession.transcript_accession();
         let start_pos = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos,
-            None => return Ok((mt_fallback(variant), vec![])),
+            None => return Ok(mt_fallback(variant)),
         };
         let end_pos = match variant.loc_edit.location.end.inner() {
             Some(pos) => pos,
-            None => return Ok((mt_fallback(variant), vec![])),
+            None => return Ok(mt_fallback(variant)),
         };
 
         // Decorated genome positions (offset / pter / qter / cen) cannot
@@ -1225,7 +1252,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             || start_pos.is_special()
             || end_pos.is_special()
         {
-            return Ok((mt_fallback(variant), vec![]));
+            return Ok(mt_fallback(variant));
         }
 
         let start = start_pos.base;
@@ -1245,7 +1272,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let ref_seq = match seq_result {
             Ok(s) => s,
             // No reference data → fall back to minimal-notation cleanup.
-            Err(_) => return Ok((mt_fallback(variant), vec![])),
+            Err(_) => return Ok(mt_fallback(variant)),
         };
 
         let rel_start = start - window_start;
@@ -1278,7 +1305,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // Issue #160 inv-split post-pass (mirrors normalize_genome).
-        let split = self.apply_canonical_split(HV::Mt(new_variant));
+        let (split, mut split_warnings) = self.apply_canonical_split(HV::Mt(new_variant));
+        let mut warnings = warnings;
+        warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
 
@@ -2850,11 +2879,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// are `T`. Both slices are normalized to `T` before comparison so the
     /// rev-comp scan works uniformly; the emitted `Substitution` sub-edits
     /// preserve the original alt `Base` (which may be `Base::U`).
-    fn apply_canonical_split(&self, variant: HgvsVariant) -> Vec<HgvsVariant> {
+    fn apply_canonical_split(
+        &self,
+        variant: HgvsVariant,
+    ) -> (Vec<HgvsVariant>, Vec<NormalizationWarning>) {
         let Some((hgvs_start, hgvs_end, alt_bytes, ref_bytes)) =
             self.fetch_ref_for_canonical_split(&variant)
         else {
-            return vec![variant];
+            return (vec![variant], vec![]);
         };
         // When the provider returns fewer (or more) bytes than the HGVS
         // interval span, the canonical-split decomposition would walk past
@@ -2865,17 +2897,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // returns 15,539 bytes for a 20,982-bp span). Pre-fix this
         // fired a `debug_assert_eq!` that panicked debug builds and
         // would have produced out-of-bounds reads in release. Now bail
-        // out gracefully: the input variant cannot be split without an
-        // authoritative ref window, so leave it as-is. Closes #339.
+        // out gracefully with a `CanonicalSplitSkipped` warning so
+        // callers can flag the input for human review. Closes #339,
+        // closes-after #354.
         let n = ref_bytes.len();
         let expected_span = (hgvs_end - hgvs_start + 1) as usize;
         if n != expected_span {
-            return vec![variant];
+            let accession = variant_accession_string(&variant);
+            let warning = NormalizationWarning::CanonicalSplitSkipped {
+                message: format!(
+                    "{}: canonical-split skipped — provider returned {} bytes for an HGVS \
+                     interval spanning {} positions ({}..{}); likely an exon-alignment gap. \
+                     Returning input unchanged.",
+                    accession, n, expected_span, hgvs_start, hgvs_end,
+                ),
+                accession,
+                expected_span,
+                actual_bytes: n,
+            };
+            return (vec![variant], vec![warning]);
         }
         let ref_norm = normalize_t_u(&ref_bytes);
         let alt_norm = normalize_t_u(&alt_bytes);
         let Some(subedits) = rules::decompose_delins(&ref_norm, 0, n, &alt_norm) else {
-            return vec![variant];
+            return (vec![variant], vec![]);
         };
         // Substitution sub-edits inherit `alt_norm` bytes (T-form) from
         // `decompose_delins`, but the user's literal alt may have been U
@@ -2918,7 +2963,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // bug. See #291 — the fix is to apply `rna_to_tx_pos` (or
         // equivalent) before reading bytes.
         let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_) | HgvsVariant::Rna(_));
-        build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware)
+        (
+            build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware),
+            vec![],
+        )
     }
 
     /// Per-coord-system extraction of `(hgvs_start, hgvs_end, alt_bytes,
@@ -3136,6 +3184,21 @@ fn unflip_intronic_positions(
 /// can't be decomposed by the post-canonicalization split rules
 /// (issues #160 / #165): non-Delins, intronic, uncertain boundary,
 /// non-literal insert, etc.
+/// Return the transcript-axis accession string for any `HgvsVariant`
+/// kind that `apply_canonical_split` operates on. Used to build the
+/// `CanonicalSplitSkipped` warning message — best-effort; returns
+/// `<unknown>` for variant kinds that don't carry a single accession.
+fn variant_accession_string(variant: &HgvsVariant) -> String {
+    match variant {
+        HgvsVariant::Genome(v) => v.accession.transcript_accession(),
+        HgvsVariant::Cds(v) => v.accession.transcript_accession(),
+        HgvsVariant::Tx(v) => v.accession.transcript_accession(),
+        HgvsVariant::Rna(v) => v.accession.transcript_accession(),
+        HgvsVariant::Mt(v) => v.accession.transcript_accession(),
+        _ => "<unknown>".to_string(),
+    }
+}
+
 fn extract_simple_delins(variant: &HgvsVariant) -> Option<(u64, u64, Vec<u8>)> {
     let (start, end, edit) = match variant {
         HgvsVariant::Genome(v) => simple_genome_loc_edit(&v.loc_edit)?,

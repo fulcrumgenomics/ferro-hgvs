@@ -100,6 +100,55 @@ fn normalize_returns_input_when_ref_window_shorter_small_span() {
     );
 }
 
+// Follow-up #354: when `apply_canonical_split` bails on an alignment-
+// gap mismatch, it now emits a `NormalizationWarning::CanonicalSplitSkipped`
+// so callers can detect that canonicalization was skipped (vs.
+// silently passing through the input verbatim).
+#[test]
+fn normalize_emits_canonical_split_skipped_warning_on_alignment_gap() {
+    let provider = FixedLengthProvider {
+        payload: "AATTAAGGTATA",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
+    let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
+
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize must not panic on alignment-gap-spanning delins");
+    assert_eq!(
+        format!("{}", result.result),
+        "NG_032871.1:g.32476_53457delinsAATTAAGGTATA",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "CANONICAL_SPLIT_SKIPPED"),
+        "expected CANONICAL_SPLIT_SKIPPED warning, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn normalize_emits_canonical_split_skipped_when_ref_longer_than_span() {
+    let provider = FixedLengthProvider {
+        payload: "AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTTACGTACGTAC",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
+    let variant = parse_hgvs("NC_000001.11:g.100_110delinsAAGCTT").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize must not panic on over-long ref window");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "CANONICAL_SPLIT_SKIPPED"),
+        "expected CANONICAL_SPLIT_SKIPPED warning on over-long ref window, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn normalize_returns_input_when_ref_window_longer_than_hgvs_span() {
     // Inverse mismatch direction: provider returns MORE bytes than the
