@@ -3985,6 +3985,40 @@ fn parse_trans_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     )))
 }
 
+/// True iff `variant` carries a position-bound (NOT whole-entity)
+/// `Identity` edit on a NA coord system — i.e. the spec compact
+/// mosaic / chimeric LHS shape `<acc>:<type>.<pos>=`.
+///
+/// Used by `parse_phase_allele` to decide how to interpret a bare
+/// `=` chunk that appears after the leading arm in a multi-slash
+/// chain. When true, the `=` chunk clones the leading arm so the
+/// inherited interval is preserved (e.g. `m.3243=/A>G/=/A>T` keeps
+/// position 3243 on the second `=`); when false (the single-slash
+/// `var/=` shorthand), we fall through to
+/// `create_identity_variant_from`, which builds a synthetic whole-
+/// entity identity that Display rewrites as bare `=`.
+fn is_lhs_position_identity(variant: &HgvsVariant) -> bool {
+    use crate::hgvs::edit::NaEdit;
+    let edit_is_pos_identity = |edit: &Mu<NaEdit>| {
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: false,
+                ..
+            })
+        )
+    };
+    match variant {
+        HgvsVariant::Genome(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Cds(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Tx(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Rna(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Mt(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        HgvsVariant::Circular(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        _ => false,
+    }
+}
+
 /// Create an identity variant based on the type of the reference variant.
 /// Used for mosaic/chimeric notation where "=" means reference allele.
 fn create_identity_variant_from(reference: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
@@ -4546,6 +4580,18 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
         }
         let variant = if chunk == "=" {
             match &first_variant {
+                // When the leading arm is itself a position-bound `=`
+                // identity (the spec compact-mosaic LHS shape, e.g.
+                // `m.3243=`), a later bare `=` chunk in a multi-slash
+                // chain (`m.3243=/A>G/=/A>T`) inherits the LHS's
+                // accession + coord type + interval rather than
+                // collapsing to a synthetic whole-entity `m.1=`. The
+                // whole-entity path is preserved only for the single-
+                // slash `var/=` shorthand, where the LHS is a non-
+                // identity edit and the Display layer rewrites the
+                // synthetic whole-entity RHS as bare `=` (PR #153 /
+                // #133 work-item-3). Closes #284.
+                Some(ref_var) if is_lhs_position_identity(ref_var) => ref_var.clone(),
                 Some(ref_var) => create_identity_variant_from(ref_var)?,
                 None => {
                     return Err(FerroError::Parse {
