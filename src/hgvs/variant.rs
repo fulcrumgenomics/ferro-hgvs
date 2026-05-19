@@ -188,9 +188,43 @@ impl Accession {
         self.assembly.is_some() && self.chromosome.is_some()
     }
 
-    /// Check if a prefix is an Ensembl-style prefix
+    /// Check if a prefix is an Ensembl-style prefix.
+    ///
+    /// Ensembl stable IDs have the shape `ENS<species_code><feature>` where:
+    /// - `species_code` is 0–5 uppercase letters (`""` for human, `MUS` for
+    ///   mouse, `RNO` for rat, `BTA` for cow, `DAR` for zebrafish, `CAF`
+    ///   for dog, `SSC` for pig, etc.).
+    /// - `feature` is one of `G` (gene), `T` (transcript), `P` (peptide),
+    ///   `E` (exon), or `R` (regulatory).
+    ///
+    /// Examples that match: `ENST`, `ENSP`, `ENSMUST`, `ENSMUSG`,
+    /// `ENSRNOT`, `ENSBTAG`, `ENSDARP`.
+    ///
+    /// Reference: <https://useast.ensembl.org/info/genome/stable_ids/index.html>.
     pub fn is_ensembl_prefix(prefix: &str) -> bool {
-        matches!(prefix, "ENST" | "ENSG" | "ENSP" | "ENSE" | "ENSR")
+        // Must start with "ENS" and have at least one feature letter after it.
+        let Some(body) = prefix.strip_prefix("ENS") else {
+            return false;
+        };
+        if body.is_empty() {
+            return false;
+        }
+        // body = species_code + feature. Per the Ensembl stable-ID convention
+        // the species code is 0..=5 uppercase letters and the feature is 1
+        // letter, so body must be at most 6 chars. This rejects arbitrarily
+        // long uppercase prefixes that would otherwise pass the suffix check.
+        if body.len() > 6 {
+            return false;
+        }
+        // All characters in the body must be uppercase ASCII letters.
+        if !body.chars().all(|c| c.is_ascii_uppercase()) {
+            return false;
+        }
+        // The last letter is the feature suffix.
+        matches!(
+            body.as_bytes()[body.len() - 1],
+            b'G' | b'T' | b'P' | b'E' | b'R'
+        )
     }
 
     /// Check if this accession is an Ensembl accession
@@ -2177,13 +2211,40 @@ mod tests {
 
     #[test]
     fn test_accession_is_ensembl_prefix() {
+        // Human prefixes (empty species code).
         assert!(Accession::is_ensembl_prefix("ENST"));
         assert!(Accession::is_ensembl_prefix("ENSG"));
         assert!(Accession::is_ensembl_prefix("ENSP"));
         assert!(Accession::is_ensembl_prefix("ENSE"));
         assert!(Accession::is_ensembl_prefix("ENSR"));
+
+        // Non-human species prefixes — same five feature suffixes,
+        // species code (`MUS`, `RNO`, `BTA`, `DAR`, `CAF`, `SSC`, …) sits
+        // between `ENS` and the suffix.
+        assert!(Accession::is_ensembl_prefix("ENSMUST"));
+        assert!(Accession::is_ensembl_prefix("ENSMUSG"));
+        assert!(Accession::is_ensembl_prefix("ENSMUSP"));
+        assert!(Accession::is_ensembl_prefix("ENSMUSE"));
+        assert!(Accession::is_ensembl_prefix("ENSMUSR"));
+        assert!(Accession::is_ensembl_prefix("ENSRNOT"));
+        assert!(Accession::is_ensembl_prefix("ENSBTAG"));
+        assert!(Accession::is_ensembl_prefix("ENSDARP"));
+        assert!(Accession::is_ensembl_prefix("ENSCAFT"));
+        assert!(Accession::is_ensembl_prefix("ENSSSCG"));
+
+        // Negative cases.
         assert!(!Accession::is_ensembl_prefix("NM"));
         assert!(!Accession::is_ensembl_prefix("NC"));
+        assert!(!Accession::is_ensembl_prefix("ENS")); // no feature suffix
+        assert!(!Accession::is_ensembl_prefix("ENSA")); // suffix not in {G,T,P,E,R}
+        assert!(!Accession::is_ensembl_prefix("ENSmust")); // lowercase rejected
+        assert!(!Accession::is_ensembl_prefix("ENSMUS1T")); // digit in species code
+        assert!(!Accession::is_ensembl_prefix("")); // empty
+        assert!(!Accession::is_ensembl_prefix("ANYTHING"));
+        // Species-code length is bounded at 5 chars (Ensembl convention).
+        assert!(Accession::is_ensembl_prefix("ENSAAAAAT")); // 5-letter species code + feature: accept
+        assert!(!Accession::is_ensembl_prefix("ENSAAAAAAT")); // 6-letter species code + feature: reject
+        assert!(!Accession::is_ensembl_prefix("ENSAAAAAAAAAT")); // grossly overlong: reject
     }
 
     #[test]
