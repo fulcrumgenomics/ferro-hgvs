@@ -262,10 +262,14 @@ fn codon_frame_del_then_sub_one_codon() {
 #[test]
 fn codon_frame_sub_then_del_rna() {
     // RNA analogue of sub+del: r. axis matches c. axis, so the same
-    // codon-frame rule applies. Lowercase bases per r. display.
+    // codon-frame rule applies. Lowercase RNA bases per r. display —
+    // the RNA alphabet is `a/c/g/u` per HGVS spec
+    // (recommendations/RNA/{substitution,delins,repeated}.md, e.g.
+    // `r.142_144delinsugg`), and PR #293 wired the display-side T→u
+    // canonicalization so the merged delins emits `cu`, not `ct`.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:r.[1a>c;3del]"),
-        "NM_TEST.1:r.1_3delinsct",
+        "NM_TEST.1:r.1_3delinscu",
     );
 }
 
