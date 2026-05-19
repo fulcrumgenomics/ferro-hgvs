@@ -2583,8 +2583,31 @@ fn parse_protein_trans_allele_shorthand(
 
         let content = remaining[1..close_bracket].trim();
 
-        let variant = if content == "0" {
-            HgvsVariant::NullAllele
+        // Inside the protein-coordinate compact trans-allele form
+        // (`ACC:p.[X];[0]`), `[0]` and `[0?]` resolve to
+        // `ProteinEdit::NoProtein` rather than the cross-coordinate
+        // `HgvsVariant::NullAllele`: the shared `p.` compact prefix has
+        // already pinned the coordinate system to protein, and `p.0` /
+        // `p.0?` are the spec's "no protein produced" forms (per
+        // `recommendations/protein/{substitution,deletion}.md`). Routing to
+        // `NullAllele` here would silently break Display→reparse semantics
+        // for variants like `[ACC:p.X];[ACC:p.0]`, whose compact-form
+        // Display emits `ACC:p.[X];[0]` (issue #277, follow-up to PR #130).
+        //
+        // The cross-coordinate `[0]` / `[?]` markers still come through the
+        // outer (no-coord-prefix) `parse_trans_allele` path
+        // (`[ACC:p.X];[0]`), where `NullAllele` / `UnknownAllele` remain
+        // correct — see the pin
+        // `protein_no_protein_roundtrip::bare_bracketed_zero_is_null_allele_not_no_protein`.
+        let variant = if content == "0" || content == "0?" {
+            let predicted = content == "0?";
+            let dummy_pos = ProtPos::new(AminoAcid::Met, 1);
+            let dummy_interval = ProtInterval::point(dummy_pos);
+            HgvsVariant::Protein(ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new(dummy_interval, ProteinEdit::NoProtein { predicted }),
+            })
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
