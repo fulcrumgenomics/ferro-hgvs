@@ -1,0 +1,724 @@
+{
+  "description": "Biocommons normalizer test cases",
+  "source": "https://github.com/biocommons/hgvs-rs",
+  "source_commit": "b6513b3d793615fd770b1e8ae2a87d85d10396b5",
+  "biocommons_upstream": "https://github.com/biocommons/hgvs",
+  "license": "Apache-2.0",
+  "refreshed_at": "2026-05-19",
+  "cases": [
+    {
+      "input": "NG_029146.1:g.6494delG",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "issue_293_parser_attribute_assignment_error",
+      "to_test": true
+    },
+    {
+      "input": "NM_000535.5:c.1673_1674inv",
+      "normalized": "NM_000535.5:c.1673_1674inv",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "issue_324_error_normalizing_simple_inversion",
+      "to_test": true
+    },
+    {
+      "input": "NC_000009.11:g.36233991_36233992delCAinsAC",
+      "normalized": "NC_000009.11:g.36233991_36233992delinsAC",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "issue_335_delins_canonicalization",
+      "to_test": true
+    },
+    {
+      "input": "NM_000535.5:c.1673_1674delCCinsGG",
+      "normalized": "NM_000535.5:c.1673_1674inv",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "issue_335_delins_canonicalization",
+      "to_test": true
+    },
+    {
+      "input": "NM_000535.5:c.1_3delATGinsCAT",
+      "normalized": "NM_000535.5:c.1_3inv",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "issue_335_delins_canonicalization",
+      "to_test": true
+    },
+    {
+      "input": "NM_005877.4:c.1104_1105insGG",
+      "normalized": "NM_005877.4:c.1104_1105insGG",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "issue_376_ins_no_shift",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.14_15insT",
+      "normalized": "NM_000051.3:c.15dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_000088.3:c.589_600inv",
+      "normalized": "NM_000088.3:c.590_599inv",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.2_7delinsTTTAGA",
+      "normalized": "NM_001166478.1:c.3_4delinsTT",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.30_31insT",
+      "normalized": "NM_001166478.1:c.35dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.31del",
+      "normalized": "NM_001166478.1:c.35del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.35_36dup",
+      "normalized": "NM_001166478.1:c.36_37dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.35_36insT",
+      "normalized": "NM_001166478.1:c.35dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.36_37insTC",
+      "normalized": "NM_001166478.1:c.36_37dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.36_37insTCTCTC",
+      "normalized": "NM_001166478.1:c.37_38insCTCTCT",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.59delG",
+      "normalized": "NM_001166478.1:c.61del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.14_15insT",
+      "normalized": "NM_000051.3:c.14dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_000088.3:c.589_600inv",
+      "normalized": "NM_000088.3:c.590_599inv",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.2_7delinsTTTAGA",
+      "normalized": "NM_001166478.1:c.3_4delinsTT",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.30_31insT",
+      "normalized": "NM_001166478.1:c.31dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.34del",
+      "normalized": "NM_001166478.1:c.31del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.35_36dup",
+      "normalized": "NM_001166478.1:c.35_36dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.35_36insT",
+      "normalized": "NM_001166478.1:c.31dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.36_37insTC",
+      "normalized": "NM_001166478.1:c.35_36dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.36_37insTCTCTC",
+      "normalized": "NM_001166478.1:c.34_35insTCTCTC",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.61delG",
+      "normalized": "NM_001166478.1:c.59del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001110792.1:c.1030_1035del",
+      "normalized": "NM_001110792.1:c.1029_1034del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_cds_around_exon_intron_boundary",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.59_61del",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_cds_around_exon_intron_boundary",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.59delG",
+      "normalized": "NM_001166478.1:c.60del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_cds_around_exon_intron_boundary",
+      "to_test": true
+    },
+    {
+      "input": "NM_001166478.1:c.61delG",
+      "normalized": "NM_001166478.1:c.61del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_cds_around_exon_intron_boundary",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.*2_*3insT",
+      "normalized": "NM_000051.3:c.*4dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.*4_*5insT",
+      "normalized": "NM_000051.3:c.*3dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.-2_-1insCA",
+      "normalized": "NM_000051.3:c.-1_1insAC",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.-2_-1insCA",
+      "normalized": "NM_000051.3:c.-1_1dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.-4_-3insA",
+      "normalized": "NM_000051.3:c.-4dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.-4_-3insAC",
+      "normalized": "NM_000051.3:c.-3_-2dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.-5_-4insA",
+      "normalized": "NM_000051.3:c.-3dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.1_2insCA",
+      "normalized": "NM_000051.3:c.-1_1dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.9170_9171insAT",
+      "normalized": "NM_000051.3:c.9171_*1dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000051.3:c.9171_*1insA",
+      "normalized": "NM_000051.3:c.9171dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NM_000059.3:c.7790delAAG",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_cds_utr_variant",
+      "to_test": true
+    },
+    {
+      "input": "NC_000001.10:g.1647893delinsCTTTCTT",
+      "normalized": "NC_000001.10:g.1647895_1647900dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000003.12:g.46709584_46709610del27insAAGAAGAAGAAGAAGAAGAAGAAGAAG",
+      "normalized": "NC_000003.12:g.46709584_46709610=",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917098delC",
+      "normalized": "NC_000006.11:g.49917099del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917121_49917122insGA",
+      "normalized": "NC_000006.11:g.49917122_49917123dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123dup",
+      "normalized": "NC_000006.11:g.49917122_49917123dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123dupGA",
+      "normalized": "NC_000006.11:g.49917122_49917123dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123insA",
+      "normalized": "NC_000006.11:g.49917127dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917151_49917156delinsTCTAAA",
+      "normalized": "NC_000006.11:g.49917154_49917155delinsAA",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_3_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000003.12:g.46709584_46709610del27insAAGAAGAAGAAGAAGAAGAAGAAGAAG",
+      "normalized": "NC_000003.12:g.46709584_46709610=",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917099delC",
+      "normalized": "NC_000006.11:g.49917098del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917121_49917122insGA",
+      "normalized": "NC_000006.11:g.49917121_49917122dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123dup",
+      "normalized": "NC_000006.11:g.49917121_49917122dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123dupGA",
+      "normalized": "NC_000006.11:g.49917121_49917122dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917122_49917123insA",
+      "normalized": "NC_000006.11:g.49917123dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000006.11:g.49917151_49917156delinsTCTAAA",
+      "normalized": "NC_000006.11:g.49917154_49917155delinsAA",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NC_000009.11:g.36233991_36233992delCAinsTG",
+      "normalized": "NC_000009.11:g.36233991_36233992inv",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NG_032871.1:g.32476_53457delinsAATTAAGGTATA",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_genome_5_prime_shuffling",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1A>T",
+      "normalized": "NM_001001656.1:c.1A>T",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1A>T",
+      "normalized": "NM_001001656.1:c.1A>T",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1del",
+      "normalized": "NM_001001656.1:c.1del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1del",
+      "normalized": "NM_001001656.1:c.1del",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1dup",
+      "normalized": "NM_001001656.1:c.1dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.1dup",
+      "normalized": "NM_001001656.1:c.1dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935T>C",
+      "normalized": "NM_001001656.1:c.935T>C",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935T>C",
+      "normalized": "NM_001001656.1:c.935T>C",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935_945del",
+      "normalized": "NM_001001656.1:c.935_945del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935_945del",
+      "normalized": "NM_001001656.1:c.935_945del",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935_946del",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.935_946del",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.945G>C",
+      "normalized": "NM_001001656.1:c.945G>C",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.945G>C",
+      "normalized": "NM_001001656.1:c.945G>C",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.945dup",
+      "normalized": "NM_001001656.1:c.945dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.945dup",
+      "normalized": "NM_001001656.1:c.945dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.946G>C",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.946G>C",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.946dup",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_001001656.1:c.946dup",
+      "normalized": null,
+      "expects_error": true,
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1400_1401insAC",
+      "normalized": "NM_212556.2:c.1401delinsACA",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1400_1401insAC",
+      "normalized": "NM_212556.2:c.1401delinsACA",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1401delinsAA",
+      "normalized": "NM_212556.2:c.1401dup",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": false,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1_2insCA",
+      "normalized": "NM_212556.2:c.1_2insCA",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1_2insCA",
+      "normalized": "NM_212556.2:c.1delinsACA",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1delinsAA",
+      "normalized": "NM_212556.2:c.1dup",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1delinsCA",
+      "normalized": "NM_212556.2:c.1delinsCA",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.1delinsCA",
+      "normalized": "NM_212556.2:c.1delinsCA",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.2_3insCAT",
+      "normalized": "NM_212556.2:c.2_3insCAT",
+      "shuffle_direction": "3prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    },
+    {
+      "input": "NM_212556.2:c.2_3insCAT",
+      "normalized": "NM_212556.2:c.1delinsATCA",
+      "shuffle_direction": "5prime",
+      "cross_boundaries": true,
+      "source_function": "normalize_near_tx_start_end",
+      "to_test": true
+    }
+  ]
+}
