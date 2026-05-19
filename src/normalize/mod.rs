@@ -2317,8 +2317,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     //
                     // If none match, fall through to ins (possibly rotated).
                     let original_pos_idx = hgvs_pos_to_index(start) as u64;
-                    let ins_to_dup =
-                        rules::insertion_to_duplication(ref_seq, original_pos_idx, &seq_bytes);
+                    let ins_to_dup = rules::insertion_to_duplication(
+                        ref_seq,
+                        original_pos_idx,
+                        &seq_bytes,
+                        self.config.shuffle_direction,
+                    );
 
                     // Codon-frame gate (repeated.md): in c., if the alt is
                     // >=2 copies of a non-codon-aligned unit, the spec
