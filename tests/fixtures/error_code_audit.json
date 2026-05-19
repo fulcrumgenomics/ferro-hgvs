@@ -382,6 +382,14 @@
       "spec_section_notes": "Parser-level rejection in src/hgvs/parser/variant.rs::parse_phase_allele when the bare-base prose RHS is detected after the spec-compact fallback fails. Closes the diagnostic gap left by issue #133 work-item 4 (mosaic prose follow-up, issue #278)."
     },
     {
+      "code": "W3019",
+      "description": "NonSpecMosaicForm — nested '/' + '//' at the same nesting level (chimeric-of-mosaic / mosaic-of-chimeric) AND the bracketed '[a/b]' / '[a//b]' mosaic group. Both are non-spec forms; one code family for two detectors.",
+      "spec_section": "recommendations/DNA/substitution.md (compact mosaic '=/<edit>' and chimeric '=//<edit>'); no nesting or '[a/b]' production is defined in HGVS v21.",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+      "status": "enforced",
+      "spec_section_notes": "Always-reject (no canonical alternative exists, so no auto-correction). Two parser-level detectors in src/hgvs/parser/variant.rs: (A) `has_slash_inside_brackets` runs at the top of `parse_variant` and catches '[a/b]' / '[a//b]'; (B) the existing chunk-has-inner-slash guard inside `parse_phase_allele` upgrades to the same W3019 family. Both go through `non_spec_mosaic_form_error`, which inlines the spec-supported alternatives ([a;b] cis; acc:c.X/acc:c.Y mosaic; acc:c.X//acc:c.Y chimeric; compact =/<edit> and =//<edit>) in the message text so callers using plain `to_string()` see the migration path. Pinned by tests/issue_281_mosaic_chimeric_nesting.rs (closes #281, follow-up to #217 / #216)."
+    },
+    {
       "code": "W3020",
       "description": "RnaThymineCanonicalized — 't'/'T' inside an r. (RNA) description rewritten to 'u'.",
       "spec_section": "recommendations/RNA/substitution.md and adjacent RNA edit pages (RNA alphabet is a/c/g/u; t is non-canonical)",

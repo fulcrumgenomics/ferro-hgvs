@@ -956,6 +956,7 @@ class ErrorType(IntEnum):
     SinglePositionRange = 24
     DeprecatedIvsNotation = 25
     DeprecatedConSyntax = 26
+    NonSpecMosaicForm = 34
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

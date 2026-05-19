@@ -1019,6 +1019,45 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
     );
 
     map.insert(
+        "W3019",
+        CodeInfo {
+            code: "W3019",
+            name: "NonSpecMosaicForm",
+            summary: "Non-spec mosaic / chimeric form (nested `/`+`//` or bracketed `[a/b]`).",
+            explanation:
+                "HGVS v21 does not define two related mosaic/chimeric shapes that ferro rejects \
+                under one diagnostic family: (1) **nesting** `/` and `//` at the same level \
+                (e.g. `m.[3243A>G/T]//[3243A>C/G]` — chimeric-of-mosaic, or the mirror image \
+                mosaic-of-chimeric), and (2) `[a/b]` — a bracketed mosaic group (e.g. \
+                `c.[100A>G/200T>C]`). Both rejections are upgraded to this targeted code so \
+                downstream tools can key off a single family. Cannot be auto-corrected (no \
+                canonical alternative exists); use compound brackets `[a;b]`, dual \
+                fully-qualified slash `acc:c.X/acc:c.Y` (mosaic) or `acc:c.X//acc:c.Y` \
+                (chimeric), or the compact short-hands `acc:c.<pos>=/<edit>` (mosaic) and \
+                `acc:c.<pos>=//<edit>` (chimeric) instead.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "m.[3243A>G/T]//[3243A>C/G]",
+                "m.[3243A>G//T]/[3243A>C//G]",
+                "NM_000088.3:c.[100A>G/200T>C]",
+                "NM_000088.3:c.[100A>G//200T>C]",
+            ],
+            good_examples: &[
+                "NM_000088.3:c.[100A>G;200T>C]",
+                "NM_000088.3:c.100A>G/NM_000088.3:c.200T>C",
+                "NM_000088.3:c.100A>G//NM_000088.3:c.200T>C",
+                "NM_000088.3:c.123=/A>G",
+                "NM_000088.3:c.123=//A>G",
+            ],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
+            ),
+            related_codes: &["W3004"],
+        },
+    );
+
+    map.insert(
         "W3021",
         CodeInfo {
             code: "W3021",

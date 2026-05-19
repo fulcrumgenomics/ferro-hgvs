@@ -1191,6 +1191,38 @@ pub(crate) fn find_top_level_slash(input: &str, want_double: bool) -> Option<usi
     None
 }
 
+/// Detect whether `input` contains a `/` *inside* a bracket pair —
+/// i.e. at bracket depth ≥ 1. Used to flag the `[a/b]` mosaic form
+/// (and the `[a//b]` chimeric variant of the same family), which the
+/// HGVS spec does not define. Both surface under W3019
+/// (`NonSpecMosaicForm`).
+///
+/// Returns `true` on the *first* `/` found at depth ≥ 1 — callers
+/// only need a yes/no for diagnostic emission.
+///
+/// This is the dual of `find_top_level_slash`, which scans at depth
+/// 0 only. Together they let `parse_variant` route the four mosaic /
+/// chimeric shapes:
+///
+///   * top-level `/` / `//`  — spec-supported mosaic / chimeric
+///   * bracketed `[a/b]`     — non-spec, reject with W3019 (this helper)
+///   * nested `/` + `//` at the same level — non-spec, reject with W3019
+pub(crate) fn has_slash_inside_brackets(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => depth += 1,
+            b']' if depth > 0 => depth -= 1,
+            b'/' if depth >= 1 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Bracket-depth-aware top-level split for chimeric (`//`) or mosaic
 /// (`/`) separators. Mirrors `str::split(sep)` semantics but respects
 /// `[ ]` nesting. Empty chunks are preserved (callers reject them
@@ -4748,18 +4780,16 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
             find_top_level_slash(chunk, true).is_some()
         };
         if chunk_has_inner_slash {
-            return Err(FerroError::Parse {
-                pos: 0,
-                msg: format!(
-                    "{} allele chunk `{}` contains a top-level '{}' (the other phase marker); \
-                     mixing mosaic and chimeric markers at the same nesting level is not \
-                     defined by the HGVS spec",
-                    capitalize(phase_name),
-                    chunk,
-                    if want_double { "/" } else { "//" }
-                ),
-                diagnostic: None,
-            });
+            // W3019 detector B: a chunk that still carries a top-level
+            // slash of the *other* phase marker after splitting on the
+            // outer marker — i.e. `a/b//c` (mosaic-of-chimeric) or
+            // `a//b/c` (chimeric-of-mosaic). HGVS v21 does not define
+            // this nesting. Reject with the same W3019 family code as
+            // detector A in `parse_variant`.
+            return Err(non_spec_mosaic_form_error(
+                input,
+                NonSpecCase::MixedFlatSlash,
+            ));
         }
         let variant = if chunk == "=" {
             match &first_variant {
@@ -4851,6 +4881,68 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
     }
 
     Ok(HgvsVariant::Allele(AlleleVariant::new(variants, phase)))
+}
+
+/// Which sub-case of the W3019 `NonSpecMosaicForm` family fired.
+/// Both produce the same error code; the case lets the diagnostic
+/// hint be precise about *which* shape the user wrote.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NonSpecCase {
+    /// `[a/b]` / `[a//b]` — slash inside a bracket pair.
+    SlashInBracket,
+    /// `a/b//c` / `a//b/c` — mixed `/` and `//` at the same level.
+    MixedFlatSlash,
+}
+
+/// Build the W3019 (`NonSpecMosaicForm`) rejection diagnostic.
+/// Centralized so both detectors emit identical hint text and so
+/// downstream tooling can grep for a single `[W3019 …]` prefix.
+///
+/// The hint enumerates the spec-supported alternatives the user
+/// should use instead:
+///   * compound brackets `[a;b]` (cis),
+///   * dual fully-qualified slash `acc:c.X/acc:c.Y` (mosaic) or
+///     `acc:c.X//acc:c.Y` (chimeric),
+///   * compact short-hands `acc:c.<pos>=/<edit>` (mosaic) and
+///     `acc:c.<pos>=//<edit>` (chimeric).
+pub(crate) fn non_spec_mosaic_form_error(input: &str, case: NonSpecCase) -> FerroError {
+    use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+    use crate::error_handling::ErrorType;
+    let case_label = match case {
+        NonSpecCase::SlashInBracket => "bracketed `[a/b]` / `[a//b]`",
+        NonSpecCase::MixedFlatSlash => {
+            "mixing mosaic and chimeric markers at the same nesting level"
+        }
+    };
+    // The hint text is inlined in `msg` (not only in the diagnostic
+    // hint field) so the spec-alternatives are visible in plain
+    // `Display` output — `FerroError::Parse`'s thiserror format
+    // shows `msg` but not the structured `Diagnostic` hint.
+    let hint = "use `[a;b]` (cis), `acc:c.X/acc:c.Y` (mosaic), \
+                `acc:c.X//acc:c.Y` (chimeric), or compact `acc:c.<pos>=/<edit>` \
+                / `acc:c.<pos>=//<edit>`";
+    // Source the W-code + name from the `ErrorType` registry so the
+    // string stays in sync if the code ever moves. Using the variant
+    // here also satisfies the error-code audit's "enforced rows
+    // must reference ErrorType::<Variant> from emission-relevant
+    // src/ paths" rule (tests/error_code_audit.rs).
+    let et = ErrorType::NonSpecMosaicForm;
+    let msg = format!(
+        "[{} {:?}] {} — HGVS v21 does not define this form; {}",
+        et.code(),
+        et,
+        case_label,
+        hint
+    );
+    FerroError::parse_with_diagnostic(
+        0,
+        msg,
+        Diagnostic::new()
+            .with_code(ErrorCode::UnexpectedChar)
+            .with_span(SourceSpan::new(0, input.len()))
+            .with_source(input)
+            .with_hint(hint),
+    )
 }
 
 /// Title-case the first ASCII letter of `s`. Tiny local helper used
@@ -5189,6 +5281,21 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // bail with a generic nom failure. Bare `parse_hgvs` callers see the
     // same code as the lenient/silent preprocessor paths.
     reject_protein_bracketed_aa_insertion(input)?;
+
+    // W3019 detector A: `[a/b]` / `[a//b]` — slash *inside* a bracket
+    // pair. HGVS does not define this form. Reject up-front with a
+    // targeted diagnostic so users get the spec alternatives instead
+    // of a generic nom error from `parse_cis_allele`.
+    //
+    // Spec-supported `[a;b]/[c;d]` has slashes only at bracket depth
+    // 0 (between groups), so this check does not regress that form
+    // — see `has_slash_inside_brackets`.
+    if has_slash_inside_brackets(input) {
+        return Err(non_spec_mosaic_form_error(
+            input,
+            NonSpecCase::SlashInBracket,
+        ));
+    }
 
     // Check for allele patterns and RNA fusion first
     let variant = if let Some(allele_type) = detect_allele_type(input) {
