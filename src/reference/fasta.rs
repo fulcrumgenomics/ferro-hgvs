@@ -836,10 +836,14 @@ impl ReferenceProvider for MmapFastaProvider {
             return Ok(tx.clone());
         }
 
-        // Try without version
+        // Try without version: only match a stored key whose base id (the
+        // segment before the version dot) equals the requested id. A bare
+        // `starts_with` would also match unrelated keys that merely share
+        // a prefix (e.g. `chr1-gene.1` for a `chr1` lookup), causing a
+        // genomic accession to be resolved as a transcript — see #314.
         let base_id = id.split('.').next().unwrap_or(id);
         for (key, tx) in &self.transcripts {
-            if key.starts_with(base_id) {
+            if key.split('.').next().unwrap_or(key) == base_id {
                 return Ok(tx.clone());
             }
         }
