@@ -499,22 +499,5 @@
       "supported": true,
       "source": "mutalyzer-community"
     }
-  ],
-  "normalization_tests": [
-    {
-      "input": "NM_004006.1:c.10A>T",
-      "normalized": "NM_004006.1:c.10A>T",
-      "description": "Substitution should not change"
-    },
-    {
-      "input": "NG_012232.1:g.100del",
-      "normalized": "NG_012232.1:g.100del",
-      "description": "Simple deletion"
-    },
-    {
-      "input": "NM_004006.1:c.100_102del",
-      "normalized": "NM_004006.1:c.100_102del",
-      "description": "Range deletion"
-    }
   ]
 }

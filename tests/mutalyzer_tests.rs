@@ -13,7 +13,6 @@ struct TestFixture {
     description: String,
     source: String,
     parsing_tests: Vec<ParsingTestCase>,
-    normalization_tests: Vec<NormalizationTestCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,14 +24,6 @@ struct ParsingTestCase {
     variant_type: Option<String>,
     supported: bool,
     source: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct NormalizationTestCase {
-    input: String,
-    normalized: String,
-    description: String,
 }
 
 fn load_mutalyzer_fixtures() -> TestFixture {
@@ -210,8 +201,4 @@ fn test_mutalyzer_coverage_summary() {
     println!("    - Supported: {}", supported_count);
     println!("    - Unsupported: {}", unsupported_count);
     println!("  Invalid variants: {}", invalid_count);
-    println!(
-        "  Normalization tests: {}",
-        fixtures.normalization_tests.len()
-    );
 }
