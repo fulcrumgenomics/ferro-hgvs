@@ -61,14 +61,16 @@ mod boundary_struct {
 
     #[test]
     fn test_boundaries_contains() {
+        // Half-open `[10, 50)`: `right` is the exclusive upper bound.
         let bounds = Boundaries::new(10, 50);
 
         // Inside bounds
-        assert!(bounds.contains(10)); // Left edge
+        assert!(bounds.contains(10)); // Left edge (inclusive)
         assert!(bounds.contains(30)); // Middle
-        assert!(bounds.contains(50)); // Right edge
+        assert!(bounds.contains(49)); // Last reachable position
 
         // Outside bounds
+        assert!(!bounds.contains(50)); // Right edge is exclusive
         assert!(!bounds.contains(9));
         assert!(!bounds.contains(51));
     }
@@ -281,7 +283,18 @@ mod normalization_boundaries {
     }
 
     #[test]
-    fn test_cds_boundaries_cross_allowed() {
+    fn test_cds_boundaries_cross_allowed_clamps_axis() {
+        // make_single_exon_transcript() has 5'UTR 1-10, CDS 11-90, 3'UTR 91-100
+        // (1-based-inclusive tx coords). tx position 50 sits inside the
+        // CDS, so the axis bound is 1-based [11, 90] → 0-based (10, 90).
+        // Even with cross_boundaries=true (which authorizes crossing exon-
+        // intron boundaries), the CDS↔UTR axis bound still applies — a
+        // 3'-rule shuffle must not silently relabel a c.<N> variant as
+        // c.-N (5'UTR) or c.*N (3'UTR). Closes #337.
+        //
+        // Tombstone: pre-#337 the same call returned `bounds.right ==
+        // sequence_length()` (the full transcript) under cross=true. The
+        // tightening to the CDS axis is the intended behavior change.
         let tx = make_single_exon_transcript();
         let config = NormalizeConfig::default().allow_crossing_boundaries();
 
@@ -289,8 +302,58 @@ mod normalization_boundaries {
         assert!(bounds.is_ok());
         let bounds = bounds.unwrap();
 
-        // With cross_boundaries=true, should allow full transcript range
-        assert_eq!(bounds.left, 1);
-        assert_eq!(bounds.right, tx.sequence_length());
+        assert_eq!(bounds.left, 10);
+        assert_eq!(bounds.right, 90);
+    }
+
+    #[test]
+    fn test_cds_boundaries_cross_allowed_in_5utr_clamps_to_utr() {
+        // Position 5 sits in 5'UTR (1-based [1, 10]). Axis bound = (0, 10)
+        // in 0-based-inclusive / 0-based-exclusive form. Even with
+        // cross=true, the shuffle cannot drift into CDS.
+        let tx = make_single_exon_transcript();
+        let config = NormalizeConfig::default().allow_crossing_boundaries();
+
+        let bounds = get_cds_boundaries(&tx, 5, &config).unwrap();
+        assert_eq!(bounds.left, 0);
+        assert_eq!(bounds.right, 10);
+    }
+
+    #[test]
+    fn test_cds_boundaries_cross_allowed_in_3utr_clamps_to_utr() {
+        // Position 95 sits in 3'UTR (1-based [91, 100]). Axis bound =
+        // (90, 100) in 0-based form.
+        let tx = make_single_exon_transcript();
+        let config = NormalizeConfig::default().allow_crossing_boundaries();
+
+        let bounds = get_cds_boundaries(&tx, 95, &config).unwrap();
+        assert_eq!(bounds.left, 90);
+        assert_eq!(bounds.right, 100);
+    }
+
+    #[test]
+    fn test_cds_boundaries_non_coding_transcript_uses_full_span() {
+        // Non-coding transcript (no cds_start/cds_end). The CDS↔UTR
+        // axis bound does not apply, so the result is the full exon
+        // (or full transcript under cross=true) in 0-based form (0, 100).
+        let tx = Transcript::new(
+            "NR_NC.1".to_string(),
+            Some("NC".to_string()),
+            Strand::Plus,
+            "A".repeat(100),
+            None,
+            None,
+            vec![Exon::new(1, 1, 100)],
+            None,
+            None,
+            None,
+            Default::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let bounds = get_cds_boundaries(&tx, 50, &NormalizeConfig::default()).unwrap();
+        assert_eq!(bounds.left, 0);
+        assert_eq!(bounds.right, 100);
     }
 }

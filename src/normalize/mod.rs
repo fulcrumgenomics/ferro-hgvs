@@ -135,6 +135,36 @@ pub enum NormalizationWarning {
         /// Number of bytes the provider returned
         actual_bytes: usize,
     },
+
+    /// A `c.` variant whose start and end positions sit in different
+    /// coordinate sub-axes (5'UTR / CDS / 3'UTR). The 3'-rule shuffle has
+    /// no well-defined semantics across an axis boundary, so ferro
+    /// preserves the canonical input position and emits this warning.
+    /// Closes-after: #350. Code: `CROSS_AXIS_VARIANT_NOT_SHUFFLED`.
+    CrossAxisVariantNotShuffled {
+        /// Human-readable description
+        message: String,
+        /// Accession of the reference sequence
+        accession: String,
+        /// Axis of the start position: "5utr" | "cds" | "3utr"
+        start_axis: String,
+        /// Axis of the end position: "5utr" | "cds" | "3utr"
+        end_axis: String,
+    },
+
+    /// A 3'-rule shuffle would have crossed a CDS↔UTR coordinate sub-axis
+    /// boundary, but the axis clamp constrained the result to the
+    /// boundary. Closes-after: #349. Code: `AXIS_CLAMP_APPLIED`.
+    AxisClampApplied {
+        /// Human-readable description
+        message: String,
+        /// Accession of the reference sequence
+        accession: String,
+        /// Shuffle direction that was clamped: "5prime" | "3prime"
+        direction: String,
+        /// Axis bound that did the clamping: "5utr" | "cds_start" | "cds_end" | "3utr"
+        clamp_kind: String,
+    },
 }
 
 impl NormalizationWarning {
@@ -144,6 +174,8 @@ impl NormalizationWarning {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
+            Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
+            Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
         }
     }
 
@@ -153,6 +185,8 @@ impl NormalizationWarning {
             Self::RefSeqMismatch { message, .. } => message,
             Self::OverlapConflict { message, .. } => message,
             Self::CanonicalSplitSkipped { message, .. } => message,
+            Self::CrossAxisVariantNotShuffled { message, .. } => message,
+            Self::AxisClampApplied { message, .. } => message,
         }
     }
 }
@@ -450,12 +484,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let rel_end = end - window_start;
 
         // Perform normalization
-        let (new_rel_start, new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+        let (new_rel_start, new_rel_end, new_edit, mut warnings) = self.normalize_na_edit(
             ref_seq.as_bytes(),
             edit,
             rel_start,
             rel_end,
-            &Boundaries::new(1, ref_seq.len() as u64),
+            &Boundaries::new(0, ref_seq.len() as u64),
             false, // genomic context: codon-frame gate does not apply
         )?;
 
@@ -479,7 +513,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // interior identities. Returns the variant unchanged for
         // non-Delins or no-decomposition cases.
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Genome(new_variant));
-        let mut warnings = warnings;
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
@@ -568,15 +601,62 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
 
-        // Get boundaries (stay within exon unless configured otherwise)
-        let boundaries = if self.config.cross_boundaries {
-            Boundaries::new(1, transcript.sequence_length())
-        } else {
-            match boundary::get_cds_boundaries(&transcript, tx_start, &self.config) {
-                Ok(b) => b,
-                Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
-            }
+        // Get boundaries. Both cross_boundaries modes route through
+        // `get_cds_boundaries_with_axis_info` so the CDS↔UTR axis bound
+        // applies regardless of cross mode (closes #337). The
+        // exon-vs-full-tx dimension still toggles on
+        // `config.cross_boundaries`. We additionally use the un-clamped
+        // exon bound to detect:
+        //
+        //   - Cross-axis variants (#350): `tx_start` and `tx_end` map to
+        //     different axes (5'UTR / CDS / 3'UTR). The 3'-rule shuffle
+        //     has no well-defined semantics across an axis boundary, so
+        //     we preserve the canonical input position and emit
+        //     `CrossAxisVariantNotShuffled`.
+        //
+        //   - Axis-clamp activations (#349): after shuffling, the result
+        //     position rests at the axis boundary AND the axis bound is
+        //     tighter than the exon bound on that side. Emit
+        //     `AxisClampApplied` so callers can flag for human review.
+        let axis_info = match boundary::get_cds_boundaries_with_axis_info(
+            &transcript,
+            tx_start,
+            &self.config,
+        ) {
+            Ok(b) => b,
+            Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
+        let boundaries = axis_info.clamped.clone();
+        let exon_only = axis_info.exon.clone();
+        let start_axis = axis_info.axis_region;
+        let end_axis = boundary::axis_region_of(&transcript, tx_end);
+
+        // #350: bail on cross-axis variants. Both endpoints must live in
+        // the same axis region for a 3'-rule shuffle to be defined.
+        if start_axis != end_axis
+            && !matches!(start_axis, boundary::AxisRegion::None)
+            && !matches!(end_axis, boundary::AxisRegion::None)
+        {
+            let acc = variant.accession.transcript_accession();
+            let warning = NormalizationWarning::CrossAxisVariantNotShuffled {
+                message: format!(
+                    "{}:c.{}: range straddles {} and {} axes; \
+                     3'-rule shuffle is undefined across a CDS\u{2194}UTR \
+                     boundary, returning input unchanged",
+                    acc,
+                    variant.loc_edit.location,
+                    start_axis.label(),
+                    end_axis.label(),
+                ),
+                accession: acc,
+                start_axis: start_axis.label().to_string(),
+                end_axis: end_axis.label().to_string(),
+            };
+            return Ok((
+                HV::Cds(self.canonicalize_cds_variant(variant)),
+                vec![warning],
+            ));
+        }
 
         // Perform normalization on transcript sequence (CDS context).
         // Coordinate-only transcripts (no cached bases) fall back to the
@@ -602,8 +682,78 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(cds_end) => tx_start >= cds_start && tx_end <= cds_end,
             None => false,
         };
-        let (new_tx_start, new_tx_end, new_edit, warnings) =
+        let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
+
+        // #349: detect whether the axis clamp was operative for this
+        // shuffle. For 5'-direction shuffles the clamp fires when the
+        // result is anchored at `boundaries.left` AND the axis bound is
+        // strictly tighter than the exon bound on the left. Symmetric
+        // logic for 3'-direction. Skip when there's no axis sub-region
+        // (non-coding transcripts).
+        //
+        // The cheap landed-at-boundary check alone is not sufficient — it
+        // can fire even when the unclamped shuffle would have stopped at
+        // the same axis-boundary position anyway (e.g. when the reference
+        // base immediately past the boundary does not match, so the
+        // shuffle was never going to move past the boundary in the first
+        // place). To eliminate that false-positive class, re-shuffle
+        // against the unclamped `exon_only` bound and only treat the
+        // clamp as operative when the unclamped result would have moved
+        // strictly past the axis boundary.
+        if !matches!(start_axis, boundary::AxisRegion::None) {
+            let new_tx_start_0 = new_tx_start.saturating_sub(1);
+            let cheap_left = boundaries.left > exon_only.left && new_tx_start_0 == boundaries.left;
+            let cheap_right = boundaries.right < exon_only.right && new_tx_end == boundaries.right;
+            let direction_could_clamp = match self.config.shuffle_direction {
+                ShuffleDirection::FivePrime => cheap_left,
+                ShuffleDirection::ThreePrime => cheap_right,
+            };
+            let (left_clamp_fired, right_clamp_fired) = if direction_could_clamp {
+                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) =
+                    self.normalize_na_edit(seq, edit, tx_start, tx_end, &exon_only, is_coding)?;
+                let exon_only_start_0 = exon_only_start.saturating_sub(1);
+                (
+                    cheap_left && exon_only_start_0 < boundaries.left,
+                    cheap_right && exon_only_end > boundaries.right,
+                )
+            } else {
+                (false, false)
+            };
+            let (direction_str, clamp_kind) = match self.config.shuffle_direction {
+                ShuffleDirection::FivePrime if left_clamp_fired => Some((
+                    "5prime",
+                    match start_axis {
+                        boundary::AxisRegion::Cds => "cds_start",
+                        boundary::AxisRegion::ThreeUtr => "3utr",
+                        _ => "5utr",
+                    },
+                )),
+                ShuffleDirection::ThreePrime if right_clamp_fired => Some((
+                    "3prime",
+                    match start_axis {
+                        boundary::AxisRegion::Cds => "cds_end",
+                        boundary::AxisRegion::FiveUtr => "5utr",
+                        _ => "3utr",
+                    },
+                )),
+                _ => None,
+            }
+            .unwrap_or(("", ""));
+            if !direction_str.is_empty() {
+                let acc = variant.accession.transcript_accession();
+                warnings.push(NormalizationWarning::AxisClampApplied {
+                    message: format!(
+                        "{}:c.{}: {}-rule shuffle clamped at {} axis boundary; \
+                         canonical position was constrained by the CDS\u{2194}UTR sub-axis",
+                        acc, variant.loc_edit.location, direction_str, clamp_kind,
+                    ),
+                    accession: acc,
+                    direction: direction_str.to_string(),
+                    clamp_kind: clamp_kind.to_string(),
+                });
+            }
+        }
 
         // Convert back to CDS coordinates
         let new_start = self.tx_to_cds_pos(new_tx_start, cds_start, transcript.cds_end)?;
@@ -619,7 +769,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // exception applies only to CDS-proper positions, which the
         // helper filters internally via `simple_cds_pos`.
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Cds(new_variant));
-        let mut warnings = warnings;
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
@@ -697,7 +846,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let tx_end = end_pos.base as u64;
 
         // Get boundaries
-        let boundaries = Boundaries::new(1, transcript.sequence_length());
+        let boundaries = Boundaries::new(0, transcript.sequence_length());
 
         // Perform normalization (n. non-coding tx context).
         // Coordinate-only transcripts (no cached bases) fall back to the
@@ -706,7 +855,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
-        let (new_start, new_end, new_edit, warnings) =
+        let (new_start, new_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
         let new_variant = TxVariant {
@@ -720,7 +869,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Issue #160 + #165 post-canonicalization split.
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Tx(new_variant));
-        let mut warnings = warnings;
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
@@ -1054,7 +1202,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Get boundaries (entire transcript span; r. has no exon-level
         // junction restriction beyond the transcript ends).
-        let boundaries = Boundaries::new(1, transcript.sequence_length());
+        let boundaries = Boundaries::new(0, transcript.sequence_length());
 
         // Perform normalization (RNA context: codon-frame gate does not apply;
         // r. is not in the spec's accepted reference types for repeats).
@@ -1063,7 +1211,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
-        let (new_tx_start, new_tx_end, new_edit, warnings) =
+        let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
         // Convert each normalized tx position back independently, restoring
@@ -1098,7 +1246,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Issue #160 + #165 post-canonicalization split (T/U-equivalent
         // comparison for the rev-comp scan and per-position emissions).
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(new_variant));
-        let mut warnings = warnings;
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
@@ -1283,12 +1430,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // has no canonical "CDS" exemption boundary in the same sense as
         // nuclear `c.`; the spec's mito chapter doesn't carry the
         // codon-frame clause), so pass `is_coding=false`.
-        let (new_rel_start, new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+        let (new_rel_start, new_rel_end, new_edit, mut warnings) = self.normalize_na_edit(
             ref_seq.as_bytes(),
             edit,
             rel_start,
             rel_end,
-            &Boundaries::new(1, ref_seq.len() as u64),
+            &Boundaries::new(0, ref_seq.len() as u64),
             false,
         )?;
 
@@ -1306,7 +1453,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Issue #160 inv-split post-pass (mirrors normalize_genome).
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Mt(new_variant));
-        let mut warnings = warnings;
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
     }
