@@ -2404,10 +2404,22 @@ fn parse_whole_protein_identity(input: &str) -> IResult<&str, ProteinEdit> {
     .parse(input)
 }
 
-/// Parse no protein production: p.0 or p.0?
+/// Parse no protein production: `p.0`, `p.0?`, or `p.(0)`.
+///
+/// The spec form for the predicted ("possibly no protein") case is `p.0?`
+/// (HGVS v21 `recommendations/protein/deletion.md`). We also accept the
+/// parenthesised `p.(0)` as a tolerated alternate input, mirroring the
+/// `c.(=)`/`r.(=)`/`r.(0)` predicted whole-entity dispatch added in PR #246
+/// for NA coord systems (#245). Both `p.0?` and `p.(0)` route to the same
+/// `ProteinEdit::NoProtein { predicted: true }` value, and Display
+/// canonicalises to the spec form `p.0?` — keeping the long-standing D6
+/// contract pinned by `tests/protein_no_protein_roundtrip.rs` intact while
+/// resolving issue #289.
 fn parse_whole_protein_no_protein(input: &str) -> IResult<&str, ProteinEdit> {
     alt((
-        // Predicted no-protein: 0?
+        // Predicted no-protein (parenthesised form, #289): (0)
+        map(tag("(0)"), |_| ProteinEdit::no_protein_predicted()),
+        // Predicted no-protein (spec-canonical form): 0?
         map(tag("0?"), |_| ProteinEdit::no_protein_predicted()),
         // Certain no-protein: 0
         map(tag("0"), |_| ProteinEdit::no_protein()),
@@ -2610,6 +2622,29 @@ fn parse_protein_trans_allele_shorthand(
             })
         } else if content == "?" {
             HgvsVariant::UnknownAllele
+        } else if content == "(0)" || content == "0?" {
+            // `[(0)]` and `[0?]` are the predicted-no-protein forms inside a
+            // protein-coordinate compact-form trans-allele bracket. Both route
+            // to `ProteinEdit::NoProtein { predicted: true }` and Display
+            // canonicalises to `[0?]` (the HGVS spec form, per
+            // `recommendations/protein/deletion.md`).
+            //
+            // `[(0)]` is the tolerated alternate input from issue #289 (mirrors
+            // the dispatcher's `parse_whole_protein_no_protein` arm); `[0?]`
+            // is the canonical Display output and must parse back round-trip.
+            // Without these arms, `parse_prot_interval` would try to consume
+            // `(0)` / `0?` as a position and reject.
+            //
+            // Bare `[0]` keeps its cross-coordinate `NullAllele` meaning (per
+            // `protein_no_protein_roundtrip::bare_bracketed_zero_is_null_allele_not_no_protein`);
+            // `[(0)]` / `[0?]` are unambiguously protein no-protein forms.
+            let dummy_pos = ProtPos::new(AminoAcid::Met, 1);
+            let dummy_interval = ProtInterval::point(dummy_pos);
+            HgvsVariant::Protein(ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new(dummy_interval, ProteinEdit::NoProtein { predicted: true }),
+            })
         } else {
             let (edit_remaining, interval) = parse_prot_interval(content)?;
             let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;

@@ -411,11 +411,20 @@ fn p0_is_distinct_from_neighbouring_whole_protein_forms() {
 /// Anything else in this neighbourhood is malformed:
 ///
 /// - Trailing junk: `p.0X`, `p.0a`, `p.0!`, `p.00`.
-/// - Parenthesised: `p.(0)`, `p.(0?)` — spec uses `?` suffix, never parens.
+/// - Double-marked predicted form: `p.(0?)` — inner `?` plus outer parens is
+///   not in the spec.
 /// - Internal whitespace: `p. 0`.
 /// - No accession: `p.0`, `p.0?` — `parse_hgvs` always requires accession.
 /// - Cis-bracket form: `p.[0]`, `p.[Arg97Trp;0]`, `p.[0;Arg97Trp]` — `alleles.md`
 ///   only allows `[0]` in trans, never cis.
+///
+/// Note: `p.(0)` used to be in this list as "spec uses `?` suffix, never
+/// parens", but issue #289 / PR landing here accepts `p.(0)` as a tolerated
+/// alternate input that routes to the same predicted-no-protein value as
+/// `p.0?`. Display still canonicalises to `p.0?` (spec form), so the D6
+/// round-trip contract above is unchanged for canonical inputs. The
+/// `p.(0)` parse path is pinned by
+/// `tests/issue_289_protein_zero_predicted.rs`.
 #[test]
 fn malformed_adjacent_inputs_reject() {
     let bad: &[&str] = &[
@@ -424,8 +433,7 @@ fn malformed_adjacent_inputs_reject() {
         "NP_003997.2:p.0a",
         "NP_003997.2:p.0!",
         "NP_003997.2:p.00",
-        // Parenthesised forms — not in spec.
-        "NP_003997.2:p.(0)",
+        // Double-marked predicted form — not in spec.
         "NP_003997.2:p.(0?)",
         // Interior whitespace — outer trim is fine, but the parser must reject
         // `p. 0`.
