@@ -46,11 +46,21 @@ pub fn get_genomic_boundaries(
 
 /// Get the shuffling boundaries for a CDS position.
 ///
+/// **Coordinate system.** Returns 0-based bounds matching the
+/// [`crate::normalize::shuffle::shuffle`] convention: `left` is the
+/// 0-based inclusive minimum reachable start position and `right` is
+/// the 0-based exclusive maximum reachable end position. Tx positions
+/// on the `Transcript` struct are 1-based-inclusive, so the conversion
+/// to 0-based is performed here (`left = tx_start_1b - 1`, `right =
+/// tx_end_1b`). Other long-standing call sites that build `Boundaries`
+/// inline (`Boundaries::new(1, seq_len)` etc.) inherit the pre-existing
+/// 1-based-input quirk; fixing those is out of scope for #337.
+///
 /// Two boundary kinds are intersected:
 ///
 ///   1. **Exon bound.** When `cross_boundaries=false`, the shuffle is
 ///      confined to the exon containing `tx_pos`; otherwise the bound is
-///      the full transcript `[1, sequence_length]`.
+///      the full transcript.
 ///
 ///   2. **CDS↔UTR axis bound (always applied; closes #337).** The 5'UTR
 ///      / CDS / 3'UTR transitions change the HGVS coordinate sub-axis
@@ -58,28 +68,36 @@ pub fn get_genomic_boundaries(
 ///      cross them — doing so would silently re-classify the variant
 ///      onto a different axis. The axis bound depends on which region
 ///      `tx_pos` lies in:
-///        - 5'UTR (`tx_pos < cds_start`): `[1, cds_start - 1]`
+///
+///        - 5'UTR (`tx_pos < cds_start`): tx 1-based `[1, cds_start - 1]`
 ///        - CDS   (`cds_start <= tx_pos <= cds_end`): `[cds_start, cds_end]`
 ///        - 3'UTR (`tx_pos > cds_end`): `[cds_end + 1, sequence_length]`
 ///
 ///      For non-coding transcripts (no `cds_start`/`cds_end`) the axis
 ///      bound is the full transcript.
 ///
-/// The returned `Boundaries` is the intersection. Errors when `tx_pos`
-/// falls outside every exon under `cross_boundaries=false` (i.e. is
-/// intronic — exonic-shuffle code shouldn't reach here in that case).
+/// The returned `Boundaries` is the 0-based intersection. Errors when
+/// `tx_pos` falls outside every exon under `cross_boundaries=false`
+/// (i.e. is intronic — exonic-shuffle code shouldn't reach here).
 pub fn get_cds_boundaries(
     transcript: &Transcript,
     tx_pos: u64,
     config: &NormalizeConfig,
 ) -> Result<Boundaries, FerroError> {
+    // Helper: convert a 1-based-inclusive interval [a, b] to 0-based
+    // (left-inclusive, right-exclusive) `(a - 1, b)`. Both endpoints
+    // satisfy `1 <= a <= b`; the empty-or-inverted case (`a == 0` or
+    // `b < a`) is handled by saturating arithmetic in callers.
+    let to_0based =
+        |left_1b: u64, right_1b: u64| -> (u64, u64) { (left_1b.saturating_sub(1), right_1b) };
+
     let (exon_left, exon_right) = if config.cross_boundaries {
-        (1u64, transcript.sequence_length())
+        to_0based(1, transcript.sequence_length())
     } else {
         let mut found = None;
         for exon in &transcript.exons {
             if tx_pos >= exon.start && tx_pos <= exon.end {
-                found = Some((exon.start, exon.end));
+                found = Some(to_0based(exon.start, exon.end));
                 break;
             }
         }
@@ -97,15 +115,15 @@ pub fn get_cds_boundaries(
     let (axis_left, axis_right) = match (transcript.cds_start, transcript.cds_end) {
         (Some(s), Some(e)) if e >= s => {
             if tx_pos < s {
-                (1, s.saturating_sub(1))
+                to_0based(1, s.saturating_sub(1))
             } else if tx_pos > e {
-                (e + 1, seq_len)
+                to_0based(e + 1, seq_len)
             } else {
-                (s, e)
+                to_0based(s, e)
             }
         }
         // Non-coding transcript: no axis sub-region to respect.
-        _ => (1, seq_len),
+        _ => to_0based(1, seq_len),
     };
 
     Ok(Boundaries::new(
@@ -157,8 +175,10 @@ mod tests {
         let transcript = make_test_transcript();
         let config = NormalizeConfig::default();
 
+        // Exon 1 is 1-based [1, 4]; converted to 0-based-inclusive /
+        // 0-based-exclusive boundaries that's (0, 4).
         let bounds = get_cds_boundaries(&transcript, 2, &config).unwrap();
-        assert_eq!(bounds.left, 1);
+        assert_eq!(bounds.left, 0);
         assert_eq!(bounds.right, 4);
     }
 
@@ -167,8 +187,11 @@ mod tests {
         let transcript = make_test_transcript();
         let config = NormalizeConfig::default().allow_crossing_boundaries();
 
+        // make_test_transcript() has cds_start=1, cds_end=12 — the entire
+        // transcript IS the CDS. Axis bound = exon bound = full transcript,
+        // converted to 0-based that's (0, 12).
         let bounds = get_cds_boundaries(&transcript, 2, &config).unwrap();
-        assert_eq!(bounds.left, 1);
+        assert_eq!(bounds.left, 0);
         assert_eq!(bounds.right, 12);
     }
 }
