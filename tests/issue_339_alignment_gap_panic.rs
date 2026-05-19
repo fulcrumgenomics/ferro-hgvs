@@ -20,24 +20,25 @@
 use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::{parse_hgvs, FerroError, NormalizeConfig, Normalizer, ReferenceProvider};
 
-/// Provider that returns a short fixed sequence regardless of the
-/// requested span — models the alignment-gap behavior of real cdot data
-/// where the FASTA window is shorter than the HGVS-coordinate span.
-struct TruncatingProvider;
+/// Provider whose `get_sequence` returns a fixed-length sequence
+/// regardless of the requested span. Models the alignment-gap behavior
+/// of real cdot data where the FASTA window is shorter than the
+/// HGVS-coordinate span. The fixed-length payload is configurable so
+/// individual tests can drive both the "ref shorter than span" and
+/// "ref longer than span" branches of the bail-out.
+struct FixedLengthProvider {
+    payload: &'static str,
+}
 
-impl ReferenceProvider for TruncatingProvider {
+impl ReferenceProvider for FixedLengthProvider {
     fn get_transcript(&self, _id: &str) -> Result<Transcript, FerroError> {
         Err(FerroError::ReferenceNotFound {
-            id: "<truncating-provider>".to_string(),
+            id: "<fixed-length-provider>".to_string(),
         })
     }
 
     fn get_sequence(&self, _id: &str, _start: u64, _end: u64) -> Result<String, FerroError> {
-        // Return a fixed 12-byte slice regardless of the requested span.
-        // A delins requesting a much larger window (e.g. 20kb) would have
-        // its `ref_bytes.len()` here at 12 ≪ the HGVS span — exactly the
-        // mismatch that fires the `debug_assert_eq!` panic pre-fix.
-        Ok("AATTAAGGTATA".to_string())
+        Ok(self.payload.to_string())
     }
 
     fn get_genomic_sequence(
@@ -46,36 +47,79 @@ impl ReferenceProvider for TruncatingProvider {
         _start: u64,
         _end: u64,
     ) -> Result<String, FerroError> {
-        Ok("AATTAAGGTATA".to_string())
+        Ok(self.payload.to_string())
     }
 }
 
 #[test]
-fn normalize_does_not_panic_when_ref_window_shorter_than_hgvs_span() {
+fn normalize_returns_input_when_ref_window_shorter_than_hgvs_span() {
     // Reproducer for the biocommons NG_032871.1 case. The variant span
     // (32476..53457 = 20,982 bp) is far larger than the 12-byte window
-    // the provider returns. Pre-fix this triggers
+    // the provider returns. Pre-fix this triggered
     // `debug_assert_eq!(n, (hgvs_end - hgvs_start + 1) as usize)` at
-    // src/normalize/mod.rs:2779. Post-fix the canonical-split helper
-    // returns the input variant unchanged.
-    let normalizer = Normalizer::with_config(TruncatingProvider, NormalizeConfig::default());
+    // src/normalize/mod.rs:2779 (debug panic) and silently skipped the
+    // split via decompose_delins' own bounds check in release. Post-fix
+    // the canonical-split helper returns the input variant unchanged in
+    // both build profiles.
+    let provider = FixedLengthProvider {
+        payload: "AATTAAGGTATA",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
     let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
 
-    // Must not panic in debug builds. We don't pin the exact normalized
-    // output — the test's purpose is to lock in graceful degradation.
-    let _ = normalizer
+    let normalized = normalizer
         .normalize(&variant)
         .expect("normalize must not panic on alignment-gap-spanning delins");
+    // Bail-out contract: input round-trips unchanged when the helper
+    // cannot trust the ref window. We assert the canonical Display
+    // round-trip rather than relying on a parsed-tree equality, since
+    // upstream canonicalization may strip redundant fields without
+    // shifting the variant.
+    assert_eq!(
+        format!("{}", normalized),
+        "NG_032871.1:g.32476_53457delinsAATTAAGGTATA",
+    );
 }
 
 #[test]
-fn normalize_does_not_panic_on_smaller_alignment_gap_mismatch() {
-    // Same shape, smaller span: 100_200delins (101 bp) with the
-    // provider still returning only 12 bytes. The fix must handle any
-    // mismatch, not just the extreme 20kb case.
-    let normalizer = Normalizer::with_config(TruncatingProvider, NormalizeConfig::default());
+fn normalize_returns_input_when_ref_window_shorter_small_span() {
+    // Same mismatch shape (ref short of span) at a smaller scale —
+    // 101-bp span vs 12-byte provider response. Locks in that the fix
+    // is independent of span magnitude.
+    let provider = FixedLengthProvider {
+        payload: "AATTAAGGTATA",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
     let variant = parse_hgvs("NC_000001.11:g.100_200delinsAATTAAGGTATA").expect("parse");
-    let _ = normalizer
+    let normalized = normalizer
         .normalize(&variant)
-        .expect("normalize must not panic on smaller ref-window mismatch");
+        .expect("normalize must not panic on small-span ref-window mismatch");
+    assert_eq!(
+        format!("{}", normalized),
+        "NC_000001.11:g.100_200delinsAATTAAGGTATA",
+    );
+}
+
+#[test]
+fn normalize_returns_input_when_ref_window_longer_than_hgvs_span() {
+    // Inverse mismatch direction: provider returns MORE bytes than the
+    // HGVS span requests. This shouldn't happen under the trait's
+    // half-open `[start, end)` contract, but a misbehaving provider
+    // would also have tripped the pre-fix debug_assert. The post-fix
+    // `n != expected_span` predicate handles both directions; this
+    // test locks that property in so a future refactor changing the
+    // comparator to `n < expected_span` is caught.
+    let provider = FixedLengthProvider {
+        // 50 bytes, but the HGVS span below is only 11.
+        payload: "AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTTACGTACGTAC",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
+    let variant = parse_hgvs("NC_000001.11:g.100_110delinsAAGCTT").expect("parse");
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize must not panic on over-long ref window");
+    assert_eq!(
+        format!("{}", normalized),
+        "NC_000001.11:g.100_110delinsAAGCTT",
+    );
 }

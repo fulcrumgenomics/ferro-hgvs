@@ -2825,7 +2825,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// internally, calls `decompose_delins`, and rebuilds N variants when
     /// the decomposition fires. Returns `vec![variant]` if the variant
     /// doesn't decompose (non-Delins, complex location, no provider data,
-    /// nothing to split out).
+    /// nothing to split out, **or the provider's ref window doesn't match
+    /// the HGVS coordinate span** — e.g. cdot alignment gaps shorten the
+    /// returned byte slice, see #339).
     ///
     /// Implements two spec-priority rules from `general.md:56`
     /// (substitution > deletion > inversion > duplication > insertion):
