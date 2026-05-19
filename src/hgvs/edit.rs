@@ -72,10 +72,19 @@ impl Base {
         self as u8
     }
 
-    /// Convert to lowercase ASCII character (for RNA display).
+    /// Convert to lowercase ASCII character for RNA `Display`.
+    ///
+    /// Per HGVS v21.0, the RNA nucleotide alphabet is `a/c/g/u`. Any
+    /// thymine byte that reaches an RNA emission path (lenient `T`/`t`
+    /// input on `r.`, cross-coordinate translation, or canonicalization
+    /// that surfaces an unseen `T`) is translated to `u` here, not just
+    /// case-folded. See issue #276.
     #[inline]
     pub fn to_lowercase_char(self) -> char {
-        (self as u8).to_ascii_lowercase() as char
+        match self {
+            Base::T => 'u',
+            _ => (self as u8).to_ascii_lowercase() as char,
+        }
     }
 }
 

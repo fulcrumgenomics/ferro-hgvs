@@ -678,10 +678,10 @@ mod rna_plus {
     #[case("acaaaacguacguacguac", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}a[8]", &[3u64, 6u64])]
     #[case("acgcagcagcaugacguacg", "r.{0}_{1}dup", &[3u64, 8u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
     #[case("uugcagcagcauuacguacgu", "r.{0}_{1}dup", &[4u64, 9u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
-    // Finer-periodicity case uses an AC tandem rather than AT to avoid the
-    // pre-existing limitation in the RNA Display path for repeat-form output
-    // when the unit contains 'T' (DNA) — see comment in del_shift_matrix.rs.
-    #[case("ccacacacacacccguacgu", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}ac[7]", &[3u64, 12u64])]
+    // Finer-periodicity case mirrors the genomic/cds/noncoding AT tandem
+    // (here AU) after #276's RNA `Display` canonicalization (T→u). Prior to
+    // that fix this case used an AC tandem as a workaround.
+    #[case("ccauauauauauccguacgu", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}au[7]", &[3u64, 12u64])]
     fn multi_base_dup_of_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -797,7 +797,8 @@ mod rna_minus {
     #[case("acaaaacguacguacguac", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}a[8]", &[3u64, 6u64])]
     #[case("acgcagcagcaugacguacg", "r.{0}_{1}dup", &[3u64, 8u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
     #[case("uugcagcagcauuacguacgu", "r.{0}_{1}dup", &[4u64, 9u64], "r.{0}_{1}gca[5]", &[3u64, 11u64])]
-    #[case("ccacacacacacccguacgu", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}ac[7]", &[3u64, 12u64])]
+    // Finer-periodicity case: see comment in rna_plus module.
+    #[case("ccauauauauauccguacgu", "r.{0}_{1}dup", &[3u64, 6u64], "r.{0}_{1}au[7]", &[3u64, 12u64])]
     fn multi_base_dup_of_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,

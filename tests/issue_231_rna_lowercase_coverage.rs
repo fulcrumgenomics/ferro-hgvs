@@ -13,11 +13,10 @@
 //! 1. lowercase input round-trips through `parse` → `Display`,
 //! 2. uppercase/mixed input is silently canonicalized to lowercase on
 //!    `Display` (lenient input policy),
-//! 3. `T`/`t` input is retained as lowercase `t` — the parser is
-//!    lenient about thymine in `r.` variants and does **not**
-//!    rewrite it to `u`. This pins observed behavior; whether to
-//!    reject `t` or canonicalize to `u` is a parser-policy question
-//!    out of scope for this audit.
+//! 3. `T`/`t` input is accepted (lenient parser policy — see #282 for
+//!    whether the parser should reject thymine on `r.`) but
+//!    canonicalized to `u` on `Display` per the HGVS RNA alphabet —
+//!    see issue #276.
 //!
 //! The predicted-wrapper form (`r.(<edit>)`) is intentionally NOT
 //! covered here — probing shows the parens are dropped on `Display`
@@ -69,13 +68,16 @@ mod substitution {
         assert_canonicalizes_to(&format!("{ACC}:r.123a>G"), &format!("{ACC}:r.123a>g"));
     }
 
-    /// Thymine input is accepted and emitted as lowercase `t` — pins
-    /// the lenient parser policy. The spec prefers `u`; a future
-    /// parser tightening would reject `t` (or canonicalize to `u`).
+    /// Thymine input is accepted (lenient parser policy — see #282)
+    /// but canonicalized to `u` on `Display` per the HGVS RNA
+    /// alphabet — see #276. A future parser tightening that rejects
+    /// `t` on `r.` would make the lenient-input cases below
+    /// unreachable, but the canonical alphabet expectation here is
+    /// independent of that policy.
     #[test]
-    fn thymine_input_is_retained_as_lowercase_t() {
-        assert_round_trips(&format!("{ACC}:r.123a>t"));
-        assert_canonicalizes_to(&format!("{ACC}:r.123A>T"), &format!("{ACC}:r.123a>t"));
+    fn thymine_input_is_canonicalized_to_u_on_display() {
+        assert_canonicalizes_to(&format!("{ACC}:r.123a>t"), &format!("{ACC}:r.123a>u"));
+        assert_canonicalizes_to(&format!("{ACC}:r.123A>T"), &format!("{ACC}:r.123a>u"));
     }
 }
 
@@ -115,12 +117,17 @@ mod deletion {
         );
     }
 
+    /// Thymine in stated-ref bases is canonicalized to `u` on
+    /// `Display` per #276 (parser remains lenient — see #282).
     #[test]
-    fn thymine_in_stated_ref_is_retained_as_lowercase_t() {
-        assert_round_trips(&format!("{ACC}:r.123_125delaut"));
+    fn thymine_in_stated_ref_is_canonicalized_to_u_on_display() {
+        assert_canonicalizes_to(
+            &format!("{ACC}:r.123_125delaut"),
+            &format!("{ACC}:r.123_125delauu"),
+        );
         assert_canonicalizes_to(
             &format!("{ACC}:r.123_125delAUT"),
-            &format!("{ACC}:r.123_125delaut"),
+            &format!("{ACC}:r.123_125delauu"),
         );
     }
 }
