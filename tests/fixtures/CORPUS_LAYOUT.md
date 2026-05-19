@@ -163,10 +163,29 @@ BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock
 #    + failure-patterns.md updates separately if applicable.
 ```
 
+## Per-corpus extensions
+
+Some corpora's source tests run the normalizer under multiple configs
+within the same fixture (e.g. biocommons exercises every input under
+both 3'-shifting and 5'-shifting × cross-boundaries on/off). In that
+case, the corpus's case schema adds `shuffle_direction` and
+`cross_boundaries` fields per row, and its `mock-pin/<axis>.txt`
+format extends to include the config in the pin line:
+
+```text
+<input>\t<shuffle_direction>\t<cross_boundaries>\t<ferro_output_or_error>
+```
+
+This is a per-corpus convention extension, not a corpus-layout breaking
+change. The harness for each corpus knows its own pin format. Mutalyzer's
+corpus assumes a single fixed config (mutalyzer's own defaults) and
+therefore uses the simpler `<input>\t<ferro_output_or_error>` shape.
+
 ## Consumers
 
-| Corpus | Path | Tracking issue |
-|---|---|---|
-| mutalyzer | `tests/fixtures/mutalyzer-normalize/` | — |
+| Corpus | Path | Per-case config? | Tracking issue |
+|---|---|---|---|
+| mutalyzer | `tests/fixtures/mutalyzer-normalize/` | no (fixed config) | — |
+| biocommons | `tests/fixtures/biocommons-normalize/` | yes (`shuffle_direction`, `cross_boundaries`) | — |
 
 Add a row when importing a new corpus.
