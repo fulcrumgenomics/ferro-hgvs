@@ -6,12 +6,23 @@ use crate::error::FerroError;
 use crate::normalize::config::NormalizeConfig;
 use crate::reference::transcript::Transcript;
 
-/// Boundaries for variant shuffling
+/// Boundaries for variant shuffling.
+///
+/// **Coordinate convention.** Half-open `[left, right)` in 0-based
+/// coordinates: `left` is the inclusive minimum and `right` is the
+/// exclusive maximum. All production constructors in `src/normalize/`
+/// build `Boundaries` with this contract — see e.g.
+/// `Boundaries::new(0, ref_seq.len())` in `normalize_genome` and the
+/// 0-based bounds returned by [`get_cds_boundaries`]. The CDS↔UTR axis
+/// clamp added in #337 explicitly relies on this half-open semantic so
+/// that `right == cds_end_1b` excludes the first 3'UTR base from a CDS
+/// shuffle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Boundaries {
-    /// Leftmost position (cannot shift left of this)
+    /// Inclusive 0-based minimum position.
     pub left: u64,
-    /// Rightmost position (cannot shift right of this)
+    /// Exclusive 0-based maximum position (one past the last reachable
+    /// position).
     pub right: u64,
 }
 
@@ -20,12 +31,12 @@ impl Boundaries {
         Self { left, right }
     }
 
-    /// Check if a position is within bounds (inclusive on both ends)
-    ///
-    /// This uses a closed interval [left, right], meaning both boundary
-    /// positions are considered to be within bounds.
+    /// Check if a position is within the half-open bounds `[left, right)`.
+    /// `right` itself is **not** contained — it's one past the last
+    /// reachable position by the half-open convention documented on
+    /// [`Boundaries`].
     pub fn contains(&self, pos: u64) -> bool {
-        pos >= self.left && pos <= self.right
+        pos >= self.left && pos < self.right
     }
 }
 
@@ -235,10 +246,13 @@ mod tests {
 
     #[test]
     fn test_boundaries_contains() {
+        // Half-open `[10, 20)`: 10 is in, 19 is in (last reachable),
+        // 20 is the exclusive upper bound (NOT contained).
         let bounds = Boundaries::new(10, 20);
         assert!(bounds.contains(10));
         assert!(bounds.contains(15));
-        assert!(bounds.contains(20));
+        assert!(bounds.contains(19));
+        assert!(!bounds.contains(20));
         assert!(!bounds.contains(9));
         assert!(!bounds.contains(21));
     }

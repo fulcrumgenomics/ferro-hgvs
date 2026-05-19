@@ -61,14 +61,16 @@ mod boundary_struct {
 
     #[test]
     fn test_boundaries_contains() {
+        // Half-open `[10, 50)`: `right` is the exclusive upper bound.
         let bounds = Boundaries::new(10, 50);
 
         // Inside bounds
-        assert!(bounds.contains(10)); // Left edge
+        assert!(bounds.contains(10)); // Left edge (inclusive)
         assert!(bounds.contains(30)); // Middle
-        assert!(bounds.contains(50)); // Right edge
+        assert!(bounds.contains(49)); // Last reachable position
 
         // Outside bounds
+        assert!(!bounds.contains(50)); // Right edge is exclusive
         assert!(!bounds.contains(9));
         assert!(!bounds.contains(51));
     }

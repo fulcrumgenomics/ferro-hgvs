@@ -245,6 +245,61 @@ fn axis_clamp_emits_warning_when_constraining_5prime_shuffle() {
 }
 
 #[test]
+fn no_axis_clamp_when_upstream_utr_base_does_not_match() {
+    // Pins the false-positive class CodeRabbit flagged for #343:
+    // `NM_INTRA.1:c.1del` under 5prime + cross_boundaries=true on a
+    // fixture whose upstream UTR base does NOT match the deleted CDS
+    // base. The clamped shuffle and the unclamped exon-only shuffle
+    // both stop at c.1del because the upstream UTR `C` doesn't match
+    // the deleted `A`, so the axis clamp never actually constrained
+    // movement. The warning must NOT fire.
+    //
+    // NM_INTRA.1 layout (defined in the homopolymer test below):
+    //   5'UTR `CCC` (non-A), CDS `AAAATGTAG`, 3'UTR `CCCCCCCC`.
+    let mut provider = MockProvider::new();
+    let sequence = "CCCAAAATGTAGCCCCCCCC".to_string();
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NM_INTRA.1".to_string(),
+        Some("INTRA".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(4),
+        Some(12),
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    let normalizer = Normalizer::with_config(
+        provider,
+        NormalizeConfig::default()
+            .with_direction(ShuffleDirection::FivePrime)
+            .allow_crossing_boundaries(),
+    );
+    let variant = parse_hgvs("NM_INTRA.1:c.1del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize");
+    assert_eq!(format!("{}", result.result), "NM_INTRA.1:c.1del");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.code() != "AXIS_CLAMP_APPLIED"),
+        "unexpected AXIS_CLAMP_APPLIED — upstream UTR base ('C') doesn't \
+         match deleted CDS base ('A'), so the shuffle never tried to \
+         cross the boundary and the clamp was inert. Warnings: {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn no_axis_clamp_when_5prime_shuffle_stays_within_axis() {
     // c.6del 5prime shifts to c.4del — entirely within CDS, no clamp.
     let normalizer = Normalizer::with_config(

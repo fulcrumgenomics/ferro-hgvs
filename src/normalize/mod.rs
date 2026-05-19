@@ -489,7 +489,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             edit,
             rel_start,
             rel_end,
-            &Boundaries::new(1, ref_seq.len() as u64),
+            &Boundaries::new(0, ref_seq.len() as u64),
             false, // genomic context: codon-frame gate does not apply
         )?;
 
@@ -691,12 +691,35 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // strictly tighter than the exon bound on the left. Symmetric
         // logic for 3'-direction. Skip when there's no axis sub-region
         // (non-coding transcripts).
+        //
+        // The cheap landed-at-boundary check alone is not sufficient — it
+        // can fire even when the unclamped shuffle would have stopped at
+        // the same axis-boundary position anyway (e.g. when the reference
+        // base immediately past the boundary does not match, so the
+        // shuffle was never going to move past the boundary in the first
+        // place). To eliminate that false-positive class, re-shuffle
+        // against the unclamped `exon_only` bound and only treat the
+        // clamp as operative when the unclamped result would have moved
+        // strictly past the axis boundary.
         if !matches!(start_axis, boundary::AxisRegion::None) {
             let new_tx_start_0 = new_tx_start.saturating_sub(1);
-            let left_clamp_fired =
-                boundaries.left > exon_only.left && new_tx_start_0 == boundaries.left;
-            let right_clamp_fired =
-                boundaries.right < exon_only.right && new_tx_end == boundaries.right;
+            let cheap_left = boundaries.left > exon_only.left && new_tx_start_0 == boundaries.left;
+            let cheap_right = boundaries.right < exon_only.right && new_tx_end == boundaries.right;
+            let direction_could_clamp = match self.config.shuffle_direction {
+                ShuffleDirection::FivePrime => cheap_left,
+                ShuffleDirection::ThreePrime => cheap_right,
+            };
+            let (left_clamp_fired, right_clamp_fired) = if direction_could_clamp {
+                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) =
+                    self.normalize_na_edit(seq, edit, tx_start, tx_end, &exon_only, is_coding)?;
+                let exon_only_start_0 = exon_only_start.saturating_sub(1);
+                (
+                    cheap_left && exon_only_start_0 < boundaries.left,
+                    cheap_right && exon_only_end > boundaries.right,
+                )
+            } else {
+                (false, false)
+            };
             let (direction_str, clamp_kind) = match self.config.shuffle_direction {
                 ShuffleDirection::FivePrime if left_clamp_fired => Some((
                     "5prime",
@@ -823,7 +846,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let tx_end = end_pos.base as u64;
 
         // Get boundaries
-        let boundaries = Boundaries::new(1, transcript.sequence_length());
+        let boundaries = Boundaries::new(0, transcript.sequence_length());
 
         // Perform normalization (n. non-coding tx context).
         // Coordinate-only transcripts (no cached bases) fall back to the
@@ -1179,7 +1202,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Get boundaries (entire transcript span; r. has no exon-level
         // junction restriction beyond the transcript ends).
-        let boundaries = Boundaries::new(1, transcript.sequence_length());
+        let boundaries = Boundaries::new(0, transcript.sequence_length());
 
         // Perform normalization (RNA context: codon-frame gate does not apply;
         // r. is not in the spec's accepted reference types for repeats).
@@ -1412,7 +1435,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             edit,
             rel_start,
             rel_end,
-            &Boundaries::new(1, ref_seq.len() as u64),
+            &Boundaries::new(0, ref_seq.len() as u64),
             false,
         )?;
 
