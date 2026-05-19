@@ -104,6 +104,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_normalized_all(&normalized)
     }
 
+    /// Project a transcript-coordinate variant (`c.`/`n.`/`r.`) onto its parent
+    /// genomic reference and return an [`HgvsVariant::Genome`].
+    ///
+    /// The output uses the parent NG/NC accession stored in the input's
+    /// `Accession.genomic_context`. The function is idempotent on `Genome`
+    /// input (returned unchanged).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FerroError::UnsupportedProjection`] for:
+    /// - `p.` / `m.` / `o.` / RNA-fusion / `Allele` / `NullAllele` / `UnknownAllele`
+    ///   inputs (see #328 for allele support),
+    /// - transcript-coordinate inputs whose `Accession.genomic_context` is
+    ///   absent (no parent NG/NC reference),
+    /// - `?` position sentinels in the start or end coordinate.
+    ///
+    /// Returns [`FerroError::InvalidCoordinates`] when an endpoint is a
+    /// compound `(a_b)` `UncertainBoundary::Range` (no single position).
+    ///
+    /// The output ref-base is **not** validated against the genomic reference;
+    /// mismatches surface downstream in `Normalizer`.
+    pub fn project_to_genomic(&self, _variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+        unimplemented!("project_to_genomic: implementation pending (#327)");
+    }
+
     /// Project an already-normalized g. variant onto ALL overlapping
     /// transcripts, skipping re-normalization.
     ///
@@ -1232,6 +1257,495 @@ mod tests {
             "allele with intronic inner variant should have no protein"
         );
         assert!(result.is_intronic, "should be marked intronic");
+    }
+
+    // -------------------------------------------------------------------------
+    // project_to_genomic tests (#327)
+    // -------------------------------------------------------------------------
+
+    mod project_to_genomic_tests {
+        use super::*;
+        use crate::hgvs::edit::{Base, InsertedSequence, NaEdit};
+        use crate::hgvs::interval::{CdsInterval, GenomeInterval, TxInterval};
+        use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
+        use crate::hgvs::variant::{
+            Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, TxVariant,
+        };
+
+        /// Build an `NG_*` parent `Accession`.
+        fn ng_parent(num: &str, version: u32) -> Accession {
+            Accession::new("NG", num, Some(version))
+        }
+
+        /// Build an `NC_*` parent `Accession`.
+        fn nc_parent(num: &str, version: u32) -> Accession {
+            Accession::new("NC", num, Some(version))
+        }
+
+        /// Attach a genomic_context to an existing `CdsVariant`.
+        fn attach_genomic_context_cds(mut v: CdsVariant, ctx: Accession) -> CdsVariant {
+            v.accession = v.accession.with_genomic_context(ctx);
+            v
+        }
+
+        /// Attach a genomic_context to an existing `TxVariant` (n.).
+        fn attach_genomic_context_tx(mut v: TxVariant, ctx: Accession) -> TxVariant {
+            v.accession = v.accession.with_genomic_context(ctx);
+            v
+        }
+
+        /// Build a non-coding transcript test fixture for `n.` projection.
+        ///
+        /// `NR_TEST.1` is a 9-base non-coding RNA on chr1, plus strand,
+        /// genome [1000, 1009).  Without a CDS the transcript uses pure n.
+        /// coordinates (1-based: n.1..n.9). n.5 maps to genome 1004.
+        fn make_noncoding_test_data() -> (Projector, MockProvider) {
+            let mut cdot = CdotMapper::new();
+            cdot.add_transcript(
+                "NR_TEST.1".to_string(),
+                CdotTranscript {
+                    gene_name: Some("TESTGENE".to_string()),
+                    contig: "chr1".to_string(),
+                    strand: ProvStrand::Plus,
+                    exons: vec![[1000, 1009, 0, 9]],
+                    // No CDS for n. transcripts.
+                    cds_start: None,
+                    cds_end: None,
+                    gene_id: None,
+                    protein: None,
+                    exon_cigars: Vec::new(),
+                },
+            );
+            let projector = Projector::new(cdot);
+
+            let mut provider = MockProvider::new();
+            provider.add_transcript(Transcript {
+                id: "NR_TEST.1".to_string(),
+                gene_symbol: Some("TESTGENE".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAA".to_string()),
+                cds_start: None,
+                cds_end: None,
+                exons: vec![Exon::with_genomic(1, 1, 9, 1000, 1008)],
+                chromosome: Some("chr1".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1008),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+            let prefix = "N".repeat(999);
+            let suffix = "N".repeat(100);
+            provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
+            (projector, provider)
+        }
+
+        // -- 1: plus-strand substitution ---------------------------------------
+
+        #[test]
+        fn project_to_genomic_plus_strand_substitution() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // Build NG_TEST.1(NM_TEST.1):c.4C>A.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("TEST", 1));
+            let input = HgvsVariant::Cds(cds);
+
+            // Compile-time check that the API exists.
+            let _ = vp.project_to_genomic(&input);
+
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("plus-strand c. → g. projection should succeed");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant, got: {}", out),
+            };
+            // Parent NG_TEST.1, plus-strand → g.1003C>A.
+            assert_eq!(g.accession.to_string(), "NG_TEST.1");
+            assert_eq!(g.to_string(), "NG_TEST.1:g.1003C>A");
+        }
+
+        // -- 2: minus-strand substitution --------------------------------------
+
+        #[test]
+        fn project_to_genomic_minus_strand_substitution_revcomps() {
+            let (projector, provider) = make_minus_strand_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // c.4C>T on minus-strand NM_TEST_MINUS.1 → tx_pos 4 on minus,
+            // c.1 is the last base of the exon [1000, 1009) at genome 1008,
+            // so c.4 = genome 1005.  Ref C on transcript = G on genome;
+            // alt T on transcript = A on genome → g.1005G>A.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST_MINUS.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("TESTMINUS", 1));
+            let input = HgvsVariant::Cds(cds);
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("minus-strand c. → g. should succeed");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant"),
+            };
+            assert_eq!(g.accession.to_string(), "NG_TESTMINUS.1");
+            assert_eq!(
+                g.to_string(),
+                "NG_TESTMINUS.1:g.1005G>A",
+                "minus-strand c.4C>T should revcomp to g.1005G>A"
+            );
+        }
+
+        // -- 3: minus-strand insertion (revcomp inserted seq) ------------------
+
+        #[test]
+        fn project_to_genomic_minus_strand_insertion_revcomps_inserted_seq() {
+            let (projector, provider) = make_minus_strand_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // c.4_5insATC on minus strand.  c.4 = g.1005, c.5 = g.1004 (minus).
+            // Inserted "ATC" on the transcript → revcomp "GAT" on the genome.
+            // g. start/end are min/max of the two genome coords, so 1004_1005.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST_MINUS.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(CdsPos::new(4), CdsPos::new(5)),
+                    NaEdit::Insertion {
+                        sequence: InsertedSequence::Literal("ATC".parse().unwrap()),
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("TESTMINUS", 1));
+            let input = HgvsVariant::Cds(cds);
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("minus-strand insertion should project");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant"),
+            };
+            let s = g.to_string();
+            assert!(s.contains("ins"), "expected ins notation in g., got: {}", s);
+            assert!(
+                s.contains("GAT"),
+                "expected revcomp(ATC) = GAT in g., got: {}",
+                s
+            );
+        }
+
+        // -- 4: intronic offset, plus strand -----------------------------------
+
+        #[test]
+        fn project_to_genomic_intronic_offset_plus() {
+            let (projector, provider) = make_intronic_test_data();
+            let vp = VariantProjector::new(projector, provider);
+
+            // NM_INTR.1 layout (plus strand):
+            //   Exon 1: genome [1000, 1010), tx [0, 10)
+            //   Intron: genome [1010, 2000)
+            //   Exon 2: genome [2000, 2010), tx [10, 20)
+            // c.10 is the last base of exon 1 (tx_pos = 9, 0-based, genome 1009).
+            // c.10+5 → 5 bases into the intron from the 5' boundary → g.1014.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_INTR.1"),
+                gene_symbol: Some("INTRGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::with_offset(10, 5)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("INTR", 1));
+            let input = HgvsVariant::Cds(cds);
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("intronic c.10+5del should project");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant"),
+            };
+            // Expect a deletion at g.1014 on NG_INTR.1.
+            assert_eq!(g.accession.to_string(), "NG_INTR.1");
+            let start = g
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .expect("start should be concrete");
+            assert_eq!(
+                start.base, 1014,
+                "expected g.1014 for c.10+5 on plus strand, got: {}",
+                start.base
+            );
+        }
+
+        // -- 5: idempotence on Genome input ------------------------------------
+
+        #[test]
+        fn project_to_genomic_idempotent_on_genome_input() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // Build a plain Genome variant.
+            let g = GenomeVariant {
+                accession: parse_accession("NC_000001.11"),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(1003)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Genome(g.clone());
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("Genome input should pass through");
+            assert_eq!(
+                out.to_string(),
+                input.to_string(),
+                "Genome input should be idempotent under project_to_genomic"
+            );
+        }
+
+        // -- 6: missing parent NG/NC -------------------------------------------
+
+        #[test]
+        fn project_to_genomic_missing_parent_returns_unsupported() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // NM_TEST.1:c.4C>A — no genomic_context attached.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Cds(cds);
+
+            let _ = vp.project_to_genomic(&input);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("missing parent should error");
+            match err {
+                FerroError::UnsupportedProjection { reason } => {
+                    assert!(
+                        reason.contains("parent reference"),
+                        "expected reason to mention 'parent reference', got: {}",
+                        reason
+                    );
+                }
+                other => panic!("expected UnsupportedProjection, got: {:?}", other),
+            }
+        }
+
+        // -- 7: n. (non-coding) input ------------------------------------------
+
+        #[test]
+        fn project_to_genomic_tx_input_on_noncoding() {
+            let (projector, provider) = make_noncoding_test_data();
+            let vp = VariantProjector::new(projector, provider);
+
+            // NR_TEST.1:n.5A>G on plus strand → n.5 = genome 1004.
+            let tx = TxVariant {
+                accession: parse_accession("NR_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    TxInterval::point(TxPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::G,
+                    },
+                ),
+            };
+            let tx = attach_genomic_context_tx(tx, ng_parent("NRTEST", 1));
+            let input = HgvsVariant::Tx(tx);
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("n. → g. projection should succeed");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant"),
+            };
+            assert_eq!(g.accession.to_string(), "NG_NRTEST.1");
+            assert_eq!(g.to_string(), "NG_NRTEST.1:g.1004A>G");
+        }
+
+        // -- 8: r. input -------------------------------------------------------
+
+        #[test]
+        fn project_to_genomic_rna_input_uppercases_to_dna_in_g() {
+            use crate::hgvs::interval::RnaInterval;
+            use crate::hgvs::location::RnaPos;
+            use crate::hgvs::variant::RnaVariant;
+
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // r.4c>a on NM_TEST.1 (plus strand) → g.1003C>A on NG_TEST.1.
+            // RnaPos uses CDS-relative semantics like CdsPos.
+            let rna = RnaVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    RnaInterval::point(RnaPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let mut rna = rna;
+            rna.accession = rna.accession.with_genomic_context(ng_parent("TEST", 1));
+            let input = HgvsVariant::Rna(rna);
+
+            let _ = vp.project_to_genomic(&input);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("r. → g. projection should succeed");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant"),
+            };
+            // Display: uppercase DNA in g., not lowercase RNA.
+            let s = g.to_string();
+            assert!(
+                s.contains("C>A"),
+                "expected uppercase C>A in g. display, got: {}",
+                s
+            );
+            assert_eq!(g.accession.to_string(), "NG_TEST.1");
+        }
+
+        // -- 9: protein input → unsupported ------------------------------------
+
+        #[test]
+        fn project_to_genomic_unsupported_for_protein() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let input = crate::parse_hgvs("NP_TEST.1:p.Arg2Cys").expect("p. parse should succeed");
+            assert!(matches!(input, HgvsVariant::Protein(_)));
+
+            let _ = vp.project_to_genomic(&input);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("p. → g. should be unsupported");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected UnsupportedProjection for p., got: {:?}",
+                err
+            );
+        }
+
+        // -- 10: allele input → unsupported ------------------------------------
+
+        #[test]
+        fn project_to_genomic_unsupported_for_allele() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let v1 = crate::parse_hgvs("chr1:g.1003C>A").expect("parse v1");
+            let v2 = crate::parse_hgvs("chr1:g.1006T>A").expect("parse v2");
+            let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
+
+            let _ = vp.project_to_genomic(&allele);
+            let err = vp
+                .project_to_genomic(&allele)
+                .expect_err("allele inputs should be rejected (see #328)");
+            match err {
+                FerroError::UnsupportedProjection { reason } => {
+                    assert!(
+                        reason.to_ascii_lowercase().contains("allele"),
+                        "expected reason to mention 'allele', got: {}",
+                        reason
+                    );
+                }
+                other => panic!("expected UnsupportedProjection, got: {:?}", other),
+            }
+        }
+
+        // -- 11: ? position sentinel → unsupported -----------------------------
+
+        #[test]
+        fn project_to_genomic_unknown_position_returns_unsupported() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // Build NG_TEST.1(NM_TEST.1):c.?C>A — start/end are CdsPos::unknown(None).
+            let unknown_pos = CdsPos::unknown(None);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1").with_genomic_context(ng_parent("TEST", 1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(unknown_pos),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Cds(cds);
+
+            let _ = vp.project_to_genomic(&input);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("? position should be unsupported");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected UnsupportedProjection for unknown position, got: {:?}",
+                err
+            );
+        }
+
+        // Suppress unused warnings for helpers that some tests don't exercise.
+        #[allow(dead_code)]
+        fn _unused_nc(num: &str, ver: u32) -> Accession {
+            nc_parent(num, ver)
+        }
     }
 
     #[test]
