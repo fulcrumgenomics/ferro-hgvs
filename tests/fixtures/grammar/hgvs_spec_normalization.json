@@ -431,7 +431,7 @@
     },
     {
       "input": "NM_004006.2:c.6775_6777delGAGinsC",
-      "current": "NM_004006.2:c.6775_6777delGAGinsC",
+      "current": "NM_004006.2:c.6775_6777delinsC",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -439,11 +439,12 @@
       "source_paths": [
         "docs/recommendations/DNA/delins.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec rejects the long-form `delGAGinsC` (`<code class=\"invalid\">`); ferro accepts but emits the spec-recommended canonical short form `delinsC` (DNA/delins.md). Status remains `false-acceptance` for the accepted-bad-input fact; `note` clarifies the canonical-on-output behavior. (#353)"
     },
     {
       "input": "NM_004006.2:c.6775_6777delGTGinsC",
-      "current": "NM_004006.2:c.6775_6777delGTGinsC",
+      "current": "NM_004006.2:c.6775_6777delinsC",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -451,7 +452,8 @@
       "source_paths": [
         "docs/recommendations/DNA/delins.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec rejects the long-form `delGTGinsC`; ferro emits canonical `delinsC` (DNA/delins.md). See #353."
     },
     {
       "input": "NM_007294.3:c.[2077G>A;2077_2078insTA]",
@@ -599,7 +601,7 @@
     {
       "input": "c.4375_4376delCGinsAGTT",
       "input_prefixed": "NM_004006.2:c.4375_4376delCGinsAGTT",
-      "current": "NM_004006.2:c.4375_4376delCGinsAGTT",
+      "current": "NM_004006.2:c.4375_4376delinsAGTT",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -607,7 +609,8 @@
       "source_paths": [
         "docs/background/simple.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec rejects the long-form `delCGinsAGTT`; ferro emits canonical `delinsAGTT` (DNA/delins.md). See #353."
     },
     {
       "input": "c.4375_4379delCGATT",
@@ -7277,7 +7280,7 @@
     },
     {
       "input": "NC_000023.11:g.32386323delCinsGA",
-      "current": "NC_000023.11:g.32386323delCinsGA",
+      "current": "NC_000023.11:g.32386323delinsGA",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "g",
@@ -7285,11 +7288,12 @@
       "source_paths": [
         "docs/recommendations/DNA/delins.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec rejects the long-form `delCinsGA`; ferro emits canonical `delinsGA` (DNA/delins.md). See #353."
     },
     {
       "input": "NC_000023.11:g.32386323delTinsGA",
-      "current": "NC_000023.11:g.32386323delTinsGA",
+      "current": "NC_000023.11:g.32386323delinsGA",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "g",
@@ -7297,7 +7301,8 @@
       "source_paths": [
         "docs/recommendations/DNA/delins.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec rejects the long-form `delTinsGA`; ferro emits canonical `delinsGA` (DNA/delins.md). See #353."
     },
     {
       "input": "NC_000023.11:g.33344590_33344592delGAT",

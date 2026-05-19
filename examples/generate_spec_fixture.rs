@@ -521,6 +521,14 @@ mod overrides {
         pub spec_expected: Option<Option<String>>,
         #[serde(default)]
         pub todo: Option<String>,
+        /// Free-form note attached to the row in the emitted fixture.
+        /// Used to capture nuances where the auto-classified `status`
+        /// doesn't fully convey ferro's behavior — e.g. rows whose
+        /// `current` is the spec's recommended canonical form even
+        /// though the original `input` is `<code class="invalid">`.
+        /// Closes-after: #353.
+        #[serde(default)]
+        pub note: Option<String>,
         /// Force a specific prefixed form for bare fragments. Wins over the
         /// auto-default in `prefix::default_prefixed`.
         #[serde(default)]
@@ -583,6 +591,12 @@ mod runner {
         pub working_group: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub todo: Option<String>,
+        /// Free-form clarifying note. Surfaced from the override file
+        /// for rows where the `status` bucket doesn't fully capture
+        /// ferro's behavior (e.g. canonical form emitted from a
+        /// spec-rejected input). Closes-after: #353.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub note: Option<String>,
         /// Mirrors the override flag — `Some(true)` means the row needs a
         /// real reference sequence to evaluate and is skipped by the test
         /// consumer. Surfaced on the row so consumers don't have to read
@@ -744,6 +758,7 @@ mod runner {
                 source_paths: paths,
                 working_group: agg.wg,
                 todo,
+                note: ov.and_then(|o| o.note.clone()),
                 requires_reference: ov.and_then(|o| o.requires_reference),
                 expected_warnings,
             });

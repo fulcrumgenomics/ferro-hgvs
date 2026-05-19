@@ -2161,9 +2161,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         }
                     }
                 }
-                // Non-literal insert (Count, Range, etc.): cannot trim or
-                // classify without the actual bases; return unchanged.
-                return Ok((start, end, edit.clone(), warnings.clone()));
+                // Non-literal insert (Count, Range, Reference, PositionRange,
+                // Complex, …): cannot trim or classify without the actual
+                // bases, but we still strip an explicit deleted sequence /
+                // length per the same spec rule that the Literal arm above
+                // applies (`delins.md`: the recommendation is to omit the
+                // explicit deleted bases). Closes #338's WITH-provider gap
+                // surfaced in code review.
+                return Ok((start, end, canonicalize_edit(edit), warnings.clone()));
             }
             NaEdit::Inversion { .. } => {
                 // Apply the complementary-outer-bases shortening rule. After
