@@ -1,10 +1,18 @@
 # Mutalyzer-normalize failure patterns
 
-This document groups the **494 FAILs** that ferro-hgvs surfaces today against
+This document groups the **479 FAILs** that ferro-hgvs surfaces today against
 the imported mutalyzer normalizer fixtures (320 active cases × 8 output axes,
 many cases hitting multiple axes). Each section is one root-cause pattern, not
 one input — burn-down PRs fix the root cause and demote rows from the
 per-axis `baseline-failures/<axis>.txt` files.
+
+**Comparator-driven demotion via #335 (recorded here for reviewability):**
+16 inputs on the `normalized` axis are no longer FAILs as of #335:
+14 gene-symbol-selector cases are tallied as `divergence_accepted` (per
+ferro policy #121); 2 dup-vs-ins cases had their `cases.json` `normalized`
+field corrected to ferro's HGVS-spec-correct value and carry a
+`spec_citation` annotation. Neither set required changing ferro behavior.
+Pre-#335 the `normalized`-axis FAIL count was 149; post-#335 it is 133.
 
 Raw per-axis FAIL data is rebuilt by running
 
@@ -25,10 +33,10 @@ this Markdown from those TSVs.
 | 2 | `VariantProjector only accepts g. variants` (`project: error` / `project_all: error`) | 83 (65+18) | protein_description, coding_protein_descriptions | **#310** ([PR #313](https://github.com/fulcrumgenomics/ferro-hgvs/pull/313) in flight) covers non-RefSeq protein prediction; the g.-only restriction is a separate adjacent gap | **ferro gap** — projector should accept c./n. inputs by first projecting back to g., then forward to p. | **new issue**: "VariantProjector::project should accept c./n./r. inputs"; possibly subsumed if c→g API (#1) ships first |
 | 3 | `output divergence: other` | 101 | normalized, genomic | many — needs per-row spec arbitration | mixed | **bulk arbitration** below (split into sub-patterns 3a–3e) |
 | 4 | `error-code mapping missing` | 50 | errors | (none) | ferro has its own `FerroError` taxonomy; mutalyzer has 30+ specific codes (`ESYNTAXUEOF`, `ENODNA`, `ELENGTHMISMATCH`, `EOUTOFBOUNDARY`, …) | **new issue**: "build mutalyzer↔ferro error-code mapping table for cross-tool diagnostics"; until then, errors axis stays in baseline-failures |
-| 5 | `output divergence: coding_protein pair missing` | 33 | coding_protein_descriptions | **#310** / #313 — the gene-symbol-in-selector issue accounts for most of these once c→g exists | **ferro policy** — #121 closed deliberately *preserving* gene-symbol selector; mutalyzer uses `(NM_legacy_alias)`. The pair shape is the same; only the selector spelling differs | Once #313 merges and c→g API ships: adjust comparator to normalize selectors before matching, OR document as accepted divergence |
+| 5 | `output divergence: coding_protein pair missing` | 33 | coding_protein_descriptions | **#310** / #313 — the gene-symbol-in-selector issue accounts for most of these once c→g exists | **ferro policy** — #121 closed deliberately *preserving* gene-symbol selector; mutalyzer uses `(NM_legacy_alias)`. The pair shape is the same; only the selector spelling differs | **partially resolved via comparator (#335)** on the `normalized` axis; the same selector-spelling divergence on `coding_protein_descriptions` still FAILs and needs either #310/#313 protein-prediction fixes or comparator extension to that axis |
 | 6 | `parse error` | 23 | normalized, genomic, protein_description | check #87 / #83 trackers — likely uncovered spec gaps | **needs per-row spec arbitration** — these are inputs ferro cannot parse at all | Triage each: if parseable per spec → **new issue** under #87; if intentionally rejected → move expected to `errors` axis with spec citation |
 | 7 | `info-code surface not wired` | 22 | infos | (none) | ferro doesn't yet emit structured `info` codes the way mutalyzer's `IINFO_*` does | **new issue**: "structured info-code surface in normalize output (mirror W##### warnings)" |
-| 8 | `gene-symbol vs alias selector (#121)` | 21 | normalized | **#121** (closed, ferro policy explicitly preserves gene-symbol selector); see also #310/#313 | **ferro policy** — these are *not bugs*. mutalyzer emits `(BRCA2_v001)`, ferro emits `(BRCA2)` | Document in `cases.json` per-case with `accepted_divergence: "ferro-policy-121-gene-symbol-selector"`; comparator will treat selector-only differences as PASS. **No issue filed; no ferro change.** |
+| 8 | `gene-symbol vs alias selector (#121)` | 14 | normalized | **#121** (closed, ferro policy explicitly preserves gene-symbol selector); see also #310/#313 | **ferro policy** — these are *not bugs*. mutalyzer emits `(BRCA2_v001)`, ferro emits `(BRCA2)` | **resolved via `accepted_divergence` comparator (#335)**: 14 cases on the `normalized` axis carry `accepted_divergence: "ferro-policy-121-gene-symbol-selector"`. The comparator tracks them in the `divergence_accepted` tally bucket instead of FAIL. **No issue filed; no ferro change.** Original eyeballed estimate was ~21; the strict selector-only-divergence count (expected vs got differ exclusively in the `(…)` token) is 14. |
 | 9 | `3' shift differs by N bases` | 20 | normalized | overlaps **#161**, **#11**, and adjacent intronic/repeat-shift work | **needs per-row spec arbitration** — some are real ferro bugs in 3' rule, some are mutalyzer over-shifts | Triage each against HGVS §SVD-WG009; cluster into 2-4 sub-issues per shape (intronic-boundary, repeat-region, etc.) |
 | 10 | `r. prediction not wired` | 16 | rna_description | **#283** (open, [PR #301](https://github.com/fulcrumgenomics/ferro-hgvs/pull/301)) audits c.→r.; **#291** (open, [PR #304](https://github.com/fulcrumgenomics/ferro-hgvs/pull/304)) related r. branch fix | **ferro gap** — runner uses a stub. After #301/#304 merge, wire the runner to ferro's r. prediction surface | Wire runner: replace the `Err("not wired")` stub with real call once those PRs merge |
 | 11 | `no chromosome mapping for intronic normalization` | 12 | normalized, genomic | adjacent to **#172** (E3006 intronic ranges) and the recently-closed #98/#100 family | **ferro bug** — when input is `NG_xxx(NM_yyy):c.123-5_…`, ferro requires a chromosome mapping but the cdot mapper has the NG-based projection | **new issue**: "intronic boundary normalization with NG-prefixed transcript inputs" |
@@ -56,14 +64,14 @@ This pattern is too generic to act on as-is. Eyeballing the diagnostics:
 
 **Disposition:** new issue: "canonicalize bracketed `ins[…]` and range-form `ins[start_end]` to flat sequence form".
 
-### 3b. dup-vs-ins canonicalization at coding-region boundary (~5)
+### 3b. dup-vs-ins canonicalization at coding-region boundary (2)
 **Examples:**
 - `NM_000143.3:c.1_2insCAT` → expected `c.1_2insCAT`, got `c.-1_2dup`
 - `NM_000143.3:c.-1_1insCAT` → expected `c.-1_1insCAT`, got `c.-1_2dup`
 
-**Verdict:** **needs spec arbitration** — HGVS spec §insertion vs §duplication is sensitive to whether the inserted seq matches flanking ref bases; ferro is canonicalizing aggressively where mutalyzer keeps insertion form.
+**Verdict:** **HGVS spec §Prioritization** mandates `dup` over `ins` when both descriptions are valid. ferro applies this rule; mutalyzer left these in `ins` form.
 
-**Disposition:** triage 2 representative cases against HGVS §SVD-WG009 + §insertion, decide policy, file 1 issue.
+**Disposition:** **resolved via `spec_citation` + corrected expected output (#335)**. The `cases.json` `normalized` field for both inputs was updated to ferro's spec-correct value, and a `spec_citation: HGVS §Prioritization` was attached. Both cases now PASS the standard match check; the citation makes the divergence reviewable. Original estimate was ~5; the actual count of `ins[bases]` → `dup` divergences on the `normalized` axis is 2.
 
 ### 3c. Gene-symbol-vs-alias selector in `normalized` axis (~20)
 Spillover from row 8 — gene-symbol selector preservation by ferro vs alias in mutalyzer.

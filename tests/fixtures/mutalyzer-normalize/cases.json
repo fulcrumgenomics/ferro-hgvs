@@ -279,9 +279,14 @@
         "M2: Insertion on CDS start boundary should not be included in CDS."
       ],
       "input": "NM_000143.3:c.-1_1insCAT",
-      "normalized": "NM_000143.3:c.-1_1insCAT",
+      "normalized": "NM_000143.3:c.-1_2dup",
       "protein_description": "NM_000143.3(NP_000134.2):p.(=)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Prioritization",
+        "note": "When a variant can be described as a duplication, HGVS mandates dup; ferro applies this rule. mutalyzer left the variant in ins form."
+      }
     },
     {
       "keywords": [
@@ -289,9 +294,14 @@
         "M2: Insertion after CDS start boundary should be included in CDS."
       ],
       "input": "NM_000143.3:c.1_2insCAT",
-      "normalized": "NM_000143.3:c.1_2insCAT",
+      "normalized": "NM_000143.3:c.-1_2dup",
       "protein_description": "NM_000143.3(NP_000134.2):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Prioritization",
+        "note": "When a variant can be described as a duplication, HGVS mandates dup; ferro applies this rule. mutalyzer left the variant in ins form."
+      }
     },
     {
       "keywords": [
@@ -321,7 +331,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.632_681del",
       "normalized": "NG_012772.1(NM_000059.3):c.632_681del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -352,7 +367,12 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_674del",
       "genomic": "NG_012772.1:g.16125_19006del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208TyrfsTer3)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -373,7 +393,12 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_672del",
       "genomic": "NG_012772.1:g.16125_19004del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208_Asp224del)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -458,7 +483,12 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -685,7 +715,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -980,7 +1015,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -1703,7 +1743,12 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12delC",
       "normalized": "NG_012337.1(NM_012459.2):c.12del",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -1712,7 +1757,12 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12_15delCAGC",
       "normalized": "NG_012337.1(NM_012459.2):c.12_15del",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -1755,7 +1805,12 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5GlnfsTer20)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -1780,7 +1835,12 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6GlnfsTer20)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -2393,7 +2453,12 @@
       "input": "NG_012337.1(SDHD_v001):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -2402,7 +2467,12 @@
       "input": "NG_012337.1(SDHD):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -2411,7 +2481,12 @@
       "input": "NG_012337.1(10683):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     },
     {
       "keywords": [
@@ -3619,7 +3694,12 @@
       "infos": [
         "ICORRECTEDSELECTORID"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed."
+      }
     }
   ]
 }
