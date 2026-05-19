@@ -93,3 +93,60 @@ fn five_prime_cross_insertion_in_homopolymer_picks_leftmost_dup() {
         "NM_TEST.1:c.6dup",
     );
 }
+
+/// Synthetic transcript with a longer (4-base) homopolymer tract at
+/// positions c.10-c.13 — used to verify the 5'-most slot is picked
+/// across multiple candidate positions, not just "the other endpoint
+/// of a 2-slot tract" (Opus + Sonnet review feedback).
+fn provider_with_long_t_tract_transcript() -> MockProvider {
+    let mut provider = MockProvider::new();
+    //                              1234567890123456789012345
+    let sequence = String::from("ATGAGAGAGTTTTGAAAAAAAACCC");
+    //                                       ^^^^ c.10-c.13 = TTTT
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NM_LONG.1".to_string(),
+        Some("LONG".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(1),
+        Some(25),
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+#[test]
+fn five_prime_insertion_in_4base_homopolymer_picks_leftmost_dup() {
+    // c.10-c.13 = T,T,T,T. Inserting another T anywhere inside the
+    // tract — the 5'-most canonical dup is c.10dup regardless of how
+    // the insertion was originally phrased. Pins that the fix
+    // generalizes beyond 2-base tracts.
+    let normalizer = Normalizer::with_config(
+        provider_with_long_t_tract_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+    );
+    let variant = parse_hgvs("NM_LONG.1:c.11_12insT").expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    assert_eq!(format!("{}", normalized), "NM_LONG.1:c.10dup");
+}
+
+#[test]
+fn three_prime_insertion_in_4base_homopolymer_picks_rightmost_dup() {
+    // Same fixture, 3prime direction: rightmost dup is c.13dup.
+    let normalizer = Normalizer::with_config(
+        provider_with_long_t_tract_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    );
+    let variant = parse_hgvs("NM_LONG.1:c.11_12insT").expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    assert_eq!(format!("{}", normalized), "NM_LONG.1:c.13dup");
+}
