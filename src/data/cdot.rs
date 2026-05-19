@@ -1166,6 +1166,15 @@ impl CdotMapper {
     /// Get a transcript by accession.
     ///
     /// For LRG transcripts (e.g., "LRG_1t1"), this will look up the equivalent
+    /// Whether the mapper has a transcript at exactly the requested accession
+    /// (no version-strip or LRG fallback). Used by callers that need to
+    /// distinguish "we have your exact version" from "we resolved to a
+    /// sibling version" — e.g. the cdot-driven base synthesis path in
+    /// `MultiFastaProvider::get_transcript` (closes #331).
+    pub fn has_transcript_exact(&self, accession: &str) -> bool {
+        self.transcripts.contains_key(accession)
+    }
+
     /// RefSeq transcript if an LRG mapping has been loaded.
     ///
     /// Supports version fallback: if "NM_000088.2" is not found but "NM_000088.3"
