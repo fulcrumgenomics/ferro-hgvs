@@ -4739,22 +4739,23 @@ mod ng_prefix_normalization {
     fn intronic_del_with_ng_parent_succeeds() {
         let provider = mock_provider_with_intronic_transcript();
         let normalizer = Normalizer::new(provider);
-        // c.10+1del: first intronic base of intron 1, an A in a 50-A run.
+        // c.10+1del: first intronic base of intron 1 (a 50-A homopolymer
+        // followed by exon 2 starting with `A`). The 3' rule shifts the
+        // deletion to the last position of the homopolymer run — the last
+        // intronic A at g.1060 — rendered as `c.11-1del` using the
+        // downstream-exon offset notation.
         let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10+1del")
             .expect("NG-parented intronic input must parse");
         let normalized = normalizer
             .normalize(&variant)
             .expect("intronic normalize with NG parent must succeed");
         let rendered = format!("{}", normalized);
-        // Selector wrapper should still be preserved in Display.
-        assert!(
-            rendered.starts_with("NG_012772.1(NM_TEST.1):c."),
-            "expected NG parent to round-trip in Display; got {}",
-            rendered
-        );
-        assert!(
-            rendered.contains("del"),
-            "expected del edit to survive normalization; got {}",
+        // Pin both the selector wrapper AND the 3'-shifted position. A
+        // regression that swallowed the shift would still match the
+        // `(NM_TEST.1):c.` prefix; only the position assertion catches it.
+        assert_eq!(
+            rendered, "NG_012772.1(NM_TEST.1):c.11-1del",
+            "expected 3'-shifted intronic deletion at c.11-1; got {}",
             rendered
         );
     }
@@ -4788,16 +4789,22 @@ mod ng_prefix_normalization {
     fn boundary_spanning_del_with_ng_parent_succeeds() {
         let provider = mock_provider_with_intronic_transcript();
         let normalizer = Normalizer::new(provider);
-        // c.10_10+5del: last exonic base of exon 1 + first 5 intronic bases.
+        // c.10_10+5del: last exonic base of exon 1 (an `A` from "ACGTACGTAC")
+        // + first 5 intronic bases (all `A` in the 50-A run). The deleted
+        // 6-base `A` stretch lives in a homopolymer that extends to the
+        // last intronic A (g.1060). 3'-shifted, the range becomes c.10_11-1
+        // and the edit canonicalizes to a repeat-notation `A[45]` (45 A's
+        // remain after the 6 are removed; the original `c.10` A merges with
+        // the 50 intronic A's into a 51-A stretch).
         let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10_10+5del")
             .expect("NG-parented boundary-spanning input must parse");
         let normalized = normalizer
             .normalize(&variant)
             .expect("boundary-spanning normalize with NG parent must succeed");
         let rendered = format!("{}", normalized);
-        assert!(
-            rendered.starts_with("NG_012772.1(NM_TEST.1):c."),
-            "NG parent must round-trip; got {}",
+        assert_eq!(
+            rendered, "NG_012772.1(NM_TEST.1):c.10_11-1A[45]",
+            "expected 3'-shifted boundary-spanning result c.10_11-1A[45]; got {}",
             rendered
         );
     }

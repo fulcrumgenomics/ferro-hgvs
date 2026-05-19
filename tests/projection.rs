@@ -172,22 +172,32 @@ fn intronic_fixture() -> (Projector, MockProvider) {
 }
 
 #[test]
-fn project_intronic_c_dot_with_ng_parent_succeeds() {
-    // The projector wraps `Normalizer::normalize` for every input. An NG-
-    // parented c. input that lands on an intronic position must travel
-    // through both the normalize intronic path (via
-    // `get_transcript_for_variant`) and the projector's per-codon
-    // transcript lookup without erroring. This test pins that wiring.
+fn project_intronic_c_dot_succeeds() {
+    // Pins that intronic g.→c. projection runs through `Normalizer::normalize`
+    // (intronic path, which uses the variant-aware lookup after #332) and the
+    // projector's per-codon transcript fetches without erroring.
+    //
+    // The input here is `g.`-form (the projector's primary supported entry
+    // point); the per-codon transcript lookups inside the projector consult
+    // `get_transcript_for_variant` on internally-constructed `CdsVariant`s
+    // (which do NOT carry `genomic_context` today — that's a separate gap
+    // tracked by #328). Direct NG-parented projection coverage will land
+    // once #328 ships.
     let (projector, provider) = intronic_fixture();
     let vp = VariantProjector::new(projector, provider);
-    // g.1012A>T: intronic position 1 base into intron 1. Routes through
-    // `Normalizer::normalize` (intronic path) and then `project_normalized_all`.
     let result = vp
         .project("NC_000001.11:g.1012A>T", "NM_TEST.1")
-        .expect("projection must succeed for intronic NG-parented input");
+        .expect("projection must succeed for intronic input");
     assert_eq!(result.transcript_id, "NM_TEST.1");
     assert!(result.is_intronic);
     let c = result.coding.as_ref().unwrap().to_string();
-    // The substitution falls in intron 1 with c. notation c.10+N (N>=1).
-    assert!(c.contains("c.10+"), "expected intronic c.10+N; got {}", c);
+    // Pin the position number — a regression that mis-identifies the
+    // intronic offset would still match a loose `c.10+` substring.
+    assert!(
+        c.contains("c.10+3"),
+        "expected intronic offset c.10+3; got {}",
+        c
+    );
+    // Intronic substitutions skip protein prediction.
+    assert!(result.protein.is_none(), "no p. for intronic substitutions");
 }
