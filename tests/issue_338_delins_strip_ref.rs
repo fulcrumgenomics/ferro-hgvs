@@ -66,3 +66,44 @@ fn genome_delins_preserves_short_form_round_trip() {
         "NC_000009.11:g.36233991_36233992delinsAC",
     );
 }
+
+#[test]
+fn genome_delins_with_count_insert_strips_deleted_sequence() {
+    // Non-literal InsertedSequence (Count) with explicit deleted bases —
+    // surfaces the WITH-provider gap caught in code review. With a real
+    // provider available, the Literal arm in normalize_na_edit's Delins
+    // dispatch trims/canonicalizes, but the non-literal fall-through
+    // previously returned the edit unchanged (preserving deleted bases).
+    // The fix routes the non-literal pass-through through canonicalize_edit
+    // so the same strip-redundant-deleted-bases rule applies.
+    //
+    // MockProvider has no genomic data, so this still exercises the
+    // no-provider canonicalize-only path. The provider-backed counterpart
+    // is below in `genome_delins_with_count_insert_strips_deleted_sequence_with_provider`.
+    assert_eq!(
+        normalize_str("NC_000009.11:g.36233991_36233992delCAins10"),
+        "NC_000009.11:g.36233991_36233992delins10",
+    );
+}
+
+#[test]
+fn genome_delins_with_count_insert_strips_deleted_sequence_with_provider() {
+    // Provider-backed regression for the non-literal `Delins` branch in
+    // `normalize_na_edit` (the line-2067 fall-through). Seeded genomic
+    // sequence makes `ref_bytes` non-empty so the WITH-provider path
+    // executes, distinct from the no-provider canonicalize-only path
+    // exercised above. Closes the CodeRabbit nit on #344.
+    let mut provider = MockProvider::new();
+    // Seed a synthetic genomic contig. Bases are indexed 1-based by
+    // MockProvider::get_sequence. Positions 5 ('C') + 6 ('A') match the
+    // explicit `delCA` so the variant is well-formed against the seeded
+    // reference and the WITH-provider path runs.
+    provider.add_genomic_sequence("NC_TEST.1", "AAAACATTT");
+    let normalizer = Normalizer::with_config(
+        provider,
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    );
+    let variant = parse_hgvs("NC_TEST.1:g.5_6delCAins10").expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    assert_eq!(format!("{}", normalized), "NC_TEST.1:g.5_6delins10");
+}

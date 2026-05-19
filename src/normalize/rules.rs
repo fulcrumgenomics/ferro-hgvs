@@ -2478,6 +2478,29 @@ mod tests {
             reference: Base::A,
             alternative: Base::A
         }));
+
+        // Delins with explicit deleted sequence enters the no-reference
+        // canonicalize path so the strip-deleted-bases rule fires
+        // (closes #338). `Delins { sequence, deleted: None, deleted_length: None }`
+        // is already canonical and must NOT re-enter the pass.
+        use crate::hgvs::edit::{InsertedSequence, Sequence};
+        use std::str::FromStr;
+        let trimmed_seq = InsertedSequence::Literal(Sequence::from_str("AC").unwrap());
+        assert!(should_canonicalize(&NaEdit::Delins {
+            sequence: trimmed_seq.clone(),
+            deleted: Some(Sequence::from_str("CA").unwrap()),
+            deleted_length: None,
+        }));
+        assert!(should_canonicalize(&NaEdit::Delins {
+            sequence: trimmed_seq.clone(),
+            deleted: None,
+            deleted_length: Some(2),
+        }));
+        assert!(!should_canonicalize(&NaEdit::Delins {
+            sequence: trimmed_seq,
+            deleted: None,
+            deleted_length: None,
+        }));
     }
 
     #[test]
