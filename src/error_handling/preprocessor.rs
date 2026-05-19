@@ -1680,6 +1680,38 @@ mod tests {
         assert!(!result.has_corrections());
     }
 
+    // ----- Issue #170: deprecated multi-base substitution on r. (lowercase IUPAC) -----
+
+    #[test]
+    fn test_preprocessor_lenient_corrects_old_substitution_r_lowercase() {
+        let preprocessor = InputPreprocessor::lenient();
+        let result = preprocessor.preprocess("NR_001234.1:r.79_80gc>uu");
+        assert!(result.success, "lenient should rewrite to delins");
+        assert_eq!(result.preprocessed, "NR_001234.1:r.79_80delinsuu");
+        assert!(result.has_warnings());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::OldSubstitutionSyntax));
+    }
+
+    #[test]
+    fn test_preprocessor_strict_rejects_old_substitution_r_lowercase() {
+        let preprocessor = InputPreprocessor::strict();
+        let result = preprocessor.preprocess("NR_001234.1:r.79_80gc>uu");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_preprocessor_silent_rewrites_old_substitution_r_lowercase_no_warning() {
+        let preprocessor = InputPreprocessor::silent();
+        let result = preprocessor.preprocess("NR_001234.1:r.79_80gc>uu");
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NR_001234.1:r.79_80delinsuu");
+        assert!(!result.has_warnings());
+    }
+
     // ===== Issue #115: deprecated `con` syntax (W3015) =====
 
     #[test]

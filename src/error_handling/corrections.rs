@@ -1371,16 +1371,23 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
 }
 
 /// Detect and correct the deprecated multi-base substitution syntax
-/// (`c.79_80GC>TT`, `c.79GC>TT`, `c.100_102>ATG`) by rewriting it to `delins`
-/// form, per HGVS spec recommendations/DNA/substitution.md line 26.
+/// (`c.79_80GC>TT`, `c.79GC>TT`, `c.100_102>ATG`, and the lowercase RNA
+/// equivalents `r.79_80gc>uu` etc.) by rewriting it to `delins` form, per
+/// HGVS spec recommendations/DNA/substitution.md line 26.
 ///
-/// Single-base substitutions (`c.100A>G`) are canonical and not touched.
+/// Single-base substitutions (`c.100A>G`, `r.100a>g`) are canonical and
+/// not touched.
 ///
-/// The detector recognises three patterns inside the input string:
+/// The detector recognises three patterns inside the input string
+/// (IUPAC matching is case-insensitive, so the same patterns apply to
+/// uppercase DNA and lowercase RNA inputs):
 ///
-/// 1. `<pos>_<pos>[ACGTU]+>[ACGTU]+` — explicit ref bases, range form
-/// 2. `<pos>[ACGTU]{2,}>[ACGTU]+`    — single position, multi-base ref
-/// 3. `<pos>(_<pos>)?>[ACGTU]+`      — no ref bases
+/// 1. `<pos>_<pos>[IUPAC]+>[IUPAC]+` — explicit ref bases, range form
+/// 2. `<pos>[IUPAC]{2,}>[IUPAC]+`    — single position, multi-base ref
+/// 3. `<pos>(_<pos>)?>[IUPAC]+`      — no ref bases
+///
+/// Case is preserved on output: the rewrite slices bases from the
+/// original input rather than any normalised buffer.
 ///
 /// Returns the (possibly rewritten) string and the list of corrections.
 pub fn correct_old_substitution_syntax(input: &str) -> (String, Vec<DetectedCorrection>) {
@@ -1514,9 +1521,16 @@ pub fn correct_old_substitution_syntax(input: &str) -> (String, Vec<DetectedCorr
 }
 
 /// IUPAC nucleotide base (incl. ambiguity codes used in HGVS).
+///
+/// Case-insensitive. HGVS uses uppercase letters in DNA descriptions
+/// (`g.`/`c.`/`n.`/`m.`) and lowercase letters in RNA descriptions
+/// (`r.`); both denote the same underlying nucleotide alphabet, so this
+/// predicate accepts either form. Callers that need to preserve case
+/// in their output must slice from the original input rather than
+/// transforming through this predicate.
 fn is_iupac_base(c: char) -> bool {
     matches!(
-        c,
+        c.to_ascii_uppercase(),
         'A' | 'C'
             | 'G'
             | 'T'
@@ -1547,22 +1561,30 @@ fn is_iupac_base(c: char) -> bool {
 pub fn detect_deprecated_ivs(input: &str) -> Vec<DetectedCorrection> {
     let mut out = Vec::new();
     let bytes = input.as_bytes();
-    let prefixes: &[&[u8]] = &[b"c.IVS", b"n.IVS", b"r.IVS"];
-    for prefix in prefixes {
+    // Axis prefixes (`c.`, `n.`, `r.`) are matched literal (HGVS axis
+    // markers are always lowercase), but the retracted `IVS` token is
+    // matched case-insensitively so that lowercase RNA inputs like
+    // `r.ivs5+1g>a` are detected on parity with the uppercase form.
+    let axes: &[&[u8]] = &[b"c.", b"n.", b"r."];
+    for axis in axes {
         let mut search_start = 0usize;
-        while let Some(rel) = find_subslice(&bytes[search_start..], prefix) {
+        while let Some(rel) = find_subslice(&bytes[search_start..], axis) {
             let prefix_start = search_start + rel;
-            // Validate left boundary: char before `c.`/`n.`/`r.` must NOT be
+            let ivs_start = prefix_start + 2;
+            // Need at least "IVS<digit>" past the axis marker.
+            if ivs_start + 4 > bytes.len() {
+                break;
+            }
+            // Validate left boundary: char before the axis must NOT be
             // an ASCII alphanumeric (avoid matching embedded identifiers).
             let ok_left = prefix_start == 0 || !bytes[prefix_start - 1].is_ascii_alphanumeric();
-            // 'I' of "IVS" is at prefix_start + 2.
-            let ivs_start = prefix_start + 2;
+            let ok_ivs = bytes[ivs_start..ivs_start + 3].eq_ignore_ascii_case(b"IVS");
             let mut j = ivs_start + 3;
             let digits_start = j;
             while j < bytes.len() && (bytes[j] as char).is_ascii_digit() {
                 j += 1;
             }
-            if ok_left && j > digits_start {
+            if ok_left && ok_ivs && j > digits_start {
                 out.push(DetectedCorrection::new(
                     ErrorType::DeprecatedIvsNotation,
                     &input[ivs_start..j],
@@ -1576,7 +1598,7 @@ pub fn detect_deprecated_ivs(input: &str) -> Vec<DetectedCorrection> {
             }
         }
     }
-    // Sort by start so multi-prefix scans return ordered results.
+    // Sort by start so multi-axis scans return ordered results.
     out.sort_by_key(|c| c.start);
     out
 }
@@ -4385,6 +4407,84 @@ mod tests {
         assert_eq!(corrections.len(), 1);
     }
 
+    // ----- Issue #170: deprecated multi-base substitution on r. (lowercase IUPAC) -----
+
+    #[test]
+    fn test_correct_old_substitution_r_lowercase_with_refs() {
+        // RNA is canonically lowercase per HGVS; the detector must recognise
+        // lowercase IUPAC bases and preserve case when rewriting.
+        let (out, corrections) = correct_old_substitution_syntax("NR_001234.1:r.79_80gc>uu");
+        assert_eq!(out, "NR_001234.1:r.79_80delinsuu");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].error_type, ErrorType::OldSubstitutionSyntax);
+        assert_eq!(corrections[0].original, "79_80gc>uu");
+        assert_eq!(corrections[0].corrected, "79_80delinsuu");
+    }
+
+    #[test]
+    fn test_correct_old_substitution_r_lowercase_no_refs() {
+        let (out, corrections) = correct_old_substitution_syntax("NR_001234.1:r.100_102>aug");
+        assert_eq!(out, "NR_001234.1:r.100_102delinsaug");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_old_substitution_r_lowercase_single_pos_multi_ref() {
+        let (out, corrections) = correct_old_substitution_syntax("NR_001234.1:r.79gc>uu");
+        assert_eq!(out, "NR_001234.1:r.79_80delinsuu");
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_old_substitution_r_lowercase_canonical_no_op() {
+        let (out, corrections) = correct_old_substitution_syntax("NR_001234.1:r.100a>g");
+        assert_eq!(out, "NR_001234.1:r.100a>g");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_old_substitution_r_lowercase_idempotent() {
+        let (out1, _) = correct_old_substitution_syntax("r.79_80gc>uu");
+        let (out2, c2) = correct_old_substitution_syntax(&out1);
+        assert_eq!(out1, out2);
+        assert!(c2.is_empty());
+    }
+
+    #[test]
+    fn test_correct_old_substitution_mixed_case_preserves_input_case() {
+        // IUPAC matching is case-blind but the rewrite must echo the
+        // submitter's original case verbatim — no implicit upcase/downcase.
+        let (out, corrections) = correct_old_substitution_syntax("r.79_80Gc>uU");
+        assert_eq!(out, "r.79_80delinsuU");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].original, "79_80Gc>uU");
+        assert_eq!(corrections[0].corrected, "79_80delinsuU");
+    }
+
+    // ----- Issue #170: latent W3016 LengthMismatch coverage on lowercase r. -----
+    //
+    // The same case-blindness of `is_iupac_base` unblocks
+    // `take_ref_seq_run`, which `detect_length_mismatch` (W3016) calls to
+    // scan the ref-seq of `del<ref>` / `dup<ref>` / `inv<ref>`. Before
+    // this PR a lowercase `r.10_15dela` consumed zero ref bytes and the
+    // detector returned None; now the lowercase `a` is consumed and the
+    // length mismatch is reported as expected.
+
+    #[test]
+    fn test_detect_length_mismatch_r_lowercase_del() {
+        let hits = detect_length_mismatch("NR_001234.1:r.10_15dela");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+        assert_eq!(hits[0].original, "10_15dela");
+    }
+
+    #[test]
+    fn test_detect_length_mismatch_r_lowercase_dup() {
+        let hits = detect_length_mismatch("NR_001234.1:r.10_15dupacg");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+    }
+
     // ----- Issue #115: retracted c.IVS notation (W3014) -----
 
     #[test]
@@ -4427,6 +4527,17 @@ mod tests {
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].error_type, ErrorType::DeprecatedIvsNotation);
         assert_eq!(detections[0].original, "IVS3");
+    }
+
+    #[test]
+    fn test_detect_deprecated_ivs_r_lowercase() {
+        // Lowercase `ivs` on an `r.` input must be detected on parity
+        // with the uppercase form. Original-case is preserved in the
+        // diagnostic span text.
+        let detections = detect_deprecated_ivs("NR_001234.1:r.ivs3+1g>a");
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].error_type, ErrorType::DeprecatedIvsNotation);
+        assert_eq!(detections[0].original, "ivs3");
     }
 
     // ----- Issue #115: deprecated `con` syntax (W3015) -----
