@@ -17,8 +17,12 @@
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
+use std::str::FromStr;
+
 use crate::coords::index_to_hgvs_pos;
-use crate::hgvs::edit::NaEdit;
+use crate::error::FerroError;
+use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, Sequence};
+use crate::reference::ReferenceProvider;
 
 /// Check if an edit type needs normalization
 pub fn needs_normalization(edit: &NaEdit) -> bool {
@@ -1559,11 +1563,445 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
 
     // Cross-reference source (or anything that isn't a clean integer pair):
     // wrap in `Reference`, which displays as `[<source>]`.
+    //
+    // `InsertedSequence::Reference` carries the *inner* payload (e.g.
+    // `NC_000022.11:g.100_200`) and its `Display` impl wraps the value
+    // in a single `[...]` pair. The parser for `con<source>` captures
+    // the entire token after `con` verbatim, so a bracketed input like
+    // `con[NC_...:g.X_Y]` lands here with `source == "[NC_...:g.X_Y]"`.
+    // Storing that as-is in `Reference` would yield `delins[[NC_...]]`
+    // on round-trip (doubled brackets) and leak the same doubling into
+    // any downstream `format!("ins[{}]", reference)` error message.
+    // Strip a single matching outer `[...]` pair so the stored payload
+    // is exactly the unbracketed inner reference, matching what the
+    // `delins[...]` parser path stores for the same shape (issue #333).
+    let inner = strip_outer_brackets(source);
     Some(NaEdit::Delins {
-        sequence: InsertedSequence::Reference(source.clone()),
+        sequence: InsertedSequence::Reference(inner.to_string()),
         deleted: None,
         deleted_length: None,
     })
+}
+
+/// If `s` is wrapped in a single matching outer `[...]` pair — i.e.
+/// the leading `[` at index 0 closes at the trailing `]` at
+/// `s.len() - 1` under standard bracket-depth bookkeeping — return the
+/// substring between the brackets. Otherwise return `s` unchanged.
+///
+/// The depth check guards against degenerate sources like `[A][B]`
+/// (two adjacent groups) where stripping the first and last byte would
+/// yield `A][B`, an invalid payload. It also leaves alone strings that
+/// happen to start with `[` but never close back to depth-0 at the end
+/// (e.g. `[A]B`).
+fn strip_outer_brackets(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'[' || bytes[bytes.len() - 1] != b']' {
+        return s;
+    }
+    let mut depth: usize = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                if depth == 0 {
+                    // Unbalanced: an inner `]` precedes any `[`.
+                    return s;
+                }
+                depth -= 1;
+                if depth == 0 && i != bytes.len() - 1 {
+                    // Outer `[` closed before the end — the trailing
+                    // `]` is a separate group, not the matching pair.
+                    return s;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Coordinate system context for `ins[...]` payload expansion.
+///
+/// Determines how inner position ranges (e.g. the `100_120` in
+/// `g.X_Yins[100_120]`) are interpreted when looked up against the
+/// reference. `g.` and `m.` ranges are direct genomic positions on the
+/// outer accession; `n.` ranges are direct transcript positions; `c.`
+/// ranges are CDS-relative and must be translated to transcript
+/// coordinates via the transcript's `cds_start`.
+///
+/// This parameter is a deliberate addition beyond the
+/// `(seq, accession, provider)` triple the helper signatures take
+/// elsewhere — without it the helper cannot disambiguate
+/// `c.X_Yins[100_120]` (CDS) from `n.X_Yins[100_120]` (transcript) for
+/// the same accession. See issue #333.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsCoordKind {
+    /// Genomic (`g.`, `m.`, `o.`) or non-coding transcript (`n.`):
+    /// positions are 1-based positions on the outer accession.
+    ///
+    /// **Note on `n.`:** non-coding transcript positions are 1-based
+    /// transcript coordinates (not CDS-relative — there is no CDS to be
+    /// relative to). The helper fetches bytes directly without any
+    /// offset translation. The locked decision "`c./n.` range coords
+    /// interpret as CDS" applies only to `c.`; `n.` is naturally
+    /// transcript-coordinate by definition of the coord system.
+    Direct,
+    /// Coding DNA (`c.`): positions are 1-based CDS-relative; the helper
+    /// translates to transcript coordinates via `cds_start` looked up
+    /// from the provider.
+    Cds,
+}
+
+/// Fetch a 1-based inclusive byte range `[start_1based..=end_1based]`
+/// from the provider, treating the bytes as the literal HGVS reference
+/// sequence at those positions.
+///
+/// For `kind == InsCoordKind::Cds` the helper translates the input
+/// positions to transcript positions via the transcript's `cds_start`
+/// before fetching. Negative / `c.0` / UTR-3 CDS coordinates are not
+/// supported here — those don't arise in well-formed `ins[A_B]` payloads
+/// (the HGVS spec example `c.849_850ins858_895` uses positive CDS
+/// integers only) and would route through `FerroError::Unsupported` at
+/// the parser level.
+fn fetch_position_range_bases<P: ReferenceProvider>(
+    accession: &str,
+    start_1based: u64,
+    end_1based: u64,
+    kind: InsCoordKind,
+    provider: &P,
+) -> Result<String, FerroError> {
+    if start_1based == 0 || end_1based < start_1based {
+        return Err(FerroError::InvalidCoordinates {
+            msg: format!(
+                "ins[{}_{}] range must satisfy 1 <= start <= end",
+                start_1based, end_1based
+            ),
+        });
+    }
+
+    // Translate CDS → transcript coordinates if needed. The helper only
+    // accepts positive CDS positions; UTR-3 (`*N`) and 5' UTR (`-N`) are
+    // not expressible in the `Complex(vec![PositionRange{..}])` shape
+    // we land on from the parser (those carry sigils that the simple
+    // u64 PositionRange cannot represent), so we conservatively reject
+    // any CDS lookup whose translated tx position would underflow.
+    let (tx_start, tx_end) = match kind {
+        InsCoordKind::Direct => (start_1based, end_1based),
+        InsCoordKind::Cds => {
+            let transcript = provider.get_transcript(accession)?;
+            let cds_start = transcript
+                .cds_start
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: format!(
+                        "transcript {} has no CDS start; cannot expand c. ins[A_B] payload",
+                        accession
+                    ),
+                })?;
+            // `cds_start` is documented as a 1-based transcript position
+            // (`reference::transcript::Transcript::cds_start`). A zero
+            // value violates that invariant and would let `c.1` translate
+            // to `tx_start = 0`, then underflow on the `tx_start - 1`
+            // 0-based conversion at the `get_sequence` call below. Reject
+            // it explicitly with the same `ConversionError` shape as the
+            // missing-CDS branch above.
+            if cds_start == 0 {
+                return Err(FerroError::ConversionError {
+                    msg: format!(
+                        "transcript {} has invalid CDS start 0 (expected 1-based); \
+                             cannot expand c. ins[A_B] payload",
+                        accession
+                    ),
+                });
+            }
+            // c.N (positive) maps to tx position cds_start + N - 1.
+            // Guard against u64 overflow in the addition. The subtraction
+            // is safe because `start_1based` and `end_1based` were already
+            // validated as `>= 1` by the caller.
+            let tx_start = cds_start.checked_add(start_1based - 1).ok_or_else(|| {
+                FerroError::ConversionError {
+                    msg: format!(
+                        "c. ins[{}_{}] translation overflowed transcript coordinates \
+                             on accession {}",
+                        start_1based, end_1based, accession
+                    ),
+                }
+            })?;
+            let tx_end = cds_start.checked_add(end_1based - 1).ok_or_else(|| {
+                FerroError::ConversionError {
+                    msg: format!(
+                        "c. ins[{}_{}] translation overflowed transcript coordinates \
+                             on accession {}",
+                        start_1based, end_1based, accession
+                    ),
+                }
+            })?;
+            (tx_start, tx_end)
+        }
+    };
+
+    // `provider.get_sequence(id, s, e)` follows the convention used
+    // throughout the normalizer: returns the slice `seq[s..e]` in
+    // 0-based half-open indexing. HGVS 1-based position `p` lives at
+    // index `p - 1`. So fetching HGVS positions `tx_start..=tx_end`
+    // (inclusive) requires `(tx_start - 1, tx_end)`.
+    provider.get_sequence(accession, tx_start - 1, tx_end)
+}
+
+/// Append bases of an `InsertedPart` to `out` if the part is a
+/// flat-resolvable form. Returns `Err(FerroError::UnsupportedVariant)`
+/// for the two deferred shapes (cross-reference accession, intronic-
+/// offset CDS range). Returns `Err(...)` for genuine provider lookup
+/// failures.
+///
+/// Returns `Ok(false)` if the part is not flat-resolvable in a way the
+/// caller should treat as "leave the variant alone" (currently never —
+/// any unhandled part is an error). Returns `Ok(true)` if the part was
+/// resolved and appended.
+fn append_part_bases<P: ReferenceProvider>(
+    part: &InsertedPart,
+    accession: &str,
+    kind: InsCoordKind,
+    provider: &P,
+    out: &mut String,
+) -> Result<bool, FerroError> {
+    match part {
+        InsertedPart::Literal(seq) => {
+            // `Sequence` Display prints uppercase IUPAC bytes; this is
+            // exactly what the flat `insXXX` form wants.
+            out.push_str(&seq.to_string());
+            Ok(true)
+        }
+        InsertedPart::PositionRange { start, end } => {
+            let bases = fetch_position_range_bases(accession, *start, *end, kind, provider)?;
+            out.push_str(&bases);
+            Ok(true)
+        }
+        InsertedPart::PositionRangeInv { start, end } => {
+            let bases = fetch_position_range_bases(accession, *start, *end, kind, provider)?;
+            out.push_str(&crate::sequence::reverse_complement(&bases));
+            Ok(true)
+        }
+        InsertedPart::CdsPositionRange(range) => {
+            // `CdsPositionRange` carries any CDS-coordinate range whose
+            // positions are not plain positive integers — intronic
+            // offsets (`244-8_249`, `c.244+8_249`) or 3'UTR markers
+            // (`*100_*200`). All such shapes need offset/UTR-aware
+            // coordinate translation the same-reference lookup machinery
+            // does not provide. The HGVS spec does not pin canonical
+            // expansion for any of these shapes, so we defer with a
+            // grep-friendly tag. The only real-world usage we've seen
+            // pairs an intronic-offset range with `N[k]` padding (e.g.
+            // `c.249_250ins[N[2800];244-8_249]`).
+            Err(FerroError::UnsupportedVariant {
+                variant_type: format!(
+                    "ins[{}] CDS-offset range (intronic or UTR-marker) is spec-undefined and not yet supported by ferro; see follow-up",
+                    range
+                ),
+            })
+        }
+        InsertedPart::Repeat { .. } => {
+            // Bracketed `[A[10];T]` carries a Repeat part whose flat
+            // form is well-defined (`A` ten times). We could expand
+            // these too, but the issue scope is limited to bases /
+            // ranges / inv — fall through to a leave-alone signal.
+            Ok(false)
+        }
+        InsertedPart::ExternalRef(reference) => {
+            // Same as `InsertedSequence::Reference`, but inside a
+            // Complex bracket (e.g. `ins[A;NC_000022.11:g.100_200]`).
+            Err(FerroError::UnsupportedVariant {
+                variant_type: format!(
+                    "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+                    reference
+                ),
+            })
+        }
+    }
+}
+
+/// Pre-scan parts for deferred shapes — cross-reference (`ExternalRef`)
+/// or intronic-offset CDS range (`CdsPositionRange`). Returns the first
+/// deferred-shape error encountered so callers report it even when an
+/// earlier part is a non-flatten shape (e.g. `Repeat`).
+fn detect_deferred_part(parts: &[InsertedPart]) -> Option<FerroError> {
+    for part in parts {
+        match part {
+            InsertedPart::CdsPositionRange(range) => {
+                return Some(FerroError::UnsupportedVariant {
+                    variant_type: format!(
+                        "ins[{}] CDS-offset range (intronic or UTR-marker) is spec-undefined and not yet supported by ferro; see follow-up",
+                        range
+                    ),
+                });
+            }
+            InsertedPart::ExternalRef(reference) => {
+                return Some(FerroError::UnsupportedVariant {
+                    variant_type: format!(
+                        "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+                        reference
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Expand the bracketed parts of a `Complex` insertion to a single flat
+/// literal sequence, or return `Ok(None)` if at least one part is not
+/// expandable in scope (e.g. a `Repeat { base, count }` member).
+///
+/// Deferred shapes — `ExternalRef` (cross-reference) and
+/// `CdsPositionRange` (intronic-offset) — are reported as
+/// `Err(FerroError::UnsupportedVariant)` even when an earlier part is
+/// non-flatten, because preserving a `Complex` that contains an
+/// unprocessable cross-reference would otherwise silently pass through.
+pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
+    parts: &[InsertedPart],
+    accession: &str,
+    kind: InsCoordKind,
+    provider: &P,
+) -> Result<Option<InsertedSequence>, FerroError> {
+    // Defer surfacing first so any deferred shape errors even when an
+    // earlier part is non-flatten (e.g. `Repeat`).
+    if let Some(err) = detect_deferred_part(parts) {
+        return Err(err);
+    }
+
+    let mut out = String::new();
+    for part in parts {
+        let resolved = append_part_bases(part, accession, kind, provider, &mut out)?;
+        if !resolved {
+            // A part we don't flatten (e.g. Repeat) keeps the whole
+            // Complex shape intact — partial flattening would silently
+            // drop semantic content.
+            return Ok(None);
+        }
+    }
+    let seq = Sequence::from_str(&out).map_err(|_| FerroError::ConversionError {
+        msg: format!(
+            "expanded ins[...] payload contains non-IUPAC base in {:?}",
+            out
+        ),
+    })?;
+    Ok(Some(InsertedSequence::Literal(seq)))
+}
+
+/// Canonicalize an `InsertedSequence` to its flat literal form when
+/// possible. Returns:
+///
+/// - `Ok(None)` — the payload is either already flat (`Literal`) or not
+///   in scope of this canonicalization (e.g. `Count`, `Range`, `Repeat`,
+///   `Named`, `Uncertain`, `Empty`, and bare `PositionRange[Inv]` /
+///   `Complex` shapes that contain at least one non-flat part).
+/// - `Ok(Some(new_seq))` — a flat `Literal` rewrite for callers to
+///   substitute in place of the input.
+/// - `Err(FerroError::UnsupportedVariant)` — a deferred shape
+///   (cross-reference accession, intronic-offset CDS range) that the
+///   spec permits but ferro does not yet expand. Errors carry the
+///   grep-friendly tags `"cross-reference"` / `"intronic"` and
+///   `"follow-up"` in their message.
+/// - `Err(FerroError::...)` — genuine provider lookup failure.
+pub fn expand_inserted_sequence<P: ReferenceProvider>(
+    seq: &InsertedSequence,
+    accession: &str,
+    kind: InsCoordKind,
+    provider: &P,
+) -> Result<Option<InsertedSequence>, FerroError> {
+    match seq {
+        // `Reference("ACC:coord_a_b")`: cross-reference to another
+        // accession. Spec permits, ferro defers.
+        InsertedSequence::Reference(reference) => Err(FerroError::UnsupportedVariant {
+            variant_type: format!(
+                "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+                reference
+            ),
+        }),
+
+        // Same-reference position range — expand directly.
+        InsertedSequence::PositionRange { start, end } => {
+            let bases = fetch_position_range_bases(accession, *start, *end, kind, provider)?;
+            let bases_seq = Sequence::from_str(&bases).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "expanded ins[{}..={}] payload contains non-IUPAC base in {:?}",
+                    start, end, bases
+                ),
+            })?;
+            Ok(Some(InsertedSequence::Literal(bases_seq)))
+        }
+        InsertedSequence::PositionRangeInv { start, end } => {
+            let bases = fetch_position_range_bases(accession, *start, *end, kind, provider)?;
+            let rc = crate::sequence::reverse_complement(&bases);
+            let rc_seq = Sequence::from_str(&rc).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "expanded ins[{}..={}inv] payload contains non-IUPAC base in {:?}",
+                    start, end, rc
+                ),
+            })?;
+            Ok(Some(InsertedSequence::Literal(rc_seq)))
+        }
+
+        // The common bracketed shape — emitted by the parser for
+        // anything `ins[...]` whose payload isn't a bare reference,
+        // bare count, or bare external accession.
+        InsertedSequence::Complex(parts) => expand_complex_parts(parts, accession, kind, provider),
+
+        // Already flat or out-of-scope for this canonicalization.
+        InsertedSequence::Literal(_)
+        | InsertedSequence::Count(_)
+        | InsertedSequence::Range(_, _)
+        | InsertedSequence::Repeat { .. }
+        | InsertedSequence::SequenceRepeat { .. }
+        | InsertedSequence::Named(_)
+        | InsertedSequence::Uncertain
+        | InsertedSequence::Empty => Ok(None),
+    }
+}
+
+/// Rewrite the inserted-sequence payload of an `Insertion` / `Delins` /
+/// `DupIns` edit to a flat literal. Returns `Ok(None)` when the edit
+/// is not one of those three kinds or the payload is already flat.
+///
+/// Mirrors [`canonicalize_conversion_to_delins`]'s `None`-means-no-op
+/// contract so the call site can chain helpers.
+pub fn canonicalize_insertion_expand<P: ReferenceProvider>(
+    edit: &NaEdit,
+    accession: &str,
+    kind: InsCoordKind,
+    provider: &P,
+) -> Result<Option<NaEdit>, FerroError> {
+    match edit {
+        NaEdit::Insertion { sequence } => {
+            match expand_inserted_sequence(sequence, accession, kind, provider)? {
+                Some(new_seq) => Ok(Some(NaEdit::Insertion { sequence: new_seq })),
+                None => Ok(None),
+            }
+        }
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => match expand_inserted_sequence(sequence, accession, kind, provider)? {
+            Some(new_seq) => Ok(Some(NaEdit::Delins {
+                sequence: new_seq,
+                deleted: deleted.clone(),
+                deleted_length: *deleted_length,
+            })),
+            None => Ok(None),
+        },
+        NaEdit::DupIns { sequence } => {
+            match expand_inserted_sequence(sequence, accession, kind, provider)? {
+                Some(new_seq) => Ok(Some(NaEdit::DupIns { sequence: new_seq })),
+                None => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -2977,6 +3415,69 @@ mod tests {
             length: None,
         };
         assert!(canonicalize_conversion_to_delins(&edit).is_none());
+    }
+
+    #[test]
+    fn strip_outer_brackets_handles_edge_cases() {
+        use super::strip_outer_brackets;
+        // Simple matched pair: strip.
+        assert_eq!(
+            strip_outer_brackets("[NC_000001.11:g.1_2]"),
+            "NC_000001.11:g.1_2"
+        );
+        // No leading bracket: unchanged.
+        assert_eq!(
+            strip_outer_brackets("NC_000001.11:g.1_2"),
+            "NC_000001.11:g.1_2"
+        );
+        // Two adjacent groups: outer `[` closes before the end. Stripping
+        // would yield `A][B`; leave the source unchanged so the caller
+        // doesn't fabricate an invalid reference payload.
+        assert_eq!(strip_outer_brackets("[A][B]"), "[A][B]");
+        // Trailing bracket only: leave unchanged.
+        assert_eq!(strip_outer_brackets("[A]B"), "[A]B");
+        // Nested matched brackets: strip the outermost pair.
+        assert_eq!(strip_outer_brackets("[A[10];T]"), "A[10];T");
+        // Degenerate empty pair: strip to empty (caller decides what to
+        // do with the empty string).
+        assert_eq!(strip_outer_brackets("[]"), "");
+        // Single bracket only: unchanged.
+        assert_eq!(strip_outer_brackets("["), "[");
+        // Reversed brackets: unchanged (would be unbalanced).
+        assert_eq!(strip_outer_brackets("]A["), "]A[");
+    }
+
+    #[test]
+    fn canonicalize_conversion_strips_outer_brackets_from_cross_reference() {
+        // Regression: `con[NC_...:g.X_Y]` parses with the brackets included
+        // in `source` (the conversion parser captures the whole rest of the
+        // token). Without stripping, `Display` of `Reference("[NC_...]")`
+        // emits `delins[[NC_...]]` -- doubled brackets that then leak into
+        // downstream error messages (`ins[[NC_...]] cross-reference ...`).
+        // Canonicalization must drop a single matching outer `[...]` pair
+        // before storing the source in `Reference`.
+        use crate::hgvs::edit::InsertedSequence;
+        let edit = NaEdit::Conversion {
+            source: "[NC_000022.11:g.17178616_17178886]".to_string(),
+        };
+        let got = canonicalize_conversion_to_delins(&edit).expect("expected Some");
+        match &got {
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(s),
+                ..
+            } => {
+                assert_eq!(s, "NC_000022.11:g.17178616_17178886");
+            }
+            other => panic!(
+                "expected Delins{{Reference}} without doubled brackets, got {:?}",
+                other
+            ),
+        }
+        // Single pair of brackets on round-trip display.
+        assert_eq!(
+            format!("{}", got),
+            "delins[NC_000022.11:g.17178616_17178886]"
+        );
     }
 
     #[test]

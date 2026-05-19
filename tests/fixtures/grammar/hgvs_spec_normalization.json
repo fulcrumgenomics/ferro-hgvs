@@ -10,10 +10,11 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 42,
-      "diverges": 154,
-      "false-acceptance": 86,
+      "diverges": 146,
+      "false-acceptance": 83,
+      "needs-reference": 31,
       "parse-error": 339,
-      "preserved": 651
+      "preserved": 631
     },
     "by_coordinate_system": {
       "c": 464,
@@ -222,56 +223,6 @@
       ]
     },
     {
-      "input": "NM_000797.3:c.812_829delins908_925",
-      "current": "NM_000797.3:c.812_829delins[908_925]",
-      "spec_expected": "NM_000797.3:c.812_829delins908_925",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.849_850ins850_900inv",
-      "current": "NM_004006.2:c.849_850ins[850_900inv]",
-      "spec_expected": "NM_004006.2:c.849_850ins850_900inv",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/DNA/inversion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.849_850ins858_895",
-      "current": "NM_004006.2:c.849_850ins[858_895]",
-      "spec_expected": "NM_004006.2:c.849_850ins858_895",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.900_901ins850_900inv",
-      "current": "NM_004006.2:c.900_901ins[850_900inv]",
-      "spec_expected": "NM_004006.2:c.900_901ins850_900inv",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/DNA/inversion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.2:c.[2376G>C];[?]",
       "current": "[NM_004006.2:c.2376G>C];[?]",
       "spec_expected": "NM_004006.2:c.[2376G>C];[?]",
@@ -293,19 +244,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "c.849_850ins858_895",
-      "input_prefixed": "NM_004006.2:c.849_850ins858_895",
-      "current": "NM_004006.2:c.849_850ins[858_895]",
-      "spec_expected": "NM_004006.2:c.849_850ins858_895",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -754,6 +692,119 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/substitution.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+      "current": "normalize error: Reference not found: LRG_199t1",
+      "spec_expected": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "current": "normalize error: Reference not found: LRG_199t1",
+      "spec_expected": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/DNA/inversion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_000797.3:c.812_829delins908_925",
+      "current": "normalize error: Reference not found: NM_000797.3",
+      "spec_expected": "NM_000797.3:c.812_829delins908_925",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.419_420ins[T;401_419]",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.419_420ins[T;401_419]",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.849_850ins850_900inv",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.849_850ins850_900inv",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/DNA/inversion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.849_850ins858_895",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.849_850ins858_895",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.900_901ins850_900inv",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.900_901ins850_900inv",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/DNA/inversion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/DNA/inversion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "c.849_850ins858_895",
+      "input_prefixed": "NM_004006.2:c.849_850ins858_895",
+      "current": "normalize error: Reference not found: NM_004006.2",
+      "spec_expected": "NM_004006.2:c.849_850ins858_895",
+      "status": "needs-reference",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -3019,17 +3070,6 @@
       ]
     },
     {
-      "input": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
-      "current": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
-      "spec_expected": "LRG_199t1:c.419_420ins[T;450_470;AGGG]",
-      "status": "preserved",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ]
-    },
-    {
       "input": "LRG_199t1:c.4661delinsTC",
       "current": "LRG_199t1:c.4661delinsTC",
       "spec_expected": "LRG_199t1:c.4661delinsTC",
@@ -3138,18 +3178,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/checklist.md"
-      ]
-    },
-    {
-      "input": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
-      "current": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
-      "spec_expected": "LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]",
-      "status": "preserved",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/DNA/inversion.md"
       ]
     },
     {
@@ -3851,17 +3879,6 @@
       ]
     },
     {
-      "input": "NM_004006.2:c.419_420ins[T;401_419]",
-      "current": "NM_004006.2:c.419_420ins[T;401_419]",
-      "spec_expected": "NM_004006.2:c.419_420ins[T;401_419]",
-      "status": "preserved",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ]
-    },
-    {
       "input": "NM_004006.2:c.4375C>T",
       "current": "NM_004006.2:c.4375C>T",
       "spec_expected": "NM_004006.2:c.4375C>T",
@@ -3972,18 +3989,6 @@
       "source_paths": [
         "docs/recommendations/DNA/other.md",
         "docs/recommendations/DNA/substitution.md"
-      ]
-    },
-    {
-      "input": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
-      "current": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
-      "spec_expected": "NM_004006.2:c.940_941ins[903_940inv;851_885inv]",
-      "status": "preserved",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/DNA/inversion.md"
       ]
     },
     {
@@ -5833,18 +5838,6 @@
       ]
     },
     {
-      "input": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
-      "current": "NC_000002.11:g.?ins[NC_000022.10:g.35788169_35788352]",
-      "spec_expected": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000003.12:g.63912687AGC[(60_?)]",
       "current": "NC_000003.12:g.63912687AGC[60_?]",
       "spec_expected": "NC_000003.12:g.63912687AGC[(60_?)]",
@@ -5854,20 +5847,6 @@
       "source_paths": [
         "docs/recommendations/DNA/alleles.md"
       ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
-      "current": "NC_000022.10:g.42522624_42522669delins[42536337_42536382]",
-      "spec_expected": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/consultation/SVD-WG009.md",
-        "docs/recommendations/DNA/delins.md"
-      ],
-      "working_group": "SVD-WG009",
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -6275,21 +6254,6 @@
         "docs/consultation/SVD-WG005.md"
       ],
       "working_group": "SVD-WG005",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "g.234_235ins123_234inv",
-      "input_prefixed": "NC_000023.11:g.234_235ins123_234inv",
-      "current": "NC_000023.11:g.234_235ins[123_234inv]",
-      "spec_expected": "NC_000023.11:g.234_235ins123_234inv",
-      "status": "diverges",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/duplication.md",
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/DNA/inversion.md"
-      ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -7253,32 +7217,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NC_000012.12:g.6128479_6128749con[NC_000022.11:g.17178616_17178886]",
-      "current": "NC_000012.12:g.6128479_6128749delins[[NC_000022.11:g.17178616_17178886]]",
-      "spec_expected": null,
-      "status": "false-acceptance",
-      "coordinate_system": "g",
-      "source_kind": "consultation",
-      "source_paths": [
-        "docs/consultation/SVD-WG009.md"
-      ],
-      "working_group": "SVD-WG009",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000022.10:g.42522624_42522669con42536337_42536382",
-      "current": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
-      "spec_expected": null,
-      "status": "false-acceptance",
-      "coordinate_system": "g",
-      "source_kind": "consultation",
-      "source_paths": [
-        "docs/consultation/SVD-WG009.md"
-      ],
-      "working_group": "SVD-WG009",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NC_000023.11:g.32386323delCinsGA",
       "current": "NC_000023.11:g.32386323delinsGA",
       "spec_expected": null,
@@ -7429,19 +7367,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "g.456_457ins123_456",
-      "input_prefixed": "NC_000023.11:g.456_457ins123_456",
-      "current": "NC_000023.11:g.456_457ins[123_456]",
-      "spec_expected": null,
-      "status": "false-acceptance",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "g.4GC>TG",
       "input_prefixed": "NC_000023.11:g.4GC>TG",
       "current": "NC_000023.11:g.4delinsTG",
@@ -7467,6 +7392,285 @@
       ],
       "working_group": "SVD-WG001",
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.35788169_35788352] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/general.md",
+        "docs/recommendations/uncertain.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
+      "current": "normalize error: Genomic reference not available for NC_000002.11:48026960-48027223",
+      "spec_expected": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/general.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.35788169_35788352] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.108111987_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825266] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md",
+        "docs/recommendations/DNA/delins.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825272] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000008.11:g.(128534000_128546000)_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000014.9:g.29745314_qterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000023.11:g.89555676_100352080] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000023.11:g.89555676_100352080inv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000010.11:g.67539995_qterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000004.11:g.106370094_106370420;A[26]] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.17450009_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.pter_8247756] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.17179029_17179091] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/delins.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000012.12:g.6128479_6128749con[NC_000022.11:g.17178616_17178886]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000022.11:g.17178616_17178886] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": null,
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "consultation",
+      "source_paths": [
+        "docs/consultation/SVD-WG009.md"
+      ],
+      "working_group": "SVD-WG009",
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec has no canonical output for this consultation example (`spec_expected: null`), so auto-classification yields `false-acceptance`. In practice the row parses and the normalizer surfaces a `cross-reference` / `follow-up` deferral — that is a `needs-reference` outcome, not an accepted-bad-input. Override pins the semantically correct bucket (#365)."
+    },
+    {
+      "input": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000022.11:g.17178616_17178886] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "consultation",
+      "source_paths": [
+        "docs/consultation/SVD-WG009.md"
+      ],
+      "working_group": "SVD-WG009",
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
+      "current": "normalize error: Unsupported variant type: ins[NC_000003.12:g.36969141_pterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "spec_expected": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/complex.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_000022.10:g.42522624_42522669con42536337_42536382",
+      "current": "normalize error: Genomic reference not available for NC_000022.10:42536336-42536382",
+      "spec_expected": null,
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "consultation",
+      "source_paths": [
+        "docs/consultation/SVD-WG009.md"
+      ],
+      "working_group": "SVD-WG009",
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference `con` source requires provider sequence to drive `con` → `delins` → ins-expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
+    },
+    {
+      "input": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
+      "current": "normalize error: Genomic reference not available for NC_000022.10:42536336-42536382",
+      "spec_expected": "NC_000022.10:g.42522624_42522669delins42536337_42536382",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/consultation/SVD-WG009.md",
+        "docs/recommendations/DNA/delins.md"
+      ],
+      "working_group": "SVD-WG009",
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "g.234_235ins123_234inv",
+      "input_prefixed": "NC_000023.11:g.234_235ins123_234inv",
+      "current": "normalize error: Genomic reference not available for NC_000023.11:122-234",
+      "spec_expected": "NC_000023.11:g.234_235ins123_234inv",
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/duplication.md",
+        "docs/recommendations/DNA/insertion.md",
+        "docs/recommendations/DNA/inversion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "g.456_457ins123_456",
+      "input_prefixed": "NC_000023.11:g.456_457ins123_456",
+      "current": "normalize error: Genomic reference not available for NC_000023.11:122-456",
+      "spec_expected": null,
+      "status": "needs-reference",
+      "coordinate_system": "g",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/insertion.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83",
+      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference ins-from-range payload requires provider sequence to expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
     },
     {
       "input": "NC_000002.12:g.[32310435_32310710del;32310711_171827243inv;insG]",
@@ -8226,64 +8430,6 @@
       ]
     },
     {
-      "input": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
-      "current": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
-      "spec_expected": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md",
-        "docs/recommendations/general.md",
-        "docs/recommendations/uncertain.md"
-      ]
-    },
-    {
-      "input": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
-      "current": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
-      "spec_expected": "NC_000002.11:g.48031621_48031622ins[TAT;48026961_48027223;GGC]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/general.md"
-      ]
-    },
-    {
-      "input": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
-      "current": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
-      "spec_expected": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
-      "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
-      "current": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
-      "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md",
-        "docs/recommendations/DNA/delins.md"
-      ]
-    },
-    {
-      "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
-      "current": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
-      "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
       "input": "NC_000003.12:g.(63912602_63912844)insN[(150_180)]",
       "current": "NC_000003.12:g.(63912602_63912844)insN[(150_180)]",
       "spec_expected": "NC_000003.12:g.(63912602_63912844)insN[(150_180)]",
@@ -8317,17 +8463,6 @@
       ]
     },
     {
-      "input": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
-      "current": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
-      "spec_expected": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
       "input": "NC_000003.12:g.63912687AGC[(50_60)]",
       "current": "NC_000003.12:g.63912687AGC[(50_60)]",
       "spec_expected": "NC_000003.12:g.63912687AGC[(50_60)]",
@@ -8350,64 +8485,9 @@
       ]
     },
     {
-      "input": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
-      "current": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
-      "spec_expected": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
       "input": "NC_000004.11:g.(3076562_3076732)insN[12]",
       "current": "NC_000004.11:g.(3076562_3076732)insN[12]",
       "spec_expected": "NC_000004.11:g.(3076562_3076732)insN[12]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/insertion.md"
-      ]
-    },
-    {
-      "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
-      "current": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
-      "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
-      "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
-      "current": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
-      "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
-      "input": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
-      "current": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
-      "spec_expected": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
-      "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
-      "current": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
-      "spec_expected": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
       "status": "preserved",
       "coordinate_system": "g",
       "source_kind": "recommendation",
@@ -8449,17 +8529,6 @@
       ]
     },
     {
-      "input": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
-      "current": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
-      "spec_expected": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
       "input": "NC_000011.10:g.1999904_1999946|gom",
       "current": "NC_000011.10:g.1999904_1999946|gom",
       "spec_expected": "NC_000011.10:g.1999904_1999946|gom",
@@ -8493,17 +8562,6 @@
       ]
     },
     {
-      "input": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
-      "current": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
-      "spec_expected": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
-      ]
-    },
-    {
       "input": "NC_000011.9:g.12345611G>A",
       "current": "NC_000011.9:g.12345611G>A",
       "spec_expected": "NC_000011.9:g.12345611G>A",
@@ -8524,29 +8582,6 @@
       "source_paths": [
         "docs/recommendations/DNA/repeated.md"
       ]
-    },
-    {
-      "input": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
-      "current": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
-      "spec_expected": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/delins.md"
-      ]
-    },
-    {
-      "input": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
-      "current": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
-      "spec_expected": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "consultation",
-      "source_paths": [
-        "docs/consultation/SVD-WG009.md"
-      ],
-      "working_group": "SVD-WG009"
     },
     {
       "input": "NC_000013.11:g.(19385993_19394916)_(25045592_25059364)del",
@@ -8612,17 +8647,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/DNA/repeated.md"
-      ]
-    },
-    {
-      "input": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
-      "current": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
-      "spec_expected": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
-      "status": "preserved",
-      "coordinate_system": "g",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/complex.md"
       ]
     },
     {

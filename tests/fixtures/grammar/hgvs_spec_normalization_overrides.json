@@ -17,6 +17,18 @@
     },
     "NC_000023.11:g.32386323delTinsGA": {
       "note": "Spec rejects the long-form `delTinsGA`; ferro emits canonical `delinsGA` (DNA/delins.md). See #353."
+    },
+    "NC_000012.12:g.6128479_6128749con[NC_000022.11:g.17178616_17178886]": {
+      "status": "needs-reference",
+      "note": "Spec has no canonical output for this consultation example (`spec_expected: null`), so auto-classification yields `false-acceptance`. In practice the row parses and the normalizer surfaces a `cross-reference` / `follow-up` deferral — that is a `needs-reference` outcome, not an accepted-bad-input. Override pins the semantically correct bucket (#365)."
+    },
+    "NC_000022.10:g.42522624_42522669con42536337_42536382": {
+      "status": "needs-reference",
+      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference `con` source requires provider sequence to drive `con` → `delins` → ins-expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
+    },
+    "g.456_457ins123_456": {
+      "status": "needs-reference",
+      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference ins-from-range payload requires provider sequence to expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
     }
   }
 }
