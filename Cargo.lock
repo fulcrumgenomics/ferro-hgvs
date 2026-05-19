@@ -977,6 +977,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "smol_str",
+ "superintervals",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -3350,6 +3351,15 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "superintervals"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261b0c240b70a6cb7cc14436105c04d71c789c56f6082c1bc913dd6007d94a44"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "syn"

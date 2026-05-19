@@ -28,11 +28,13 @@ use crate::liftover::aliases::ContigAliases;
 use crate::reference::transcript::GenomeBuild;
 use crate::reference::Strand;
 use bincode::Options;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use superintervals::IntervalMap;
 
 /// cdot transcript alignment data (normalized internal representation).
 ///
@@ -405,10 +407,26 @@ impl CdotTranscript {
     }
 
     /// Find exon containing a genomic position.
+    ///
+    /// Exons in `self.exons` are sorted by `tx_start` (see
+    /// `RawCdotTranscript::from_genome_build`). On a plus-strand transcript
+    /// that means `genome_start` is monotonically increasing; on a
+    /// minus-strand transcript it's monotonically *decreasing* (the
+    /// 5'→3' transcript order runs against genomic coordinates). Use that
+    /// to early-terminate the scan once we've passed `genome_pos` — for
+    /// intronic / off-transcript positions, the previous unconditional
+    /// linear walk consulted every exon even though the answer was already
+    /// determined a few iterations in.
     pub fn exon_for_genome_pos(&self, genome_pos: u64) -> Option<Exon> {
         for (i, arr) in self.exons.iter().enumerate() {
             if genome_pos >= arr[0] && genome_pos < arr[1] {
                 return Some(Exon::from_array((i + 1) as u32, *arr));
+            }
+            // Early-terminate based on the sort invariant.
+            match self.strand {
+                Strand::Plus if genome_pos < arr[0] => return None,
+                Strand::Minus if genome_pos >= arr[1] => return None,
+                _ => {}
             }
         }
         None
@@ -441,6 +459,40 @@ impl CdotTranscript {
             }
             Strand::Unknown => None,
         }
+    }
+
+    /// Locate `genome_pos` against this transcript's exons in a single scan,
+    /// returning the containing exon and the corresponding transcript-space
+    /// position.
+    ///
+    /// Existing callers chained `genome_to_tx` (which internally scans the
+    /// exon list) with a second `exon_for_genome_pos` call (another scan).
+    /// This helper does both in one pass — relevant in
+    /// [`CoordinateMapper::genome_pos_to_cds_pos`] which is invoked twice per
+    /// projection and is the dominant per-variant cost on the SNP fixture
+    /// after c11.
+    pub fn locate_genome_pos(&self, genome_pos: u64) -> Option<(u64, Exon)> {
+        for (i, arr) in self.exons.iter().enumerate() {
+            if genome_pos >= arr[0] && genome_pos < arr[1] {
+                let exon = Exon::from_array((i + 1) as u32, *arr);
+                let tx_pos = match self.strand {
+                    Strand::Plus => exon.tx_start + (genome_pos - exon.genome_start),
+                    Strand::Minus => exon.tx_start + (exon.genome_end - 1 - genome_pos),
+                    Strand::Unknown => return None,
+                };
+                return Some((tx_pos, exon));
+            }
+            // Same early-termination as in `exon_for_genome_pos`. Exons are
+            // sorted by `tx_start`, which is monotone in `genome_start` on
+            // plus-strand (increasing) and in `genome_end` on minus-strand
+            // (decreasing).
+            match self.strand {
+                Strand::Plus if genome_pos < arr[0] => return None,
+                Strand::Minus if genome_pos >= arr[1] => return None,
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Convert CDS position (1-based) to transcript position (0-based).
@@ -771,6 +823,27 @@ pub struct CdotMapper {
     /// Used by [`get_transcript_on_build`](Self::get_transcript_on_build) to
     /// short-circuit when the caller asks for the primary build.
     primary_build: String,
+    /// Lazily-built per-contig SuperIntervals index for stabbing queries.
+    ///
+    /// Built on the first call to `transcripts_at_position` from the contents of
+    /// `contig_index` + `transcripts`. Replaces a linear scan that re-folded
+    /// every transcript's exon table on every query. The `u32` payload is the
+    /// index into `contig_index[contig]` so the original accession can be
+    /// recovered for the caller.
+    ///
+    /// Built eagerly here because every "real" caller (`from_json_file`,
+    /// `load`, `from_transcripts`) populates `contig_index` once and then only
+    /// queries; `add_transcript` followed by a query in tests still works
+    /// because the cell is initialised on first access. If a caller adds
+    /// transcripts AFTER a query has populated the cell the new transcripts
+    /// will be missing from the index — `add_transcript` clears the cell to
+    /// guard against that.
+    contig_query_index: OnceCell<HashMap<String, IntervalMap<u32>>>,
+    /// Lazily-built per-transcript `(min_genome_start, max_genome_end)`
+    /// cache so `VariantProjector::project_single_inner` doesn't re-fold the
+    /// exon table on every projection. Sharing the same `OnceCell` build
+    /// trigger as `contig_query_index` keeps the two views in sync.
+    transcript_genome_spans: OnceCell<HashMap<String, (u64, u64)>>,
 }
 
 impl CdotMapper {
@@ -784,6 +857,8 @@ impl CdotMapper {
             lrg_to_refseq: HashMap::new(),
             alt_build_transcripts: HashMap::new(),
             primary_build: "GRCh38".to_string(),
+            contig_query_index: OnceCell::new(),
+            transcript_genome_spans: OnceCell::new(),
         }
     }
 
@@ -947,6 +1022,8 @@ impl CdotMapper {
                 HashMap::new()
             },
             primary_build: "GRCh38".to_string(),
+            contig_query_index: OnceCell::new(),
+            transcript_genome_spans: OnceCell::new(),
         })
     }
 
@@ -1107,6 +1184,11 @@ impl CdotMapper {
         }
 
         self.transcripts.insert(accession, transcript);
+
+        // Any previously-built query index is stale now. The next query will
+        // rebuild it from the updated `contig_index` + `transcripts`.
+        self.contig_query_index = OnceCell::new();
+        self.transcript_genome_spans = OnceCell::new();
     }
 
     /// Build contig alias mappings from `ContigAliases` so that UCSC-style names
@@ -1342,26 +1424,101 @@ impl CdotMapper {
     }
 
     /// Find transcripts overlapping a genomic position. Resolves contig aliases.
+    ///
+    /// Backed by a per-contig SuperIntervals stab-query index that is built
+    /// lazily on first call and cached for the lifetime of the `CdotMapper`
+    /// (invalidated by `add_transcript`). Replaces the previous linear scan
+    /// that re-folded every transcript's exon table on every query.
     pub fn transcripts_at_position(&self, contig: &str, pos: u64) -> Vec<(&str, &CdotTranscript)> {
-        self.contig_index
-            .get(self.resolve_contig(contig))
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| {
-                        let tx = self.transcripts.get(id)?;
-                        // Check if position is within transcript genomic range
-                        let (min, max) = tx.exons.iter().fold((u64::MAX, 0), |(min, max), e| {
-                            (min.min(e[0]), max.max(e[1]))
-                        });
-                        if pos >= min && pos < max {
-                            Some((id.as_str(), tx))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+        let canonical = self.resolve_contig(contig);
+        let by_contig = self
+            .contig_query_index
+            .get_or_init(|| self.build_query_index());
+        let Some(im) = by_contig.get(canonical) else {
+            return Vec::new();
+        };
+        let Some(accessions) = self.contig_index.get(canonical) else {
+            return Vec::new();
+        };
+        // i32 fits every chromosome in any current build (max ~250M < 2.1B).
+        // Positions outside i32 cannot overlap a real transcript span anyway.
+        let Ok(p) = i32::try_from(pos) else {
+            return Vec::new();
+        };
+        let mut hits: Vec<u32> = Vec::with_capacity(16);
+        im.search_stabbed(p, &mut hits);
+        hits.into_iter()
+            .filter_map(|idx| {
+                let acc = accessions.get(idx as usize)?;
+                let tx = self.transcripts.get(acc)?;
+                Some((acc.as_str(), tx))
             })
-            .unwrap_or_default()
+            .collect()
+    }
+
+    /// Genomic extent `(min_exon_start, max_exon_end)` of a transcript, taken
+    /// from a cached side-table that's built lazily on first call alongside
+    /// the contig stab-query index.
+    ///
+    /// Used by `VariantProjector::project_single_inner` instead of folding
+    /// `tx.exons.iter().map(|e| e[0]).min()/max()` per call — the inputs are
+    /// stable for the life of the `CdotMapper`, so re-computing every time
+    /// (~4.4M folds across the SNP fixture) is pure waste.
+    pub fn transcript_genome_span(&self, transcript_id: &str) -> Option<(u64, u64)> {
+        let spans = self
+            .transcript_genome_spans
+            .get_or_init(|| self.build_transcript_genome_spans());
+        spans.get(transcript_id).copied()
+    }
+
+    /// Build the per-transcript span side-table. Same single-pass shape as
+    /// `build_query_index` so the two views can't disagree about what
+    /// "transcript span" means.
+    fn build_transcript_genome_spans(&self) -> HashMap<String, (u64, u64)> {
+        let mut out = HashMap::with_capacity(self.transcripts.len());
+        for (acc, tx) in &self.transcripts {
+            if tx.exons.is_empty() {
+                continue;
+            }
+            let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
+            let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
+            out.insert(acc.clone(), (min, max));
+        }
+        out
+    }
+
+    /// Construct the per-contig stab-query index. Called at most once per
+    /// `CdotMapper` lifetime (until `add_transcript` invalidates the cache).
+    ///
+    /// SuperIntervals' intervals are end-inclusive (`[start, end]`). To
+    /// preserve the old half-open `pos >= min && pos < max` semantics we
+    /// insert `[min, max - 1]` and probe with `search_stabbed(pos)`.
+    fn build_query_index(&self) -> HashMap<String, IntervalMap<u32>> {
+        let mut by_contig: HashMap<String, IntervalMap<u32>> =
+            HashMap::with_capacity(self.contig_index.len());
+        for (contig, accessions) in &self.contig_index {
+            let mut im: IntervalMap<u32> = IntervalMap::new();
+            for (idx, acc) in accessions.iter().enumerate() {
+                let Some(tx) = self.transcripts.get(acc) else {
+                    continue;
+                };
+                if tx.exons.is_empty() {
+                    continue;
+                }
+                let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
+                let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
+                if max <= min {
+                    continue;
+                }
+                let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
+                    continue;
+                };
+                im.add(s, e, idx as u32);
+            }
+            im.build();
+            by_contig.insert(contig.clone(), im);
+        }
+        by_contig
     }
 
     /// Get the number of transcripts loaded.
@@ -1528,6 +1685,63 @@ mod tests {
 
         // Second exon
         assert_eq!(tx.genome_to_tx(2199), Some(150));
+    }
+
+    /// c15 early-termination relies on the cdot sort invariant — exons are
+    /// in `tx_start`-ascending order, which means `genome_start` is
+    /// monotonically increasing on plus-strand and decreasing on
+    /// minus-strand. These tests pin both the off-transcript None return and
+    /// the in-transcript Some return so a future change to either the sort
+    /// invariant or the early-break condition is caught.
+    #[test]
+    fn test_exon_for_genome_pos_plus_strand_early_term() {
+        let tx = sample_transcript(); // exons at [1000,1100), [2000,2200), [3000,3150)
+                                      // Below all exons → None.
+        assert!(tx.exon_for_genome_pos(500).is_none());
+        // Between exon 0 and 1 (intronic) → None.
+        assert!(tx.exon_for_genome_pos(1500).is_none());
+        // Above all exons → None.
+        assert!(tx.exon_for_genome_pos(5000).is_none());
+        // Inside each exon → Some(...).
+        assert!(tx.exon_for_genome_pos(1050).is_some());
+        assert!(tx.exon_for_genome_pos(2100).is_some());
+        assert!(tx.exon_for_genome_pos(3100).is_some());
+    }
+
+    #[test]
+    fn test_exon_for_genome_pos_minus_strand_early_term() {
+        let tx = minus_strand_transcript();
+        // The minus-strand fixture has exons (in tx-order, i.e. high→low
+        // genome): [3000,3150), [2000,2200), [1000,1100).
+        assert!(tx.exon_for_genome_pos(5000).is_none()); // above all
+        assert!(tx.exon_for_genome_pos(2500).is_none()); // intronic between 3000 and 2200
+        assert!(tx.exon_for_genome_pos(500).is_none()); // below all
+        assert!(tx.exon_for_genome_pos(3050).is_some()); // first exon (highest)
+        assert!(tx.exon_for_genome_pos(2100).is_some()); // middle exon
+        assert!(tx.exon_for_genome_pos(1050).is_some()); // last exon (lowest)
+    }
+
+    #[test]
+    fn test_locate_genome_pos_matches_exon_lookup() {
+        // `locate_genome_pos` must agree with `exon_for_genome_pos` +
+        // `genome_to_tx` on which exon (and what tx position) a query maps
+        // to. Sweep a representative range of positions and require either
+        // both succeed with the same exon number or both return None.
+        for tx in [sample_transcript(), minus_strand_transcript()] {
+            for pos in (500..5500).step_by(37) {
+                let combined = tx.locate_genome_pos(pos);
+                let separate = match (tx.genome_to_tx(pos), tx.exon_for_genome_pos(pos)) {
+                    (Some(tp), Some(ex)) => Some((tp, ex)),
+                    _ => None,
+                };
+                assert_eq!(
+                    combined.map(|(tp, ex)| (tp, ex.number)),
+                    separate.map(|(tp, ex)| (tp, ex.number)),
+                    "disagreement at pos {pos} for {:?}-strand",
+                    tx.strand
+                );
+            }
+        }
     }
 
     #[test]

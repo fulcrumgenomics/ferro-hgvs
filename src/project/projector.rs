@@ -12,14 +12,54 @@ use crate::hgvs::variant::{
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
-use crate::project::protein::{predict_indel_protein, predict_substitution_protein};
+use crate::project::protein::{
+    predict_indel_protein, predict_substitution_protein, RefProteinBundle,
+};
 use crate::project::result::VariantProjection;
+use crate::reference::transcript::Transcript;
 use crate::reference::ReferenceProvider;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+/// Cache key for [`VariantProjector`]'s transcript cache:
+/// `(transcript_id, parent_accession)`. The parent component is `None` for
+/// non-variant-aware lookups and for inputs without a `genomic_context`; it
+/// is `Some` only when the variant-aware path observes an NG/NC parent that
+/// could steer the lookup to a non-primary cdot build (issue #332).
+type TranscriptCacheKey = (String, Option<String>);
 
 pub struct VariantProjector<P: ReferenceProvider + Clone> {
     projector: Projector,
     provider: P,
     normalizer: Normalizer<P>,
+    /// Cache of fetched transcripts keyed by `(transcript_id, parent_accession)`.
+    ///
+    /// `project_single_inner` looks up each overlapping transcript via the
+    /// provider once per variant; for `project_all` workloads (hundreds of
+    /// overlapping transcripts per variant on dense chromosomes) the same
+    /// transcript ID is fetched repeatedly. Caching collapses N→1 fetches
+    /// per unique key over the projector's lifetime.
+    ///
+    /// The parent-accession component is non-`None` only on the variant-aware
+    /// lookup path (`cached_get_transcript_for_variant`), where the variant's
+    /// `genomic_context` (NG/NC parent) can steer
+    /// `ReferenceProvider::get_transcript_for_variant` to a different cdot
+    /// build for the same `transcript_id` (issue #332). Inputs without a
+    /// `genomic_context` and the legacy `cached_get_transcript` entry point
+    /// both cache under `(transcript_id, None)`, so they share entries.
+    transcript_cache: RwLock<HashMap<TranscriptCacheKey, Arc<Transcript>>>,
+    /// Cache of the translated reference protein (ref CDS + ref protein +
+    /// ref-with-stop) keyed by the same `(transcript_id, parent_accession)`
+    /// identity used by `transcript_cache`. Each entry is stable for the life
+    /// of the projector and is consumed by `predict_indel_protein` to avoid
+    /// retranslating the full CDS on every indel.
+    ///
+    /// The parent-aware key matters because one `transcript_id` can resolve to
+    /// different transcript records (and therefore different reference CDS
+    /// bases) under different NG/NC parents (issue #332). Keying by
+    /// `transcript_id` alone would let the first resolved build poison indel
+    /// protein predictions for projections on the other build.
+    ref_protein_cache: RwLock<HashMap<TranscriptCacheKey, Arc<RefProteinBundle>>>,
 }
 
 impl<P: ReferenceProvider + Clone> VariantProjector<P> {
@@ -29,7 +69,126 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             projector,
             provider,
             normalizer,
+            transcript_cache: RwLock::new(HashMap::new()),
+            ref_protein_cache: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Non-variant-aware transcript fetch with caching. Kept for inline tests
+    /// that need to populate a `Transcript` for `cached_ref_translation`
+    /// without constructing an `HgvsVariant`. Hot-path callers go through
+    /// [`Self::cached_get_transcript_for_variant`] so an NG/NC-parented input
+    /// resolves to the correct cdot build (issue #332).
+    #[cfg(test)]
+    fn cached_get_transcript(&self, transcript_id: &str) -> Result<Arc<Transcript>, FerroError> {
+        let key = (transcript_id.to_string(), None);
+        if let Some(tx) = self
+            .transcript_cache
+            .read()
+            .expect("transcript cache poisoned")
+            .get(&key)
+        {
+            return Ok(Arc::clone(tx));
+        }
+        let tx = self.provider.get_transcript(transcript_id)?;
+        let mut guard = self
+            .transcript_cache
+            .write()
+            .expect("transcript cache poisoned");
+        let entry = guard.entry(key).or_insert_with(|| Arc::new(tx));
+        Ok(Arc::clone(entry))
+    }
+
+    /// Variant-aware transcript lookup with caching.
+    ///
+    /// Routes through [`ReferenceProvider::get_transcript_for_variant`] so an
+    /// NG/NC-parented input picks the build-correct cdot transcript (issue
+    /// #332). The cache key is `(transcript_id, parent_accession)` because
+    /// the same `transcript_id` can resolve to different transcripts under
+    /// different parents.
+    ///
+    /// On `ReferenceNotFound` from the variant-aware call, falls back to the
+    /// bare provider lookup (matches the prior `tx_for_codon_with_fallback`
+    /// contract). Other provider errors propagate.
+    /// Build the parent-aware cache key component for a variant.
+    ///
+    /// Returns `Some(parent.to_string())` when the variant's accession carries
+    /// a `genomic_context` (NG/NC parent), `None` otherwise. Shared by
+    /// [`Self::cached_get_transcript_for_variant`] and
+    /// [`Self::cached_ref_translation`] so both caches use byte-identical keys
+    /// for the same variant.
+    fn parent_key_for(variant: &HgvsVariant) -> Option<String> {
+        variant
+            .accession()
+            .and_then(|a| a.genomic_context.as_deref())
+            .map(|gc| gc.to_string())
+    }
+
+    fn cached_get_transcript_for_variant(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        let parent_key = Self::parent_key_for(variant);
+        let key = (transcript_id.to_string(), parent_key);
+        if let Some(tx) = self
+            .transcript_cache
+            .read()
+            .expect("transcript cache poisoned")
+            .get(&key)
+        {
+            return Ok(Arc::clone(tx));
+        }
+        let tx = match self.provider.get_transcript_for_variant(variant) {
+            Ok(tx) => tx,
+            Err(FerroError::ReferenceNotFound { .. }) => {
+                self.provider.get_transcript(transcript_id)?
+            }
+            Err(e) => return Err(e),
+        };
+        let mut guard = self
+            .transcript_cache
+            .write()
+            .expect("transcript cache poisoned");
+        let entry = guard.entry(key).or_insert_with(|| Arc::new(tx));
+        Ok(Arc::clone(entry))
+    }
+
+    /// Build (or retrieve) the cached `RefProteinBundle` for a transcript.
+    ///
+    /// The reference CDS and its translation are stable for a given
+    /// `(transcript_id, parent_accession)` pair — `predict_indel_protein`
+    /// would otherwise recompute them on every variant. Caching collapses
+    /// that to one translation per (id, parent) over the projector's
+    /// lifetime.
+    ///
+    /// The cache is keyed by the same parent-aware identity as
+    /// [`Self::cached_get_transcript_for_variant`] so that an NG/NC-parented
+    /// input does not reuse the bundle built for a different cdot build of
+    /// the same `transcript_id` (issue #332).
+    pub(crate) fn cached_ref_translation(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+        transcript: &Transcript,
+    ) -> Result<Arc<RefProteinBundle>, FerroError> {
+        let parent_key = Self::parent_key_for(variant);
+        let key = (transcript_id.to_string(), parent_key);
+        if let Some(b) = self
+            .ref_protein_cache
+            .read()
+            .expect("ref-protein cache poisoned")
+            .get(&key)
+        {
+            return Ok(Arc::clone(b));
+        }
+        let bundle = RefProteinBundle::from_transcript(transcript)?;
+        let mut guard = self
+            .ref_protein_cache
+            .write()
+            .expect("ref-protein cache poisoned");
+        let entry = guard.entry(key).or_insert_with(|| Arc::new(bundle));
+        Ok(Arc::clone(entry))
     }
 
     pub fn with_normalize_config(mut self, config: NormalizeConfig) -> Self {
@@ -671,27 +830,28 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             })?;
 
         let mapper = self.projector.mapper();
-        let normalized_str = normalized.to_string();
 
-        // Compute the overall genomic extent of the transcript from its exons.
-        // Exon format: [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end].
-        let (tx_genome_start, tx_genome_end) = {
-            let exons = &cdot_tx.exons;
-            if exons.is_empty() {
-                return Err(FerroError::ReferenceNotFound {
-                    id: transcript_id.to_string(),
-                });
-            }
-            let starts = exons.iter().map(|e| e[0]).min().unwrap();
-            let ends = exons.iter().map(|e| e[1]).max().unwrap();
-            (starts, ends)
-        };
+        // Genomic extent of the transcript — used to short-circuit the
+        // genome-to-CDS mapping when the variant is outside the transcript's
+        // span. `transcript_genome_span` consults a cached side-table on the
+        // CdotMapper (built once); before c14 this re-folded `cdot_tx.exons`
+        // (min/max) on every call.
+        let (tx_genome_start, tx_genome_end) = mapper
+            .cdot()
+            .transcript_genome_span(transcript_id)
+            .ok_or_else(|| FerroError::ReferenceNotFound {
+                id: transcript_id.to_string(),
+            })?;
 
         // Helper: map one GenomePos → CdsPos, converting out-of-range errors.
+        // `normalized.to_string()` is only consumed by the error message and
+        // the happy path doesn't touch it; building it eagerly was ~2% of
+        // SNP CPU per `fmt::write` self-time, so defer it to the moment we
+        // actually construct a `TranscriptNotOverlapping` error.
         let map_position = |gp: &GenomePos| -> Result<(CdsPos, MappingInfo), FerroError> {
             if gp.base < tx_genome_start || gp.base >= tx_genome_end {
                 return Err(FerroError::TranscriptNotOverlapping {
-                    variant: normalized_str.clone(),
+                    variant: normalized.to_string(),
                     transcript_id: transcript_id.to_string(),
                 });
             }
@@ -700,7 +860,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 Err(FerroError::InvalidCoordinates { .. })
                 | Err(FerroError::ConversionError { .. }) => {
                     Err(FerroError::TranscriptNotOverlapping {
-                        variant: normalized_str.clone(),
+                        variant: normalized.to_string(),
                         transcript_id: transcript_id.to_string(),
                     })
                 }
@@ -783,28 +943,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 // Issue #332: route per-codon transcript lookups through the
                 // variant-aware path so an NG/NC-parented input (carried on
                 // the input `coding` variant we're projecting) picks the
-                // build-correct chromosome. Falls back to the bare lookup
-                // for inputs without a `genomic_context`.
-                let get_tx = || -> Result<crate::reference::transcript::Transcript, FerroError> {
-                    self.provider.get_transcript_for_variant(&coding)
-                };
-                // Only fall back to the bare lookup when the variant-aware
-                // lookup explicitly couldn't find a build-resolved transcript
-                // (issue #332). Other provider errors (I/O, parse, etc.)
-                // must propagate so they aren't silently masked.
-                let tx_for_codon_with_fallback =
-                    || -> Result<crate::reference::transcript::Transcript, FerroError> {
-                        match get_tx() {
-                            Ok(tx) => Ok(tx),
-                            Err(FerroError::ReferenceNotFound { .. }) => {
-                                self.provider.get_transcript(transcript_id)
-                            }
-                            Err(e) => Err(e),
-                        }
-                    };
+                // build-correct chromosome. `cached_get_transcript_for_variant`
+                // caches by `(transcript_id, parent_accession)` so repeat
+                // lookups on the same parent are free, and falls back to the
+                // bare provider lookup on `ReferenceNotFound` (the previous
+                // `tx_for_codon_with_fallback` contract). Other provider
+                // errors propagate.
                 match &c_edit {
                     NaEdit::Substitution { .. } => {
-                        let tx_for_codon = tx_for_codon_with_fallback()?;
+                        let tx_for_codon =
+                            self.cached_get_transcript_for_variant(&coding, transcript_id)?;
                         protein = Some(predict_substitution_protein(
                             &tx_for_codon,
                             cds_start.base,
@@ -824,9 +972,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                             && cds_start.base > 0
                             && cds_end.base > 0 =>
                     {
-                        let tx_for_codon = tx_for_codon_with_fallback()?;
+                        let tx_for_codon =
+                            self.cached_get_transcript_for_variant(&coding, transcript_id)?;
+                        let ref_bundle = self.cached_ref_translation(
+                            &coding,
+                            transcript_id,
+                            &tx_for_codon,
+                        )?;
                         match predict_indel_protein(
                             &tx_for_codon,
+                            &ref_bundle,
                             cds_start.base,
                             cds_end.base,
                             &c_edit,
@@ -924,7 +1079,7 @@ mod tests {
     use super::*;
     use crate::data::cdot::{CdotMapper, CdotTranscript};
     use crate::data::projection::Projector;
-    use crate::hgvs::variant::{AllelePhase, AlleleVariant};
+    use crate::hgvs::variant::{Accession, AllelePhase, AlleleVariant};
     use crate::reference::mock::MockProvider;
     use crate::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
     use crate::reference::Strand as ProvStrand;
@@ -1104,6 +1259,112 @@ mod tests {
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
         (projector, provider)
+    }
+
+    // -------------------------------------------------------------------------
+    // Cache identity tests
+    // -------------------------------------------------------------------------
+
+    /// Build a minimal coding HgvsVariant pointing at `transcript_id` for use
+    /// in `cached_ref_translation` tests. The variant's `accession` carries
+    /// `genomic_context = ctx`, so `parent_key_for` returns the same string
+    /// the production code would derive at projection time.
+    #[cfg(test)]
+    fn make_coding_variant(transcript_id: &str, ctx: Option<Accession>) -> HgvsVariant {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+
+        let mut accession = parse_accession(transcript_id);
+        if let Some(parent) = ctx {
+            accession = accession.with_genomic_context(parent);
+        }
+        HgvsVariant::Cds(CdsVariant {
+            accession,
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        })
+    }
+
+    /// Two consecutive `cached_ref_translation` calls for the same
+    /// `(transcript_id, parent_accession)` pair must return the same
+    /// `Arc<RefProteinBundle>` (pointer-equal). Catches any future
+    /// regression that accidentally rebuilds the bundle per call.
+    #[test]
+    fn cached_ref_translation_returns_same_arc() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let tx = vp
+            .cached_get_transcript("NM_TEST.1")
+            .expect("transcript fetch");
+        let variant = make_coding_variant("NM_TEST.1", None);
+        let a = vp
+            .cached_ref_translation(&variant, "NM_TEST.1", &tx)
+            .expect("first translation");
+        let b = vp
+            .cached_ref_translation(&variant, "NM_TEST.1", &tx)
+            .expect("second translation");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "ref-protein cache must return the same Arc for repeated lookups"
+        );
+        // ATGCGCTAA = Met-Arg-Ter; translate_full_cds stops before the Ter.
+        assert_eq!(a.ref_protein.len(), 2);
+        assert_eq!(a.ref_protein_with_stop.len(), 3);
+    }
+
+    /// Two `cached_ref_translation` lookups for the same `transcript_id`
+    /// but different parent `genomic_context` accessions must produce
+    /// distinct cache entries (different `Arc`s). Without parent-aware
+    /// keying the second call would reuse the bundle built for the first
+    /// parent, which can poison indel protein predictions once the
+    /// underlying transcript resolves to a different cdot build under
+    /// each parent (issue #332).
+    #[test]
+    fn cached_ref_translation_is_parent_aware() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let tx = vp
+            .cached_get_transcript("NM_TEST.1")
+            .expect("transcript fetch");
+
+        let v_none = make_coding_variant("NM_TEST.1", None);
+        let v_ng1 = make_coding_variant("NM_TEST.1", Some(Accession::new("NG", "TEST", Some(1))));
+        let v_ng2 = make_coding_variant("NM_TEST.1", Some(Accession::new("NG", "TEST", Some(2))));
+
+        let b_none = vp
+            .cached_ref_translation(&v_none, "NM_TEST.1", &tx)
+            .expect("no-parent bundle");
+        let b_ng1 = vp
+            .cached_ref_translation(&v_ng1, "NM_TEST.1", &tx)
+            .expect("NG_TEST.1 bundle");
+        let b_ng2 = vp
+            .cached_ref_translation(&v_ng2, "NM_TEST.1", &tx)
+            .expect("NG_TEST.2 bundle");
+
+        // Each parent identity must occupy its own cache slot.
+        assert!(
+            !Arc::ptr_eq(&b_none, &b_ng1),
+            "no-parent and NG-parented entries must not collide"
+        );
+        assert!(
+            !Arc::ptr_eq(&b_ng1, &b_ng2),
+            "two distinct NG parents must produce distinct cache entries"
+        );
+
+        // Re-querying with the same parent must still hit the cache.
+        let b_ng1_again = vp
+            .cached_ref_translation(&v_ng1, "NM_TEST.1", &tx)
+            .expect("NG_TEST.1 bundle (repeat)");
+        assert!(
+            Arc::ptr_eq(&b_ng1, &b_ng1_again),
+            "repeated lookup with the same parent must hit the cache"
+        );
     }
 
     // -------------------------------------------------------------------------

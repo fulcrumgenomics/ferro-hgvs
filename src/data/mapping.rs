@@ -346,17 +346,19 @@ impl CoordinateMapper {
         genome_pos: &GenomePos,
         transcript_id: &str,
     ) -> Result<(CdsPos, MappingInfo), FerroError> {
-        let mut info = MappingInfo {
-            transcript_id: Some(transcript_id.to_string()),
-            ..Default::default()
-        };
+        // `transcript_id` is part of the parameter list for API stability but
+        // no in-tree consumer reads `MappingInfo::transcript_id` — leaving it
+        // None avoids a `String::from` allocation per call (~400 calls per
+        // SNP project_all on chr17 fan-out).
+        let _ = transcript_id;
+        let mut info = MappingInfo::default();
 
-        // Check if position is in an exon
-        if let Some(tx_pos) = tx.genome_to_tx(genome_pos.base) {
-            // Position is exonic
-            if let Some(exon) = tx.exon_for_genome_pos(genome_pos.base) {
-                info.exon_numbers.push(exon.number);
-            }
+        // Check if position is in an exon. `locate_genome_pos` returns both
+        // the exon and the converted tx position in a single scan; before
+        // c12 we called `genome_to_tx` (one scan) and `exon_for_genome_pos`
+        // (a second scan) separately.
+        if let Some((tx_pos, exon)) = tx.locate_genome_pos(genome_pos.base) {
+            info.exon_numbers.push(exon.number);
 
             // Convert to CDS position
             let cds_pos = tx
@@ -709,5 +711,111 @@ mod tests {
         // Position outside all transcripts
         let results = mapper.find_overlapping_transcripts("NC_000001.11", 5000);
         assert!(results.is_empty());
+    }
+
+    /// Boundary semantics of the SuperIntervals index must match the previous
+    /// linear-scan implementation: `pos >= min && pos < max` (half-open). Both
+    /// fixtures span [1000, 3150) on chr1, so:
+    ///   pos = 1000  → in (inclusive lower bound)
+    ///   pos = 3149  → in (last position covered by 3150 exclusive)
+    ///   pos = 3150  → out (exclusive upper bound)
+    ///   pos = 999   → out
+    #[test]
+    fn test_find_overlapping_transcripts_boundary_semantics() {
+        let mapper = create_test_mapper();
+        assert_eq!(
+            mapper
+                .find_overlapping_transcripts("NC_000001.11", 1000)
+                .len(),
+            2,
+            "inclusive lower bound"
+        );
+        assert_eq!(
+            mapper
+                .find_overlapping_transcripts("NC_000001.11", 3149)
+                .len(),
+            2,
+            "inclusive upper bound (3150 - 1)"
+        );
+        assert!(
+            mapper
+                .find_overlapping_transcripts("NC_000001.11", 3150)
+                .is_empty(),
+            "exclusive upper bound"
+        );
+        assert!(
+            mapper
+                .find_overlapping_transcripts("NC_000001.11", 999)
+                .is_empty(),
+            "below lower bound"
+        );
+    }
+
+    /// The query uses each transcript's `[min_exon_start, max_exon_end)` span,
+    /// so intronic positions inside that span (between two exons of the same
+    /// transcript) still return the transcript. The downstream
+    /// `genome_to_cds` is what tells the caller it landed in an intron.
+    #[test]
+    fn test_find_overlapping_transcripts_returns_intronic_spans() {
+        let mapper = create_test_mapper();
+        // Position 1500 is in the intron between exon 1 [1000,1100) and exon 2
+        // [2000,2200). It's inside the transcript span [1000, 3150).
+        let results = mapper.find_overlapping_transcripts("NC_000001.11", 1500);
+        assert_eq!(results.len(), 2, "intronic position must return both txs");
+    }
+
+    /// After `add_transcript` is called following a prior query, the new
+    /// transcript must show up in subsequent queries — i.e. the OnceCell
+    /// invalidation works.
+    #[test]
+    fn test_find_overlapping_transcripts_invalidates_after_add() {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_FIRST.1".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "NC_000001.11".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[1000, 1100, 0, 100]],
+                cds_start: Some(0),
+                cds_end: Some(100),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let mapper = CoordinateMapper::new(cdot);
+        assert_eq!(
+            mapper
+                .find_overlapping_transcripts("NC_000001.11", 1050)
+                .len(),
+            1,
+        );
+
+        // Add a second transcript via a fresh mapper (mimicking the typical
+        // build-once flow but exercising the invalidation explicitly).
+        let mut cdot2 = mapper.cdot().clone();
+        cdot2.add_transcript(
+            "NM_SECOND.1".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "NC_000001.11".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[1000, 1100, 0, 100]],
+                cds_start: Some(0),
+                cds_end: Some(100),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let mapper2 = CoordinateMapper::new(cdot2);
+        assert_eq!(
+            mapper2
+                .find_overlapping_transcripts("NC_000001.11", 1050)
+                .len(),
+            2,
+            "second transcript must be visible after add",
+        );
     }
 }
