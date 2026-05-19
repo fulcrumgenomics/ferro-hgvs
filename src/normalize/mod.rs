@@ -568,14 +568,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
 
-        // Get boundaries (stay within exon unless configured otherwise)
-        let boundaries = if self.config.cross_boundaries {
-            Boundaries::new(1, transcript.sequence_length())
-        } else {
-            match boundary::get_cds_boundaries(&transcript, tx_start, &self.config) {
-                Ok(b) => b,
-                Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
-            }
+        // Get boundaries. Both cross_boundaries modes route through
+        // `get_cds_boundaries` so the CDS↔UTR axis-system bound applies
+        // regardless of cross mode (closes #337). The exon-vs-full-tx
+        // dimension still toggles on `config.cross_boundaries`.
+        let boundaries = match boundary::get_cds_boundaries(&transcript, tx_start, &self.config) {
+            Ok(b) => b,
+            Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
 
         // Perform normalization on transcript sequence (CDS context).

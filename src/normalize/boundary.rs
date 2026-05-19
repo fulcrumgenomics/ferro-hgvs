@@ -44,31 +44,74 @@ pub fn get_genomic_boundaries(
     Ok(Boundaries::new(left, right))
 }
 
-/// Get the shuffling boundaries for a CDS position
+/// Get the shuffling boundaries for a CDS position.
 ///
-/// This considers exon boundaries and UTR/CDS boundaries
-/// unless cross_boundaries is enabled.
+/// Two boundary kinds are intersected:
+///
+///   1. **Exon bound.** When `cross_boundaries=false`, the shuffle is
+///      confined to the exon containing `tx_pos`; otherwise the bound is
+///      the full transcript `[1, sequence_length]`.
+///
+///   2. **CDS↔UTR axis bound (always applied; closes #337).** The 5'UTR
+///      / CDS / 3'UTR transitions change the HGVS coordinate sub-axis
+///      (`c.-N` vs `c.<N>` vs `c.*N`), so a 3'-rule shuffle must not
+///      cross them — doing so would silently re-classify the variant
+///      onto a different axis. The axis bound depends on which region
+///      `tx_pos` lies in:
+///        - 5'UTR (`tx_pos < cds_start`): `[1, cds_start - 1]`
+///        - CDS   (`cds_start <= tx_pos <= cds_end`): `[cds_start, cds_end]`
+///        - 3'UTR (`tx_pos > cds_end`): `[cds_end + 1, sequence_length]`
+///
+///      For non-coding transcripts (no `cds_start`/`cds_end`) the axis
+///      bound is the full transcript.
+///
+/// The returned `Boundaries` is the intersection. Errors when `tx_pos`
+/// falls outside every exon under `cross_boundaries=false` (i.e. is
+/// intronic — exonic-shuffle code shouldn't reach here in that case).
 pub fn get_cds_boundaries(
     transcript: &Transcript,
     tx_pos: u64,
     config: &NormalizeConfig,
 ) -> Result<Boundaries, FerroError> {
-    if config.cross_boundaries {
-        // If crossing is allowed, use the full transcript
-        return Ok(Boundaries::new(1, transcript.sequence_length()));
-    }
-
-    // Find which exon contains this position
-    for exon in &transcript.exons {
-        if tx_pos >= exon.start && tx_pos <= exon.end {
-            return Ok(Boundaries::new(exon.start, exon.end));
+    let (exon_left, exon_right) = if config.cross_boundaries {
+        (1u64, transcript.sequence_length())
+    } else {
+        let mut found = None;
+        for exon in &transcript.exons {
+            if tx_pos >= exon.start && tx_pos <= exon.end {
+                found = Some((exon.start, exon.end));
+                break;
+            }
         }
-    }
+        match found {
+            Some(p) => p,
+            None => {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!("Position {} is not within an exon", tx_pos),
+                })
+            }
+        }
+    };
 
-    // Position is intronic - this shouldn't happen for exonic variants
-    Err(FerroError::InvalidCoordinates {
-        msg: format!("Position {} is not within an exon", tx_pos),
-    })
+    let seq_len = transcript.sequence_length();
+    let (axis_left, axis_right) = match (transcript.cds_start, transcript.cds_end) {
+        (Some(s), Some(e)) if e >= s => {
+            if tx_pos < s {
+                (1, s.saturating_sub(1))
+            } else if tx_pos > e {
+                (e + 1, seq_len)
+            } else {
+                (s, e)
+            }
+        }
+        // Non-coding transcript: no axis sub-region to respect.
+        _ => (1, seq_len),
+    };
+
+    Ok(Boundaries::new(
+        axis_left.max(exon_left),
+        axis_right.min(exon_right),
+    ))
 }
 
 #[cfg(test)]
