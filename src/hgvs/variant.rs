@@ -596,31 +596,60 @@ impl AlleleVariant {
     /// check. Returns `FerroError::Parse` with
     /// `ErrorCode::SelfCancellingAllele` if the allele violates HGVS
     /// `recommendations/general.md` line 47.
+    ///
+    /// `source_span` is the byte range of the offending allele in the
+    /// caller's source string. Pass it through whenever it's known so that
+    /// downstream tooling (LSP, structured-error consumers, the web
+    /// service) can underline the precise location; pass `None` for
+    /// programmatically constructed alleles with no source backing. When
+    /// `Some(span)` is provided, the returned error's `pos` is set to
+    /// `span.start`.
     pub fn try_new_validated(
         variants: Vec<HgvsVariant>,
         phase: AllelePhase,
+        source_span: Option<crate::error::SourceSpan>,
     ) -> Result<Self, crate::error::FerroError> {
         if let Some((dl, du)) = Self::detect_self_cancelling_pair(&variants) {
-            return Err(crate::error::FerroError::Parse {
-                pos: 0,
-                msg: format!(
-                    "Self-cancelling allele: variants at index {} (del) and {} (dup) describe \
-                     overlapping reference positions",
-                    dl, du
-                ),
-                diagnostic: Some(Box::new(
-                    crate::error::Diagnostic::new()
-                        .with_code(crate::error::ErrorCode::SelfCancellingAllele)
-                        .with_hint(
-                            "HGVS does not allow describing both a deletion and a duplication \
-                             of overlapping reference positions in the same allele \
-                             (recommendations/general.md line 47); drop one edit or rewrite \
-                             as a single delins",
-                        ),
-                )),
-            });
+            return Err(build_self_cancelling_error(dl, du, source_span, None));
         }
         Ok(Self::new(variants, phase))
+    }
+}
+
+/// Build the E3006 `SelfCancellingAllele` error with the supplied source
+/// span. Shared by the parser-side validator and the library-level
+/// `AlleleVariant::try_new_validated` so the diagnostic payload stays in
+/// lock-step. `source` is the surrounding input string, attached to the
+/// `Diagnostic` for caret rendering when available.
+pub(crate) fn build_self_cancelling_error(
+    del_idx: usize,
+    dup_idx: usize,
+    source_span: Option<crate::error::SourceSpan>,
+    source: Option<&str>,
+) -> crate::error::FerroError {
+    let pos = source_span.as_ref().map(|s| s.start).unwrap_or(0);
+    let mut diagnostic = crate::error::Diagnostic::new()
+        .with_code(crate::error::ErrorCode::SelfCancellingAllele)
+        .with_hint(
+            "HGVS does not allow describing both a deletion and a duplication \
+             of overlapping reference positions in the same allele \
+             (recommendations/general.md line 47); drop one edit or rewrite \
+             as a single delins",
+        );
+    if let Some(span) = source_span {
+        diagnostic = diagnostic.with_span(span);
+    }
+    if let Some(src) = source {
+        diagnostic = diagnostic.with_source(src);
+    }
+    crate::error::FerroError::Parse {
+        pos,
+        msg: format!(
+            "Self-cancelling allele: variants at index {} (del) and {} (dup) describe \
+             overlapping reference positions",
+            del_idx, dup_idx
+        ),
+        diagnostic: Some(Box::new(diagnostic)),
     }
 }
 

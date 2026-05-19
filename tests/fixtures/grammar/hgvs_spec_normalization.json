@@ -894,7 +894,7 @@
     },
     {
       "input": "NM_004006.2:c.[762_768del;767_774dup]",
-      "current": "parse error: Parse error at position 0: Self-cancelling allele: variants at index 0 (del) and 1 (dup) describe overlapping reference positions",
+      "current": "parse error: Parse error at position 14: Self-cancelling allele: variants at index 0 (del) and 1 (dup) describe overlapping reference positions",
       "spec_expected": "NM_004006.2:c.[762_768del;767_774dup]",
       "status": "parse-error",
       "coordinate_system": "c",
