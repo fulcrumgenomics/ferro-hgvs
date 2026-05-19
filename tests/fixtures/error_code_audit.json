@@ -446,6 +446,14 @@
       "spec_section_notes": "Detected in src/normalize/overlap.rs by detect_overlap_conflicts and wired into normalize_allele after per-variant normalization. Variant output is preserved; the warning is advisory."
     },
     {
+      "code": "W5003",
+      "description": "VariantExceedsReference — the provider returned fewer bytes than the HGVS interval span; the variant references positions outside the reference (e.g. NG_032871.1:g.32476_53457delins... when the reference is shorter than position 53457).",
+      "spec_section": "background/refseq.md §43: 'the entirety of the variant sequence must be encompassed by the selected reference sequence'",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/#reference-sequences",
+      "status": "enforced",
+      "spec_section_notes": "Emitted as NormalizationWarning::CanonicalSplitSkipped from apply_canonical_split in src/normalize/mod.rs when ref_bytes.len() != expected_span. Strict mode promotes to FerroError::VariantExceedsReference via Normalizer::normalize; lenient mode emits the warning and preserves input; silent mode preserves without warning. Matches biocommons hgvs which raises HGVSInvalidVariantError. Closes #355."
+    },
+    {
       "code": "E-LOAD-001",
       "description": "MalformedRecord — a required GFF/GTF column failed to parse; the offending row is dropped.",
       "spec_section": null,

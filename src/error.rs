@@ -358,6 +358,22 @@ pub enum FerroError {
         found: String,
     },
 
+    /// Variant position range exceeds the available reference sequence.
+    /// Per HGVS `refseq.md` §43 the variant must be entirely encompassed
+    /// by the reference. Strict-mode promotion of the
+    /// `CanonicalSplitSkipped` warning. Closes-after: #355.
+    #[error(
+        "{accession}: variant span {hgvs_start}..{hgvs_end} \
+         ({expected_span} bp) exceeds available reference ({actual_bytes} bp)"
+    )]
+    VariantExceedsReference {
+        accession: String,
+        hgvs_start: u64,
+        hgvs_end: u64,
+        expected_span: u64,
+        actual_bytes: u64,
+    },
+
     /// Coordinate conversion error
     #[error("Coordinate conversion error: {msg}")]
     ConversionError { msg: String },
@@ -423,6 +439,7 @@ impl FerroError {
             FerroError::UnsupportedVariant { .. } => Some(ErrorCode::UnsupportedVariant),
             FerroError::IntronicVariant { .. } => Some(ErrorCode::IntronicVariant),
             FerroError::ReferenceMismatch { .. } => Some(ErrorCode::ReferenceMismatch),
+            FerroError::VariantExceedsReference { .. } => Some(ErrorCode::PositionOutOfBounds),
             FerroError::ConversionError { .. } => Some(ErrorCode::ConversionFailed),
             FerroError::TranscriptNotOverlapping { .. } => Some(ErrorCode::NoOverlappingTranscript),
             FerroError::ProteinSequenceUnavailable { .. } => Some(ErrorCode::SequenceNotFound),

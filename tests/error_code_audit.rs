@@ -72,6 +72,11 @@ const EMISSION_SCAN_PATHS: &[&str] = &[
 const NORMALIZATION_WARNING_TO_REGISTRY_NAME: &[(&str, &str)] = &[
     // W5001 — both names match, so no mapping entry needed.
     ("OverlapConflict", "OverlapConflictingEdits"),
+    // W5003: the warning describes the procedural effect
+    // (canonical-split skipped), the registry/error name describes the
+    // underlying spec violation (variant exceeds the reference). Same
+    // condition, two names.
+    ("CanonicalSplitSkipped", "VariantExceedsReference"),
 ];
 
 /// Scan [`EMISSION_SCAN_PATHS`] under `CARGO_MANIFEST_DIR` for distinct

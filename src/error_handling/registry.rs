@@ -1202,6 +1202,37 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W5003",
+        CodeInfo {
+            code: "W5003",
+            name: "VariantExceedsReference",
+            summary: "Variant position range exceeds the available reference sequence.",
+            explanation: "The provider returned fewer bytes than the HGVS interval span. \
+                Per HGVS spec (recommendations/background/refseq.md \u{00A7}43), \"the entirety \
+                of the variant sequence must be encompassed by the selected reference \
+                sequence.\" Biocommons hgvs raises HGVSInvalidVariantError for this shape. \
+                Strict mode rejects with FerroError::VariantExceedsReference; lenient mode \
+                emits this warning (also published as `CanonicalSplitSkipped` in the \
+                NormalizationWarning enum) and preserves the input verbatim; silent mode \
+                preserves the input without warning. Common cause: a version-fallback \
+                substituted a shorter reference (e.g. NG_032871.1 \u{2192} NG_032871.2), \
+                or the variant positions are genuinely past the reference end.",
+            category: CodeCategory::Semantic,
+            bad_examples: &[
+                "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (when reference is shorter than 53457)",
+            ],
+            good_examples: &[
+                "(no auto-correct; use a complete reference sequence per refseq.md \u{00A7}43)",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/background/refseq/#reference-sequences",
+            ),
+            related_codes: &["E3001", "W3016"],
+        },
+    );
+
     // =========================================================================
     // LOADER WARNINGS / ERRORS (E-LOAD-* / W-LOAD-*)
     // =========================================================================
