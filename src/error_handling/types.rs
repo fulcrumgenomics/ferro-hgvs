@@ -227,6 +227,14 @@ pub enum ErrorType {
     /// which the parser cannot decide); strict mode rejects.
     LengthMismatch,
 
+    /// Thymine (`t`/`T`) used as a base in an `r.` (RNA) description.
+    ///
+    /// Per HGVS v21.0 RNA nomenclature the RNA alphabet is `a/c/g/u`;
+    /// `t` is non-canonical input. ferro canonicalizes `t` → `u` inside
+    /// any `r.` description in lenient/silent modes; strict mode rejects.
+    /// Issue #282 (closes #232 follow-up).
+    RnaThymineCanonicalized,
+
     /// Bracketed amino-acid list inside a protein insertion edit
     /// (e.g., `p.Arg97_Trp98ins[Ala;Pro]`).
     ///
@@ -267,6 +275,7 @@ impl ErrorType {
             ErrorType::DeprecatedIvsNotation => "W3014",
             ErrorType::DeprecatedConSyntax => "W3015",
             ErrorType::LengthMismatch => "W3016",
+            ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::PositionZero => "W4002",
@@ -313,6 +322,9 @@ impl ErrorType {
             ErrorType::DeprecatedConSyntax => "deprecated con (conversion) edit syntax",
             ErrorType::LengthMismatch => {
                 "explicit reference sequence length does not match position range"
+            }
+            ErrorType::RnaThymineCanonicalized => {
+                "thymine (t) used in r. RNA description; canonicalized to u"
             }
             ErrorType::ProteinBracketedAaInsertion => {
                 "bracketed amino-acid list inside protein insertion edit"
@@ -362,6 +374,8 @@ impl ErrorType {
             // Length-mismatch input has no safe auto-correction — the user
             // could have meant either endpoint or a different ref seq.
             ErrorType::LengthMismatch => false,
+            // RNA thymine is rewritten to `u`
+            ErrorType::RnaThymineCanonicalized => true,
             // Bracketed AA list inside an insertion has no spec-defined
             // rewrite: mixing 3-letter and 1-letter inside `[...]` is
             // ambiguous, so all modes reject with a hint.
@@ -412,6 +426,7 @@ impl ErrorType {
                 "c.100_200delinsNM_001.1:c.5_105",
             ),
             ErrorType::LengthMismatch => ("g.100_110delAAAATTTGCC", "(no auto-correct)"),
+            ErrorType::RnaThymineCanonicalized => ("r.123a>t", "r.123a>u"),
             ErrorType::ProteinBracketedAaInsertion => {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
@@ -588,6 +603,7 @@ mod tests {
         assert!(!ErrorType::DeprecatedIvsNotation.is_correctable());
         assert!(ErrorType::DeprecatedConSyntax.is_correctable());
         assert!(!ErrorType::LengthMismatch.is_correctable());
+        assert!(ErrorType::RnaThymineCanonicalized.is_correctable());
     }
 
     #[test]
@@ -631,6 +647,7 @@ mod tests {
         assert_eq!(ErrorType::DeprecatedIvsNotation.code(), "W3014");
         assert_eq!(ErrorType::DeprecatedConSyntax.code(), "W3015");
         assert_eq!(ErrorType::LengthMismatch.code(), "W3016");
+        assert_eq!(ErrorType::RnaThymineCanonicalized.code(), "W3020");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::PositionZero.code(), "W4002");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");

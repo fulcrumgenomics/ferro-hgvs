@@ -8,7 +8,7 @@ use super::corrections::{
     correct_deprecated_con, correct_deprecated_protein_forms, correct_edit_type_case_full,
     correct_empty_delins, correct_missing_coordinate_prefix, correct_old_allele_format,
     correct_old_substitution_syntax, correct_protein_arrow, correct_quote_characters,
-    correct_redundant_repeat_label, correct_single_letter_aa_in_protein,
+    correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
     detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch, detect_missing_versions,
     detect_position_zero, detect_protein_bracketed_aa_insertion, strip_trailing_annotation,
@@ -989,6 +989,50 @@ impl InputPreprocessor {
                                 .with_suggestion(corrected.clone())
                                 .with_hint(
                                     "HGVS range syntax requires start ≤ end; rewrite to the ascending form",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 16a: Canonicalize thymine (`t`/`T`) → `u` inside `r.` (RNA)
+        // descriptions (W3020, #282). Per HGVS v21.0 RNA nomenclature, the
+        // RNA alphabet is `a/c/g/u`; `t` is non-canonical input. PR #293
+        // already canonicalizes on `Display`; this closes the loop on the
+        // input side so the parsed `Base` enum holds `U` from first parse,
+        // and so a soft-validation warning fires per occurrence.
+        let (corrected, corrections) = correct_rna_thymine(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::RnaThymineCanonicalized);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Thymine '{}' is not a valid base in r. (RNA) descriptions (W3020)",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::UnexpectedChar)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "Per HGVS v21 the RNA alphabet is a/c/g/u — replace 't' with 'u'",
                                 ),
                         ),
                     );

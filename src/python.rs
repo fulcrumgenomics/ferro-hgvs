@@ -1986,10 +1986,10 @@ pub enum PyErrorType {
     DeprecatedIvsNotation = 25,
     DeprecatedConSyntax = 26,
     LengthMismatch = 27,
-    // Discriminants 28-30 are reserved for in-flight PRs (#295 W3017/W3018,
-    // #298 W3019, #299 W3020); claim 31 here to avoid collisions when they
-    // land. The W-code (W3021) is the canonical identity; the integer is
-    // only a Python-side ABI tag.
+    // Discriminants 28–29 are reserved for in-flight PRs (#295 W3017/W3018,
+    // #298 W3019). This PR claims 30 for W3020. The W-code is the canonical
+    // identity; the integer is only a Python-side ABI tag.
+    RnaThymineCanonicalized = 30,
     ProteinBracketedAaInsertion = 31,
 }
 
@@ -2024,6 +2024,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::DeprecatedIvsNotation => PyErrorType::DeprecatedIvsNotation,
             ErrorType::DeprecatedConSyntax => PyErrorType::DeprecatedConSyntax,
             ErrorType::LengthMismatch => PyErrorType::LengthMismatch,
+            ErrorType::RnaThymineCanonicalized => PyErrorType::RnaThymineCanonicalized,
             ErrorType::ProteinBracketedAaInsertion => PyErrorType::ProteinBracketedAaInsertion,
         }
     }
@@ -2060,6 +2061,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::DeprecatedIvsNotation => ErrorType::DeprecatedIvsNotation,
             PyErrorType::DeprecatedConSyntax => ErrorType::DeprecatedConSyntax,
             PyErrorType::LengthMismatch => ErrorType::LengthMismatch,
+            PyErrorType::RnaThymineCanonicalized => ErrorType::RnaThymineCanonicalized,
             PyErrorType::ProteinBracketedAaInsertion => ErrorType::ProteinBracketedAaInsertion,
         }
     }

@@ -366,6 +366,14 @@
       "spec_section_notes": "Wired as InputPreprocessor Phase 13a via detect_length_mismatch. Lenient mode emits W3016 without rewriting (no safe auto-correction — either endpoint or the ref seq could be wrong); strict mode rejects with E1004 InvalidEdit. Detector handles g./c./n./m./o./r. ranges with simple integer endpoints; offset and *N/-N marker endpoints fall through (cannot compute length without provider). Covers del<ref>, dup<ref>, inv<ref>; delins<ins> is skipped (the inserted sequence is intentionally allowed to differ in length). Closes #81 K1 follow-up to #259."
     },
     {
+      "code": "W3020",
+      "description": "RnaThymineCanonicalized — 't'/'T' inside an r. (RNA) description rewritten to 'u'.",
+      "spec_section": "recommendations/RNA/substitution.md and adjacent RNA edit pages (RNA alphabet is a/c/g/u; t is non-canonical)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/RNA/substitution/",
+      "status": "enforced",
+      "spec_section_notes": "Pre-parse rewrite in lenient/silent modes via correct_rna_thymine in src/error_handling/corrections.rs; strict mode rejects with E1006 UnexpectedChar + hint. Closes the input-side loop on issue #232's deferred policy decision (closes #282). PR #293 / Display canonicalization handles the output side independently for raw parse_hgvs callers."
+    },
+    {
       "code": "W3021",
       "description": "ProteinBracketedAaInsertion — 'p.…ins[Ala;Pro]' rejected; canonical form is 'p.…insAlaPro'.",
       "spec_section": "recommendations/protein/variant/insertion.md (protein insertions concatenate 3-letter codes with no separator; brackets are reserved for variant-level alleles)",

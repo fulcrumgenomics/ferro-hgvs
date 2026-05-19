@@ -2881,6 +2881,87 @@ pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorre
     (result, hits)
 }
 
+/// Canonicalize thymine (`t`/`T`) to `u` inside `r.` (RNA) descriptions
+/// (W3020, closes #282).
+///
+/// Per HGVS v21.0 RNA nomenclature, the RNA alphabet is `a/c/g/u`; `t` is
+/// non-canonical input. PR #293 (issue #276) already canonicalizes `t/T` to
+/// `u` on `Display`. This function closes the loop by canonicalizing at
+/// preprocess time so the parsed `Base` enum holds `U` from the first parse,
+/// and so a soft-validation warning fires per occurrence.
+///
+/// Scoping rules:
+/// - The replacement is confined to the byte span of each `r.` description
+///   (start = byte after `r.`, where the `r.` is preceded by `:`, `(`,
+///   `[`, `;`, `|`, or appears at start of input; end = either the next
+///   observed coord-prefix (`c.`/`g.`/`n.`/`m.`/`o.`/`p.`) under the same
+///   prev-byte rule, or a top-level (bracket-depth 0) `;`/`|` separator,
+///   or end of input). Bracket/paren bytes themselves do not end the span
+///   so a bracketed compound like `r.[1a>t;2t>g]` keeps both halves under
+///   the r. context. Top-level `;`/`|` DO end the span so that a malformed
+///   unbracketed multi-description input such as
+///   `r.1a>t;NT_000001.1:c.5A>T` doesn't rewrite the `T` in the accession
+///   `NT_` before the `c.` boundary is reached.
+/// - HGVS edit-type keywords inside an `r.` description (`del`, `ins`,
+///   `dup`, `inv`, `delins`, `con`, `spl`) never contain `t` or `T`, so any
+///   `t`/`T` byte inside an `r.` description span is unambiguously a base.
+/// - Each `t`/`T` byte produces one `DetectedCorrection` and is rewritten
+///   to lowercase `u` (the canonical RNA letter casing).
+pub fn correct_rna_thymine(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+
+    let mut result = String::with_capacity(input.len());
+    let mut i = 0usize;
+    let mut in_rna = false;
+    let mut bracket_depth: u32 = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        // Track bracket/paren nesting so we can distinguish a top-level
+        // `;`/`|` separator (which ends a description) from a `;`/`|`
+        // inside a bracketed compound allele (which does not).
+        match b {
+            b'[' | b'(' => bracket_depth = bracket_depth.saturating_add(1),
+            b']' | b')' => bracket_depth = bracket_depth.saturating_sub(1),
+            b';' | b'|' if bracket_depth == 0 => in_rna = false,
+            _ => {}
+        }
+
+        // Detect entry into a new coordinate-type description. An `r.`
+        // start (preceded by `:` / `(` / `[` / `;` / `|`, or at index 0)
+        // begins an RNA region; any other coord prefix ends it.
+        if i + 1 < bytes.len() && bytes[i + 1] == b'.' {
+            let coord = b;
+            let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';' | b'|');
+            if prev_ok {
+                match coord {
+                    b'r' => in_rna = true,
+                    b'c' | b'g' | b'n' | b'm' | b'o' | b'p' => in_rna = false,
+                    _ => {}
+                }
+            }
+        }
+
+        if in_rna && (b == b't' || b == b'T') {
+            hits.push(DetectedCorrection::new(
+                ErrorType::RnaThymineCanonicalized,
+                std::str::from_utf8(&bytes[i..i + 1]).unwrap_or("t"),
+                "u",
+                i,
+                i + 1,
+            ));
+            result.push('u');
+            i += 1;
+            continue;
+        }
+        let ch_end = next_char_end(bytes, i);
+        result.push_str(&input[i..ch_end]);
+        i = ch_end;
+    }
+    (result, hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4406,5 +4487,74 @@ mod tests {
         let (out, corrections) = correct_deprecated_con("c.100_200con5_105");
         assert_eq!(out, "c.100_200delins5_105");
         assert_eq!(corrections.len(), 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // correct_rna_thymine — RNA → non-RNA boundary
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_correct_rna_thymine_rewrites_only_inside_rna_span() {
+        // A compound input that flips from `r.` to `c.` mid-string: the `t`
+        // in the `r.` half must be canonicalized to `u`; the `T` in the `c.`
+        // half (canonical DNA) must be left alone. This pins the
+        // span-handoff documented on `correct_rna_thymine` — the boundary
+        // is `c.` (a new coord prefix), not a bracket/paren/semicolon byte.
+        let input = "NM_000088.3:r.1a>t;NM_000088.3:c.5A>T";
+        let (out, hits) = correct_rna_thymine(input);
+        assert_eq!(out, "NM_000088.3:r.1a>u;NM_000088.3:c.5A>T");
+        assert_eq!(hits.len(), 1, "exactly one W3020 hit on r. half");
+        assert_eq!(hits[0].error_type, ErrorType::RnaThymineCanonicalized);
+        assert_eq!(hits[0].original, "t");
+        assert_eq!(hits[0].corrected, "u");
+    }
+
+    #[test]
+    fn test_correct_rna_thymine_at_start_of_input() {
+        // Verify the `at start of input` doc claim: an `r.` at byte 0 (no
+        // preceding `:` / `(` / `[` / `;` / `|`) still opens an RNA span.
+        let (out, hits) = correct_rna_thymine("r.123a>t");
+        assert_eq!(out, "r.123a>u");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_rna_thymine_leaves_non_rna_alone() {
+        let (out, hits) = correct_rna_thymine("NM_000088.3:c.123A>T");
+        assert_eq!(out, "NM_000088.3:c.123A>T");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_rna_thymine_top_level_semicolon_ends_span() {
+        // Top-level `;` ends the r. description span so a `T` in a
+        // following accession (e.g. `NT_000001.1`) is not rewritten.
+        // Pins CodeRabbit feedback: in_rna previously leaked across a
+        // top-level `;`, corrupting `NT_` to `Nu_`.
+        let input = "r.1a>t;NT_000001.1:c.5A>T";
+        let (out, hits) = correct_rna_thymine(input);
+        assert_eq!(out, "r.1a>u;NT_000001.1:c.5A>T");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::RnaThymineCanonicalized);
+        assert_eq!(hits[0].original, "t");
+    }
+
+    #[test]
+    fn test_correct_rna_thymine_top_level_pipe_ends_span() {
+        // Top-level `|` (allele-group separator) behaves like `;`.
+        let input = "r.1a>t|NT_000001.1:c.5A>T";
+        let (out, _hits) = correct_rna_thymine(input);
+        assert_eq!(out, "r.1a>u|NT_000001.1:c.5A>T");
+    }
+
+    #[test]
+    fn test_correct_rna_thymine_bracketed_compound_keeps_span() {
+        // Inside a `[...]` compound allele the `;` does NOT end the r.
+        // span — both halves remain under the r. coord and `t`/`T` bytes
+        // in either half get rewritten.
+        let input = "r.[1a>t;2t>g]";
+        let (out, hits) = correct_rna_thymine(input);
+        assert_eq!(out, "r.[1a>u;2u>g]");
+        assert_eq!(hits.len(), 2);
     }
 }
