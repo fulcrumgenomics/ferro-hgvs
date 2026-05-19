@@ -502,6 +502,14 @@
       "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
     },
     {
+      "code": "W-LOAD-120",
+      "description": "ConflictingProteinId — CDS fragments of one transcript report disagreeing protein_id values; protein_id is left unset and the projector's transcript-id fallback applies.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "GFF/GTF loader infrastructure; no HGVS spec section applies. See GFF/GTF loader design §6 Stage 4."
+    },
+    {
       "code": "W-LOAD-200",
       "description": "CdsLengthNotMod3 — FASTA validation found a CDS whose length is not divisible by 3. Reserved for Phase 4.",
       "spec_section": null,

@@ -297,6 +297,59 @@ fn build_single(
         .or_else(|| crate::reference::annotation::feature::attr_get(attrs, "ensembl_id"))
         .map(String::from);
 
+    // Protein accession resolution. GTF carries `protein_id "NP_..."` on each
+    // CDS record (and sometimes on the transcript record). GFF3 carries
+    // `protein_id=NP_...` on each CDS feature (per GenBank/RefSeq convention).
+    // Prefer the transcript-level attribute when present (authoritative);
+    // otherwise fall back to the CDS children. All CDS fragments of a single
+    // transcript should share the same protein_id (they're all one
+    // polypeptide); if they disagree, we emit W-LOAD-120 and leave protein_id
+    // unset rather than silently pick an input-order-dependent first value.
+    // The projector then falls back to its transcript-id heuristic (see #310).
+    let protein_id = if let Some(tx_pid) =
+        crate::reference::annotation::feature::attr_get(attrs, "protein_id")
+    {
+        Some(tx_pid.to_string())
+    } else {
+        let mut distinct: Vec<String> = Vec::new();
+        for fid in &cds_fids {
+            if let Some(pid) = crate::reference::annotation::feature::attr_get(
+                &graph.feature(*fid).attrs,
+                "protein_id",
+            ) {
+                if !distinct.iter().any(|v| v == pid) {
+                    distinct.push(pid.to_string());
+                }
+            }
+        }
+        match distinct.len() {
+            0 => None,
+            1 => Some(distinct.remove(0)),
+            _ => {
+                report.record(LoaderDiagnostic::warning(
+                    "W-LOAD-120",
+                    format!(
+                        "ConflictingProteinId: transcript {} CDS fragments report \
+                         {} distinct protein_id values ({}); protein_id left unset",
+                        tx_id_str,
+                        distinct.len(),
+                        distinct.join(", "),
+                    ),
+                    SourceLocation {
+                        path: source_path.to_path_buf(),
+                        line: tx_feat.source_line,
+                    },
+                    Some(tx_id_str.clone()),
+                    DiagnosticPayload::ConflictingProteinId {
+                        transcript_id: tx_id_str.clone(),
+                        values: distinct,
+                    },
+                ));
+                None
+            }
+        }
+    };
+
     Some(Transcript {
         id: tx_id_str,
         gene_symbol,
@@ -315,7 +368,7 @@ fn build_single(
         mane_status,
         refseq_match,
         ensembl_match,
-        protein_id: None,
+        protein_id,
         exon_cigars: Vec::new(),
         cached_introns: OnceLock::new(),
     })
@@ -946,5 +999,128 @@ mod tests {
         let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
         assert_eq!(txs[0].refseq_match.as_deref(), Some("NM_000088.3"));
         assert_eq!(txs[0].ensembl_match.as_deref(), Some("ENST00000000001"));
+    }
+
+    #[test]
+    fn protein_id_extracted_from_cds_feature_gff3() {
+        // GFF3: RefSeq/GenBank put `protein_id=NP_...` on every CDS feature
+        // of a coding transcript. The builder picks it up from the first CDS
+        // child.
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t450\t.\t+\t0\tParent=tx1;protein_id=NP_000088.3",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id.as_deref(), Some("NP_000088.3"));
+    }
+
+    #[test]
+    fn protein_id_extracted_from_transcript_attr_when_present() {
+        // Some GFF3 producers put `protein_id` directly on the mRNA record.
+        // The transcript-level attribute wins over CDS-level when both are
+        // present.
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1;protein_id=NP_TXLEVEL.1",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t450\t.\t+\t0\tParent=tx1;protein_id=NP_CDSLEVEL.1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id.as_deref(), Some("NP_TXLEVEL.1"));
+    }
+
+    #[test]
+    fn protein_id_extracted_from_first_cds_when_multiple_fragments() {
+        // Multi-exon coding transcripts have one CDS feature per coding
+        // exon; all CDS fragments of a single transcript share the same
+        // `protein_id`. The first match suffices.
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t900\t.\t+\t.\tID=tx1",
+            "chr1\t.\texon\t100\t300\t.\t+\t.\tParent=tx1",
+            "chr1\t.\texon\t500\t900\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t300\t.\t+\t0\tParent=tx1;protein_id=NP_SPLICED.2",
+            "chr1\t.\tCDS\t500\t850\t.\t+\t0\tParent=tx1;protein_id=NP_SPLICED.2",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id.as_deref(), Some("NP_SPLICED.2"));
+    }
+
+    #[test]
+    fn protein_id_absent_when_no_attribute() {
+        // No `protein_id` attribute anywhere → `None`, and the projector's
+        // fallback chain (NM_ → NP_ inference, then transcript-id) takes
+        // over downstream. See #310.
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t450\t.\t+\t0\tParent=tx1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id, None);
+    }
+
+    #[test]
+    fn protein_id_warns_and_drops_when_cds_fragments_disagree() {
+        // GFF/GTF convention: every CDS fragment of one transcript carries
+        // the same `protein_id` (it's all one polypeptide). If the upstream
+        // file disagrees we must not silently pick the first one and let
+        // output depend on iteration order — emit W-LOAD-120 and leave
+        // `protein_id` unset so the projector's transcript-id fallback
+        // (see #310) takes over downstream.
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t900\t.\t+\t.\tID=tx1",
+            "chr1\t.\texon\t100\t300\t.\t+\t.\tParent=tx1",
+            "chr1\t.\texon\t500\t900\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t300\t.\t+\t0\tParent=tx1;protein_id=NP_FIRST.1",
+            "chr1\t.\tCDS\t500\t850\t.\t+\t0\tParent=tx1;protein_id=NP_SECOND.1",
+        ];
+        let (txs, report) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id, None);
+        assert_eq!(report.diagnostics_by_code.get("W-LOAD-120"), Some(&1));
+    }
+
+    #[test]
+    fn protein_id_transcript_attr_wins_even_when_cds_fragments_disagree() {
+        // A transcript-level `protein_id` is authoritative; when present we
+        // do not look at CDS records (and so do not emit W-LOAD-120 for any
+        // CDS-only disagreement).
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t900\t.\t+\t.\tID=tx1;protein_id=NP_TXLEVEL.1",
+            "chr1\t.\texon\t100\t300\t.\t+\t.\tParent=tx1",
+            "chr1\t.\texon\t500\t900\t.\t+\t.\tParent=tx1",
+            "chr1\t.\tCDS\t150\t300\t.\t+\t0\tParent=tx1;protein_id=NP_A.1",
+            "chr1\t.\tCDS\t500\t850\t.\t+\t0\tParent=tx1;protein_id=NP_B.1",
+        ];
+        let (txs, report) = build_db(lines, AnnotationFormat::Gff3);
+        assert_eq!(txs[0].protein_id.as_deref(), Some("NP_TXLEVEL.1"));
+        assert_eq!(report.diagnostics_by_code.get("W-LOAD-120"), None);
+    }
+
+    #[test]
+    fn protein_id_extracted_from_cds_feature_gtf() {
+        // GTF: `protein_id "NP_..."` is the standard attribute on CDS
+        // records produced by both GENCODE and RefSeq.
+        let lines = &[
+            "chr1\thavana\ttranscript\t100\t500\t.\t+\t.\tgene_id \"g1\"; transcript_id \"tx1\";",
+            "chr1\thavana\texon\t100\t500\t.\t+\t.\tgene_id \"g1\"; transcript_id \"tx1\";",
+            "chr1\thavana\tCDS\t150\t450\t.\t+\t0\tgene_id \"g1\"; transcript_id \"tx1\"; protein_id \"ENSP00000000001.1\";",
+        ];
+        let mut graph = crate::reference::annotation::graph::FeatureGraph::new();
+        for (i, l) in lines.iter().enumerate() {
+            let r = crate::reference::annotation::record::GtfRecord::parse(l, (i + 1) as u64)
+                .unwrap()
+                .unwrap();
+            graph.ingest(r);
+        }
+        graph.resolve();
+        let mut report = LoaderReport::default();
+        let txs = build_transcripts(
+            &graph,
+            AnnotationFormat::Gtf,
+            GenomeBuild::GRCh38,
+            "t.gtf".into(),
+            &mut report,
+        );
+        assert_eq!(txs[0].protein_id.as_deref(), Some("ENSP00000000001.1"));
     }
 }

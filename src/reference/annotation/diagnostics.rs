@@ -59,6 +59,10 @@ pub enum DiagnosticPayload {
     GeneAsTranscript {
         gene_id: String,
     },
+    ConflictingProteinId {
+        transcript_id: String,
+        values: Vec<String>,
+    },
     Other,
 }
 

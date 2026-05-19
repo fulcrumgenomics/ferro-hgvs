@@ -1307,6 +1307,30 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
     );
 
     map.insert(
+        "W-LOAD-120",
+        CodeInfo {
+            code: "W-LOAD-120",
+            name: "ConflictingProteinId",
+            summary: "CDS fragments of a single transcript reported disagreeing `protein_id` values; `protein_id` was left unset.",
+            explanation: "GFF3 and GTF convention is that every CDS fragment of a single \
+                transcript carries the same `protein_id` (they all encode parts of the same \
+                polypeptide). When the loader observes two or more distinct `protein_id` \
+                values on the CDS records of one transcript, it cannot pick one safely \
+                without making the output depend on input record order. The transcript is \
+                still loaded, but its `protein_id` is left unset so the projector's \
+                transcript-id-based protein-accession fallback (see issue #310) takes over. \
+                Inspect the source annotation and reconcile the disagreement upstream. \
+                See the GFF/GTF loader design (§6 Stage 4 — transcript assembly).",
+            category: CodeCategory::Io,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &[],
+        },
+    );
+
+    map.insert(
         "W-LOAD-200",
         CodeInfo {
             code: "W-LOAD-200",
@@ -1520,6 +1544,7 @@ mod tests {
             "W-LOAD-110",
             "W-LOAD-111",
             "W-LOAD-112",
+            "W-LOAD-120",
             "W-LOAD-200",
             "W-LOAD-201",
         ] {
