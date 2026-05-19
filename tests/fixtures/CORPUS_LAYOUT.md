@@ -172,7 +172,7 @@ case, the corpus's case schema adds `shuffle_direction` and
 `cross_boundaries` fields per row, and its `mock-pin/<axis>.txt`
 format extends to include the config in the pin line:
 
-```
+```text
 <input>\t<shuffle_direction>\t<cross_boundaries>\t<ferro_output_or_error>
 ```
 

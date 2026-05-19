@@ -26,6 +26,7 @@
 //! See `tests/fixtures/biocommons-normalize/failure-patterns.md` for the
 //! disposition of currently-known divergences.
 
+use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::{
@@ -411,9 +412,15 @@ fn axis_normalized() {
             continue;
         }
         // biocommons expects-error cases: ferro should also error.
+        // Run in strict mode so the W4xxx / W5xxx rejectable diagnostics
+        // (`PositionPastEnd`, `VariantExceedsReference`, etc.) fire as
+        // typed errors rather than lenient-mode warnings. Without this,
+        // every rejectable W-code that ferro currently emits would
+        // round-trip as `Ok(canonicalized_input)` and the row would
+        // fail the harness.
         if case.expects_error {
-            let normalizer =
-                Normalizer::with_config(ArcProvider(provider.clone()), build_config(case));
+            let cfg = build_config(case).with_error_mode(ErrorMode::Strict);
+            let normalizer = Normalizer::with_config(ArcProvider(provider.clone()), cfg);
             let actual = catch_panics(|| -> Result<String, String> {
                 let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e}"))?;
                 match normalizer.normalize(&v) {

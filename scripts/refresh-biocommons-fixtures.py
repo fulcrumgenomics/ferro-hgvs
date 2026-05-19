@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -34,7 +35,10 @@ from pathlib import Path
 
 # --- Pin to a specific upstream commit ---------------------------------------
 HGVS_RS_SHA = "b6513b3d793615fd770b1e8ae2a87d85d10396b5"  # v0.20.2-1-gb6513b3
-HGVS_RS_REPO = Path.home() / "work" / "git" / "hgvs-rs"
+# Default checkout location. Override with `--hgvs-rs <path>` on the CLI or
+# the `HGVS_RS_REPO` env var so contributors who don't mirror this layout
+# can still run the refresh script.
+DEFAULT_HGVS_RS_REPO = Path.home() / "work" / "git" / "hgvs-rs"
 NORMALIZER_RS_REL = "src/normalizer.rs"
 
 # Biocommons project doesn't supply a tagged version we pin against — the
@@ -65,11 +69,11 @@ VAR_CONFIG = {
 VEC_VAR = {"cases3": "norm", "cases5": "norm5"}
 
 
-def read_normalizer_rs_at_sha() -> str:
-    if not HGVS_RS_REPO.exists():
-        sys.exit(f"error: hgvs-rs repo not found at {HGVS_RS_REPO}")
+def read_normalizer_rs_at_sha(hgvs_rs_repo: Path) -> str:
+    if not hgvs_rs_repo.exists():
+        sys.exit(f"error: hgvs-rs repo not found at {hgvs_rs_repo}")
     return subprocess.check_output(
-        ["git", "-C", str(HGVS_RS_REPO), "show", f"{HGVS_RS_SHA}:{NORMALIZER_RS_REL}"],
+        ["git", "-C", str(hgvs_rs_repo), "show", f"{HGVS_RS_SHA}:{NORMALIZER_RS_REL}"],
         text=True,
     )
 
@@ -306,8 +310,8 @@ def apply_reinterpretations(cases: list[dict]) -> list[dict]:
     return out
 
 
-def cmd_refresh() -> None:
-    src = read_normalizer_rs_at_sha()
+def cmd_refresh(hgvs_rs_repo: Path) -> None:
+    src = read_normalizer_rs_at_sha(hgvs_rs_repo)
     cases = extract_cases_from_hgvs_rs(src)
     cases = apply_reinterpretations(cases)
     cases.extend(ISSUE_CASES)
@@ -401,11 +405,20 @@ licenses require attribution; this file satisfies that requirement.
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--hgvs-rs",
+        type=Path,
+        default=Path(os.environ.get("HGVS_RS_REPO", str(DEFAULT_HGVS_RS_REPO))),
+        help=(
+            "Path to the local hgvs-rs checkout. Defaults to $HGVS_RS_REPO if set, "
+            f"otherwise {DEFAULT_HGVS_RS_REPO}."
+        ),
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("refresh", help="regenerate cases.json from pinned upstream SHA")
     args = parser.parse_args()
     if args.cmd == "refresh":
-        cmd_refresh()
+        cmd_refresh(args.hgvs_rs)
 
 
 if __name__ == "__main__":
