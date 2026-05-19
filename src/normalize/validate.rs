@@ -208,9 +208,25 @@ fn validate_repeat_tract(
 ///
 /// Multi-repeat notation describes the reference structure exactly: the
 /// per-unit counts must reproduce the reference bases at `[start, end]`
-/// when expanded and concatenated. Skips validation when any unit has a
-/// non-Exact count (Range / MinUncertain / MaxUncertain / Unknown) —
-/// the expected length is ambiguous in those cases.
+/// when expanded and concatenated.
+///
+/// Validation mode is chosen by inspecting the per-unit counts:
+///
+/// - **All units `Exact`** — full validation. The expanded
+///   concatenation has a deterministic length; we check both the
+///   span-vs-sum length invariant and the base-by-base content match.
+/// - **Leading `Exact` prefix followed by a non-`Exact` unit (Range /
+///   MinUncertain / MaxUncertain / Unknown)** — *partial validation*
+///   (issue #279). The prefix bases at `[start, start + prefix_len)`
+///   are known; we validate just those against the reference and
+///   skip the length check and the ambiguous tail. A prefix mismatch
+///   surfaces as `RefSeqMismatch`.
+/// - **First unit non-`Exact`** — no validation. There is no known
+///   prefix to check; the description is accepted unchanged.
+///
+/// Missing reference data (out-of-range span, inverted range) is
+/// handled defensively: those cases short-circuit to `ok()` so other
+/// validation gates can surface a clearer error.
 fn validate_multirepeat_tract(
     units: &[RepeatUnit],
     ref_seq: &[u8],
@@ -222,56 +238,122 @@ fn validate_multirepeat_tract(
     if units.is_empty() {
         return ValidationResult::ok();
     }
-    // Skip if any count is not Exact — can't form a deterministic
-    // expected sequence to compare against.
-    let mut expected = Vec::new();
-    let mut expected_str = String::new();
+
+    // Walk units left-to-right, building the deterministic prefix from
+    // the leading `Exact` runs. Stop at the first non-`Exact` unit;
+    // everything from there on is the ambiguous tail and is skipped.
+    let mut prefix_bytes: Vec<u8> = Vec::new();
+    let mut prefix_str = String::new();
+    let mut prefix_units = 0usize;
     for u in units {
         let n = match u.count {
             RepeatCount::Exact(n) => n,
-            _ => return ValidationResult::ok(),
+            // First non-Exact ends the validated prefix.
+            _ => break,
         };
         let unit_bytes: Vec<u8> = u.sequence.bases().iter().map(|b| b.to_u8()).collect();
         let unit_str: String = u.sequence.bases().iter().map(|b| b.to_char()).collect();
-        expected_str.push_str(&format!("{}[{}]", unit_str, n));
+        prefix_str.push_str(&format!("{}[{}]", unit_str, n));
         for _ in 0..n {
-            expected.extend_from_slice(&unit_bytes);
+            prefix_bytes.extend_from_slice(&unit_bytes);
         }
+        prefix_units += 1;
     }
+
+    // First-unit-non-Exact case: no known prefix → no validation.
+    // Preserves the pre-#279 behavior for these descriptions.
+    if prefix_units == 0 {
+        return ValidationResult::ok();
+    }
+
+    let all_exact = prefix_units == units.len();
+
     let start_idx = hgvs_pos_to_index(start);
     let end_idx = end as usize;
     if end_idx > ref_seq.len() || start_idx > end_idx {
         return ValidationResult::ok();
     }
     let actual_bytes = &ref_seq[start_idx..end_idx];
-    let actual_str: String = actual_bytes
-        .iter()
-        .map(|&b| (b as char).to_ascii_uppercase())
-        .collect();
-    if expected.len() != actual_bytes.len() {
+
+    if all_exact {
+        // Full validation: span length must equal expanded prefix
+        // length, and bases must match.
+        let actual_str: String = actual_bytes
+            .iter()
+            .map(|&b| (b as char).to_ascii_uppercase())
+            .collect();
+        if prefix_bytes.len() != actual_bytes.len() {
+            return ValidationResult::mismatch(
+                format!(
+                    "{} ({} bp from declared multi-repeat units)",
+                    prefix_str,
+                    prefix_bytes.len()
+                ),
+                format!("{} ({} bp)", actual_str, actual_bytes.len()),
+            );
+        }
+        let matches = prefix_bytes
+            .iter()
+            .zip(actual_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if matches {
+            return ValidationResult::ok();
+        }
+        let expected_bases_str: String = prefix_bytes
+            .iter()
+            .map(|&b| (b as char).to_ascii_uppercase())
+            .collect();
         return ValidationResult::mismatch(
-            format!(
-                "{} ({} bp from declared multi-repeat units)",
-                expected_str,
-                expected.len()
-            ),
-            format!("{} ({} bp)", actual_str, actual_bytes.len()),
+            format!("{} ({})", prefix_str, expected_bases_str),
+            actual_str,
         );
     }
-    let matches = expected
+
+    // Partial validation (issue #279): only the known Exact prefix is
+    // checked. The ambiguous tail starts at `prefix_bytes.len()` in
+    // `actual_bytes` and is skipped entirely.
+    //
+    // If the reference span is shorter than the Exact prefix the
+    // description claims, that itself is a content/length mismatch —
+    // surface it. (Without this the slice below would silently truncate
+    // the comparison.)
+    if actual_bytes.len() < prefix_bytes.len() {
+        let actual_str: String = actual_bytes
+            .iter()
+            .map(|&b| (b as char).to_ascii_uppercase())
+            .collect();
+        return ValidationResult::mismatch(
+            format!(
+                "{} ({} bp from declared Exact prefix)",
+                prefix_str,
+                prefix_bytes.len()
+            ),
+            format!(
+                "{} ({} bp; reference span too short for prefix)",
+                actual_str,
+                actual_bytes.len()
+            ),
+        );
+    }
+    let prefix_actual = &actual_bytes[..prefix_bytes.len()];
+    let matches = prefix_bytes
         .iter()
-        .zip(actual_bytes.iter())
+        .zip(prefix_actual.iter())
         .all(|(a, b)| a.eq_ignore_ascii_case(b));
     if matches {
         return ValidationResult::ok();
     }
-    let expected_bases_str: String = expected
+    let expected_bases_str: String = prefix_bytes
+        .iter()
+        .map(|&b| (b as char).to_ascii_uppercase())
+        .collect();
+    let prefix_actual_str: String = prefix_actual
         .iter()
         .map(|&b| (b as char).to_ascii_uppercase())
         .collect();
     ValidationResult::mismatch(
-        format!("{} ({})", expected_str, expected_bases_str),
-        actual_str,
+        format!("{} ({})", prefix_str, expected_bases_str),
+        prefix_actual_str,
     )
 }
 
