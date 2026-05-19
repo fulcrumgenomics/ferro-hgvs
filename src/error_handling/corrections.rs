@@ -1586,6 +1586,145 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Detect a protein-edit insertion whose inserted sequence is given as a
+/// bracketed amino-acid list (e.g. `p.Arg97_Trp98ins[Ala;Pro]`).
+///
+/// HGVS v21's protein insertion notation concatenates 3-letter codes
+/// without separators (`p.Arg97_Trp98insAlaPro`). The bracketed
+/// `[Ala;Pro]` form is not in the spec — brackets at the edit level
+/// would collide with the variant-level allele syntax. ferro rejects
+/// the form with W3021 and points at the canonical concatenated shape.
+///
+/// Scope: only the protein description (text after `p.`) is scanned, so
+/// allele/repeat brackets in `c.`, `g.`, `n.`, `r.`, `m.` descriptions
+/// are not falsely triggered. Multi-variant inputs (compound alleles)
+/// scan each `p.` slice independently.
+///
+/// Returns one `DetectedCorrection` per offending `ins[...]` span. The
+/// `corrected` field carries the best-effort canonical rewrite when the
+/// bracket contents parse as `<Aa3>;<Aa3>;...`; otherwise it is empty
+/// (and the diagnostic still names the canonical shape via the
+/// preprocessor hint). The `start`/`end` span covers the `ins[...]`
+/// substring (inclusive of the closing `]`).
+pub fn detect_protein_bracketed_aa_insertion(input: &str) -> Vec<DetectedCorrection> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+
+    // Bare-prefix form `p.…` with no accession (e.g. `p.Arg97_Trp98ins[Ala;Pro]`).
+    // The full `<acc>:p.` loop below only matches `:p.`, so we'd otherwise
+    // miss this shape. Scoped tightly: only when `p.` is the very first
+    // token, to avoid colliding with substrings like `op.` mid-input.
+    if bytes.starts_with(b"p.") {
+        scan_protein_body(input, 2, &mut out);
+    }
+
+    let mut search_start = 0usize;
+    while let Some(rel) = find_subslice(&bytes[search_start..], b":p.") {
+        let p_dot_start = search_start + rel;
+        // Body of the protein description starts after ":p."
+        let body_start = p_dot_start + 3;
+        let body_end = scan_protein_body(input, body_start, &mut out);
+        search_start = body_end;
+    }
+
+    out
+}
+
+/// Scan the protein-edit body that begins at `body_start` for the
+/// `ins[…]` shape, appending one `DetectedCorrection` per offending
+/// span. Returns the body end (next whitespace / comma / EOF), so the
+/// caller can advance its outer search cursor past the body without
+/// rescanning. Shared between the `:p.` and bare-`p.` entry points.
+fn scan_protein_body(input: &str, body_start: usize, out: &mut Vec<DetectedCorrection>) -> usize {
+    let bytes = input.as_bytes();
+    // Body ends at next whitespace, comma (multi-variant separator), or
+    // end of input. This bounds the scan so we don't bleed into a sibling
+    // description in compound inputs. Note: `;` is intentionally NOT a
+    // terminator here — it is the intra-bracket AA separator inside
+    // `ins[Ala;Pro]`, which is exactly the shape we are looking for.
+    // Treating `;` as a body terminator would clip the bracket and miss
+    // the detection.
+    let mut body_end = body_start;
+    while body_end < bytes.len()
+        && !(bytes[body_end] as char).is_whitespace()
+        && bytes[body_end] != b','
+    {
+        body_end += 1;
+    }
+
+    let mut j = body_start;
+    while j + 4 <= body_end {
+        if &bytes[j..j + 4] == b"ins["
+            // `ins[` is the bracketed-AA form only when `ins` is a
+            // protein edit token, not part of a longer word. Reject
+            // if preceded by an alphabetic byte (so `delins[…]`
+            // remains untouched — that's a different edit type
+            // outside this issue's scope).
+            && (j == body_start || !bytes[j - 1].is_ascii_alphabetic())
+        {
+            // Find the matching close `]` within the body.
+            let open = j + 3; // index of '['
+            let close_search_start = open + 1;
+            let mut k = close_search_start;
+            let mut close = None;
+            while k < body_end {
+                if bytes[k] == b']' {
+                    close = Some(k);
+                    break;
+                }
+                k += 1;
+            }
+            if let Some(close_idx) = close {
+                let inner = &input[close_search_start..close_idx];
+                let canonical = canonicalize_protein_bracketed_aa_list(inner);
+                let original = &input[j..close_idx + 1];
+                let corrected = match canonical {
+                    Some(ref cat) => format!("ins{}", cat),
+                    None => String::new(),
+                };
+                out.push(DetectedCorrection::new(
+                    ErrorType::ProteinBracketedAaInsertion,
+                    original,
+                    corrected,
+                    j,
+                    close_idx + 1,
+                ));
+                j = close_idx + 1;
+                continue;
+            }
+        }
+        j += 1;
+    }
+
+    body_end
+}
+
+/// Try to canonicalize the contents of a `[...]` AA list to a
+/// concatenated 3-letter sequence. Returns `Some("AlaPro")` for a
+/// well-formed `Ala;Pro` body; `None` if the body is empty, has a
+/// leading/trailing separator, an empty segment, or any segment that is
+/// not a recognized 3-letter amino acid (case-sensitive: HGVS canonical
+/// 3-letter codes start with an uppercase letter).
+fn canonicalize_protein_bracketed_aa_list(inner: &str) -> Option<String> {
+    if inner.is_empty() {
+        return None;
+    }
+    if inner.starts_with(';') || inner.ends_with(';') {
+        return None;
+    }
+    let mut out = String::with_capacity(inner.len());
+    for segment in inner.split(';') {
+        if segment.is_empty() {
+            return None;
+        }
+        if !is_canonical_three_letter_aa(segment) {
+            return None;
+        }
+        out.push_str(segment);
+    }
+    Some(out)
+}
+
 /// Detect the deprecated `con` (sequence conversion) edit syntax and rewrite
 /// it as `delins`. Per HGVS spec recommendations/DNA/delins.md line 19:
 /// "The previous format 'con' is no longer used".

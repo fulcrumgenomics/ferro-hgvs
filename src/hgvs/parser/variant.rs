@@ -4796,6 +4796,16 @@ fn parse_rna_fusion_breakpoint(input: &str) -> Result<RnaFusionBreakpoint, Ferro
 pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     let input = input.trim();
 
+    // Pre-parse rejection for protein bracketed-amino-acid insertion
+    // (`p.…ins[Ala;Pro]`) — W3021 ProteinBracketedAaInsertion (#290).
+    // The bracketed form has no spec-defined meaning at the protein-edit
+    // level (brackets are reserved for variant-level alleles), so we
+    // surface a structured diagnostic pointing at the canonical
+    // concatenated `insAlaPro` shape rather than letting the bare parser
+    // bail with a generic nom failure. Bare `parse_hgvs` callers see the
+    // same code as the lenient/silent preprocessor paths.
+    reject_protein_bracketed_aa_insertion(input)?;
+
     // Check for allele patterns and RNA fusion first
     let variant = if let Some(allele_type) = detect_allele_type(input) {
         match allele_type {
@@ -4825,6 +4835,48 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     validate_no_self_cancelling(&variant)?;
 
     Ok(variant)
+}
+
+/// Pre-parse rejection for `p.…ins[Ala;Pro]` — W3021
+/// ProteinBracketedAaInsertion (#290).
+///
+/// HGVS v21's protein insertion notation concatenates 3-letter codes
+/// (`p.Arg97_Trp98insAlaPro`); brackets at the edit level have no
+/// spec meaning. Bare `parse_hgvs` callers do not go through the
+/// preprocessor, so we surface the same structured diagnostic here.
+/// Scope is bounded to text inside a `:p.` description.
+fn reject_protein_bracketed_aa_insertion(input: &str) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+    use crate::error_handling::corrections::detect_protein_bracketed_aa_insertion;
+
+    let detections = detect_protein_bracketed_aa_insertion(input);
+    let Some(first) = detections.first() else {
+        return Ok(());
+    };
+
+    let canonical_suggestion = if !first.corrected.is_empty() {
+        format!(
+            " — e.g. write `{}` instead of `{}`",
+            first.corrected, first.original
+        )
+    } else {
+        String::new()
+    };
+    let hint = format!(
+        "HGVS protein insertion uses concatenated 3-letter codes \
+         (`ins<AA1><AA2>...`, e.g. `insAlaPro`), not a bracketed list \
+         (`ins[AA1;AA2]`){canonical_suggestion}",
+    );
+
+    Err(FerroError::parse_with_diagnostic(
+        first.start,
+        "Bracketed amino-acid list inside protein insertion edit",
+        Diagnostic::new()
+            .with_code(ErrorCode::InvalidEdit)
+            .with_span(SourceSpan::new(first.start, first.end))
+            .with_source(input)
+            .with_hint(hint),
+    ))
 }
 
 /// Walk the variant tree and reject any `AlleleVariant` that contains an

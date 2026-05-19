@@ -1952,6 +1952,11 @@ pub enum PyErrorType {
     DeprecatedIvsNotation = 25,
     DeprecatedConSyntax = 26,
     LengthMismatch = 27,
+    // Discriminants 28-30 are reserved for in-flight PRs (#295 W3017/W3018,
+    // #298 W3019, #299 W3020); claim 31 here to avoid collisions when they
+    // land. The W-code (W3021) is the canonical identity; the integer is
+    // only a Python-side ABI tag.
+    ProteinBracketedAaInsertion = 31,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -1985,6 +1990,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::DeprecatedIvsNotation => PyErrorType::DeprecatedIvsNotation,
             ErrorType::DeprecatedConSyntax => PyErrorType::DeprecatedConSyntax,
             ErrorType::LengthMismatch => PyErrorType::LengthMismatch,
+            ErrorType::ProteinBracketedAaInsertion => PyErrorType::ProteinBracketedAaInsertion,
         }
     }
 }
@@ -2020,6 +2026,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::DeprecatedIvsNotation => ErrorType::DeprecatedIvsNotation,
             PyErrorType::DeprecatedConSyntax => ErrorType::DeprecatedConSyntax,
             PyErrorType::LengthMismatch => ErrorType::LengthMismatch,
+            PyErrorType::ProteinBracketedAaInsertion => ErrorType::ProteinBracketedAaInsertion,
         }
     }
 }
