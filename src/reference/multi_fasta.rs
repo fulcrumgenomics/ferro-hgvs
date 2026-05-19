@@ -740,6 +740,7 @@ impl MultiFastaProvider {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: tx.protein.clone(),
             exon_cigars: tx.exon_cigars.clone(),
             cached_introns: OnceLock::new(),
         })
@@ -1241,6 +1242,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
@@ -1327,6 +1329,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1382,6 +1385,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1429,6 +1433,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
