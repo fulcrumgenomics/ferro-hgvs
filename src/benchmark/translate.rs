@@ -32,8 +32,6 @@ pub fn translate_cds_to_protein(cds_sequence: &str) -> Option<String> {
                 break; // Stop at stop codon
             }
             if let Some(aa) = table.amino_acid_for(&codon) {
-                use crate::hgvs::location::AminoAcid;
-                let _: &AminoAcid = aa; // type assertion
                 protein.push(aa.to_one_letter());
             } else {
                 return None; // Unknown codon

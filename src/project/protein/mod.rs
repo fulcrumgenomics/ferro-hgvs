@@ -15,5 +15,6 @@ mod indel;
 mod substitution;
 
 // Re-export the public API used by `projector.rs`.
+pub(crate) use helpers::RefProteinBundle;
 pub(crate) use indel::predict_indel_protein;
 pub(crate) use substitution::predict_substitution_protein;

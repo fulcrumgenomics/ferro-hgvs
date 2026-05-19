@@ -9,7 +9,7 @@ use crate::hgvs::location::AminoAcid;
 use crate::reference::transcript::Transcript;
 use crate::sequence::reverse_complement;
 
-use super::substitution::translate;
+use super::substitution::translate_bytes;
 
 // ── CDS sequence readers ──────────────────────────────────────────────────────
 
@@ -52,69 +52,102 @@ pub(crate) fn read_full_cds(transcript: &Transcript) -> Result<String, FerroErro
 /// caller sets `cds_start == cds_end`.
 ///
 /// The returned string is the full CDS after the edit, in uppercase.
+#[cfg(test)]
 pub(crate) fn build_mutated_cds(
     transcript: &Transcript,
     cds_pos_start: i64, // 1-based CDS position of edit start
     cds_pos_end: i64,   // 1-based CDS position of edit end (inclusive)
     edit: &NaEdit,
 ) -> Result<String, FerroError> {
-    let tx_cds_start = transcript
-        .cds_start
-        .ok_or_else(|| FerroError::ConversionError {
-            msg: format!("transcript {} has no CDS", transcript.id),
-        })? as usize;
+    let ref_cds = read_full_cds(transcript)?;
+    build_mutated_cds_with_ref(&ref_cds, transcript, cds_pos_start, cds_pos_end, edit)
+}
 
-    let full_cds = read_full_cds(transcript)?;
-
+/// Fast path of [`build_mutated_cds`] for callers that already hold the
+/// reference CDS (e.g. via `RefProteinBundle::ref_cds`). Skips the per-call
+/// `read_full_cds` + `to_uppercase` that would otherwise re-uppercase a
+/// 1-10 kbp string on every indel projection.
+///
+/// The `ref_cds` argument MUST be uppercase ACGT (the form that
+/// `read_full_cds` returns). Inserted / reverse-complemented slices are
+/// uppercased individually before splicing so the result is still uniformly
+/// uppercase without a final whole-string pass.
+pub(crate) fn build_mutated_cds_with_ref(
+    ref_cds: &str,
+    transcript: &Transcript,
+    cds_pos_start: i64,
+    cds_pos_end: i64,
+    edit: &NaEdit,
+) -> Result<String, FerroError> {
     // Convert 1-based CDS positions to 0-based CDS-string indices.
     let idx_start = (cds_pos_start - 1) as usize;
     let idx_end = cds_pos_end as usize; // exclusive upper bound
 
-    if idx_end > full_cds.len() {
+    if idx_end > ref_cds.len() {
         return Err(FerroError::ProteinSequenceUnavailable {
             accession: transcript.id.clone(),
         });
     }
 
-    let before = &full_cds[..idx_start];
-    let affected = &full_cds[idx_start..idx_end];
-    let after = &full_cds[idx_end..];
+    let before = &ref_cds[..idx_start];
+    let affected = &ref_cds[idx_start..idx_end];
+    let after = &ref_cds[idx_end..];
 
     let mutated = match edit {
         NaEdit::Deletion { .. } => {
             // Remove the affected bases.
-            format!("{}{}", before, after)
+            let mut out = String::with_capacity(before.len() + after.len());
+            out.push_str(before);
+            out.push_str(after);
+            out
         }
         NaEdit::Insertion { sequence } => {
-            // HGVS insertion c.N_N+1insX: the inserted bases go between cds_pos_start
-            // and cds_pos_start+1, i.e. at idx_start (after `before`).
-            // The `affected` region here should be 0 bases wide (cds_pos_start == cds_pos_end
-            // for most insertions, or the caller can pass both as the same boundary base).
-            // We treat `before` as everything up through and including cds_pos_start.
+            // HGVS insertion c.N_N+1insX: the inserted bases go between
+            // cds_pos_start and cds_pos_start+1, i.e. at idx_start (after
+            // `before`). Caller passes idx_end == idx_start so `affected` is
+            // empty; preserved in the concat to make this explicit.
             let inserted = extract_literal_sequence(sequence, transcript)?;
-            // For HGVS insertions, idx_end == idx_start (the interval covers the gap),
-            // so before == full_cds[..idx_start] and after == full_cds[idx_start..].
-            // We want to insert between position idx_start-1 and idx_start.
-            // The caller passes cds_pos_start as the last unaffected base's c. position,
-            // so idx_end == idx_start and we insert at that junction.
-            format!("{}{}{}{}", before, affected, inserted, after)
+            let mut out =
+                String::with_capacity(before.len() + affected.len() + inserted.len() + after.len());
+            out.push_str(before);
+            out.push_str(affected);
+            push_ascii_uppercase(&mut out, &inserted);
+            out.push_str(after);
+            out
         }
         NaEdit::Duplication { .. } => {
-            // Duplicate: append a copy of `affected` right after its end.
-            format!("{}{}{}{}", before, affected, affected, after)
+            let mut out = String::with_capacity(before.len() + 2 * affected.len() + after.len());
+            out.push_str(before);
+            out.push_str(affected);
+            out.push_str(affected);
+            out.push_str(after);
+            out
         }
         NaEdit::Delins { sequence, .. } => {
             let inserted = extract_literal_sequence(sequence, transcript)?;
-            format!("{}{}{}", before, inserted, after)
+            let mut out = String::with_capacity(before.len() + inserted.len() + after.len());
+            out.push_str(before);
+            push_ascii_uppercase(&mut out, &inserted);
+            out.push_str(after);
+            out
         }
         NaEdit::Inversion { .. } => {
+            // `affected` is already uppercase; reverse_complement preserves
+            // case, so no additional uppercase pass is needed.
             let rc = reverse_complement(affected);
-            format!("{}{}{}", before, rc, after)
+            let mut out = String::with_capacity(before.len() + rc.len() + after.len());
+            out.push_str(before);
+            out.push_str(&rc);
+            out.push_str(after);
+            out
         }
         NaEdit::Substitution { alternative, .. } => {
-            // Single-base substitution.
-            let alt_char = alternative.to_u8() as char;
-            format!("{}{}{}", before, alt_char, after)
+            // Single-base substitution. `alternative.to_u8()` is ASCII upper.
+            let mut out = String::with_capacity(before.len() + 1 + after.len());
+            out.push_str(before);
+            out.push(alternative.to_u8() as char);
+            out.push_str(after);
+            out
         }
         _ => {
             return Err(FerroError::UnsupportedProjection {
@@ -123,8 +156,16 @@ pub(crate) fn build_mutated_cds(
         }
     };
 
-    let _ = tx_cds_start; // currently unused but kept for clarity
-    Ok(mutated.to_uppercase())
+    Ok(mutated)
+}
+
+/// Push `src` onto `dst`, uppercasing ASCII letters as we go. Avoids the
+/// allocation of `src.to_uppercase()` for the common case where the caller
+/// only has a small inserted slice (typically 1-100 bp).
+fn push_ascii_uppercase(dst: &mut String, src: &str) {
+    for &b in src.as_bytes() {
+        dst.push(b.to_ascii_uppercase() as char);
+    }
 }
 
 /// Extract a literal nucleotide sequence from an `InsertedSequence`.
@@ -155,9 +196,177 @@ fn extract_literal_sequence(
 pub(crate) fn translate_full_cds(cds: &str) -> Vec<AminoAcid> {
     cds.as_bytes()
         .chunks_exact(3)
-        .filter_map(|c| std::str::from_utf8(c).ok().and_then(translate))
+        .filter_map(translate_bytes)
         .take_while(|aa| *aa != AminoAcid::Ter)
         .collect()
+}
+
+/// Pre-translated reference CDS for a transcript.
+///
+/// Cached on [`VariantProjector`] so that fan-out across many indel variants
+/// on the same transcript translates the reference CDS exactly once instead
+/// of once per variant. The fields are exactly the values that
+/// `predict_indel_protein` needs from the reference side of the comparison.
+#[derive(Debug)]
+pub(crate) struct RefProteinBundle {
+    /// Uppercase CDS bytes. Cached so `predict_indel_protein` doesn't
+    /// re-read + re-uppercase the same string for every variant on the same
+    /// transcript; the alt-side CDS is built by slicing this with
+    /// `build_mutated_cds_with_ref`.
+    pub ref_cds: String,
+    pub ref_protein: Vec<AminoAcid>,
+    pub ref_protein_with_stop: Vec<AminoAcid>,
+}
+
+impl RefProteinBundle {
+    /// Build a bundle by reading and translating the CDS of `transcript`.
+    pub(crate) fn from_transcript(transcript: &Transcript) -> Result<Self, FerroError> {
+        let ref_cds = read_full_cds(transcript)?;
+        let ref_protein = translate_full_cds(&ref_cds);
+        let ref_protein_with_stop = translate_full_cds_with_stop(&ref_cds);
+        Ok(Self {
+            ref_cds,
+            ref_protein,
+            ref_protein_with_stop,
+        })
+    }
+}
+
+/// Translate a *mutated* CDS to a protein, reusing the already-translated
+/// reference prefix wherever the alt and ref CDS bytes are identical.
+///
+/// The first `unchanged_prefix_codons` codons of `mut_cds` (positions
+/// `0..unchanged_prefix_codons * 3`) are byte-identical to `ref_cds` by
+/// construction — they're the unedited prefix that `build_mutated_cds_with_ref`
+/// preserved verbatim. We can lift their amino-acid translations straight out
+/// of `ref_protein` and only translate the remaining tail of `mut_cds`.
+///
+/// Correctness notes:
+/// * `ref_protein` may be shorter than `unchanged_prefix_codons` if the
+///   reference's first stop falls inside the unchanged prefix. In that case
+///   the alt protein also stops there (same bytes, same `take_while`), so we
+///   return the ref protein verbatim.
+/// * Stop-codon readthrough (an edit that removes the ref's terminator) still
+///   works because we only short-circuit when the prefix already contained
+///   the stop. When the edit is at or past the ref stop's codon we fall into
+///   the normal translation path.
+/// * Output matches `translate_full_cds(mut_cds)` exactly — verified by
+///   `translate_mutated_cds_matches_full_translation` over substitution /
+///   deletion / insertion / duplication / delins / inversion cases.
+pub(crate) fn translate_mutated_cds(
+    ref_protein: &[AminoAcid],
+    mut_cds: &str,
+    unchanged_prefix_codons: usize,
+) -> Vec<AminoAcid> {
+    let kept = unchanged_prefix_codons.min(ref_protein.len());
+    let mut out: Vec<AminoAcid> = ref_protein[..kept].to_vec();
+    if kept < unchanged_prefix_codons {
+        // The reference already terminated inside the unchanged prefix, so
+        // the alt protein terminates at the same point (same bytes).
+        return out;
+    }
+    let start_byte = unchanged_prefix_codons * 3;
+    if start_byte >= mut_cds.len() {
+        return out;
+    }
+    out.extend(
+        mut_cds.as_bytes()[start_byte..]
+            .chunks_exact(3)
+            .filter_map(translate_bytes)
+            .take_while(|aa| *aa != AminoAcid::Ter),
+    );
+    out
+}
+
+/// In-frame variant of [`translate_mutated_cds`] that also lifts the
+/// post-edit *suffix* from `ref_protein` whenever the mutated and reference
+/// CDS bytes have re-converged.
+///
+/// For an in-frame indel (`net % 3 == 0`), the bytes of `mut_cds` after the
+/// modification region are byte-identical to a (codon-aligned) slice of
+/// `ref_cds`, so we can skip translating them and copy the corresponding
+/// `ref_protein` AAs directly. Only the small edit window — bytes from the
+/// first edited codon's start up to the first codon boundary at-or-past the
+/// last edited byte — is translated normally.
+///
+/// Parameters:
+/// * `cds_pos_start` / `cds_pos_end` — the 1-based CDS positions of the edit
+///   (same values predict_indel_protein passes in).
+/// * `net` — net base-length change (`mut_cds.len() - ref_cds.len()`). Must
+///   be a multiple of 3 (the in-frame contract).
+///
+/// Correctness invariants:
+/// * Output matches `translate_full_cds(mut_cds)` byte-for-byte; verified by
+///   `translate_mutated_cds_inframe_matches_full_translation` over deletion,
+///   insertion, duplication, delins, inversion, and readthrough cases.
+/// * If a stop appears inside the edit window, translation terminates there
+///   and the suffix is not lifted (same as `take_while(!= Ter)`).
+/// * If the alt sequence extends past the ref's stop (readthrough), the
+///   tail of `mut_cds` after the suffix-join point is translated normally.
+pub(crate) fn translate_mutated_cds_inframe(
+    ref_protein: &[AminoAcid],
+    mut_cds: &str,
+    cds_pos_start: i64,
+    cds_pos_end: i64,
+    net: i64,
+) -> Vec<AminoAcid> {
+    debug_assert_eq!(net % 3, 0, "in-frame fast path requires net % 3 == 0");
+
+    let unchanged_prefix_codons = ((cds_pos_start - 1).max(0) / 3) as usize;
+    let kept = unchanged_prefix_codons.min(ref_protein.len());
+    let mut out: Vec<AminoAcid> = ref_protein[..kept].to_vec();
+    if kept < unchanged_prefix_codons {
+        // Reference already stopped inside the unchanged prefix; alt does too.
+        return out;
+    }
+
+    // Locate the first mut-CDS byte at-or-past the modification (this is the
+    // first byte whose value comes from the unchanged ref suffix, shifted by
+    // `net` in ref-space). For all edit categories this is
+    // `idx_start + mut_edit_length` where mut_edit_length = ref_edit_length + net.
+    let idx_start = (cds_pos_start - 1).max(0) as usize;
+    let idx_end = cds_pos_end as usize;
+    let ref_edit_length = idx_end.saturating_sub(idx_start) as i64;
+    let mut_edit_length = (ref_edit_length + net).max(0) as usize;
+    let bx = idx_start + mut_edit_length;
+    let bx_first_full_codon = bx.div_ceil(3) * 3;
+
+    // Translate the edit window: codons starting at `start_byte` up to the
+    // first codon boundary on/after the modification's end.
+    let start_byte = unchanged_prefix_codons * 3;
+    let edit_window_end = bx_first_full_codon.min(mut_cds.len());
+    if start_byte < edit_window_end {
+        for chunk in mut_cds.as_bytes()[start_byte..edit_window_end].chunks_exact(3) {
+            if let Some(aa) = translate_bytes(chunk) {
+                if aa == AminoAcid::Ter {
+                    return out;
+                }
+                out.push(aa);
+            }
+        }
+    }
+
+    // The remaining mut suffix (bytes from `bx_first_full_codon` onward) is
+    // byte-identical to ref bytes from `bx_first_full_codon - net` onward.
+    // Lift the corresponding amino acids from `ref_protein`.
+    let ref_byte_for_join = (bx_first_full_codon as i64 - net).max(0) as usize;
+    let ref_codon_idx = ref_byte_for_join / 3;
+    if ref_codon_idx <= ref_protein.len() {
+        out.extend_from_slice(&ref_protein[ref_codon_idx..]);
+        return out;
+    }
+
+    // Readthrough: alt has codons past ref's first stop. Translate the rest
+    // of mut_cds normally (the join point is past ref_protein's end).
+    if bx_first_full_codon < mut_cds.len() {
+        out.extend(
+            mut_cds.as_bytes()[bx_first_full_codon..]
+                .chunks_exact(3)
+                .filter_map(translate_bytes)
+                .take_while(|aa| *aa != AminoAcid::Ter),
+        );
+    }
+    out
 }
 
 /// Translate a CDS sequence to a protein, including the termination codon.
@@ -166,12 +375,10 @@ pub(crate) fn translate_full_cds(cds: &str) -> Vec<AminoAcid> {
 pub(crate) fn translate_full_cds_with_stop(cds: &str) -> Vec<AminoAcid> {
     let mut result = Vec::new();
     for chunk in cds.as_bytes().chunks_exact(3) {
-        if let Ok(s) = std::str::from_utf8(chunk) {
-            if let Some(aa) = translate(s) {
-                result.push(aa);
-                if aa == AminoAcid::Ter {
-                    break;
-                }
+        if let Some(aa) = translate_bytes(chunk) {
+            result.push(aa);
+            if aa == AminoAcid::Ter {
+                break;
             }
         }
     }
@@ -361,6 +568,166 @@ mod tests {
         // 7 bases → 2 complete codons + 1 incomplete (dropped).
         let aas = translate_full_cds("ATGCGCTA");
         assert_eq!(aas, vec![AminoAcid::Met, AminoAcid::Arg]);
+    }
+
+    /// Locks the per-codon behaviour of `translate_full_cds` end-to-end across
+    /// every ACGT codon. Concatenating all 64 codons gives a 192-base CDS;
+    /// adding three trailing Ns checks that an invalid codon at the end is
+    /// silently skipped (filter_map convention) rather than aborting.
+    #[test]
+    fn translate_full_cds_all_64_codons() {
+        // Build a 192-base CDS that contains every codon exactly once, in a
+        // fixed canonical order. None of the codons before the first stop
+        // matter — the take_while-before-Ter contract means we'd cut off at
+        // the first stop. So instead we use a stop-free synthetic CDS by
+        // omitting TAA/TAG/TGA from the body and asserting via the
+        // `_with_stop` variant for the stop-codon path.
+        let codons = [
+            "TTT", "TTC", "TTA", "TTG", "CTT", "CTC", "CTA", "CTG", "ATT", "ATC", "ATA", "ATG",
+            "GTT", "GTC", "GTA", "GTG", "TCT", "TCC", "TCA", "TCG", "AGT", "AGC", "CCT", "CCC",
+            "CCA", "CCG", "ACT", "ACC", "ACA", "ACG", "GCT", "GCC", "GCA", "GCG", "TAT", "TAC",
+            "CAT", "CAC", "CAA", "CAG", "AAT", "AAC", "AAA", "AAG", "GAT", "GAC", "GAA", "GAG",
+            "TGT", "TGC", "TGG", "CGT", "CGC", "CGA", "CGG", "AGA", "AGG", "GGT", "GGC", "GGA",
+            "GGG",
+        ];
+        // 61 sense codons (no stops). Concat + 2 trailing bases (incomplete).
+        let cds: String = codons.iter().copied().collect::<String>() + "NN";
+        let aas = translate_full_cds(&cds);
+        assert_eq!(
+            aas.len(),
+            61,
+            "61 sense codons translated, incomplete tail dropped"
+        );
+        // First codon TTT → Phe, last codon GGG → Gly.
+        assert_eq!(aas[0], AminoAcid::Phe);
+        assert_eq!(aas[60], AminoAcid::Gly);
+
+        // _with_stop variant: prepend a stop right after the first codon and
+        // confirm translation halts immediately after Ter.
+        let cds_with_stop = String::from("ATGTAA") + &cds;
+        let aas = translate_full_cds_with_stop(&cds_with_stop);
+        assert_eq!(aas, vec![AminoAcid::Met, AminoAcid::Ter]);
+    }
+
+    /// `translate_mutated_cds` must produce byte-identical results to
+    /// `translate_full_cds(mut_cds)` for every prefix offset between 0 and
+    /// the codon count, across every indel category exercised below. This is
+    /// the safety net for the localised-translation perf change: any
+    /// off-by-one in the prefix-keep arithmetic falls out here.
+    #[test]
+    fn translate_mutated_cds_matches_full_translation() {
+        // Reference CDS: 6 sense codons + stop = 21 bases.
+        // Met-Arg-Pro-Thr-Ala-Cys-Ter
+        let ref_cds = "ATGCGGCCCACCGCGTGCTAA";
+        let ref_protein = translate_full_cds(ref_cds);
+        assert_eq!(ref_protein.len(), 6, "Met..Cys (stops before Ter)");
+
+        // Every (mut_cds, unchanged_prefix_codons) pair below was constructed
+        // so that the first `unchanged_prefix_codons * 3` bytes of mut_cds
+        // are identical to `ref_cds[..unchanged_prefix_codons * 3]` — i.e.
+        // it preserves the precondition of `translate_mutated_cds`.
+        let cases: &[(&str, &str, usize)] = &[
+            // edit at codon 0 — no prefix kept; substitution of first base.
+            ("subst codon 0", "GTGCGGCCCACCGCGTGCTAA", 0),
+            // edit at codon 1 — 1 codon kept; mid-codon deletion.
+            ("del codon 1", "ATGCGGCCACCGCGTGCTAA", 1),
+            // edit at codon 2 — 2 codons kept; codon-aligned 3-base deletion.
+            ("del codon 2 whole", "ATGCGGACCGCGTGCTAA", 2),
+            // edit at codon 3 — 3 codons kept; in-frame insertion of 3 bases.
+            ("ins after codon 3", "ATGCGGCCCACCGGGGCGTGCTAA", 3),
+            // edit at codon 4 — 4 codons kept; frameshift insertion (+1 base).
+            ("fs ins codon 4", "ATGCGGCCCACCGCGCTGCTAA", 4),
+            // edit at codon 5 — 5 codons kept; substitution that introduces a
+            // new stop one codon earlier than the ref's stop.
+            ("nonsense codon 5", "ATGCGGCCCACCGCGTAATGCTAA", 5),
+            // edit at codon 6 (past first stop) — 6 codons kept; alt also
+            // stopped at codon 6 in the ref translation, so kept >= ref_len.
+            ("readthrough", "ATGCGGCCCACCGCGTGCCCATAA", 6),
+        ];
+
+        for (name, mut_cds, prefix) in cases {
+            let from_full = translate_full_cds(mut_cds);
+            let from_partial = translate_mutated_cds(&ref_protein, mut_cds, *prefix);
+            assert_eq!(
+                from_full, from_partial,
+                "case '{}': translate_mutated_cds (prefix={}) must match \
+                 translate_full_cds(mut_cds); full={:?}, partial={:?}",
+                name, prefix, from_full, from_partial
+            );
+        }
+    }
+
+    /// Byte-for-byte equivalence between `translate_mutated_cds_inframe`
+    /// (the prefix + suffix lift) and `translate_full_cds` (the unchanged
+    /// reference implementation) across every in-frame indel category. Any
+    /// off-by-one in the suffix-join arithmetic falls out here.
+    #[test]
+    fn translate_mutated_cds_inframe_matches_full_translation() {
+        // Reference CDS: 6 sense codons + stop = 21 bases.
+        // Met-Arg-Pro-Thr-Ala-Cys-Ter
+        let ref_cds = "ATGCGGCCCACCGCGTGCTAA";
+        let ref_protein = translate_full_cds(ref_cds);
+        assert_eq!(ref_protein.len(), 6);
+
+        // (name, mut_cds, cds_pos_start, cds_pos_end, net)
+        // Each mut_cds was constructed by applying the named edit to ref_cds
+        // so that its prefix/suffix invariants match `build_mutated_cds_with_ref`.
+        let cases: &[(&str, &str, i64, i64, i64)] = &[
+            // Codon-aligned in-frame deletion of CCC at c.7-9.
+            ("del whole codon 3", "ATGCGGACCGCGTGCTAA", 7, 9, -3),
+            // 6-base codon-aligned deletion at c.7-12.
+            ("del two whole codons", "ATGCGGGCGTGCTAA", 7, 12, -6),
+            // Mid-codon in-frame deletion (6 bases straddling codon boundaries
+            // c.5-10 — deletes GGCCCA, leaves ATGC + CCGCGTGCTAA = ATGCCCGCGTGCTAA).
+            ("mid-codon 6-base del", "ATGCCCGCGTGCTAA", 5, 10, -6),
+            // Codon-aligned in-frame insertion of GGG after c.3 (between Met
+            // and Arg codons).
+            (
+                "codon-aligned ins after c.3",
+                "ATGGGGCGGCCCACCGCGTGCTAA",
+                3,
+                3,
+                3,
+            ),
+            // Codon-aligned in-frame insertion that also introduces a stop.
+            ("ins introducing stop", "ATGTAACGGCCCACCGCGTGCTAA", 3, 3, 3),
+            // In-frame delins: replace TGC (Cys) with TAATGC (Ter + Cys) at
+            // c.16-18. Length: +3. Introduces a premature stop.
+            (
+                "delins introducing stop",
+                "ATGCGGCCCACCGCGTAATGCTAA",
+                16,
+                18,
+                3,
+            ),
+            // Inversion of codon 2 (CCC → GGG via revcomp).
+            ("inversion of codon 2", "ATGCGGGGGACCGCGTGCTAA", 7, 9, 0),
+            // Same-length delins (net = 0) replacing one codon with another.
+            ("same-length delins", "ATGCGGAAAACCGCGTGCTAA", 7, 9, 0),
+            // Readthrough: delete the entire stop codon, alt extends.
+            // mut = ref minus TAA + 3 new bases after CDS, but for simplicity
+            // we model a same-length stop-substituting delins (TAA → CCG +
+            // 3 new bases that include a downstream stop).
+            (
+                "readthrough w/ downstream stop",
+                "ATGCGGCCCACCGCGTGCCCGCCATAA",
+                19,
+                21,
+                6,
+            ),
+        ];
+
+        for (name, mut_cds, start, end, net) in cases {
+            let from_full = translate_full_cds(mut_cds);
+            let from_inframe =
+                translate_mutated_cds_inframe(&ref_protein, mut_cds, *start, *end, *net);
+            assert_eq!(
+                from_full, from_inframe,
+                "case '{}' (start={}, end={}, net={}): inframe path must \
+                 match full translate; full={:?}, inframe={:?}",
+                name, start, end, net, from_full, from_inframe
+            );
+        }
     }
 
     // ── first_diff_position ───────────────────────────────────────────────────

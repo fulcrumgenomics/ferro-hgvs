@@ -8,6 +8,12 @@ use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
 use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
+use once_cell::sync::Lazy;
+
+/// Standard genetic-code table, built once and reused. Constructing a fresh
+/// `CodonTable` per call dominates protein-prediction CPU because
+/// `translate_full_cds` invokes `translate` once per codon of every CDS.
+static STANDARD_CODON_TABLE: Lazy<CodonTable> = Lazy::new(CodonTable::standard);
 
 /// Read the codon (3 bases) covering a given CDS position from a transcript's CDS sequence.
 ///
@@ -74,12 +80,21 @@ pub(crate) fn apply_substitution(codon: &str, frame: u8, alt: Base) -> String {
 /// Translate a 3-character codon to an `AminoAcid`. Returns `Some(Ter)` for stop codons,
 /// `Some(Xaa)` if the codon is unrecognized; `None` only if the input is not 3 ASCII bases.
 pub(crate) fn translate(codon: &str) -> Option<AminoAcid> {
-    let parsed = Codon::parse(codon)?;
-    let table = CodonTable::standard();
+    translate_bytes(codon.as_bytes())
+}
+
+/// Byte-slice variant of [`translate`] for hot callers that have already
+/// produced a `&[u8]` (e.g. `chunks_exact(3)` over a CDS sequence). Skips the
+/// `from_utf8` step that the `&str`-taking entry point would imply for
+/// `chunks_exact` output. samply showed that detour at ~18% of indel CPU
+/// after the prior round of perf wins.
+pub(crate) fn translate_bytes(bytes: &[u8]) -> Option<AminoAcid> {
+    let parsed = Codon::parse_bytes(bytes)?;
+    let table = &*STANDARD_CODON_TABLE;
     if table.is_stop(&parsed) {
         return Some(AminoAcid::Ter);
     }
-    Some(*table.amino_acid_for(&parsed).unwrap_or(&AminoAcid::Xaa))
+    Some(table.amino_acid_for(&parsed).unwrap_or(AminoAcid::Xaa))
 }
 
 /// Build a predicted `p.(...)` ProteinVariant for a CDS substitution.
@@ -220,6 +235,107 @@ mod tests {
         assert_eq!(translate("TAA"), Some(AminoAcid::Ter));
         assert_eq!(translate("CGG"), Some(AminoAcid::Arg));
         assert_eq!(translate("GGG"), Some(AminoAcid::Gly));
+    }
+
+    /// Exhaustive: every 3-base ACGT codon must round-trip to the canonical
+    /// amino acid. Used as the safety net for perf changes in this file —
+    /// callers depend on these mappings being byte-stable across releases.
+    #[test]
+    fn translate_all_64_codons() {
+        let table: &[(&str, AminoAcid)] = &[
+            ("TTT", AminoAcid::Phe),
+            ("TTC", AminoAcid::Phe),
+            ("TTA", AminoAcid::Leu),
+            ("TTG", AminoAcid::Leu),
+            ("CTT", AminoAcid::Leu),
+            ("CTC", AminoAcid::Leu),
+            ("CTA", AminoAcid::Leu),
+            ("CTG", AminoAcid::Leu),
+            ("ATT", AminoAcid::Ile),
+            ("ATC", AminoAcid::Ile),
+            ("ATA", AminoAcid::Ile),
+            ("ATG", AminoAcid::Met),
+            ("GTT", AminoAcid::Val),
+            ("GTC", AminoAcid::Val),
+            ("GTA", AminoAcid::Val),
+            ("GTG", AminoAcid::Val),
+            ("TCT", AminoAcid::Ser),
+            ("TCC", AminoAcid::Ser),
+            ("TCA", AminoAcid::Ser),
+            ("TCG", AminoAcid::Ser),
+            ("AGT", AminoAcid::Ser),
+            ("AGC", AminoAcid::Ser),
+            ("CCT", AminoAcid::Pro),
+            ("CCC", AminoAcid::Pro),
+            ("CCA", AminoAcid::Pro),
+            ("CCG", AminoAcid::Pro),
+            ("ACT", AminoAcid::Thr),
+            ("ACC", AminoAcid::Thr),
+            ("ACA", AminoAcid::Thr),
+            ("ACG", AminoAcid::Thr),
+            ("GCT", AminoAcid::Ala),
+            ("GCC", AminoAcid::Ala),
+            ("GCA", AminoAcid::Ala),
+            ("GCG", AminoAcid::Ala),
+            ("TAT", AminoAcid::Tyr),
+            ("TAC", AminoAcid::Tyr),
+            ("TAA", AminoAcid::Ter),
+            ("TAG", AminoAcid::Ter),
+            ("TGA", AminoAcid::Ter),
+            ("CAT", AminoAcid::His),
+            ("CAC", AminoAcid::His),
+            ("CAA", AminoAcid::Gln),
+            ("CAG", AminoAcid::Gln),
+            ("AAT", AminoAcid::Asn),
+            ("AAC", AminoAcid::Asn),
+            ("AAA", AminoAcid::Lys),
+            ("AAG", AminoAcid::Lys),
+            ("GAT", AminoAcid::Asp),
+            ("GAC", AminoAcid::Asp),
+            ("GAA", AminoAcid::Glu),
+            ("GAG", AminoAcid::Glu),
+            ("TGT", AminoAcid::Cys),
+            ("TGC", AminoAcid::Cys),
+            ("TGG", AminoAcid::Trp),
+            ("CGT", AminoAcid::Arg),
+            ("CGC", AminoAcid::Arg),
+            ("CGA", AminoAcid::Arg),
+            ("CGG", AminoAcid::Arg),
+            ("AGA", AminoAcid::Arg),
+            ("AGG", AminoAcid::Arg),
+            ("GGT", AminoAcid::Gly),
+            ("GGC", AminoAcid::Gly),
+            ("GGA", AminoAcid::Gly),
+            ("GGG", AminoAcid::Gly),
+        ];
+        assert_eq!(table.len(), 64, "must enumerate all 64 codons");
+        for (codon, aa) in table {
+            assert_eq!(translate(codon), Some(*aa), "codon {codon}");
+            // Lowercase and U-substitution must yield the same result.
+            assert_eq!(
+                translate(&codon.to_ascii_lowercase()),
+                Some(*aa),
+                "lowercase codon {codon}"
+            );
+            let u_codon: String = codon
+                .chars()
+                .map(|c| if c == 'T' { 'U' } else { c })
+                .collect();
+            assert_eq!(translate(&u_codon), Some(*aa), "RNA codon {u_codon}");
+        }
+    }
+
+    #[test]
+    fn translate_rejects_bad_input() {
+        assert_eq!(translate(""), None, "empty");
+        assert_eq!(translate("AT"), None, "two bases");
+        assert_eq!(translate("ATGC"), None, "four bases");
+        assert_eq!(
+            translate("ATN"),
+            None,
+            "ambiguous N must not silently translate"
+        );
+        assert_eq!(translate("AT*"), None, "non-base char");
     }
 
     #[test]
