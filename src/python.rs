@@ -733,6 +733,40 @@ impl PyVariantProjector {
             })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
     }
+
+    /// Project a transcript-coordinate variant (c./n./r.) onto its parent
+    /// genomic reference and return a `Genome`-kind HgvsVariant.
+    ///
+    /// The output `g.` variant carries the parent NG/NC `Accession` stored in
+    /// the input's `Accession.genomic_context` (e.g.
+    /// `NG_007485.1(NM_000077.4):c.161_162insATC` projects onto
+    /// `NG_007485.1:g.28294_28295insATC`). Idempotent on `Genome` input.
+    ///
+    /// Limitations:
+    ///   - `Allele` inputs are rejected pending #328.
+    ///   - Plus-strand `Base::U` in r. inputs is forwarded verbatim into the
+    ///     g. output; callers should pre-translate U→T.
+    ///   - Intronic offsets on non-coding transcripts are rejected pending
+    ///     #332.
+    ///
+    /// Args:
+    ///     variant: A c./n./r./g. HgvsVariant. Transcript-coord variants must
+    ///         have a `genomic_context` (NG/NC parent reference) on their
+    ///         `Accession`.
+    ///
+    /// Returns:
+    ///     The Genome-kind HgvsVariant for the requested projection.
+    ///
+    /// Raises:
+    ///     RuntimeError: If the input lacks a parent reference, carries an
+    ///         unknown (`?`) position, or is otherwise unsupported (`p.`/`m.`/
+    ///         `o.`/Allele/fusion/null/unknown-allele).
+    fn project_to_genomic(&self, variant: &PyHgvsVariant) -> PyResult<PyHgvsVariant> {
+        self.inner
+            .project_to_genomic(&variant.inner)
+            .map(|inner| PyHgvsVariant { inner })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
 }
 
 impl PyVariantProjector {

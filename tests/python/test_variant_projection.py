@@ -107,6 +107,43 @@ class TestVariantProjector:
         assert ":g." in rep or ":c." in rep
 
 
+class TestProjectToGenomic:
+    """Tests for ``VariantProjector.project_to_genomic`` (c./n./r. → g.).
+
+    Inverse of ``project``: takes a transcript-coordinate variant with an
+    NG/NC parent in its ``Accession.genomic_context`` and returns a Genome-kind
+    HgvsVariant on that parent.
+    """
+
+    def test_plus_strand_c_to_g_substitution(self, projector: ferro_hgvs.VariantProjector) -> None:
+        # NG_TEST.1(NM_TEST.1):c.4C>A — NG_TEST.1 is the parent NG accession
+        # carried in the input's genomic_context. NM_TEST.1's c.4 maps to
+        # genome 1003 on the plus strand.
+        v = ferro_hgvs.parse("NG_TEST.1(NM_TEST.1):c.4C>A")
+        g = projector.project_to_genomic(v)
+        s = str(g)
+        assert s.startswith("NG_TEST.1")
+        assert ":g.1003C>A" in s
+
+    def test_idempotent_on_genome_input(self, projector: ferro_hgvs.VariantProjector) -> None:
+        # Genome input must pass through unchanged.
+        v = ferro_hgvs.parse("NC_000001.11:g.1003C>A")
+        g = projector.project_to_genomic(v)
+        assert str(g) == str(v)
+
+    def test_missing_parent_raises(self, projector: ferro_hgvs.VariantProjector) -> None:
+        # NM_TEST.1:c.4C>A has no genomic_context (no NG/NC parent in the
+        # parsed input) → must raise rather than silently fabricate one.
+        v = ferro_hgvs.parse("NM_TEST.1:c.4C>A")
+        with pytest.raises(RuntimeError, match="parent reference"):
+            projector.project_to_genomic(v)
+
+    def test_protein_input_raises(self, projector: ferro_hgvs.VariantProjector) -> None:
+        v = ferro_hgvs.parse("NP_TEST.1:p.Arg2Cys")
+        with pytest.raises(RuntimeError):
+            projector.project_to_genomic(v)
+
+
 @pytest.fixture
 def long_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
     """Build a VariantProjector backed by a longer transcript for indel p. tests.

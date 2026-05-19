@@ -238,14 +238,37 @@ impl CoordinateMapper {
             ..Default::default()
         };
 
+        // Resolve the transcript-coordinate base position, honoring the `utr3`
+        // flag on the input. cdot's `cds_to_tx` only accepts an integer and
+        // treats every `cds_pos > 0` as a CDS-interior position, which silently
+        // maps `c.*N` to `c.N`. For 3'UTR positions we instead compute the tx
+        // coord directly from cds_end (cdot's cds_end is 0-based exclusive, so
+        // `c.*1` lives at `cds_end`).
+        let cds_to_tx_aware = |base: i64| -> Result<u64, FerroError> {
+            if cds_pos.utr3 {
+                let cds_end = tx.cds_end.ok_or_else(|| FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript {transcript_id} has no cds_end; cannot resolve c.*{base}"
+                    ),
+                })?;
+                if base < 1 {
+                    return Err(FerroError::InvalidCoordinates {
+                        msg: format!("Invalid 3' UTR position c.*{base}: must be >= 1"),
+                    });
+                }
+                Ok(cds_end + (base as u64) - 1)
+            } else {
+                tx.cds_to_tx(base)
+                    .ok_or_else(|| FerroError::InvalidCoordinates {
+                        msg: format!("Invalid CDS position: {base}"),
+                    })
+            }
+        };
+
         // Handle intronic positions
         if let Some(offset) = cds_pos.offset {
             // First convert the base position to genomic
-            let tx_pos =
-                tx.cds_to_tx(cds_pos.base)
-                    .ok_or_else(|| FerroError::InvalidCoordinates {
-                        msg: format!("Invalid CDS position: {}", cds_pos.base),
-                    })?;
+            let tx_pos = cds_to_tx_aware(cds_pos.base)?;
 
             // Find the exon containing this position
             let exon = tx.exon_for_tx_pos(tx_pos);
@@ -292,11 +315,7 @@ impl CoordinateMapper {
         }
 
         // Non-intronic position
-        let tx_pos = tx
-            .cds_to_tx(cds_pos.base)
-            .ok_or_else(|| FerroError::InvalidCoordinates {
-                msg: format!("Invalid CDS position: {}", cds_pos.base),
-            })?;
+        let tx_pos = cds_to_tx_aware(cds_pos.base)?;
 
         let genome_pos = tx
             .tx_to_genome(tx_pos)
