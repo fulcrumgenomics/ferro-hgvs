@@ -2161,13 +2161,13 @@ pub enum PyErrorType {
     AlleleFractionAnnotation = 28,
     ClinVarProseMultiAllelic = 29,
     // 30 is W3020 RnaThymineCanonicalized (in main). 31 is W3021
-    // ProteinBracketedAaInsertion (in main). 32 is reserved for #342
-    // (W4004 PositionPastEnd in flight). This PR claims 33 for W5003
-    // VariantExceedsReference. 34 is W3019 NonSpecMosaicForm (in main).
-    // The W-code is the canonical identity; the integer is only a
-    // Python-side ABI tag.
+    // ProteinBracketedAaInsertion (in main). 32 is W4004 PositionPastEnd.
+    // 33 is W5003 VariantExceedsReference. 34 is W3019 NonSpecMosaicForm
+    // (in main). The W-code is the canonical identity; the integer is
+    // only a Python-side ABI tag.
     RnaThymineCanonicalized = 30,
     ProteinBracketedAaInsertion = 31,
+    PositionPastEnd = 32,
     VariantExceedsReference = 33,
     NonSpecMosaicForm = 34,
 }
@@ -2208,6 +2208,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::ProteinBracketedAaInsertion => PyErrorType::ProteinBracketedAaInsertion,
             ErrorType::NonSpecMosaicForm => PyErrorType::NonSpecMosaicForm,
             ErrorType::VariantExceedsReference => PyErrorType::VariantExceedsReference,
+            ErrorType::PositionPastEnd => PyErrorType::PositionPastEnd,
         }
     }
 }
@@ -2248,6 +2249,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::ProteinBracketedAaInsertion => ErrorType::ProteinBracketedAaInsertion,
             PyErrorType::NonSpecMosaicForm => ErrorType::NonSpecMosaicForm,
             PyErrorType::VariantExceedsReference => ErrorType::VariantExceedsReference,
+            PyErrorType::PositionPastEnd => ErrorType::PositionPastEnd,
         }
     }
 }

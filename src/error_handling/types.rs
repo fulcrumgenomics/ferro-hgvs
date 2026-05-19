@@ -295,6 +295,16 @@ pub enum ErrorType {
     /// input; silent mode preserves the input without warning.
     /// Closes-after: #355.
     VariantExceedsReference,
+
+    /// A `c.` or `n.` position lies past the transcript's CDS-end /
+    /// transcript-end (closes #336).
+    ///
+    /// Examples: `c.946G>C` on a transcript whose CDS is only 945 bases;
+    /// `c.*9G>C` on a transcript whose 3'UTR is only 8 bases. Strict mode
+    /// rejects; lenient emits W4004 and lets normalization proceed (which
+    /// may then shift the position even further past the end). Silent
+    /// skips the check entirely.
+    PositionPastEnd,
 }
 
 impl ErrorType {
@@ -332,6 +342,7 @@ impl ErrorType {
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::SinglePositionRange => "W4003",
+            ErrorType::PositionPastEnd => "W4004",
             ErrorType::RefSeqMismatch => "W5001",
             ErrorType::VariantExceedsReference => "W5003",
         }
@@ -377,6 +388,7 @@ impl ErrorType {
         ErrorType::ProteinBracketedAaInsertion,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
+        ErrorType::PositionPastEnd,
         ErrorType::RefSeqMismatch,
         ErrorType::VariantExceedsReference,
     ];
@@ -451,6 +463,7 @@ impl ErrorType {
             ErrorType::VariantExceedsReference => {
                 "variant position range exceeds reference sequence"
             }
+            ErrorType::PositionPastEnd => "position lies past CDS-end or transcript-end",
         }
     }
 
@@ -515,6 +528,9 @@ impl ErrorType {
             // variant references positions past the provider's window
             // and we cannot conjure missing bases.
             ErrorType::VariantExceedsReference => false,
+            // Past-end positions cannot be auto-corrected — there's no safe
+            // way to guess the intended canonical position.
+            ErrorType::PositionPastEnd => false,
         }
     }
 
@@ -578,6 +594,7 @@ impl ErrorType {
                 "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
             ),
+            ErrorType::PositionPastEnd => ("c.946G>C (CDS length 945)", "(no auto-correct)"),
         }
     }
 }
@@ -798,7 +815,9 @@ mod tests {
         assert_eq!(ErrorType::RnaThymineCanonicalized.code(), "W3020");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
+        assert_eq!(ErrorType::PositionPastEnd.code(), "W4004");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");
+        assert_eq!(ErrorType::VariantExceedsReference.code(), "W5003");
     }
 
     #[test]
@@ -810,6 +829,11 @@ mod tests {
         // Non-spec mosaic / chimeric forms have no canonical
         // alternative and cannot be auto-corrected.
         assert!(!ErrorType::NonSpecMosaicForm.is_correctable());
+        // Past-end positions could mean a different position or a different
+        // reference — no safe auto-correction.
+        assert!(!ErrorType::PositionPastEnd.is_correctable());
+        // Variants exceeding the reference bounds have no safe correction.
+        assert!(!ErrorType::VariantExceedsReference.is_correctable());
     }
 
     // ErrorOverride tests
@@ -968,6 +992,7 @@ mod tests {
             ErrorType::ProteinBracketedAaInsertion,
             ErrorType::SwappedPositions,
             ErrorType::SinglePositionRange,
+            ErrorType::PositionPastEnd,
             ErrorType::RefSeqMismatch,
             ErrorType::VariantExceedsReference,
         ];
@@ -1008,6 +1033,7 @@ mod tests {
                 | ErrorType::ProteinBracketedAaInsertion
                 | ErrorType::SwappedPositions
                 | ErrorType::SinglePositionRange
+                | ErrorType::PositionPastEnd
                 | ErrorType::RefSeqMismatch
                 | ErrorType::VariantExceedsReference => {}
             }
