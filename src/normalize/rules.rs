@@ -174,6 +174,17 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// ref_end_1based, unit_bytes))` when repeat notation applies, `None`
 /// otherwise. `first_byte` is preserved for backwards-compat with the
 /// homopolymer caller; `unit_bytes` is the full tandem unit.
+///
+/// # Direction-awareness (audit per #357)
+///
+/// Unlike `insertion_to_duplication` (which picks an explicit
+/// direction-aligned slot), `insertion_to_repeat` returns the canonical
+/// `unit[N+k]` window spanning the full reference tract, anchored at
+/// `ref_start`. The returned window covers the entire tract regardless
+/// of where shuffle would have placed the original insertion, so the
+/// output is invariant under `ShuffleDirection`. A direction-parameter
+/// audit was performed in #357 and locked in by
+/// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`.
 pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
@@ -234,11 +245,15 @@ pub(crate) struct InsToDupResult {
     /// differ from the `inserted_seq` argument when the alt was spelled
     /// as a non-zero cyclic rotation of the reference unit (issue #132).
     pub unit: Vec<u8>,
-    /// 1-based HGVS start of the most-3' unit-aligned duplication position
-    /// inside the rotation-aligned reference tract (inclusive).
+    /// 1-based HGVS start of the direction-aligned unit-aligned duplication
+    /// position inside the rotation-aligned reference tract (inclusive).
+    /// Resolves to the most-3' slot when the caller passed
+    /// `ShuffleDirection::ThreePrime`, the most-5' slot under `FivePrime`
+    /// (closes #340 subgroup (i)).
     pub start: u64,
-    /// 1-based HGVS end of the most-3' unit-aligned duplication position
-    /// inside the rotation-aligned reference tract (inclusive).
+    /// 1-based HGVS end of the direction-aligned unit-aligned duplication
+    /// position inside the rotation-aligned reference tract (inclusive).
+    /// Always equals `start + unit.len() - 1`.
     pub end: u64,
     /// Number of full reference copies of `unit` in the chosen tract. The
     /// caller uses this to decide whether the tract-aligned dup position
@@ -272,9 +287,17 @@ pub(crate) struct InsToDupResult {
 ///    the insertion point.
 /// 3. Pick the rotation yielding the largest tandem run (ties broken by
 ///    iteration order — same convention as `insertion_to_repeat`).
-/// 4. Return the most-3' unit-aligned duplication slot inside that tract:
-///    `dup_start_idx = tract.end - unit.len()`, `dup_end_idx = tract.end - 1`,
-///    converted to 1-based HGVS positions.
+/// 4. Return the unit-aligned duplication slot inside that tract whose
+///    position matches the requested shuffle direction:
+///    - `ThreePrime`: `dup_start_idx = tract.end - unit.len()` — the
+///      most-3' unit (current default; pre-#340 behavior).
+///    - `FivePrime`: `dup_start_idx = ref_start` — the most-5' unit, so
+///      a homopolymer insertion under 5'-direction shuffle reports the
+///      leftmost-canonical dup rather than the 3'-most one (closes #340
+///      subgroup (i)).
+///
+///    Both end at `dup_start_idx + unit.len() - 1`, converted to 1-based
+///    HGVS positions.
 ///
 /// Returns `None` when no rotation matches an adjacent tract (true
 /// non-tandem insertion — caller leaves it as plain `ins`).
@@ -282,7 +305,10 @@ pub(crate) fn insertion_to_duplication(
     ref_seq: &[u8],
     pos: u64,
     inserted_seq: &[u8],
+    direction: crate::normalize::config::ShuffleDirection,
 ) -> Option<InsToDupResult> {
+    use crate::normalize::config::ShuffleDirection;
+
     if inserted_seq.is_empty() {
         return None;
     }
@@ -309,8 +335,15 @@ pub(crate) fn insertion_to_duplication(
 
     let (unit, ref_start, ref_count) = best?;
     let tract_end_idx = ref_start + (ref_count as usize) * unit.len();
-    let dup_start_idx = tract_end_idx - unit.len();
-    let dup_end_idx = tract_end_idx - 1;
+    // `find_tandem_extent` returns `ref_start` aligned on a `unit`-length
+    // anchor probe, so picking `ref_start` for the 5' end never lands the
+    // dup slot mid-unit even when the inserted alt was a non-zero
+    // rotation of the canonical reference unit.
+    let dup_start_idx = match direction {
+        ShuffleDirection::ThreePrime => tract_end_idx - unit.len(),
+        ShuffleDirection::FivePrime => ref_start,
+    };
+    let dup_end_idx = dup_start_idx + unit.len() - 1;
     Some(InsToDupResult {
         unit,
         start: index_to_hgvs_pos(dup_start_idx),
@@ -1513,6 +1546,7 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normalize::config::ShuffleDirection;
 
     #[test]
     fn test_needs_normalization() {
@@ -2977,15 +3011,64 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_insertion_to_duplication_homopolymer_matched() {
+    fn test_insertion_to_duplication_homopolymer_matched_3prime() {
         // ref "TTAAATT": insert A at pos 3 (between idx 3 and idx 4 = inside
         // the A-tract). unit "A", only one rotation. tract [2..5), ref_count=3.
         // Most-3' A dup → dup_start_idx = tract_end-1 = 4 → HGVS [5..5].
         let ref_seq = b"TTAAATT";
-        let r = insertion_to_duplication(ref_seq, 3, b"A").expect("should fire");
+        let r = insertion_to_duplication(ref_seq, 3, b"A", ShuffleDirection::ThreePrime)
+            .expect("should fire");
         assert_eq!(r.unit, b"A");
         assert_eq!(r.start, 5);
         assert_eq!(r.end, 5);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_homopolymer_matched_5prime() {
+        // Same ref/tract as the 3prime case, but direction=5prime picks
+        // the most-5' dup position. tract at idx [2..5), ref_count=3:
+        // dup_start_idx = ref_start = 2 → HGVS [3..3]. Closes #340 (i).
+        let ref_seq = b"TTAAATT";
+        let r = insertion_to_duplication(ref_seq, 3, b"A", ShuffleDirection::FivePrime)
+            .expect("should fire");
+        assert_eq!(r.unit, b"A");
+        assert_eq!(r.start, 3);
+        assert_eq!(r.end, 3);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_dinucleotide_5prime() {
+        // Same ref / alt as the cyclic_rotation_two_base test but under
+        // FivePrime: the GT tract spans idx [2..8), ref_count=3. The
+        // 5'-most unit-aligned slot starts at ref_start=2, end=3 →
+        // HGVS [3..4]. Locks in unit alignment of `ref_start` under
+        // rotation — a regression that picked mid-unit would land at
+        // an odd HGVS pair like [3..3] or [4..5].
+        let ref_seq = b"ACGTGTGTAC";
+        let r = insertion_to_duplication(ref_seq, 2, b"TG", ShuffleDirection::FivePrime)
+            .expect("should fire");
+        assert_eq!(r.unit, b"GT");
+        assert_eq!(r.start, 3);
+        assert_eq!(r.end, 4);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_single_copy_tract_is_direction_invariant() {
+        // ref_count == 1 (a single unit, no tandem run). Under either
+        // direction the 5'-most and 3'-most slots coincide
+        // (`ref_start == tract_end_idx - unit.len()`), so the helper
+        // must return the same answer regardless of `ShuffleDirection`.
+        // Locks in the intentional no-op of the new arm for length-1
+        // tracts (Sonnet review feedback).
+        let ref_seq = b"TTGCATT";
+        let three = insertion_to_duplication(ref_seq, 2, b"G", ShuffleDirection::ThreePrime)
+            .expect("should fire");
+        let five = insertion_to_duplication(ref_seq, 2, b"G", ShuffleDirection::FivePrime)
+            .expect("should fire");
+        assert_eq!(three.ref_count, 1);
+        assert_eq!(five.ref_count, 1);
+        assert_eq!(three.start, five.start);
+        assert_eq!(three.end, five.end);
     }
 
     #[test]
@@ -3006,7 +3089,8 @@ mod tests {
         // padded-sequence behavior in `MockProvider`-driven integration
         // tests (the issue #132 reproducer at `g.258_259insTG`).
         let ref_seq = b"ACGTGTGTAC";
-        let r = insertion_to_duplication(ref_seq, 2, b"TG").expect("should fire");
+        let r = insertion_to_duplication(ref_seq, 2, b"TG", ShuffleDirection::ThreePrime)
+            .expect("should fire");
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 7);
         assert_eq!(r.end, 8);
@@ -3016,14 +3100,16 @@ mod tests {
     fn test_insertion_to_duplication_no_adjacent_tract() {
         // ref "ACGTACGT": no tandem of "X"; insert "X" at any pos returns None.
         let ref_seq = b"ACGTACGT";
-        assert!(insertion_to_duplication(ref_seq, 3, b"X").is_none());
+        assert!(
+            insertion_to_duplication(ref_seq, 3, b"X", ShuffleDirection::ThreePrime,).is_none()
+        );
     }
 
     #[test]
     fn test_insertion_to_duplication_empty_or_oob() {
         let ref_seq = b"TTAAATT";
-        assert!(insertion_to_duplication(ref_seq, 3, b"").is_none());
-        assert!(insertion_to_duplication(b"", 0, b"A").is_none());
+        assert!(insertion_to_duplication(ref_seq, 3, b"", ShuffleDirection::ThreePrime,).is_none());
+        assert!(insertion_to_duplication(b"", 0, b"A", ShuffleDirection::ThreePrime,).is_none());
     }
 
     #[test]
@@ -3031,7 +3117,9 @@ mod tests {
         // alt is 2 copies of unit A → not a 1-copy ins; helper returns None
         // (caller routes 2+ copies to insertion_to_repeat instead).
         let ref_seq = b"TTAAATT";
-        assert!(insertion_to_duplication(ref_seq, 3, b"AA").is_none());
+        assert!(
+            insertion_to_duplication(ref_seq, 3, b"AA", ShuffleDirection::ThreePrime,).is_none()
+        );
     }
 
     #[test]
@@ -3041,7 +3129,8 @@ mod tests {
         // as `test_insertion_to_duplication_cyclic_rotation_two_base`,
         // but alt "GT" is r=0 (matched). Result is identical.
         let ref_seq = b"ACGTGTGTAC";
-        let r = insertion_to_duplication(ref_seq, 2, b"GT").expect("should fire");
+        let r = insertion_to_duplication(ref_seq, 2, b"GT", ShuffleDirection::ThreePrime)
+            .expect("should fire");
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 7);
         assert_eq!(r.end, 8);
