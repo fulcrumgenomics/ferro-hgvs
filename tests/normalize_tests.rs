@@ -4923,3 +4923,315 @@ mod ng_prefix_normalization {
         assert_eq!(by_variant.chromosome, by_id.chromosome);
     }
 }
+
+// =============================================================================
+// Issue #333: ins[...] canonicalization to flat literal sequence
+// =============================================================================
+//
+// Per HGVS DNA/insertion spec, bracketed and reference-range forms of `ins`
+// are permitted but the spec encourages the most concise flat literal form
+// once the inserted bases are known. mutalyzer canonicalizes both. ferro
+// now matches: single-literal-in-brackets, multi-literal concat, and
+// reference-range (with optional `inv`) all rewrite to a flat literal
+// `InsertedSequence::Literal(Sequence)` so Display naturally renders the
+// flat form.
+//
+// Cross-reference (`ins[ACC:coord_a_b]`) and intronic-offset (`ins[244-8_249]`)
+// shapes are explicitly deferred and surface as
+// `FerroError::UnsupportedVariant` so callers can grep for follow-up.
+mod ins_bracketed_expansion {
+    use ferro_hgvs::error::FerroError;
+    use ferro_hgvs::reference::mock::MockProvider;
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+    use ferro_hgvs::{parse_hgvs, Normalizer};
+
+    /// Build a `MockProvider` whose contig `contig` has `bases` placed at
+    /// 1-based positions starting at `start_1based`. Padded with `A`s out to
+    /// a length that comfortably covers both the variant footprint and the
+    /// normalizer's shuffle window.
+    fn provider_with_genomic(contig: &str, start_1based: usize, bases: &str) -> MockProvider {
+        let total = (start_1based + bases.len() + 200).max(8000);
+        let mut seq = vec![b'A'; total];
+        for (i, b) in bases.bytes().enumerate() {
+            seq[start_1based - 1 + i] = b;
+        }
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence(contig, String::from_utf8(seq).unwrap());
+        provider
+    }
+
+    /// Build a coding transcript whose CDS starts at tx position 1 (so c.X
+    /// == tx.X) and whose sequence carries `bases` placed at 1-based CDS
+    /// position `start_1based`. Lets us pin CDS-coord reference-range
+    /// lookups against deterministic bytes.
+    fn provider_with_cds_transcript(id: &str, start_1based: usize, bases: &str) -> MockProvider {
+        let total = (start_1based + bases.len() + 200).max(500);
+        let mut seq = vec![b'A'; total];
+        for (i, b) in bases.bytes().enumerate() {
+            seq[start_1based - 1 + i] = b;
+        }
+        let transcript = Transcript::new(
+            id.to_string(),
+            Some("INS_EXPAND".to_string()),
+            Strand::Plus,
+            String::from_utf8(seq).unwrap(),
+            Some(1),
+            Some(total as u64),
+            vec![Exon::new(1, 1, total as u64)],
+            None,
+            None,
+            None,
+            Default::default(),
+            ManeStatus::None,
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(transcript);
+        provider
+    }
+
+    fn normalize_ok(provider: MockProvider, input: &str) -> String {
+        let normalizer = Normalizer::new(provider);
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
+        let normalized = normalizer
+            .normalize(&variant)
+            .unwrap_or_else(|e| panic!("normalize failed for {}: {}", input, e));
+        format!("{}", normalized)
+    }
+
+    fn normalize_err(provider: MockProvider, input: &str) -> FerroError {
+        let normalizer = Normalizer::new(provider);
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
+        normalizer
+            .normalize(&variant)
+            .err()
+            .unwrap_or_else(|| panic!("normalize unexpectedly succeeded for {}", input))
+    }
+
+    // -------------------------------------------------------------------
+    // 1. Single literal in brackets — `ins[ATC]` → `insATC` (genomic).
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_bracketed_single_literal_g() {
+        // No reference data needed; the canonicalization is pure syntax
+        // for the Complex([Literal]) shape. Provider is empty by design.
+        let result = normalize_ok(MockProvider::new(), "NC_000001.11:g.100_101ins[ATC]");
+        assert_eq!(result, "NC_000001.11:g.100_101insATC");
+    }
+
+    // -------------------------------------------------------------------
+    // 2. Single literal in brackets — `c.X_Yins[ATC]` → `c.X_YinsATC`.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_bracketed_single_literal_c() {
+        // Use a transcript long enough to back the c.5_6 insertion site.
+        let provider = provider_with_cds_transcript("NM_111111.1", 1, "ATGCCCAAGGTGCTG");
+        let result = normalize_ok(provider, "NM_111111.1:c.5_6ins[ATC]");
+        assert_eq!(result, "NM_111111.1:c.5_6insATC");
+    }
+
+    // -------------------------------------------------------------------
+    // 3. Multi-literal concat — `ins[GTCC;ATTA]` → `insGTCCATTA`.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_bracketed_multi_literal_concat_g() {
+        let result = normalize_ok(
+            MockProvider::new(),
+            "NC_000001.11:g.5207_5208ins[GTCC;ATTA]",
+        );
+        assert_eq!(result, "NC_000001.11:g.5207_5208insGTCCATTA");
+    }
+
+    // -------------------------------------------------------------------
+    // 4. Reference position-range — `g.X_Yins[4300_4320]` → flat literal
+    //    of those 21 bases. Pin exact bytes so a regression in the
+    //    coordinate convention surfaces immediately.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_position_range_g() {
+        // 21 bases placed at genomic positions 4300..=4320.
+        let bases = "GTCCTGTGCTCATTATCTGGC";
+        let provider = provider_with_genomic("NC_000001.11", 4300, bases);
+        let result = normalize_ok(provider, "NC_000001.11:g.5207_5208ins[4300_4320]");
+        assert_eq!(result, format!("NC_000001.11:g.5207_5208ins{}", bases));
+    }
+
+    // -------------------------------------------------------------------
+    // 5. Reference position-range with `inv` — bases get reverse-
+    //    complemented before concat.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_position_range_inv_g() {
+        let bases = "GTCCTGTGCTCATTATCTGGC";
+        let expected_inv = "GCCAGATAATGAGCACAGGAC"; // revcomp of bases
+        let provider = provider_with_genomic("NC_000001.11", 4300, bases);
+        let result = normalize_ok(provider, "NC_000001.11:g.5207_5208ins[4300_4320inv]");
+        assert_eq!(
+            result,
+            format!("NC_000001.11:g.5207_5208ins{}", expected_inv)
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 6. CDS-coord reference range — `c.X_Yins[A_B]` interprets A/B as
+    //    CDS coordinates. The example mirrors the HGVS spec sample
+    //    `NM_004006.2:c.849_850ins858_895`.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_position_range_c() {
+        // CDS starts at tx position 1, so c.X == tx.X. Place 11 known
+        // bases at CDS positions 100..=110.
+        let bases = "ACGTACGTACG";
+        let provider = provider_with_cds_transcript("NM_222222.1", 100, bases);
+        let result = normalize_ok(provider, "NM_222222.1:c.5_6ins[100_110]");
+        assert_eq!(result, format!("NM_222222.1:c.5_6ins{}", bases));
+    }
+
+    // -------------------------------------------------------------------
+    // 7. Mixed literal + reference range — concatenate both halves.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_mixed_literal_and_range_g() {
+        // Place 11 bases at positions 100..=110.
+        let bases = "TTTGGGAAACC";
+        let provider = provider_with_genomic("NC_000001.11", 100, bases);
+        let result = normalize_ok(provider, "NC_000001.11:g.5207_5208ins[A;100_110]");
+        assert_eq!(result, format!("NC_000001.11:g.5207_5208insA{}", bases));
+    }
+
+    // -------------------------------------------------------------------
+    // 8. Provider lookup failure must surface as an error, not silently
+    //    preserve the bracketed form. Empty MockProvider has no genomic
+    //    data for `NC_000001.11`, so the range lookup fails.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_provider_lookup_failure_errors() {
+        let err = normalize_err(MockProvider::new(), "NC_000001.11:g.5207_5208ins[100_120]");
+        // Don't pin the exact variant — just that it's not a silent
+        // passthrough. Display must report enough context to debug.
+        let msg = format!("{}", err);
+        assert!(
+            !msg.is_empty(),
+            "expected provider lookup error to carry a message, got: {:?}",
+            err
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 9. Flat literal input is idempotent — no warning, no rewrite.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_flat_literal_is_idempotent() {
+        let input = "NC_000001.11:g.5207_5208insATC";
+        let result = normalize_ok(MockProvider::new(), input);
+        assert_eq!(result, input);
+    }
+
+    // -------------------------------------------------------------------
+    // 10. The same canonicalization applies to a `delins` payload.
+    // -------------------------------------------------------------------
+    #[test]
+    fn delins_bracketed_payload_expands() {
+        let bases = "TTTGGGAAACC";
+        let provider = provider_with_genomic("NC_000001.11", 100, bases);
+        let result = normalize_ok(provider, "NC_000001.11:g.5207_5208delins[ACG;100_110]");
+        assert_eq!(
+            result,
+            format!("NC_000001.11:g.5207_5208delinsACG{}", bases)
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 11. The same canonicalization applies to a `dupins` payload.
+    // -------------------------------------------------------------------
+    #[test]
+    fn dupins_bracketed_payload_expands() {
+        let result = normalize_ok(MockProvider::new(), "NC_000001.11:g.5207_5208dupins[ATC]");
+        assert_eq!(result, "NC_000001.11:g.5207_5208dupinsATC");
+    }
+
+    // -------------------------------------------------------------------
+    // 12. Cross-reference accession in the payload is deferred — error
+    //    with a grep-friendly message mentioning "cross-reference" and
+    //    "follow-up" so users can find the tracking issue.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_cross_reference_returns_unsupported_error() {
+        let err = normalize_err(
+            MockProvider::new(),
+            "NC_000001.11:g.5207_5208ins[NC_000022.11:g.100_200]",
+        );
+        let msg = format!("{}", err);
+        assert!(
+            matches!(err, FerroError::UnsupportedVariant { .. }),
+            "expected UnsupportedVariant, got {:?}",
+            err
+        );
+        assert!(
+            msg.contains("cross-reference"),
+            "error message must mention 'cross-reference' for grep, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("follow-up"),
+            "error message must mention 'follow-up' for grep, got: {}",
+            msg
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 13. Intronic-offset position range in the payload (e.g. `244-8_249`)
+    //    is deferred — error with a grep-friendly message.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_intronic_offset_range_returns_unsupported_error() {
+        let provider = provider_with_cds_transcript("NM_333333.1", 1, "ATGCCCAAGGTGCTG");
+        let err = normalize_err(provider, "NM_333333.1:c.5_6ins[N[2800];244-8_249]");
+        let msg = format!("{}", err);
+        assert!(
+            matches!(err, FerroError::UnsupportedVariant { .. }),
+            "expected UnsupportedVariant, got {:?}",
+            err
+        );
+        assert!(
+            msg.contains("intronic"),
+            "error message must mention 'intronic' for grep, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("follow-up"),
+            "error message must mention 'follow-up' for grep, got: {}",
+            msg
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 14. Allele-compound regression guard: a bracketed-ins member inside
+    //    an Allele wrapper must canonicalize exactly once, not twice.
+    //    Pinning the literal output catches a double-rewrite that would
+    //    e.g. flatten `[insATC]` into `insATC` and then erroneously expand
+    //    again, doubling the literal.
+    // -------------------------------------------------------------------
+    #[test]
+    fn ins_canonicalization_fires_inside_allele_once() {
+        // Cis allele with one bracketed ins member. The Allele path
+        // normalizes each member individually, so the expansion must
+        // fire on the inner Insertion edit. The resulting compound
+        // Display falls back to the unwrapped singleton (one member,
+        // cis phase, originally len == 1 → re-wrapped, but Display
+        // strips the wrapper for singletons per existing convention).
+        let result = normalize_ok(MockProvider::new(), "NC_000001.11:g.[100_101ins[ATC]]");
+        assert_eq!(
+            result, "NC_000001.11:g.100_101insATC",
+            "single-member Allele with bracketed ins must expand exactly once"
+        );
+
+        // Re-normalizing the result must be a no-op — guards against a
+        // double-rewrite that would re-process the now-flat literal.
+        let again = normalize_ok(MockProvider::new(), &result);
+        assert_eq!(again, result, "expansion must be idempotent");
+    }
+}
