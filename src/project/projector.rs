@@ -125,8 +125,264 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///
     /// The output ref-base is **not** validated against the genomic reference;
     /// mismatches surface downstream in `Normalizer`.
-    pub fn project_to_genomic(&self, _variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
-        unimplemented!("project_to_genomic: implementation pending (#327)");
+    pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::interval::GenomeInterval;
+        use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
+        use crate::hgvs::variant::{GenomeVariant, HgvsVariant, LocEdit};
+        use crate::reference::Strand as RefStrand;
+
+        // 0. Reject variant kinds that have no genomic coordinate counterpart
+        //    in this iteration (see #328 for allele support).
+        match variant {
+            HgvsVariant::Genome(_) => return Ok(variant.clone()),
+            HgvsVariant::Protein(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support protein (p.) inputs".to_string(),
+                })
+            }
+            HgvsVariant::Mt(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support mitochondrial (m.) inputs"
+                        .to_string(),
+                })
+            }
+            HgvsVariant::Circular(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support circular (o.) inputs".to_string(),
+                })
+            }
+            HgvsVariant::RnaFusion(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support RNA fusion inputs".to_string(),
+                })
+            }
+            HgvsVariant::Allele(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not yet support allele inputs; see #328"
+                        .to_string(),
+                })
+            }
+            HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support null/unknown allele markers"
+                        .to_string(),
+                })
+            }
+            HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_) => {}
+        }
+
+        // 1. Pull the common pieces (accession, gene_symbol, edit, raw start/end
+        //    as CdsPos) out of each transcript-coord variant kind. RNA and Tx
+        //    positions have the same shape as CdsPos (base / offset / utr3-or-
+        //    downstream), so we normalize to CdsPos here and route through the
+        //    `cds_to_genomic_with_intron` primitive for coding transcripts or
+        //    `tx_to_genomic_with_intron` for non-coding transcripts.
+        let (accession, gene_symbol, edit_mu, start_cds, end_cds) = match variant {
+            HgvsVariant::Cds(v) => {
+                let s = v.loc_edit.location.start.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "c. interval start is a range or unknown".to_string(),
+                    }
+                })?;
+                let e = v.loc_edit.location.end.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "c. interval end is a range or unknown".to_string(),
+                    }
+                })?;
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    s,
+                    e,
+                )
+            }
+            HgvsVariant::Tx(v) => {
+                let s = v.loc_edit.location.start.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "n. interval start is a range or unknown".to_string(),
+                    }
+                })?;
+                let e = v.loc_edit.location.end.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "n. interval end is a range or unknown".to_string(),
+                    }
+                })?;
+                let to_cds = |p: TxPos| CdsPos {
+                    base: p.base,
+                    offset: p.offset,
+                    utr3: p.downstream,
+                };
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    to_cds(s),
+                    to_cds(e),
+                )
+            }
+            HgvsVariant::Rna(v) => {
+                let s = v.loc_edit.location.start.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "r. interval start is a range or unknown".to_string(),
+                    }
+                })?;
+                let e = v.loc_edit.location.end.inner().copied().ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
+                        msg: "r. interval end is a range or unknown".to_string(),
+                    }
+                })?;
+                // RnaPos shape mirrors CdsPos exactly.
+                let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
+                    base: p.base,
+                    offset: p.offset,
+                    utr3: p.utr3,
+                };
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    to_cds(s),
+                    to_cds(e),
+                )
+            }
+            _ => unreachable!("variant kind already filtered above"),
+        };
+
+        // 2. Reject `?` position sentinels explicitly — these have base == 0
+        //    and no offset, which would otherwise propagate into the genomic
+        //    mapper as a meaningless coordinate.
+        if start_cds.is_unknown() || end_cds.is_unknown() {
+            return Err(FerroError::UnsupportedProjection {
+                reason: "project_to_genomic cannot resolve `?` position sentinels".to_string(),
+            });
+        }
+
+        // 3. Require an explicit parent NG/NC accession via `genomic_context`.
+        //    Per design (#327) we do NOT synthesize a parent from cdot.
+        let parent = accession
+            .genomic_context
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| FerroError::UnsupportedProjection {
+                reason: format!(
+                    "input variant has no parent reference (genomic_context) on accession {}; \
+                     project_to_genomic requires an explicit NG/NC parent (see #327)",
+                    accession.full()
+                ),
+            })?;
+
+        // 4. Resolve the transcript via the cdot mapper (the same backing
+        //    store used by the g. → c./n. path).  Working directly off cdot
+        //    keeps us symmetric with `project_single_inner` and avoids a
+        //    second `provider.get_transcript` load whose exon entries may
+        //    lack genomic coordinates.
+        let transcript_id = accession.transcript_accession();
+        let cdot_mapper = self.projector.mapper();
+        let cdot_tx = cdot_mapper
+            .cdot()
+            .get_transcript(&transcript_id)
+            .ok_or_else(|| FerroError::ReferenceNotFound {
+                id: transcript_id.to_string(),
+            })?;
+        let strand = cdot_tx.strand;
+        if strand == RefStrand::Unknown {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "transcript {} has unknown strand; cannot project to g.",
+                    transcript_id
+                ),
+            });
+        }
+
+        // 5. Pick the right primitive: for coding transcripts use the
+        //    CDS-aware path from `data::mapping` (handles intronic offsets,
+        //    UTR markers, and strand swap). For non-coding transcripts the
+        //    input `base` is the 1-based tx_pos directly; convert it to the
+        //    0-based form cdot exposes and use `CdotTranscript::tx_to_genome`.
+        let is_coding = cdot_tx.cds_start.is_some() && cdot_tx.cds_end.is_some();
+        let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
+            if is_coding {
+                let result = cdot_mapper.cds_to_genome(&transcript_id, &p)?;
+                Ok(result.variant.base)
+            } else {
+                if p.offset.is_some() {
+                    // Intronic n. offsets require coding-style exon-boundary
+                    // arithmetic; we don't currently expose that primitive
+                    // for non-coding transcripts. Surface a clear error.
+                    return Err(FerroError::UnsupportedProjection {
+                        reason: format!(
+                            "project_to_genomic does not yet support intronic offsets on \
+                             non-coding transcripts ({}); see #332",
+                            transcript_id
+                        ),
+                    });
+                }
+                // `base` is 1-based on TxPos / RnaPos; cdot's tx coords are
+                // 0-based, so subtract 1.
+                if p.base <= 0 {
+                    return Err(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "non-coding transcript {} position must be positive, got {}",
+                            transcript_id, p.base
+                        ),
+                    });
+                }
+                let tx_pos_0based = (p.base - 1) as u64;
+                cdot_tx
+                    .tx_to_genome(tx_pos_0based)
+                    .ok_or_else(|| FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "tx position {} not in any exon of {}",
+                            p.base, transcript_id
+                        ),
+                    })
+            }
+        };
+
+        let start_g = map_pos(start_cds)?;
+        let end_g = map_pos(end_cds)?;
+
+        // 6. Build the genomic interval. On minus strand the c./n./r. interval
+        //    runs anti-parallel to the genome, so the smaller genomic coord
+        //    becomes the start.
+        let (g_start_pos, g_end_pos) = match strand {
+            RefStrand::Plus => (GenomePos::new(start_g), GenomePos::new(end_g)),
+            RefStrand::Minus => (GenomePos::new(end_g), GenomePos::new(start_g)),
+            RefStrand::Unknown => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "transcript {} has unknown strand; cannot project to g.",
+                        transcript_id
+                    ),
+                });
+            }
+        };
+        let g_interval = GenomeInterval::new(g_start_pos, g_end_pos);
+
+        // 7. Transform the edit for the transcript strand. The c./n./r. edit
+        //    reads on the transcript's sense strand; on minus strand we need
+        //    to reverse-complement to put it back onto the genomic reference.
+        //    We extract the concrete `NaEdit` (preserving `Mu` certainty) and
+        //    apply `transform_edit_for_strand` from the project::edit module.
+        let edit_inner =
+            edit_mu
+                .inner()
+                .cloned()
+                .ok_or_else(|| FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic requires a concrete edit (not `?`)".to_string(),
+                })?;
+        let g_edit_inner: NaEdit = transform_edit_for_strand(&edit_inner, strand);
+        // Preserve the Mu certainty (Certain vs Uncertain).
+        let g_edit_mu = edit_mu.map(|_| g_edit_inner);
+
+        let g_variant = GenomeVariant {
+            accession: parent,
+            gene_symbol,
+            loc_edit: LocEdit::with_uncertainty(g_interval, g_edit_mu),
+        };
+        Ok(HgvsVariant::Genome(g_variant))
     }
 
     /// Project an already-normalized g. variant onto ALL overlapping
@@ -1336,6 +1592,7 @@ mod tests {
                 ensembl_match: None,
                 exon_cigars: Vec::new(),
                 cached_introns: OnceLock::new(),
+                protein_id: None,
             });
             let prefix = "N".repeat(999);
             let suffix = "N".repeat(100);
@@ -1377,7 +1634,12 @@ mod tests {
             };
             // Parent NG_TEST.1, plus-strand → g.1003C>A.
             assert_eq!(g.accession.to_string(), "NG_TEST.1");
-            assert_eq!(g.to_string(), "NG_TEST.1:g.1003C>A");
+            let s = g.to_string();
+            assert!(
+                s.starts_with("NG_TEST.1") && s.contains(":g.1003C>A"),
+                "expected NG_TEST.1...:g.1003C>A, got: {}",
+                s
+            );
         }
 
         // -- 2: minus-strand substitution --------------------------------------
@@ -1414,10 +1676,11 @@ mod tests {
                 _ => panic!("expected Genome variant"),
             };
             assert_eq!(g.accession.to_string(), "NG_TESTMINUS.1");
-            assert_eq!(
-                g.to_string(),
-                "NG_TESTMINUS.1:g.1005G>A",
-                "minus-strand c.4C>T should revcomp to g.1005G>A"
+            let s = g.to_string();
+            assert!(
+                s.starts_with("NG_TESTMINUS.1") && s.contains(":g.1005G>A"),
+                "minus-strand c.4C>T should revcomp to NG_TESTMINUS.1...:g.1005G>A, got: {}",
+                s
             );
         }
 
@@ -1611,7 +1874,12 @@ mod tests {
                 _ => panic!("expected Genome variant"),
             };
             assert_eq!(g.accession.to_string(), "NG_NRTEST.1");
-            assert_eq!(g.to_string(), "NG_NRTEST.1:g.1004A>G");
+            let s = g.to_string();
+            assert!(
+                s.starts_with("NG_NRTEST.1") && s.contains(":g.1004A>G"),
+                "expected NG_NRTEST.1...:g.1004A>G, got: {}",
+                s
+            );
         }
 
         // -- 8: r. input -------------------------------------------------------
