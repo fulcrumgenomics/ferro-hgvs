@@ -84,7 +84,7 @@ struct Fixture {
     cases: Vec<Case>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 struct Case {
     #[serde(default)]
@@ -108,6 +108,60 @@ struct Case {
     noncoding: Option<Vec<String>>,
     #[serde(default = "default_true")]
     to_test: bool,
+    /// Marks a mismatch on a specific axis as an accepted (non-bug)
+    /// divergence — e.g. a ferro policy decision that intentionally
+    /// disagrees with mutalyzer while both outputs remain HGVS-spec-allowed.
+    /// Tallied into `AxisTally::divergence_accepted` instead of `fail`.
+    #[serde(default)]
+    accepted_divergence: Option<AcceptedDivergence>,
+    /// Documentary annotation for cases where mutalyzer's expected output
+    /// has been corrected in `cases.json` to ferro's spec-correct value.
+    /// Has NO effect on tally bucketing — the corrected expected string
+    /// makes the case PASS by the usual match check; this field only
+    /// records the spec citation for review.
+    #[serde(default)]
+    spec_citation: Option<SpecCitation>,
+}
+
+/// Accepted-divergence annotation. When attached to a `Case`, the
+/// corpus runner treats a mismatch on `axis` as a tracked-but-non-failing
+/// divergence (counted in `divergence_accepted`) rather than a hard FAIL.
+///
+/// **Typo warning:** `axis` and `policy` are free-form strings, not
+/// validated enums. A misspelled `axis` (`"normalised"`, `"genomic_"`,
+/// etc.) silently makes the annotation a no-op — the case falls through
+/// to FAIL with no warning. Cross-check spelling against the `axis` arg
+/// passed to `AxisTally::new(...)` in each test in this file. (Tightening
+/// this to a closed enum is a follow-up.)
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+struct AcceptedDivergence {
+    /// Axis name this annotation applies to (e.g. `"normalized"`).
+    axis: String,
+    /// Short policy identifier explaining *why* the divergence is acceptable
+    /// — e.g. `"ferro-policy-121-gene-symbol-selector"`. Surfaced in the
+    /// per-axis tally summary so reviewers can grep for the policy.
+    policy: String,
+    /// Optional human-readable note expanding on the policy.
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Spec-citation annotation. Documentary only — does NOT affect tally
+/// bucketing. Used to record that the `cases.json` expected output for
+/// `axis` has been corrected to ferro's spec-correct value (versus
+/// mutalyzer's spec-incorrect output), with a citation to the relevant
+/// HGVS spec section.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+struct SpecCitation {
+    /// Axis name this citation applies to (e.g. `"normalized"`).
+    axis: String,
+    /// HGVS spec section the citation references (e.g. `"HGVS §Prioritization"`).
+    section: String,
+    /// Optional human-readable note expanding on the citation.
+    #[serde(default)]
+    note: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -224,6 +278,20 @@ fn variant_projector() -> Option<VariantProjector<ArcProvider>> {
 struct AxisTally {
     axis: &'static str,
     pass: usize,
+    /// Mismatches gated by an `accepted_divergence` annotation whose
+    /// `axis` matches this tally's axis. Tracked-but-non-failing; reported
+    /// in the summary line as `divergence_accepted` and NOT written to
+    /// `baseline-failures/<axis>.txt`. Stores `(input, policy)`.
+    divergence_accepted: Vec<(String, String)>,
+    /// Mismatches routed to the spec-overridden bucket via a
+    /// `spec_citation` annotation whose `axis` matches this tally's axis.
+    /// Tracked-but-non-failing; reported in the summary line as
+    /// `spec_overridden` and NOT written to `baseline-failures/<axis>.txt`.
+    /// Stores `(input, section)`. The `cases.json` `expected` field is
+    /// expected to carry ferro's spec-correct value, but for axes where
+    /// the upstream mutalyzer expectation still differs, the citation
+    /// keeps the case visible without surfacing as a FAIL.
+    spec_overridden: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
 }
@@ -233,22 +301,68 @@ impl AxisTally {
         Self {
             axis,
             pass: 0,
+            divergence_accepted: Vec::new(),
+            spec_overridden: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
         }
     }
 
-    fn record(&mut self, case_input: &str, expected: &str, actual: Result<String, String>) {
+    /// Bucket a single case against `expected`/`actual`:
+    /// 1. PASS when `actual == expected`.
+    /// 2. `divergence_accepted` when the case carries
+    ///    `accepted_divergence` matching this tally's axis.
+    /// 3. `spec_overridden` when the case carries a `spec_citation`
+    ///    matching this tally's axis.
+    /// 4. FAIL otherwise.
+    ///
+    /// `accepted_divergence` and `spec_citation` only catch a *string
+    /// mismatch* from a successful run. An `Err` means ferro failed to
+    /// produce any result (panic, parse error, normalize failure) —
+    /// those are real bugs and must surface as FAIL even when an
+    /// annotation is present.
+    fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
         let matches = matches!(&actual, Ok(s) if s == expected);
         if matches {
             self.pass += 1;
-        } else {
-            let diag = match actual {
-                Ok(got) => format!("expected={expected:?} got={got:?}"),
-                Err(e) => format!("expected={expected:?} err={e}"),
-            };
-            self.fail.push((case_input.to_string(), diag));
+            return;
         }
+        if actual.is_ok() {
+            if let Some(ad) = &case.accepted_divergence {
+                if ad.axis == self.axis {
+                    self.divergence_accepted
+                        .push((case.input.clone(), ad.policy.clone()));
+                    return;
+                }
+            }
+            if let Some(sc) = &case.spec_citation {
+                if sc.axis == self.axis {
+                    self.spec_overridden
+                        .push((case.input.clone(), sc.section.clone()));
+                    return;
+                }
+            }
+        }
+        let diag = match actual {
+            Ok(got) => format!("expected={expected:?} got={got:?}"),
+            Err(e) => format!("expected={expected:?} err={e}"),
+        };
+        self.fail.push((case.input.clone(), diag));
+    }
+
+    /// Single-line, grep-friendly summary of the tally state. Stable
+    /// format used by both `finish()` and unit tests.
+    fn summary_line(&self, report_path: &Path) -> String {
+        format!(
+            "{}: {} pass / {} divergence_accepted / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
+            self.axis,
+            self.pass,
+            self.divergence_accepted.len(),
+            self.spec_overridden.len(),
+            self.fail.len(),
+            self.skipped,
+            report_path.display()
+        )
     }
 
     fn finish(self) {
@@ -269,14 +383,33 @@ impl AxisTally {
             .collect();
         let _ = fs::write(&tsv_path, &tsv);
 
-        println!(
-            "{}: {} pass / {} FAIL / {} skipped (FAIL inputs -> {})",
-            self.axis,
-            self.pass,
-            self.fail.len(),
-            self.skipped,
-            report_path.display()
-        );
+        println!("{}", self.summary_line(&report_path));
+
+        for (input, policy) in self.divergence_accepted.iter().take(FAIL_PRINT_LIMIT) {
+            eprintln!(
+                "  DIVERGENCE_ACCEPTED  [{}] {} | policy={}",
+                self.axis, input, policy
+            );
+        }
+        if self.divergence_accepted.len() > FAIL_PRINT_LIMIT {
+            eprintln!(
+                "  ... {} more divergence_accepted",
+                self.divergence_accepted.len() - FAIL_PRINT_LIMIT,
+            );
+        }
+
+        for (input, section) in self.spec_overridden.iter().take(FAIL_PRINT_LIMIT) {
+            eprintln!(
+                "  SPEC_OVERRIDDEN  [{}] {} | section={}",
+                self.axis, input, section
+            );
+        }
+        if self.spec_overridden.len() > FAIL_PRINT_LIMIT {
+            eprintln!(
+                "  ... {} more spec_overridden",
+                self.spec_overridden.len() - FAIL_PRINT_LIMIT,
+            );
+        }
 
         for (input, diag) in self.fail.iter().take(FAIL_PRINT_LIMIT) {
             eprintln!("  FAIL  [{}] {} | {}", self.axis, input, diag);
@@ -391,7 +524,7 @@ fn axis_normalized() {
             Ok(format!("{n}"))
         });
 
-        t.record(&case.input, expected, actual);
+        t.record(case, expected, actual);
     }
     t.finish();
 }
@@ -428,7 +561,7 @@ fn axis_genomic() {
             }
         });
 
-        t.record(&case.input, expected, actual);
+        t.record(case, expected, actual);
     }
     t.finish();
 }
@@ -468,7 +601,7 @@ fn axis_protein_description() {
                 .ok_or_else(|| "no protein predicted".to_string())
         });
 
-        t.record(&case.input, expected, actual);
+        t.record(case, expected, actual);
     }
     t.finish();
 }
@@ -524,7 +657,7 @@ fn axis_coding_protein_descriptions() {
             Ok(expected_repr.clone())
         });
 
-        t.record(&case.input, &expected_repr, actual);
+        t.record(case, &expected_repr, actual);
     }
     t.finish();
 }
@@ -553,7 +686,7 @@ fn axis_rna_description() {
         };
         let actual: Result<String, String> =
             Err("ferro-hgvs r. prediction surface not yet wired into this runner".to_string());
-        t.record(&case.input, expected, actual);
+        t.record(case, expected, actual);
     }
     t.finish();
 }
@@ -581,7 +714,7 @@ fn axis_noncoding() {
         let expected = expected_list.join(" | ");
         let actual: Result<String, String> =
             Err("ferro-hgvs n. projection surface not yet wired into this runner".to_string());
-        t.record(&case.input, &expected, actual);
+        t.record(case, &expected, actual);
     }
     t.finish();
 }
@@ -640,7 +773,7 @@ fn axis_errors() {
             }
         });
 
-        t.record(&case.input, &expected_repr, actual);
+        t.record(case, &expected_repr, actual);
     }
     t.finish();
 }
@@ -668,7 +801,7 @@ fn axis_infos() {
         let expected = expected_list.join(",");
         let actual: Result<String, String> =
             Err("ferro-hgvs info-code surface not yet wired into this runner".to_string());
-        t.record(&case.input, &expected, actual);
+        t.record(case, &expected, actual);
     }
     t.finish();
 }
@@ -767,4 +900,330 @@ fn regression_under_mock_normalized() {
         diffs.len(),
         diffs.join("\n"),
     );
+}
+
+// ----------------------------------------------------------------------------
+// Comparator unit tests
+// ----------------------------------------------------------------------------
+//
+// Hermetic — no manifest, no fixture, no I/O. Each test builds a synthetic
+// `Case` and drives `AxisTally::record` directly to assert the bucketing
+// rules for `accepted_divergence` and `spec_citation`.
+
+#[cfg(test)]
+mod comparator_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Build a minimal `Case` with the given input and optional
+    /// annotations. All other fields default to None/empty/true.
+    fn make_case(
+        input: &str,
+        accepted_divergence: Option<AcceptedDivergence>,
+        spec_citation: Option<SpecCitation>,
+    ) -> Case {
+        Case {
+            keywords: Vec::new(),
+            input: input.to_string(),
+            normalized: None,
+            genomic: None,
+            coding_protein_descriptions: None,
+            protein_description: None,
+            rna_description: None,
+            errors: None,
+            infos: None,
+            noncoding: None,
+            to_test: true,
+            accepted_divergence,
+            spec_citation,
+        }
+    }
+
+    fn parse_case(json: &str) -> Case {
+        serde_json::from_str(json).expect("Case should deserialize")
+    }
+
+    // (1) Backward compat: a case without the new optional fields parses.
+    #[test]
+    fn case_parses_without_new_fields() {
+        let case = parse_case(
+            r#"{"input": "NM_000088.3:c.459A>G", "normalized": "NM_000088.3:c.459A>G"}"#,
+        );
+        assert_eq!(case.input, "NM_000088.3:c.459A>G");
+        assert!(case.accepted_divergence.is_none());
+        assert!(case.spec_citation.is_none());
+    }
+
+    // (2) `accepted_divergence` deserializes including the optional `note`.
+    #[test]
+    fn case_parses_with_accepted_divergence() {
+        let case = parse_case(
+            r#"{
+                "input": "NM_000088.3:c.459A>G",
+                "accepted_divergence": {
+                    "axis": "normalized",
+                    "policy": "ferro-policy-121-gene-symbol-selector",
+                    "note": "ferro emits (COL1A1) per #121"
+                }
+            }"#,
+        );
+        let ad = case
+            .accepted_divergence
+            .as_ref()
+            .expect("accepted_divergence present");
+        assert_eq!(ad.axis, "normalized");
+        assert_eq!(ad.policy, "ferro-policy-121-gene-symbol-selector");
+        assert_eq!(ad.note.as_deref(), Some("ferro emits (COL1A1) per #121"));
+    }
+
+    // (3) `spec_citation` deserializes including the optional `note`.
+    #[test]
+    fn case_parses_with_spec_citation() {
+        let case = parse_case(
+            r#"{
+                "input": "NM_000143.3:c.1_2insCAT",
+                "spec_citation": {
+                    "axis": "normalized",
+                    "section": "HGVS §Prioritization",
+                    "note": "dup over ins"
+                }
+            }"#,
+        );
+        let sc = case.spec_citation.as_ref().expect("spec_citation present");
+        assert_eq!(sc.axis, "normalized");
+        assert_eq!(sc.section, "HGVS §Prioritization");
+        assert_eq!(sc.note.as_deref(), Some("dup over ins"));
+    }
+
+    // (4) `record` PASSes when actual == expected, regardless of annotations.
+    #[test]
+    fn tally_pass_when_output_matches() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case("NM_000088.3:c.459A>G", None, None);
+        t.record(&case, "X", Ok("X".to_string()));
+        assert_eq!(t.pass, 1);
+        assert!(t.divergence_accepted.is_empty());
+        assert!(t.fail.is_empty());
+    }
+
+    // (5) Mismatch on the annotated axis goes into `divergence_accepted`.
+    #[test]
+    fn tally_divergence_accepted_on_matching_axis() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: "normalized".to_string(),
+                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                note: None,
+            }),
+            None,
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert_eq!(
+            t.divergence_accepted,
+            vec![(
+                "in".to_string(),
+                "ferro-policy-121-gene-symbol-selector".to_string()
+            )]
+        );
+        assert!(t.fail.is_empty());
+    }
+
+    // (6) Mismatch when the annotation's axis does NOT match the tally's
+    // axis is still a FAIL — annotations are scoped strictly per-axis.
+    #[test]
+    fn tally_fail_when_annotation_axis_mismatches() {
+        let mut t = AxisTally::new("genomic");
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: "normalized".to_string(),
+                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                note: None,
+            }),
+            None,
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert_eq!(t.fail[0].0, "in");
+    }
+
+    // (7a) `Err` result with `accepted_divergence` on the matching axis is
+    // STILL FAIL — the annotation accepts a string difference, not a
+    // catastrophic failure (panic / parse / normalize Err). A regression
+    // that turned a passing-with-divergence case into an Err must not be
+    // silenced by the annotation.
+    #[test]
+    fn tally_err_with_accepted_divergence_still_fails() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: "normalized".to_string(),
+                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                note: None,
+            }),
+            None,
+        );
+        t.record(&case, "X", Err("normalize: panic boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.divergence_accepted.is_empty(),
+            "Err must not silence into divergence_accepted bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("err=normalize: panic boom"));
+    }
+
+    // (7) Mismatch with no annotation is FAIL.
+    #[test]
+    fn tally_fail_when_no_annotation() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case("in", None, None);
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("expected=\"X\" got=\"Y\""));
+    }
+
+    // (8) `spec_citation` routes a string mismatch on the cited axis into
+    // the `spec_overridden` bucket — non-failing, separately tracked.
+    #[test]
+    fn tally_spec_citation_routes_to_spec_overridden() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: "normalized".to_string(),
+                section: "HGVS §Prioritization".to_string(),
+                note: None,
+            }),
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.spec_overridden.len(), 1);
+        assert_eq!(t.spec_overridden[0].0, "in");
+        assert_eq!(t.spec_overridden[0].1, "HGVS §Prioritization");
+        assert!(t.fail.is_empty());
+    }
+
+    // (8b) `spec_citation` only catches *string mismatches*, not `Err`
+    // results. A panic / parse error on a cited row is still a real bug
+    // and must surface as FAIL — same contract as `accepted_divergence`.
+    #[test]
+    fn tally_err_with_spec_citation_still_fails() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: "normalized".to_string(),
+                section: "HGVS §Prioritization".to_string(),
+                note: None,
+            }),
+        );
+        t.record(&case, "X", Err("normalize: panic boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.spec_overridden.is_empty(),
+            "Err must not silence into spec_overridden bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (8c) `spec_citation` on a different axis from the tally's must NOT
+    // route to `spec_overridden` — citations are axis-scoped.
+    #[test]
+    fn tally_spec_citation_other_axis_is_fail() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: "errors".to_string(),
+                section: "HGVS §Prioritization".to_string(),
+                note: None,
+            }),
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert!(t.spec_overridden.is_empty());
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (9) `summary_line` includes the `divergence_accepted` AND
+    // `spec_overridden` buckets in the documented stable format.
+    #[test]
+    fn tally_finish_summary_string_includes_new_bucket() {
+        let mut t = AxisTally::new("normalized");
+        // 1 pass, 1 divergence_accepted, 1 spec_overridden, 1 fail,
+        // 0 skipped.
+        t.record(&make_case("a", None, None), "X", Ok("X".to_string()));
+        t.record(
+            &make_case(
+                "b",
+                Some(AcceptedDivergence {
+                    axis: "normalized".to_string(),
+                    policy: "p".to_string(),
+                    note: None,
+                }),
+                None,
+            ),
+            "X",
+            Ok("Y".to_string()),
+        );
+        t.record(
+            &make_case(
+                "d",
+                None,
+                Some(SpecCitation {
+                    axis: "normalized".to_string(),
+                    section: "HGVS §Prioritization".to_string(),
+                    note: None,
+                }),
+            ),
+            "X",
+            Ok("Y".to_string()),
+        );
+        t.record(&make_case("c", None, None), "X", Ok("Y".to_string()));
+
+        let path = PathBuf::from("/tmp/example.txt");
+        let line = t.summary_line(&path);
+        assert_eq!(
+            line,
+            "normalized: 1 pass / 1 divergence_accepted / 1 spec_overridden / 1 FAIL / 0 skipped \
+             (FAIL inputs -> /tmp/example.txt)"
+        );
+    }
+
+    // (10) A case may carry BOTH annotations and the bucketing rules
+    // remain orthogonal: a mismatch on the matching `accepted_divergence`
+    // axis still routes to `divergence_accepted`, regardless of any
+    // co-attached `spec_citation`.
+    #[test]
+    fn tally_coexisting_annotations_route_by_accepted_divergence() {
+        let mut t = AxisTally::new("normalized");
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: "normalized".to_string(),
+                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                note: None,
+            }),
+            Some(SpecCitation {
+                axis: "normalized".to_string(),
+                section: "HGVS §Prioritization".to_string(),
+                note: None,
+            }),
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.divergence_accepted.len(), 1);
+        assert!(t.fail.is_empty());
+    }
 }
