@@ -86,7 +86,19 @@ pub enum NormalizationWarning {
         actual_ref: String,
         /// Position info
         position: String,
-        /// Whether the mismatch was auto-corrected
+        /// Whether the mismatch was actually corrected by the normalizer.
+        ///
+        /// `true` when the canonical Display drops or rewrites the stated
+        /// bases (sub / del / dup / inv: the explicit `sequence` field is
+        /// stripped during canonicalization, so the wrong stated bases
+        /// never reach the output).
+        ///
+        /// `false` when the description passes through verbatim — the
+        /// normalizer surfaces the warning but cannot rewrite the user's
+        /// declared form. This covers `Repeat` and `MultiRepeat`
+        /// consistency mismatches (issues #214 / #279): the per-unit
+        /// declaration is part of the user's variant description, and
+        /// the normalizer declines to second-guess it. (Issue #280.)
         corrected: bool,
     },
 
@@ -1858,12 +1870,38 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Validate reference allele before normalization
         let validation = validate::validate_reference(edit, ref_seq, start, end);
         if !validation.valid {
+            // `corrected` is honest about whether the canonical Display
+            // drops the user-stated bases. See issue #280.
+            //
+            // True for `Deletion` / `Duplication` (canonicalize_edit
+            // strips `sequence`) and conditionally for `Inversion`
+            // (the Inversion arm in `normalize_na_edit` emits
+            // `sequence: None` when `shorten_inversion` rewrites the
+            // span, and otherwise still drops the stated bases in the
+            // canonical path). `Substitution` does not reach here at
+            // all — `needs_normalization` returns `false` for real
+            // substitutions and only the degenerate `ref == alt` case
+            // routes through this function, where the validator's
+            // single-base check is satisfied by construction.
+            //
+            // False for `Repeat` / `MultiRepeat` consistency mismatches
+            // (issues #214 / #279): the per-unit declaration is part of
+            // the user's form and the normalizer passes the description
+            // through verbatim.
+            //
+            // TODO/Note: revisit if `delins` ever gets a stated-deleted
+            // validator — today `validate_reference`'s `NaEdit::Delins`
+            // arm returns `ok()` unconditionally (see also the Delins
+            // arm in `canonicalize_edit`, which strips `deleted` /
+            // `deleted_length`), so the branch is unreachable for
+            // Delins.
+            let corrected = !matches!(edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. });
             warnings.push(NormalizationWarning::RefSeqMismatch {
                 message: validation.warning.unwrap_or_default(),
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),
                 position: format!("{}-{}", start, end),
-                corrected: true,
+                corrected,
             });
         }
 
