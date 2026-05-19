@@ -371,7 +371,9 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 let get_count = |rc: &RepeatCount| -> Result<u64, FerroError> {
                     match rc {
                         RepeatCount::Exact(n) => Ok(*n),
-                        RepeatCount::Range(min, _) | RepeatCount::MinUncertain(min) => Ok(*min),
+                        RepeatCount::Range(min, _)
+                        | RepeatCount::UncertainRange(min, _)
+                        | RepeatCount::MinUncertain(min) => Ok(*min),
                         RepeatCount::MaxUncertain(_) | RepeatCount::Unknown => {
                             Err(FerroError::ConversionError {
                                 msg: "Repeat variant with unknown count cannot be converted to VCF"

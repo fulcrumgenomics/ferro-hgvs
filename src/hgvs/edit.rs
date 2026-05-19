@@ -144,8 +144,14 @@ impl fmt::Display for Sequence {
 pub enum RepeatCount {
     /// Exact count (e.g., [12])
     Exact(u64),
-    /// Range of counts (e.g., [10_15])
+    /// Explicit fixed range of counts (e.g., [10_15]) — both bounds are
+    /// known and the range itself is the observation.
     Range(u64, u64),
+    /// Uncertain range of counts wrapped in parentheses (e.g., [(10_15)])
+    /// — the actual count is somewhere within `[min, max]` but is
+    /// uncertain. Distinct from `Range` so Display can preserve the
+    /// parens.
+    UncertainRange(u64, u64),
     /// Lower bound with uncertain upper (e.g., [10_?])
     MinUncertain(u64),
     /// Upper bound with uncertain lower (e.g., [?_20])
@@ -174,6 +180,7 @@ impl fmt::Display for RepeatCount {
         match self {
             RepeatCount::Exact(n) => write!(f, "[{}]", n),
             RepeatCount::Range(min, max) => write!(f, "[{}_{}]", min, max),
+            RepeatCount::UncertainRange(min, max) => write!(f, "[({}_{})]", min, max),
             RepeatCount::MinUncertain(min) => write!(f, "[{}_?]", min),
             RepeatCount::MaxUncertain(max) => write!(f, "[?_{}]", max),
             RepeatCount::Unknown => write!(f, "[?]"),
@@ -332,10 +339,12 @@ impl InsertedSequence {
             InsertedSequence::Count(n) => Some(*n as usize),
             InsertedSequence::Repeat { count, .. } => match count {
                 RepeatCount::Exact(n) => Some(*n as usize),
+                // Range, UncertainRange, MinUncertain, MaxUncertain, Unknown.
                 _ => None, // Unknown exact length for ranges/uncertain
             },
             InsertedSequence::SequenceRepeat { sequence, count } => match count {
                 RepeatCount::Exact(n) => Some(sequence.len() * (*n as usize)),
+                // Range, UncertainRange, MinUncertain, MaxUncertain, Unknown.
                 _ => None, // Unknown exact length for ranges/uncertain
             },
             InsertedSequence::Range(_, _) => None, // Unknown exact length
@@ -1472,6 +1481,14 @@ mod tests {
     #[test]
     fn test_repeat_count_range_display() {
         assert_eq!(format!("{}", RepeatCount::Range(10, 15)), "[10_15]");
+    }
+
+    #[test]
+    fn test_repeat_count_uncertain_range_display() {
+        assert_eq!(
+            format!("{}", RepeatCount::UncertainRange(10, 15)),
+            "[(10_15)]"
+        );
     }
 
     #[test]
