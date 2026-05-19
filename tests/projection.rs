@@ -78,7 +78,7 @@ fn end_to_end_missense() {
     let c = result.coding.as_ref().unwrap().to_string();
     assert!(c.contains(":c.4C>A"), "got c. = {}", c);
     let p = result.protein.as_ref().unwrap().to_string();
-    assert_eq!(p, "NP_TEST.1(TESTGENE):p.(Arg2Ser)");
+    assert_eq!(p, "NP_TEST.1:p.(Arg2Ser)");
     assert!(!result.is_frameshift);
     assert!(!result.is_intronic);
     assert!(!result.is_utr);

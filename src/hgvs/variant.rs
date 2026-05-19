@@ -1355,8 +1355,16 @@ impl ProteinVariant {
 
 impl fmt::Display for ProteinVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
-        write!(f, ":p.")?;
+        // Per HGVS syntax.yaml lines 119–128 the protein-variant grammar is
+        // `sequence_identifier ":" coordinate_type "." aa_position alternate_base`
+        // — no parenthesized selector position. The `accession(selector):c.`
+        // form (syntax.yaml line 213) is reserved for genomic-to-transcript
+        // projection on c./n., not for p. The struct still stores
+        // `gene_symbol` so callers can read it programmatically and so the
+        // parser (which is permissive about the legacy `NP_*(GENE):p.`
+        // form) can round-trip the value; it is just not emitted here. See
+        // #310.
+        write!(f, "{}:p.", self.accession)?;
         self.fmt_loc_edit(f)
     }
 }

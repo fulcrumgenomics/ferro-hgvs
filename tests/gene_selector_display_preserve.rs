@@ -90,10 +90,17 @@ fn display_preserves_gene_selector_refseq_nr_noncoding() {
 }
 
 #[test]
-fn display_preserves_gene_selector_refseq_np_protein() {
-    // Protein with predicted-change parens uses `p.(...)` form; the gene
-    // selector parens sit between the accession and the colon.
-    assert_display_preserves_gene_selector("NP_000079.2(COL1A1):p.(Arg8Gln)", "COL1A1");
+fn display_drops_gene_selector_refseq_np_protein() {
+    // Per HGVS syntax.yaml 119–128 the protein-variant grammar has no
+    // parenthesized selector position; the `accession(selector):c.` form
+    // (syntax.yaml 213) is reserved for genomic-to-transcript projection on
+    // c./n., not p. The parser remains permissive and `gene_symbol` round-trips
+    // on the struct, but Display emits the spec-compliant `NP_*:p.` form.
+    // See #310.
+    use ferro_hgvs::hgvs::parser::parse_hgvs;
+    let v = parse_hgvs("NP_000079.2(COL1A1):p.(Arg8Gln)").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("COL1A1"));
+    assert_eq!(v.to_string(), "NP_000079.2:p.(Arg8Gln)");
 }
 
 #[test]
@@ -110,11 +117,19 @@ fn display_preserves_gene_selector_ensembl() {
 #[test]
 fn display_preserves_gene_selector_lrg() {
     // LRG references come in three flavors: bare (`LRG_<n>`), transcript
-    // (`LRG_<n>t<m>`), and protein (`LRG_<n>p<m>`). All three must accept
-    // and round-trip the gene selector.
+    // (`LRG_<n>t<m>`), and protein (`LRG_<n>p<m>`). The bare and transcript
+    // forms preserve the gene selector verbatim on `c.`/`n.`. The protein
+    // form does NOT round-trip the selector through Display: the HGVS
+    // protein-variant grammar (syntax.yaml 119–128) has no parenthesized
+    // selector position, so Display emits the spec-compliant `LRG_*p*:p.`
+    // form. See #310.
     assert_display_preserves_gene_selector("LRG_199(BRCA1):c.100A>G", "BRCA1");
     assert_display_preserves_gene_selector("LRG_199t1(BRCA1):c.100A>G", "BRCA1");
-    assert_display_preserves_gene_selector("LRG_199p1(BRCA1):p.(Arg8Gln)", "BRCA1");
+
+    use ferro_hgvs::hgvs::parser::parse_hgvs;
+    let v = parse_hgvs("LRG_199p1(BRCA1):p.(Arg8Gln)").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("BRCA1"));
+    assert_eq!(v.to_string(), "LRG_199p1:p.(Arg8Gln)");
 }
 
 #[test]

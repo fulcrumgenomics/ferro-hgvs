@@ -413,6 +413,7 @@ mod tests {
             mane_status: ManeStatus::Select,
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };

@@ -75,7 +75,7 @@ class TestVariantProjector:
         assert result.gene_symbol == "TESTGENE"
         assert result.c_name is not None
         assert ":c.4C>A" in result.c_name
-        assert result.p_name == "NP_TEST.1(TESTGENE):p.(Arg2Ser)"
+        assert result.p_name == "NP_TEST.1:p.(Arg2Ser)"
         assert result.is_frameshift is False
         assert result.is_intronic is False
         assert result.is_utr is False
@@ -186,14 +186,14 @@ class TestIndelProteinNomenclature:
         result = long_projector.project("NC_000002.12:g.2006_2008del", transcript="NM_LONG.1")
         assert result.c_name is not None
         assert "del" in result.c_name
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2del)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2del)"
         assert result.is_frameshift is False
 
     def test_del_two_whole_codons(self, long_projector: ferro_hgvs.VariantProjector) -> None:
         # Delete Arg+Lys codons (c.4_9 = g.2006_2014del): p.(Arg2_Lys3del).
         result = long_projector.project("NC_000002.12:g.2006_2011del", transcript="NM_LONG.1")
         assert result.c_name is not None
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2_Lys3del)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2_Lys3del)"
         assert result.is_frameshift is False
 
     def test_del_single_base_frameshift(self, long_projector: ferro_hgvs.VariantProjector) -> None:
@@ -209,7 +209,7 @@ class TestIndelProteinNomenclature:
         result = long_projector.project("NC_000002.12:g.2006_2008dup", transcript="NM_LONG.1")
         assert result.c_name is not None
         assert "dup" in result.c_name
-        assert result.p_name == "NP_LONG.1(LONGGENE):p.(Arg2dup)"
+        assert result.p_name == "NP_LONG.1:p.(Arg2dup)"
         assert result.is_frameshift is False
 
     def test_dup_single_base_frameshift(self, long_projector: ferro_hgvs.VariantProjector) -> None:
@@ -389,3 +389,63 @@ class TestProjectNormalized:
         result = projector.project_normalized(variant, "NM_TEST.1")
         assert isinstance(result, ferro_hgvs.VariantProjection)
         assert result.c_name is not None
+
+
+class TestIssue310NonRefSeqProtein:
+    """Issue #310 — protein prediction for non-RefSeq transcript IDs and
+    spec-compliant `p.` selector emission. Mirrors the reproduction in the
+    issue body."""
+
+    @staticmethod
+    def _fixture(protein_id: str | None = None) -> dict:
+        tx: dict = {
+            "id": "MYGENE-gene.1",
+            "gene_symbol": "MYGENE",
+            "strand": "+",
+            "sequence": "ATGCGCTAA",
+            "cds_start": 1,
+            "cds_end": 9,
+            "exons": [
+                {
+                    "number": 1,
+                    "start": 1,
+                    "end": 9,
+                    "genomic_start": 1000,
+                    "genomic_end": 1008,
+                }
+            ],
+            "chromosome": "chr1",
+            "genomic_start": 1000,
+            "genomic_end": 1008,
+        }
+        if protein_id is not None:
+            tx["protein_id"] = protein_id
+        return {
+            "transcripts": [tx],
+            "genomic_sequences": {"chr1": "N" * 1000 + "ATGCGCTAA" + "N" * 100},
+        }
+
+    def test_explicit_protein_id_drives_p_name(self, tmp_path):
+        import json
+
+        path = tmp_path / "ref.json"
+        path.write_text(json.dumps(self._fixture(protein_id="MYGENE-protein.1")))
+        projector = ferro_hgvs.VariantProjector(reference_json=str(path))
+        result = projector.project("chr1:g.1003C>A", "MYGENE-gene.1")
+        # c. keeps the (GENE) selector per existing #121 policy; only p.
+        # output is changed by #310 to align with the HGVS protein grammar.
+        assert ":c.4C>A" in (result.c_name or "")
+        assert result.p_name == "MYGENE-protein.1:p.(Arg2Ser)"
+        assert "(MYGENE)" not in (result.p_name or "")
+
+    def test_missing_protein_id_falls_back_to_transcript_id(self, tmp_path):
+        import json
+
+        path = tmp_path / "ref.json"
+        path.write_text(json.dumps(self._fixture(protein_id=None)))
+        projector = ferro_hgvs.VariantProjector(reference_json=str(path))
+        result = projector.project("chr1:g.1003C>A", "MYGENE-gene.1")
+        # The HGVS protein grammar requires a sequence_identifier, so the
+        # projector falls back to the transcript ID rather than silently
+        # dropping the prediction.
+        assert result.p_name == "MYGENE-gene.1:p.(Arg2Ser)"

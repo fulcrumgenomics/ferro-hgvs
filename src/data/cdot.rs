@@ -852,7 +852,10 @@ impl CdotMapper {
                 // cds_end: 1-based tx inclusive → 0-based exclusive (same value)
                 cds_end: tx.cds_end,
                 gene_id: None,
-                protein: None,
+                // Propagate the ferro reference's explicit protein accession so
+                // c. → p. projection works for non-RefSeq transcript IDs without
+                // needing a cdot JSON. See #310.
+                protein: tx.protein_id.clone(),
                 exon_cigars: Vec::new(),
             };
             mapper.add_transcript(tx.id.clone(), cdot_tx);
@@ -1573,6 +1576,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1608,6 +1612,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1640,6 +1645,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1674,6 +1680,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1710,6 +1717,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1745,6 +1753,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
@@ -1780,6 +1789,7 @@ mod tests {
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
+            protein_id: None,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };

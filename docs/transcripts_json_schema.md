@@ -59,6 +59,7 @@ Each transcript object has the following fields:
 | `mane_status` | string | MANE designation: `"MANE_Select"`, `"MANE_Plus_Clinical"`, or omitted if not MANE |
 | `refseq_match` | string | For Ensembl transcripts: matched RefSeq accession |
 | `ensembl_match` | string | For RefSeq transcripts: matched Ensembl accession |
+| `protein_id` | string | Protein accession (e.g. `"NP_000079.2"` or `"MYGENE-protein.1"`). Used as the `p.` accession for c. → p. projection. When omitted, the projector infers `NP_*` from `NM_*` and `XP_*` from `XM_*`; if neither applies, it falls back to using the transcript ID itself as the `p.` accession so protein prediction is never silently dropped. |
 
 ## Exon Object
 
