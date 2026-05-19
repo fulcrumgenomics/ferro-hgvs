@@ -2854,12 +2854,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         else {
             return vec![variant];
         };
+        // When the provider returns fewer (or more) bytes than the HGVS
+        // interval span, the canonical-split decomposition would walk past
+        // the end of `ref_bytes` (or under-walk and miss interior
+        // identities). This happens in practice when a cdot exon
+        // alignment collapses gaps that the HGVS span counts as
+        // positions (e.g. biocommons NG_032871.1:g.32476_53457delins…
+        // returns 15,539 bytes for a 20,982-bp span). Pre-fix this
+        // fired a `debug_assert_eq!` that panicked debug builds and
+        // would have produced out-of-bounds reads in release. Now bail
+        // out gracefully: the input variant cannot be split without an
+        // authoritative ref window, so leave it as-is. Closes #339.
         let n = ref_bytes.len();
-        debug_assert_eq!(
-            n,
-            (hgvs_end - hgvs_start + 1) as usize,
-            "ref_bytes length must match HGVS interval span"
-        );
+        let expected_span = (hgvs_end - hgvs_start + 1) as usize;
+        if n != expected_span {
+            return vec![variant];
+        }
         let ref_norm = normalize_t_u(&ref_bytes);
         let alt_norm = normalize_t_u(&alt_bytes);
         let Some(subedits) = rules::decompose_delins(&ref_norm, 0, n, &alt_norm) else {
