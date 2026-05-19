@@ -1979,6 +1979,50 @@ fn parse_tx_variant(
     move |input: &str| {
         let (input, _) = tag("n.").parse(input)?;
 
+        // First try whole-tx identity (n.= or n.(=)) - no position. #288.
+        // Non-coding transcripts reuse the RNA whole-entity parsers
+        // (`parse_whole_rna_*`, `parse_rna_no_product`) — those are pure
+        // tag-only parsers and don't depend on the coord system.
+        if let Ok((remaining, edit)) = parse_whole_rna_identity(input) {
+            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+            return Ok((
+                remaining,
+                HgvsVariant::Tx(TxVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
+
+        // Try whole-tx unknown (n.? or n.(?)) - no position. #288.
+        if let Ok((remaining, edit)) = parse_whole_rna_unknown(input) {
+            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+            return Ok((
+                remaining,
+                HgvsVariant::Tx(TxVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
+
+        // Try tx-specific no product pattern (n.0 or predicted n.(0)). #288.
+        // `0` is a valid spec form for non-coding transcripts — they can
+        // fail to produce a transcript, exactly like `r.0`.
+        if let Ok((remaining, edit)) = parse_rna_no_product(input) {
+            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+            return Ok((
+                remaining,
+                HgvsVariant::Tx(TxVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
+
         // Compact-prefix trans-allele shorthand: n.[a];[b]. Mirrors
         // parse_genome_variant's dispatch added in PR #146; the expanded
         // form [ACC:n.a];[ACC:n.b] is handled by the top-level allele parser.
@@ -2258,6 +2302,36 @@ fn parse_mt_variant(
 ) -> impl FnMut(&str) -> IResult<&str, HgvsVariant> {
     move |input: &str| {
         let (input, _) = tag("m.").parse(input)?;
+
+        // First try whole-mtDNA identity (m.= or m.(=)) - no position. #288.
+        // Mitochondrial DNA reuses the genome whole-entity parser because
+        // both share `GenomeInterval`.
+        if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
+            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+            let dummy_interval = GenomeInterval::point(dummy_pos);
+            return Ok((
+                remaining,
+                HgvsVariant::Mt(MtVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
+
+        // Try whole-mtDNA unknown (m.? or m.(?)) - no position. #288.
+        if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
+            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+            let dummy_interval = GenomeInterval::point(dummy_pos);
+            return Ok((
+                remaining,
+                HgvsVariant::Mt(MtVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
 
         // Compact-prefix trans-allele shorthand: m.[a];[b]. Mirrors
         // parse_genome_variant's dispatch added in PR #146.
@@ -3534,6 +3608,36 @@ fn parse_circular_variant(
 ) -> impl FnMut(&str) -> IResult<&str, HgvsVariant> {
     move |input: &str| {
         let (input, _) = tag("o.").parse(input)?;
+
+        // First try whole-circular identity (o.= or o.(=)) - no position. #288.
+        // Circular DNA reuses the genome whole-entity parser because both
+        // share `GenomeInterval`; SVD-WG006 inherits the DNA grammar.
+        if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
+            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+            let dummy_interval = GenomeInterval::point(dummy_pos);
+            return Ok((
+                remaining,
+                HgvsVariant::Circular(CircularVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
+
+        // Try whole-circular unknown (o.? or o.(?)) - no position. #288.
+        if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
+            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+            let dummy_interval = GenomeInterval::point(dummy_pos);
+            return Ok((
+                remaining,
+                HgvsVariant::Circular(CircularVariant {
+                    accession: accession.clone(),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                }),
+            ));
+        }
 
         // Compact-prefix trans-allele shorthand: o.[a];[b]. Mirrors
         // parse_genome_variant's dispatch added in PR #146; SVD-WG006 says

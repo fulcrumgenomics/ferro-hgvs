@@ -1259,6 +1259,17 @@ pub struct TxVariant {
 
 impl TxVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // For whole-entity identity / unknown / no-product (n.=, n.?, n.0
+        // and their predicted wrappers n.(=), n.(?), n.(0)), skip the
+        // position. #288 — mirrors the same short-circuits on g./c./r..
+        if let Some(edit) = self.loc_edit.edit.inner() {
+            if edit.is_whole_entity_identity()
+                || edit.is_whole_entity_unknown()
+                || edit.is_no_product()
+            {
+                return write!(f, "{}", self.loc_edit.edit);
+            }
+        }
         // Predicted form: wrap position+edit in parens. #241.
         if self.loc_edit.edit.is_uncertain() {
             if let Some(edit) = self.loc_edit.edit.inner() {
@@ -1379,6 +1390,15 @@ pub struct MtVariant {
 
 impl MtVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // For whole-entity identity / unknown (m.=, m.? and their
+        // predicted wrappers m.(=), m.(?)), skip the position. #288 —
+        // mirrors the genome short-circuit. There is no m.0 form
+        // (DNA isn't "produced"), so no-product isn't accepted here.
+        if let Some(edit) = self.loc_edit.edit.inner() {
+            if edit.is_whole_entity_identity() || edit.is_whole_entity_unknown() {
+                return write!(f, "{}", self.loc_edit.edit);
+            }
+        }
         // Predicted form: wrap position+edit in parens. #241.
         if self.loc_edit.edit.is_uncertain() {
             if let Some(edit) = self.loc_edit.edit.inner() {
@@ -1410,6 +1430,14 @@ pub struct CircularVariant {
 
 impl CircularVariant {
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // For whole-entity identity / unknown (o.=, o.? and their
+        // predicted wrappers o.(=), o.(?)), skip the position. #288 —
+        // mirrors the genome short-circuit. There is no o.0 form.
+        if let Some(edit) = self.loc_edit.edit.inner() {
+            if edit.is_whole_entity_identity() || edit.is_whole_entity_unknown() {
+                return write!(f, "{}", self.loc_edit.edit);
+            }
+        }
         // Predicted form: wrap position+edit in parens. #241.
         if self.loc_edit.edit.is_uncertain() {
             if let Some(edit) = self.loc_edit.edit.inner() {
