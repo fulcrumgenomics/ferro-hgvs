@@ -67,6 +67,49 @@ fn genome_delins_preserves_short_form_round_trip() {
     );
 }
 
+// Follow-up #352: `NaEdit::Inversion { sequence, length }` should
+// follow the same minimal-notation rule as Deletion/Duplication/Delins
+// — the spec recommends `g.100_105inv` over `g.100_105invATGCC` or
+// `g.100_105inv5`. The Inversion arm in `canonicalize_edit` /
+// `should_canonicalize` strips both fields.
+#[test]
+fn genome_inversion_strips_explicit_inverted_sequence() {
+    // §HGVS v21.0 DNA/inversion.md: "the recommendation is not to
+    // describe the inverted nucleotide sequence." Strip the explicit
+    // bases regardless of provider availability.
+    assert_eq!(
+        normalize_str("NC_000009.11:g.36233991_36233995invATGCC"),
+        "NC_000009.11:g.36233991_36233995inv",
+    );
+}
+
+#[test]
+fn genome_inversion_strips_explicit_inverted_length() {
+    // Numeric form `inv5` is the length variant of the same redundancy.
+    assert_eq!(
+        normalize_str("NC_000009.11:g.36233991_36233995inv5"),
+        "NC_000009.11:g.36233991_36233995inv",
+    );
+}
+
+#[test]
+fn cds_inversion_strips_explicit_inverted_sequence() {
+    // Same rule on coding variants.
+    assert_eq!(
+        normalize_str("NM_TEST.1:c.100_105invATGCCG"),
+        "NM_TEST.1:c.100_105inv",
+    );
+}
+
+#[test]
+fn genome_inversion_preserves_short_form_round_trip() {
+    // Already-canonical `inv` must round-trip unchanged.
+    assert_eq!(
+        normalize_str("NC_000009.11:g.36233991_36233995inv"),
+        "NC_000009.11:g.36233991_36233995inv",
+    );
+}
+
 #[test]
 fn genome_delins_with_count_insert_strips_deleted_sequence() {
     // Non-literal InsertedSequence (Count) with explicit deleted bases —

@@ -2,6 +2,21 @@
   "by_input": {
     "c.123C>C": {
       "spec_expected": "NM_004006.2:c.123="
+    },
+    "NM_004006.2:c.6775_6777delGAGinsC": {
+      "note": "Spec rejects the long-form `delGAGinsC` (`<code class=\"invalid\">`); ferro accepts but emits the spec-recommended canonical short form `delinsC` (DNA/delins.md). Status remains `false-acceptance` for the accepted-bad-input fact; `note` clarifies the canonical-on-output behavior. (#353)"
+    },
+    "NM_004006.2:c.6775_6777delGTGinsC": {
+      "note": "Spec rejects the long-form `delGTGinsC`; ferro emits canonical `delinsC` (DNA/delins.md). See #353."
+    },
+    "c.4375_4376delCGinsAGTT": {
+      "note": "Spec rejects the long-form `delCGinsAGTT`; ferro emits canonical `delinsAGTT` (DNA/delins.md). See #353."
+    },
+    "NC_000023.11:g.32386323delCinsGA": {
+      "note": "Spec rejects the long-form `delCinsGA`; ferro emits canonical `delinsGA` (DNA/delins.md). See #353."
+    },
+    "NC_000023.11:g.32386323delTinsGA": {
+      "note": "Spec rejects the long-form `delTinsGA`; ferro emits canonical `delinsGA` (DNA/delins.md). See #353."
     }
   }
 }

@@ -1448,6 +1448,15 @@ pub fn canonicalize_edit(edit: &NaEdit) -> NaEdit {
                 deleted_length: None,
             }
         }
+        // Inversion: §HGVS v21.0 DNA/inversion.md — "the recommendation
+        // is not to describe the inverted nucleotide sequence." Strip
+        // both `sequence` and `length` so `g.100_105invATGCC` /
+        // `g.100_105inv5` collapse to the canonical `g.100_105inv`.
+        // Closes-after: #352.
+        NaEdit::Inversion { .. } => NaEdit::Inversion {
+            sequence: None,
+            length: None,
+        },
         // A4: a substitution where ref == alt (e.g. `c.100A>A`) is degenerate;
         // the HGVS v21 spec calls the form "not allowed" (recommendations/DNA/
         // other.md) and gives `c.100=` as the canonical alternative. The rule
@@ -1481,6 +1490,10 @@ pub fn should_canonicalize(edit: &NaEdit) -> bool {
             deleted_length,
             ..
         } => deleted.is_some() || deleted_length.is_some(),
+        // Companion to the Inversion arm in `canonicalize_edit`: strip
+        // redundant `sequence` / `length` per §DNA/inversion.md. Closes-
+        // after: #352.
+        NaEdit::Inversion { sequence, length } => sequence.is_some() || length.is_some(),
         // Companion to the A4 arm in `canonicalize_edit`: route degenerate
         // substitutions through the no-reference canonicalize path so the
         // rewrite fires even when the provider is empty.
