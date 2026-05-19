@@ -765,8 +765,22 @@ struct TranscriptMetadata {
     exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
 }
 
-impl ReferenceProvider for MultiFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+impl MultiFastaProvider {
+    /// Core transcript-loading routine. When `build_hint` is `Some`, the cdot
+    /// lookup is restricted to that genome build via
+    /// [`CdotMapper::get_transcript_on_build`]; otherwise it uses the primary
+    /// build via [`CdotMapper::get_transcript`].
+    ///
+    /// This is the shared body of [`get_transcript`](Self::get_transcript) and
+    /// [`get_transcript_for_variant`](Self::get_transcript_for_variant). See
+    /// issue #332: when the input carries an NG/NC `genomic_context`, the
+    /// caller passes the inferred build so the transcript's `chromosome` is
+    /// populated against the correct alignment.
+    fn get_transcript_on_build(
+        &self,
+        id: &str,
+        build_hint: Option<&str>,
+    ) -> Result<Transcript, FerroError> {
         use crate::reference::transcript::{Exon as TxExon, GenomeBuild, ManeStatus};
         use std::sync::OnceLock;
 
@@ -777,7 +791,11 @@ impl ReferenceProvider for MultiFastaProvider {
 
                 // Try to get metadata from cdot
                 let meta = if let Some(ref cdot) = self.cdot_mapper {
-                    if let Some(tx) = cdot.get_transcript(&resolved) {
+                    let cdot_tx_opt = match build_hint {
+                        Some(b) => cdot.get_transcript_on_build(&resolved, b),
+                        None => cdot.get_transcript(&resolved),
+                    };
+                    if let Some(tx) = cdot_tx_opt {
                         // Convert cdot exons to transcript exons
                         // cdot internal format: [genome_start, genome_end, tx_start, tx_end]
                         // COORDINATE SYSTEMS:
@@ -866,7 +884,11 @@ impl ReferenceProvider for MultiFastaProvider {
                     chromosome: meta.chromosome,
                     genomic_start: meta.genomic_start,
                     genomic_end: meta.genomic_end,
-                    genome_build: GenomeBuild::GRCh38,
+                    genome_build: match build_hint {
+                        Some("GRCh37") => GenomeBuild::GRCh37,
+                        Some("GRCh38") | None => GenomeBuild::GRCh38,
+                        _ => GenomeBuild::Unknown,
+                    },
                     mane_status: ManeStatus::default(),
                     refseq_match: None,
                     ensembl_match: None,
@@ -910,6 +932,96 @@ impl ReferenceProvider for MultiFastaProvider {
         }
 
         Err(FerroError::ReferenceNotFound { id: id.to_string() })
+    }
+
+    /// Infer the genome build for an `NC_*` parent accession by checking
+    /// `ContigAliases::default_human()` for membership under each build.
+    /// Returns `None` for `NG_*` parents (build-agnostic) and for any NC
+    /// accession not in the human alias table.
+    fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
+        use crate::liftover::aliases::ContigAliases;
+        use crate::reference::transcript::GenomeBuild;
+        // Only `NC_*` carries a build-distinguishing version; `NG_*` is
+        // build-agnostic, return None so the caller probes multiple builds.
+        if &*parent.prefix != "NC" {
+            return None;
+        }
+        let aliases = ContigAliases::default_human();
+        // `Accession::full()` re-renders `NC_000017.11` etc. and avoids a
+        // separate format!() here.
+        let parent_str = parent.full();
+        if aliases
+            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh38)
+            .is_some()
+        {
+            return Some("GRCh38");
+        }
+        if aliases
+            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh37)
+            .is_some()
+        {
+            return Some("GRCh37");
+        }
+        None
+    }
+}
+
+impl ReferenceProvider for MultiFastaProvider {
+    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+        self.get_transcript_on_build(id, None)
+    }
+
+    fn get_transcript_for_variant(
+        &self,
+        variant: &crate::hgvs::variant::HgvsVariant,
+    ) -> Result<Transcript, FerroError> {
+        let Some(accession) = variant.accession() else {
+            // No accession at all (e.g. NullAllele) — fall through to the
+            // default impl which produces a clear ReferenceNotFound error.
+            return self.get_transcript_on_build(&format!("{}", variant), None);
+        };
+        let tx_id = accession.transcript_accession();
+
+        // No parent → exactly the existing behavior.
+        let Some(parent) = accession.genomic_context.as_deref() else {
+            return self.get_transcript_on_build(&tx_id, None);
+        };
+
+        // Decide a probe order based on the parent class.
+        //   NC_*  : infer build from the parent version (GRCh37/GRCh38).
+        //           Probe the inferred build first, then the other build.
+        //   NG_*  : build-agnostic. Probe GRCh38 first (mutalyzer policy),
+        //           then GRCh37.
+        //   other : fall through to plain lookup (no extra information).
+        let probe_order: &[&str] = match Self::infer_build_from_parent(parent) {
+            Some("GRCh38") => &["GRCh38", "GRCh37"],
+            Some("GRCh37") => &["GRCh37", "GRCh38"],
+            _ => {
+                // NG_* and unrecognized parents land here.
+                if &*parent.prefix == "NG" {
+                    &["GRCh38", "GRCh37"]
+                } else {
+                    return self.get_transcript_on_build(&tx_id, None);
+                }
+            }
+        };
+
+        let mut last_err: Option<FerroError> = None;
+        for build in probe_order {
+            match self.get_transcript_on_build(&tx_id, Some(build)) {
+                Ok(tx) if tx.chromosome.is_some() => return Ok(tx),
+                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id }),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        // Final fallback: try without a build hint (uses cdot's primary build
+        // and any supplemental/FASTA-only data). Preserves the historical
+        // behavior for transcripts that only live in the primary build.
+        match self.get_transcript_on_build(&tx_id, None) {
+            Ok(tx) => Ok(tx),
+            Err(e) => Err(last_err.unwrap_or(e)),
+        }
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
@@ -1117,6 +1229,68 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::tempdir;
+
+    // ----------------------------------------------------------------------
+    // infer_build_from_parent unit coverage (closes review gap on #332)
+    // ----------------------------------------------------------------------
+
+    fn nc_accession(num: &str, version: u32) -> crate::hgvs::variant::Accession {
+        crate::hgvs::variant::Accession::new("NC", num, Some(version))
+    }
+
+    fn ng_accession(num: &str, version: u32) -> crate::hgvs::variant::Accession {
+        crate::hgvs::variant::Accession::new("NG", num, Some(version))
+    }
+
+    #[test]
+    fn infer_build_chr17_grch38() {
+        // NC_000017.11 is chr17 on GRCh38.
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&nc_accession("000017", 11)),
+            Some("GRCh38")
+        );
+    }
+
+    #[test]
+    fn infer_build_chr17_grch37() {
+        // NC_000017.10 is chr17 on GRCh37.
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&nc_accession("000017", 10)),
+            Some("GRCh37")
+        );
+    }
+
+    #[test]
+    fn infer_build_chr14_uses_alias_table_not_version_heuristic() {
+        // chr14 NC accessions are NC_000014.9 (GRCh38) / NC_000014.8 (GRCh37).
+        // A naive ".11→GRCh38, .10→GRCh37" rule would mis-classify both.
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&nc_accession("000014", 9)),
+            Some("GRCh38"),
+        );
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&nc_accession("000014", 8)),
+            Some("GRCh37"),
+        );
+    }
+
+    #[test]
+    fn infer_build_malformed_nc_returns_none() {
+        // NC_000999.999 is not in the human alias table on any build.
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&nc_accession("000999", 999)),
+            None,
+        );
+    }
+
+    #[test]
+    fn infer_build_ng_parent_returns_none() {
+        // NG accessions are build-agnostic; caller must probe builds.
+        assert_eq!(
+            MultiFastaProvider::infer_build_from_parent(&ng_accession("012772", 1)),
+            None,
+        );
+    }
 
     #[test]
     fn test_load_fai_index() {

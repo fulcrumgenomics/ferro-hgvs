@@ -4607,3 +4607,319 @@ mod issue_160_revcomp_inv_subspans {
         assert_eq!(format!("{}", normalized), "NM_000088.3:r.9_10inv");
     }
 }
+
+// =============================================================================
+// Issue #332: NG/NC-prefixed parent reference (`genomic_context`) must not
+// block intronic and exon/intron-boundary normalization. The cdot mapper that
+// owns the NM→chromosome alignment is keyed by genome build, and when the
+// requested build doesn't have the NM (e.g. an older entry under GRCh37
+// referenced by an NG_*-prefixed input), the transcript falls through with
+// `chromosome: None` and the three intronic/boundary paths in
+// `src/normalize/mod.rs` error out before they can run.
+//
+// The fix routes intronic/boundary normalize call sites through the
+// `ReferenceProvider::get_transcript_for_variant` trait method, which uses
+// the input's `genomic_context` parent (NG/NC) to pick a build that has the
+// NM. Plain `NM_*` inputs (no `genomic_context`) keep the old behavior via
+// the default trait impl.
+//
+// Tests use `MockProvider` so CI runs them with no manifest. The fixture
+// registers transcripts with a chromosome set explicitly, exercising the
+// happy path; the missing-chromosome test pins the *improved* error message
+// for the remaining failure mode.
+// =============================================================================
+
+mod ng_prefix_normalization {
+    use super::*;
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+    use ferro_hgvs::reference::ReferenceProvider;
+
+    // -------------------------------------------------------------------------
+    // Fixture: NM_TEST.1 on chr17 (NC_000017.11 / NC_000017.10), 3 exons of
+    // 10bp each, separated by 50bp introns. Plus strand. CDS spans the full
+    // transcript (c.1..c.30).
+    //
+    //   Exon 1: c.1..c.10  ↔ g.1001..1010  (genomic 1-based)
+    //   Intron 1:           g.1011..1060
+    //   Exon 2: c.11..c.20 ↔ g.1061..1070
+    //   Intron 2:           g.1071..1120
+    //   Exon 3: c.21..c.30 ↔ g.1121..1130
+    //
+    // The intron sequences are homopolymers (A in intron 1, T in intron 2)
+    // so 3' shifting has a deterministic target.
+    // -------------------------------------------------------------------------
+
+    /// Transcript fixture used by every test in this module. The MockProvider
+    /// returns a transcript with a non-None `chromosome`, so the existing
+    /// intronic/boundary paths can reach the genomic-fetch step.
+    fn mock_provider_with_intronic_transcript() -> MockProvider {
+        let mut provider = MockProvider::new();
+        // 30bp transcript sequence (3 exons of 10bp each, all "ACGT" filler).
+        let tx_seq = "ACGTACGTAC".repeat(3);
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.1".to_string(),
+            Some("TESTGENE".to_string()),
+            Strand::Plus,
+            tx_seq,
+            Some(1),
+            Some(30),
+            vec![
+                Exon::with_genomic(1, 1, 10, 1001, 1010),
+                Exon::with_genomic(2, 11, 20, 1061, 1070),
+                Exon::with_genomic(3, 21, 30, 1121, 1130),
+            ],
+            Some("chr17".to_string()),
+            Some(1001),
+            Some(1130),
+            Default::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        ));
+        // Build a 2 kb chr17 contig sequence:
+        //  - Filler "N" everywhere except where we plant deterministic bases.
+        //  - Exon 1 at g.1001..1010 = "ACGTACGTAC"
+        //  - Intron 1 at g.1011..1060 = 50 A's (homopolymer for 3' shift)
+        //  - Exon 2 at g.1061..1070 = "ACGTACGTAC"
+        //  - Intron 2 at g.1071..1120 = 50 T's
+        //  - Exon 3 at g.1121..1130 = "ACGTACGTAC"
+        let mut bytes = vec![b'N'; 2000];
+        let plant = |bytes: &mut Vec<u8>, start_1: usize, seq: &str| {
+            for (i, b) in seq.bytes().enumerate() {
+                bytes[start_1 - 1 + i] = b;
+            }
+        };
+        plant(&mut bytes, 1001, "ACGTACGTAC");
+        plant(&mut bytes, 1011, &"A".repeat(50));
+        plant(&mut bytes, 1061, "ACGTACGTAC");
+        plant(&mut bytes, 1071, &"T".repeat(50));
+        plant(&mut bytes, 1121, "ACGTACGTAC");
+        provider.add_genomic_sequence("chr17", String::from_utf8(bytes).unwrap());
+        provider
+    }
+
+    /// A second fixture for the "missing chromosome" error-message test:
+    /// the registered transcript has `chromosome: None` so the intronic
+    /// path's chromosome lookup fails.
+    fn mock_provider_missing_chromosome() -> MockProvider {
+        let mut provider = MockProvider::new();
+        let tx_seq = "ACGTACGTAC".repeat(3);
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.1".to_string(),
+            Some("TESTGENE".to_string()),
+            Strand::Plus,
+            tx_seq,
+            Some(1),
+            Some(30),
+            vec![
+                Exon::with_genomic(1, 1, 10, 1001, 1010),
+                Exon::with_genomic(2, 11, 20, 1061, 1070),
+                Exon::with_genomic(3, 21, 30, 1121, 1130),
+            ],
+            None, // chromosome missing
+            Some(1001),
+            Some(1130),
+            Default::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        ));
+        // Need genomic data present so the path doesn't bail out on
+        // `has_genomic_data()`; the contents are irrelevant for the test.
+        provider.add_genomic_sequence("chr17", "N".repeat(2000));
+        provider
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. Intronic deletion on an NG-parented input must normalize without
+    // error. The intron is a homopolymer A-stretch so the result is a
+    // 3'-shifted single-base deletion inside the same intron.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn intronic_del_with_ng_parent_succeeds() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        // c.10+1del: first intronic base of intron 1 (a 50-A homopolymer
+        // followed by exon 2 starting with `A`). The 3' rule shifts the
+        // deletion to the last position of the homopolymer run — the last
+        // intronic A at g.1060 — rendered as `c.11-1del` using the
+        // downstream-exon offset notation.
+        let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10+1del")
+            .expect("NG-parented intronic input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("intronic normalize with NG parent must succeed");
+        let rendered = format!("{}", normalized);
+        // Pin both the selector wrapper AND the 3'-shifted position. A
+        // regression that swallowed the shift would still match the
+        // `(NM_TEST.1):c.` prefix; only the position assertion catches it.
+        assert_eq!(
+            rendered, "NG_012772.1(NM_TEST.1):c.11-1del",
+            "expected 3'-shifted intronic deletion at c.11-1; got {}",
+            rendered
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Regression guard: plain NM_* (no genomic_context) still normalizes,
+    // unchanged from previous behavior.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn intronic_del_plain_nm_unchanged() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_TEST.1:c.10+1del").expect("plain NM input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("intronic normalize on plain NM must succeed");
+        let rendered = format!("{}", normalized);
+        assert!(
+            rendered.starts_with("NM_TEST.1:c."),
+            "plain NM output should not gain a genomic_context wrapper; got {}",
+            rendered
+        );
+        assert!(rendered.contains("del"));
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Boundary-spanning deletion (one endpoint exonic, the other intronic)
+    // on an NG-parented input must normalize without error.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn boundary_spanning_del_with_ng_parent_succeeds() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        // c.10_10+5del: last exonic base of exon 1 (an `A` from "ACGTACGTAC")
+        // + first 5 intronic bases (all `A` in the 50-A run). The deleted
+        // 6-base `A` stretch lives in a homopolymer that extends to the
+        // last intronic A (g.1060). 3'-shifted, the range becomes c.10_11-1
+        // and the edit canonicalizes to a repeat-notation `A[45]` (45 A's
+        // remain after the 6 are removed; the original `c.10` A merges with
+        // the 50 intronic A's into a 51-A stretch).
+        let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10_10+5del")
+            .expect("NG-parented boundary-spanning input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("boundary-spanning normalize with NG parent must succeed");
+        let rendered = format!("{}", normalized);
+        assert_eq!(
+            rendered, "NG_012772.1(NM_TEST.1):c.10_11-1A[45]",
+            "expected 3'-shifted boundary-spanning result c.10_11-1A[45]; got {}",
+            rendered
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Regression guard: plain NM_* boundary-spanning del still works.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn boundary_spanning_del_plain_nm_unchanged() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_TEST.1:c.10_10+5del").expect("plain NM input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("boundary-spanning normalize on plain NM must succeed");
+        let rendered = format!("{}", normalized);
+        assert!(rendered.starts_with("NM_TEST.1:c."));
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Pins the *improved* error message when the transcript genuinely has
+    // no chromosome on any build. The message must include the parent
+    // accession (so debugging the fix on production inputs is tractable) and
+    // the full variant Display (so the failure is reproducible).
+    // -------------------------------------------------------------------------
+    #[test]
+    fn intronic_with_ng_parent_chromosome_missing_errors_clearly() {
+        let provider = mock_provider_missing_chromosome();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10+1del").expect("parse must succeed");
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("normalize must fail when chromosome is missing");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("NG_012772.1"),
+            "error must mention the parent accession; got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("NM_TEST.1"),
+            "error must mention the transcript accession; got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("c.10+1del"),
+            "error must mention the variant body; got: {}",
+            msg
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. n. (non-coding) intronic input with NG parent must normalize.
+    // Mirrors test 1 but uses the n. axis (TxVariant) which routes through
+    // `normalize_intronic_tx`.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn intronic_tx_n_dot_with_ng_parent_succeeds() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        // n.10+1del — same position as c.10+1del since cds_start=1 for this
+        // fixture, so n. ≡ tx ≡ c. positions on the exonic axis.
+        let variant = parse_hgvs("NG_012772.1(NM_TEST.1):n.10+1del")
+            .expect("NG-parented n. intronic input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("n. intronic normalize with NG parent must succeed");
+        let rendered = format!("{}", normalized);
+        assert!(
+            rendered.starts_with("NG_012772.1(NM_TEST.1):n."),
+            "NG parent + n. axis must round-trip; got {}",
+            rendered
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. NC_*-parented inputs must also benefit from the fix (locked decision
+    // 1 in the issue). NC_000017.11 → GRCh38 by version; the build hint is
+    // ignored for MockProvider since the provider returns the same transcript
+    // either way, but the call path must accept NC parents.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn intronic_del_with_nc_parent_succeeds() {
+        let provider = mock_provider_with_intronic_transcript();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NC_000017.11(NM_TEST.1):c.10+1del")
+            .expect("NC-parented intronic input must parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("intronic normalize with NC parent must succeed");
+        let rendered = format!("{}", normalized);
+        assert!(
+            rendered.starts_with("NC_000017.11(NM_TEST.1):c."),
+            "NC parent must round-trip; got {}",
+            rendered
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. Direct test of the new trait method. Pins the default implementation
+    // contract: `get_transcript_for_variant` returns the same transcript as
+    // `get_transcript(&variant.transcript_accession())` for MockProvider
+    // (which keeps the default impl per the plan).
+    // -------------------------------------------------------------------------
+    #[test]
+    fn get_transcript_for_variant_default_impl_delegates() {
+        let provider = mock_provider_with_intronic_transcript();
+        let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10+1del").expect("input must parse");
+        let by_variant = provider
+            .get_transcript_for_variant(&variant)
+            .expect("default impl must delegate to get_transcript");
+        let by_id = provider
+            .get_transcript("NM_TEST.1")
+            .expect("get_transcript must find the registered transcript");
+        assert_eq!(by_variant.id, by_id.id);
+        assert_eq!(by_variant.chromosome, by_id.chromosome);
+    }
+}

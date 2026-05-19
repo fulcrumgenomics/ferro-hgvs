@@ -742,7 +742,10 @@ impl From<CdotTranscriptSnapshot> for CdotTranscript {
 /// Coordinate mapper using cdot data.
 #[derive(Debug, Clone)]
 pub struct CdotMapper {
-    /// Transcripts indexed by accession.
+    /// Transcripts indexed by accession. Entries are populated from whatever
+    /// genome build was passed at load time (the "primary build"). Use
+    /// [`get_transcript_on_build`](Self::get_transcript_on_build) to fetch a
+    /// non-primary build's view of a transcript.
     transcripts: HashMap<String, CdotTranscript>,
     /// Index from contig to transcript IDs that overlap.
     contig_index: HashMap<String, Vec<String>>,
@@ -753,10 +756,25 @@ pub struct CdotMapper {
     base_to_versioned: HashMap<String, String>,
     /// LRG transcript to RefSeq transcript mapping (e.g., "LRG_1t1" -> "NM_000088.3").
     lrg_to_refseq: HashMap<String, String>,
+    /// Per-transcript data on builds OTHER than the primary load build.
+    /// Outer key is the genome-build name (e.g. "GRCh37"); inner key is the
+    /// transcript accession. Populated when the source cdot JSON nests
+    /// per-build data under `genome_builds`. Empty for mappers built without
+    /// a multi-build source (bincode snapshots, `from_transcripts`, manual
+    /// `add_transcript`).
+    ///
+    /// The primary build's data lives in [`Self::transcripts`] only; it is
+    /// NOT duplicated here. [`get_transcript_on_build`](Self::get_transcript_on_build)
+    /// dispatches between the two maps.
+    alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscript>>,
+    /// The genome-build name corresponding to entries in [`Self::transcripts`].
+    /// Used by [`get_transcript_on_build`](Self::get_transcript_on_build) to
+    /// short-circuit when the caller asks for the primary build.
+    primary_build: String,
 }
 
 impl CdotMapper {
-    /// Create a new empty mapper.
+    /// Create a new empty mapper (primary build defaults to GRCh38).
     pub fn new() -> Self {
         Self {
             transcripts: HashMap::new(),
@@ -764,6 +782,8 @@ impl CdotMapper {
             contig_alias_to_canonical: HashMap::new(),
             base_to_versioned: HashMap::new(),
             lrg_to_refseq: HashMap::new(),
+            alt_build_transcripts: HashMap::new(),
+            primary_build: "GRCh38".to_string(),
         }
     }
 
@@ -806,6 +826,7 @@ impl CdotMapper {
         I: IntoIterator<Item = &'a crate::reference::transcript::Transcript>,
     {
         let mut mapper = Self::new();
+        mapper.primary_build = genome_build.to_string();
         for tx in transcripts {
             let Some(contig) = tx.chromosome.clone() else {
                 log::warn!("Skipping transcript {}: missing chromosome", tx.id);
@@ -913,6 +934,19 @@ impl CdotMapper {
             contig_alias_to_canonical: snapshot.contig_alias_to_canonical,
             base_to_versioned: snapshot.base_to_versioned,
             lrg_to_refseq: snapshot.lrg_to_refseq,
+            // Bincode snapshots are produced for a specific genome build; alt-
+            // build data is not part of the serialized format. `primary_build`
+            // is unknown here — default to GRCh38 to match the prior contract.
+            // Callers that need multi-build access (e.g. NG/NC-parent-aware
+            // transcript lookup per #332) should load from JSON.
+            alt_build_transcripts: {
+                log::warn!(
+                    "cdot bincode load: alt-build data unavailable; NG/NC-parent build \
+                     resolution (#332) is degraded. Load from JSON to enable."
+                );
+                HashMap::new()
+            },
+            primary_build: "GRCh38".to_string(),
         })
     }
 
@@ -999,10 +1033,36 @@ impl CdotMapper {
     }
 
     /// Create from a raw CdotFile, converting to internal format.
+    ///
+    /// Captures both the primary build's data (into [`Self::transcripts`])
+    /// and any non-primary builds present in the source `genome_builds`
+    /// (into [`Self::alt_build_transcripts`]), so callers can later request
+    /// a non-default build via
+    /// [`get_transcript_on_build`](Self::get_transcript_on_build). The
+    /// non-primary capture is best-effort: transcripts that omit a given
+    /// build are simply absent from that build's map.
     fn from_raw_cdot_file(raw_file: RawCdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
+        mapper.primary_build = genome_build.to_string();
 
         for (accession, raw_transcript) in raw_file.transcripts {
+            // Stash any non-primary build views first so a missing primary-
+            // build entry does not skip the alt builds.
+            if let Some(builds) = &raw_transcript.genome_builds {
+                for build_name in builds.keys() {
+                    if build_name == genome_build {
+                        continue;
+                    }
+                    if let Some(tx) = raw_transcript.to_transcript(build_name) {
+                        mapper
+                            .alt_build_transcripts
+                            .entry(build_name.clone())
+                            .or_default()
+                            .insert(accession.clone(), tx);
+                    }
+                }
+            }
+
             if let Some(transcript) = raw_transcript.to_transcript(genome_build) {
                 mapper.add_transcript(accession, transcript);
             }
@@ -1021,6 +1081,7 @@ impl CdotMapper {
     /// Create from a parsed CdotFile with a specific genome build for contig aliases.
     pub fn from_cdot_file_with_build(cdot_file: CdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
+        mapper.primary_build = genome_build.to_string();
 
         for (accession, transcript) in cdot_file.transcripts {
             mapper.add_transcript(accession, transcript);
@@ -1213,6 +1274,63 @@ impl CdotMapper {
         }
 
         None
+    }
+
+    /// Get a transcript by accession, restricted to a specific genome build.
+    ///
+    /// When `build` matches the mapper's primary load build, delegates to
+    /// [`get_transcript`](Self::get_transcript). Otherwise consults the
+    /// alt-build cache (populated from the source cdot JSON's `genome_builds`
+    /// section). Returns `None` if the transcript is absent from the requested
+    /// build (or if the alt-build cache is empty, e.g. for bincode-loaded
+    /// mappers or `from_transcripts`-built mappers).
+    ///
+    /// This is the lookup used by NG/NC-parent-aware transcript resolution
+    /// (issue #332): when the input is `NG_*(NM_*):c.…` or
+    /// `NC_*(NM_*):c.…`, the caller infers a build hint from the parent and
+    /// asks for that build's view of the NM, so the resulting transcript
+    /// carries the correct chromosome alignment.
+    pub fn get_transcript_on_build(&self, accession: &str, build: &str) -> Option<&CdotTranscript> {
+        if build == self.primary_build {
+            return self.get_transcript(accession);
+        }
+        let alt = self.alt_build_transcripts.get(build)?;
+        if let Some(tx) = alt.get(accession) {
+            return Some(tx);
+        }
+        // Version fallback within the alt-build map.
+        if let Some(base) = accession.split('.').next() {
+            for (k, v) in alt {
+                if k.starts_with(base) && k[base.len()..].starts_with('.') {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+
+    /// List every genome build that has data for the given transcript.
+    ///
+    /// Includes the primary build if the transcript is present there. The
+    /// returned list is unordered; callers that want a deterministic probe
+    /// order (e.g. GRCh38-then-GRCh37) should sort externally.
+    pub fn available_builds_for(&self, accession: &str) -> Vec<String> {
+        let mut builds = Vec::new();
+        if self.get_transcript(accession).is_some() {
+            builds.push(self.primary_build.clone());
+        }
+        for (build, alt) in &self.alt_build_transcripts {
+            // Direct hit, or versioned-base fallback.
+            let hit = alt.contains_key(accession)
+                || accession.split('.').next().is_some_and(|base| {
+                    alt.keys()
+                        .any(|k| k.starts_with(base) && k[base.len()..].starts_with('.'))
+                });
+            if hit {
+                builds.push(build.clone());
+            }
+        }
+        builds
     }
 
     /// Get all transcripts on a contig. Resolves aliases (e.g., "chr7" -> "NC_000007.14").
@@ -2253,5 +2371,98 @@ mod tests {
         assert_eq!(cumulative_insertion_offset(&cigar, 150), 0);
         // After insertion
         assert_eq!(cumulative_insertion_offset(&cigar, 250), 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #332: multi-build retention. A cdot JSON with `genome_builds` for
+    // both GRCh37 and GRCh38 must yield a mapper that can return the
+    // transcript on either build via `get_transcript_on_build`.
+    // -------------------------------------------------------------------------
+
+    fn multi_build_cdot_json() -> &'static str {
+        r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "+",
+                            "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                        },
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#
+    }
+
+    #[test]
+    fn test_get_transcript_on_build_returns_correct_contig() {
+        let json = multi_build_cdot_json();
+        // Primary build = GRCh38.
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        let tx38 = mapper
+            .get_transcript_on_build("NM_000088.3", "GRCh38")
+            .expect("GRCh38 view must be present");
+        assert_eq!(tx38.contig, "NC_000017.11");
+
+        let tx37 = mapper
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .expect("GRCh37 view must be retained even when GRCh38 is primary");
+        assert_eq!(tx37.contig, "NC_000017.10");
+    }
+
+    #[test]
+    fn test_get_transcript_on_build_primary_build_grch37() {
+        let json = multi_build_cdot_json();
+        // Primary build = GRCh37.
+        let mapper = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh37").unwrap();
+
+        let tx37 = mapper
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .expect("primary build access via get_transcript_on_build");
+        assert_eq!(tx37.contig, "NC_000017.10");
+
+        let tx38 = mapper
+            .get_transcript_on_build("NM_000088.3", "GRCh38")
+            .expect("non-primary GRCh38 view must be retained");
+        assert_eq!(tx38.contig, "NC_000017.11");
+    }
+
+    #[test]
+    fn test_available_builds_for_multi_build_input() {
+        let json = multi_build_cdot_json();
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let mut builds = mapper.available_builds_for("NM_000088.3");
+        builds.sort();
+        assert_eq!(builds, vec!["GRCh37".to_string(), "GRCh38".to_string()]);
+    }
+
+    #[test]
+    fn test_available_builds_for_unknown_accession() {
+        let json = multi_build_cdot_json();
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        assert!(mapper.available_builds_for("NM_999999.1").is_empty());
+    }
+
+    #[test]
+    fn test_get_transcript_on_build_version_fallback_in_alt() {
+        // NM_000088.4 falls back to NM_000088.3 inside the alt-build map too.
+        let json = multi_build_cdot_json();
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let tx37 = mapper
+            .get_transcript_on_build("NM_000088.4", "GRCh37")
+            .expect("version fallback inside alt-build map");
+        assert_eq!(tx37.contig, "NC_000017.10");
     }
 }

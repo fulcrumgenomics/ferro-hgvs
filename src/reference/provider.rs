@@ -3,6 +3,7 @@
 //! Defines the interface for accessing reference sequence data.
 
 use crate::error::FerroError;
+use crate::hgvs::variant::HgvsVariant;
 use crate::reference::transcript::Transcript;
 
 /// Trait for providing reference sequence data
@@ -14,6 +15,29 @@ use crate::reference::transcript::Transcript;
 pub trait ReferenceProvider {
     /// Get a transcript by its accession
     fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError>;
+
+    /// Get the transcript for the given variant, optionally using the
+    /// variant's `genomic_context` parent (NG/NC) to pick a cdot build
+    /// that has the transcript with a chromosome populated.
+    ///
+    /// The default implementation delegates to
+    /// [`get_transcript`](Self::get_transcript) using
+    /// [`HgvsVariant::accession`] / [`Accession::transcript_accession`],
+    /// which preserves existing behavior for inputs that do not carry a
+    /// `genomic_context`.
+    ///
+    /// Providers that know how to resolve an NG/NC-anchored input to a
+    /// specific cdot build (e.g. [`crate::reference::multi_fasta::MultiFastaProvider`])
+    /// override this to consult the parent accession before falling back to
+    /// the bare transcript lookup. See issue #332.
+    fn get_transcript_for_variant(&self, variant: &HgvsVariant) -> Result<Transcript, FerroError> {
+        let accession = variant
+            .accession()
+            .ok_or_else(|| FerroError::ReferenceNotFound {
+                id: format!("{}", variant),
+            })?;
+        self.get_transcript(&accession.transcript_accession())
+    }
 
     /// Get a sequence region
     ///
@@ -102,6 +126,10 @@ pub trait ReferenceProvider {
 impl ReferenceProvider for Box<dyn ReferenceProvider> {
     fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
         (**self).get_transcript(id)
+    }
+
+    fn get_transcript_for_variant(&self, variant: &HgvsVariant) -> Result<Transcript, FerroError> {
+        (**self).get_transcript_for_variant(variant)
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {

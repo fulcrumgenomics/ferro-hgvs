@@ -706,9 +706,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 })
                 .or_else(|| Some(transcript_id.to_string()));
             if let Some(prot_acc) = prot_acc {
+                // Issue #332: route per-codon transcript lookups through the
+                // variant-aware path so an NG/NC-parented input (carried on
+                // the input `coding` variant we're projecting) picks the
+                // build-correct chromosome. Falls back to the bare lookup
+                // for inputs without a `genomic_context`.
+                let get_tx = || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                    self.provider.get_transcript_for_variant(&coding)
+                };
+                // Only fall back to the bare lookup when the variant-aware
+                // lookup explicitly couldn't find a build-resolved transcript
+                // (issue #332). Other provider errors (I/O, parse, etc.)
+                // must propagate so they aren't silently masked.
+                let tx_for_codon_with_fallback =
+                    || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                        match get_tx() {
+                            Ok(tx) => Ok(tx),
+                            Err(FerroError::ReferenceNotFound { .. }) => {
+                                self.provider.get_transcript(transcript_id)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    };
                 match &c_edit {
                     NaEdit::Substitution { .. } => {
-                        let tx_for_codon = self.provider.get_transcript(transcript_id)?;
+                        let tx_for_codon = tx_for_codon_with_fallback()?;
                         protein = Some(predict_substitution_protein(
                             &tx_for_codon,
                             cds_start.base,
@@ -728,7 +750,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                             && cds_start.base > 0
                             && cds_end.base > 0 =>
                     {
-                        let tx_for_codon = self.provider.get_transcript(transcript_id)?;
+                        let tx_for_codon = tx_for_codon_with_fallback()?;
                         match predict_indel_protein(
                             &tx_for_codon,
                             cds_start.base,

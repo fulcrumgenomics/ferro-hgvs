@@ -561,8 +561,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![]));
         }
 
-        // Try to get transcript first - we need it for intronic normalization too
+        // Try to get transcript first - we need it for intronic normalization too.
+        //
+        // For intronic / boundary-spanning positions we route through
+        // `get_transcript_for_variant` so providers that hold cdot data
+        // (e.g. `MultiFastaProvider`) can pick a genome build informed by
+        // the input's `genomic_context` (NG_* / NC_* parent). For the
+        // pure-exonic CDS path the build hint is irrelevant — `get_transcript`
+        // is sufficient.
         let accession = variant.accession.transcript_accession();
+        let transcript_for_intronic =
+            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                self.provider
+                    .get_transcript_for_variant(&HV::Cds(variant.clone()))
+            };
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
@@ -571,6 +583,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Handle intronic variants specially
         if start_pos.is_intronic() || end_pos.is_intronic() {
+            // Switch to the variant-aware lookup so an NG/NC-parented input
+            // gets the build-correct chromosome. If the variant-aware lookup
+            // fails, fall back to the plain transcript we already fetched.
+            let transcript = transcript_for_intronic().unwrap_or(transcript);
             // Check if both positions are intronic and in the same intron
             if start_pos.is_intronic() && end_pos.is_intronic() {
                 return self.normalize_intronic_cds(variant, &transcript, start_pos, end_pos, edit);
@@ -817,8 +833,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![]));
         }
 
-        // Try to get transcript first - we need it for intronic normalization too
+        // Try to get transcript first - we need it for intronic normalization too.
+        // See `normalize_cds` for the rationale behind the dual lookup.
         let accession = variant.accession.transcript_accession();
+        let transcript_for_intronic =
+            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                self.provider
+                    .get_transcript_for_variant(&HV::Tx(variant.clone()))
+            };
         let transcript = match self.provider.get_transcript(&accession) {
             Ok(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
@@ -826,6 +848,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         if start_pos.is_intronic() || end_pos.is_intronic() {
+            // Switch to the variant-aware lookup so an NG/NC-parented input
+            // gets the build-correct chromosome.
+            let transcript = transcript_for_intronic().unwrap_or(transcript);
             // Route intronic tx variants to the intronic normalization path
             if start_pos.is_intronic() && end_pos.is_intronic() {
                 return self.normalize_intronic_tx(variant, &transcript, start_pos, end_pos, edit);
@@ -1506,14 +1531,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
-        // Get the chromosome for this transcript
+        // Get the chromosome for this transcript. Issue #332: include the
+        // parent accession and full variant Display in the error so the
+        // remaining failure mode (transcript not present on any genome build)
+        // is diagnosable without re-running with extra logging.
         let chromosome =
             transcript
                 .chromosome
                 .as_ref()
                 .ok_or_else(|| FerroError::ConversionError {
-                    msg: "Transcript has no chromosome mapping for intronic normalization"
-                        .to_string(),
+                    msg: format!(
+                        "Transcript {} has no chromosome mapping for intronic \
+                         normalization (parent={}, variant={}); the cdot data has \
+                         no genomic alignment for this transcript on any known \
+                         genome build",
+                        transcript.id,
+                        variant
+                            .accession
+                            .genomic_context
+                            .as_deref()
+                            .map(|a| a.full())
+                            .unwrap_or_else(|| "<none>".to_string()),
+                        variant,
+                    ),
                 })?;
 
         // Create coordinate mapper
@@ -1669,14 +1709,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
-        // Get the chromosome for this transcript
+        // Get the chromosome for this transcript. Issue #332: include the
+        // parent accession and full variant Display in the error so the
+        // remaining failure mode (transcript not present on any genome build)
+        // is diagnosable without re-running with extra logging.
         let chromosome =
             transcript
                 .chromosome
                 .as_ref()
                 .ok_or_else(|| FerroError::ConversionError {
-                    msg: "Transcript has no chromosome mapping for intronic normalization"
-                        .to_string(),
+                    msg: format!(
+                        "Transcript {} has no chromosome mapping for intronic \
+                         normalization (parent={}, variant={}); the cdot data has \
+                         no genomic alignment for this transcript on any known \
+                         genome build",
+                        transcript.id,
+                        variant
+                            .accession
+                            .genomic_context
+                            .as_deref()
+                            .map(|a| a.full())
+                            .unwrap_or_else(|| "<none>".to_string()),
+                        variant,
+                    ),
                 })?;
 
         // Create coordinate mapper
@@ -1815,12 +1870,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
+        // Issue #332: same improved error shape as the intronic paths.
         let chromosome =
             transcript
                 .chromosome
                 .as_ref()
                 .ok_or_else(|| FerroError::ConversionError {
-                    msg: "Transcript has no chromosome for boundary normalization".to_string(),
+                    msg: format!(
+                        "Transcript {} has no chromosome for boundary \
+                         normalization (parent={}, variant={}); the cdot data \
+                         has no genomic alignment for this transcript on any \
+                         known genome build",
+                        transcript.id,
+                        variant
+                            .accession
+                            .genomic_context
+                            .as_deref()
+                            .map(|a| a.full())
+                            .unwrap_or_else(|| "<none>".to_string()),
+                        variant,
+                    ),
                 })?;
 
         let mapper = CoordinateMapper::new(transcript);
@@ -3131,6 +3200,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// (`hgvs_end - hgvs_start + 1` bytes), with `ref_bytes[0]` aligned to
     /// HGVS pos `hgvs_start`. This invariant lets the caller use a uniform
     /// `hgvs_pos = hgvs_start + offset` formula regardless of coord system.
+    ///
+    /// Note: this helper reads the transcript *sequence* (FASTA-derived,
+    /// build-invariant) and not the `chromosome` field; the bare
+    /// `provider.get_sequence(&transcript_accession, …)` is therefore
+    /// sufficient. The build-aware lookup (`get_transcript_for_variant`,
+    /// see #332) is reserved for paths that actually consume `chromosome`
+    /// — the intronic and boundary-spanning normalization branches.
     fn fetch_ref_for_canonical_split(
         &self,
         variant: &HgvsVariant,

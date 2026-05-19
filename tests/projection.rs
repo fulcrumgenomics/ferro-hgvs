@@ -92,3 +92,112 @@ fn end_to_end_no_overlap() {
     let err = vp.project("NC_000001.11:g.5000A>G", "NM_TEST.1");
     assert!(err.is_err(), "expected error for off-transcript position");
 }
+
+// =============================================================================
+// Issue #332: `VariantProjector` must also route transcript lookups through
+// the variant-aware `ReferenceProvider::get_transcript_for_variant` so the
+// projector benefits from the same NG/NC-parent build resolution as
+// `Normalizer::normalize`. Confirms the projector resolves an intronic c.
+// input that carries an NG_* parent without erroring on the codon-fetch step.
+// =============================================================================
+
+/// Intronic-aware fixture: a 3-exon transcript on chr1 plus strand, intron
+/// homopolymers, so intronic 3' shifting is well-defined. The projector path
+/// only requires that the substitution-codon-fetch and indel-codon-fetch
+/// sites use the variant-aware lookup; this fixture exercises an exonic g.
+/// substitution against an NG-parented HGVS form to confirm the projector's
+/// `provider.get_transcript_for_variant(variant)` plumbing is in place.
+fn intronic_fixture() -> (Projector, MockProvider) {
+    let mut cdot = CdotMapper::new();
+    cdot.add_transcript(
+        "NM_TEST.1".to_string(),
+        CdotTranscript {
+            gene_name: Some("TESTGENE".to_string()),
+            contig: "chr1".to_string(),
+            strand: Strand::Plus,
+            // 3 exons, 30bp total, plus 2 introns of 50bp each.
+            // Exon 1: g.[1001,1010] tx [0,10)
+            // Exon 2: g.[1061,1070] tx [10,20)
+            // Exon 3: g.[1121,1130] tx [20,30)
+            exons: vec![
+                [1000, 1010, 0, 10],
+                [1060, 1070, 10, 20],
+                [1120, 1130, 20, 30],
+            ],
+            cds_start: Some(0),
+            cds_end: Some(30),
+            gene_id: None,
+            protein: Some("NP_TEST.1".to_string()),
+            exon_cigars: Vec::new(),
+        },
+    );
+    let projector = Projector::new(cdot);
+
+    let mut provider = MockProvider::new();
+    let tx_seq = "ATGCGCTAAATGCGCTAAATGCGCTAACGT"; // 30 bases
+    provider.add_transcript(Transcript::new(
+        "NM_TEST.1".to_string(),
+        Some("TESTGENE".to_string()),
+        TxStrand::Plus,
+        tx_seq.to_string(),
+        Some(1),
+        Some(30),
+        vec![
+            Exon::with_genomic(1, 1, 10, 1001, 1010),
+            Exon::with_genomic(2, 11, 20, 1061, 1070),
+            Exon::with_genomic(3, 21, 30, 1121, 1130),
+        ],
+        Some("chr1".to_string()),
+        Some(1001),
+        Some(1130),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+    // Plant a deterministic genomic sequence on chr1.
+    let mut bytes = vec![b'N'; 2000];
+    let plant = |bytes: &mut Vec<u8>, start_1: usize, seq: &str| {
+        for (i, b) in seq.bytes().enumerate() {
+            bytes[start_1 - 1 + i] = b;
+        }
+    };
+    plant(&mut bytes, 1001, "ATGCGCTAAA");
+    plant(&mut bytes, 1011, &"A".repeat(50));
+    plant(&mut bytes, 1061, "TGCGCTAAAT");
+    plant(&mut bytes, 1071, &"T".repeat(50));
+    plant(&mut bytes, 1121, "GCGCTAACGT");
+    provider.add_genomic_sequence("chr1", String::from_utf8(bytes).unwrap());
+    (projector, provider)
+}
+
+#[test]
+fn project_intronic_c_dot_succeeds() {
+    // Pins that intronic g.→c. projection runs through `Normalizer::normalize`
+    // (intronic path, which uses the variant-aware lookup after #332) and the
+    // projector's per-codon transcript fetches without erroring.
+    //
+    // The input here is `g.`-form (the projector's primary supported entry
+    // point); the per-codon transcript lookups inside the projector consult
+    // `get_transcript_for_variant` on internally-constructed `CdsVariant`s
+    // (which do NOT carry `genomic_context` today — that's a separate gap
+    // tracked by #328). Direct NG-parented projection coverage will land
+    // once #328 ships.
+    let (projector, provider) = intronic_fixture();
+    let vp = VariantProjector::new(projector, provider);
+    let result = vp
+        .project("NC_000001.11:g.1012A>T", "NM_TEST.1")
+        .expect("projection must succeed for intronic input");
+    assert_eq!(result.transcript_id, "NM_TEST.1");
+    assert!(result.is_intronic);
+    let c = result.coding.as_ref().unwrap().to_string();
+    // Pin the position number — a regression that mis-identifies the
+    // intronic offset would still match a loose `c.10+` substring.
+    assert!(
+        c.contains("c.10+3"),
+        "expected intronic offset c.10+3; got {}",
+        c
+    );
+    // Intronic substitutions skip protein prediction.
+    assert!(result.protein.is_none(), "no p. for intronic substitutions");
+}
