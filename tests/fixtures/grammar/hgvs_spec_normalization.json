@@ -431,7 +431,7 @@
     },
     {
       "input": "NM_004006.2:c.6775_6777delGAGinsC",
-      "current": "NM_004006.2:c.6775_6777delGAGinsC",
+      "current": "NM_004006.2:c.6775_6777delinsC",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -443,7 +443,7 @@
     },
     {
       "input": "NM_004006.2:c.6775_6777delGTGinsC",
-      "current": "NM_004006.2:c.6775_6777delGTGinsC",
+      "current": "NM_004006.2:c.6775_6777delinsC",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -599,7 +599,7 @@
     {
       "input": "c.4375_4376delCGinsAGTT",
       "input_prefixed": "NM_004006.2:c.4375_4376delCGinsAGTT",
-      "current": "NM_004006.2:c.4375_4376delCGinsAGTT",
+      "current": "NM_004006.2:c.4375_4376delinsAGTT",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "c",
@@ -7277,7 +7277,7 @@
     },
     {
       "input": "NC_000023.11:g.32386323delCinsGA",
-      "current": "NC_000023.11:g.32386323delCinsGA",
+      "current": "NC_000023.11:g.32386323delinsGA",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "g",
@@ -7289,7 +7289,7 @@
     },
     {
       "input": "NC_000023.11:g.32386323delTinsGA",
-      "current": "NC_000023.11:g.32386323delTinsGA",
+      "current": "NC_000023.11:g.32386323delinsGA",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "g",

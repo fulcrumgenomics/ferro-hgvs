@@ -1471,6 +1471,16 @@ pub fn should_canonicalize(edit: &NaEdit) -> bool {
         NaEdit::Duplication {
             sequence, length, ..
         } => sequence.is_some() || length.is_some(),
+        // Companion to the Delins arm in `canonicalize_edit`: a top-level
+        // `<a>_<b>delXinsY` (or `<a>_<b>del<N>insY`) is redundant per
+        // recommendations/DNA/delins.md — the spec says `<a>_<b>delinsY`
+        // is the canonical form. Strip the explicit deleted bases/length
+        // regardless of provider availability. Closes #338.
+        NaEdit::Delins {
+            deleted,
+            deleted_length,
+            ..
+        } => deleted.is_some() || deleted_length.is_some(),
         // Companion to the A4 arm in `canonicalize_edit`: route degenerate
         // substitutions through the no-reference canonicalize path so the
         // rewrite fires even when the provider is empty.
