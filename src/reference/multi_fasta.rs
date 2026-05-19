@@ -617,6 +617,96 @@ impl MultiFastaProvider {
             TranscriptMetadata::default()
         }
     }
+
+    /// Build a `Transcript` for `id` whose bases are synthesized from the genome
+    /// FASTA by walking the cdot exon alignment. Used as a fallback when the
+    /// transcript FASTA does not carry the requested versioned accession but
+    /// cdot does (closes #331).
+    ///
+    /// Strand-aware: cdot stores genome-orientation bases; minus-strand
+    /// transcripts get reverse-complemented to transcript orientation here.
+    ///
+    /// Returns `FerroError::GenomicReferenceNotAvailable` if the cdot-named
+    /// contig is missing from the genome FASTA, and `FerroError::InvalidCoordinates`
+    /// if any exon's genomic span is degenerate.
+    fn synthesize_transcript_from_cdot(
+        &self,
+        id: &str,
+        tx: &crate::data::cdot::CdotTranscript,
+    ) -> Result<Transcript, FerroError> {
+        use crate::reference::transcript::{Exon as TxExon, GenomeBuild, ManeStatus, Strand};
+        use std::sync::OnceLock;
+
+        // Concatenate genome bases per exon in tx-order. cdot stores exons
+        // sorted by tx position; the array layout is
+        //   [genome_start (HGVS-1-based incl), genome_end (HGVS-1-based excl),
+        //    tx_start (0-based incl), tx_end (0-based excl)]
+        // so we subtract 1 from both genomic bounds to get the 0-based
+        // half-open window `get_genomic_sequence` expects.
+        let mut sequence = String::new();
+        for e in &tx.exons {
+            let g_start_hgvs = e[0];
+            let g_end_excl_hgvs = e[1];
+            if g_end_excl_hgvs <= g_start_hgvs || g_start_hgvs == 0 {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "cdot exon for {} has degenerate genomic span [{}, {})",
+                        id, g_start_hgvs, g_end_excl_hgvs
+                    ),
+                });
+            }
+            let bases =
+                self.get_genomic_sequence(&tx.contig, g_start_hgvs - 1, g_end_excl_hgvs - 1)?;
+            sequence.push_str(&bases);
+        }
+
+        if matches!(tx.strand, Strand::Minus) {
+            sequence = crate::sequence::reverse_complement(&sequence);
+        }
+
+        // Project cdot exons + CDS metadata onto the transcript struct using the
+        // same conventions as the FASTA-backed `get_transcript` path above so
+        // downstream consumers see one shape regardless of which path served them.
+        let exons: Vec<TxExon> = tx
+            .exons
+            .iter()
+            .enumerate()
+            .map(|(i, e)| TxExon {
+                number: (i + 1) as u32,
+                start: e[2],
+                end: e[3],
+                genomic_start: Some(e[0] + 1),
+                genomic_end: Some(e[1]),
+            })
+            .collect();
+
+        let (genomic_start, genomic_end) = if !exons.is_empty() {
+            let min_start = exons.iter().filter_map(|e| e.genomic_start).min();
+            let max_end = exons.iter().filter_map(|e| e.genomic_end).max();
+            (min_start, max_end)
+        } else {
+            (None, None)
+        };
+
+        Ok(Transcript {
+            id: id.to_string(),
+            gene_symbol: tx.gene_name.clone(),
+            strand: tx.strand,
+            sequence: Some(sequence),
+            cds_start: tx.cds_start.map(|s| s + 1),
+            cds_end: tx.cds_end,
+            exons,
+            chromosome: Some(tx.contig.clone()),
+            genomic_start,
+            genomic_end,
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: tx.exon_cigars.clone(),
+            cached_introns: OnceLock::new(),
+        })
+    }
 }
 
 /// Metadata about a transcript gathered from cdot and/or supplemental sources.
@@ -746,6 +836,17 @@ impl ReferenceProvider for MultiFastaProvider {
                     exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });
+            }
+        }
+
+        // cdot-driven fallback: when the transcript FASTA has no entry for
+        // `id` (most often because the requested version is missing) but cdot
+        // does carry the exon alignment, synthesize transcript bases by
+        // walking the alignment against the genome FASTA. Strand-aware.
+        // Closes #331.
+        if let Some(ref cdot) = self.cdot_mapper {
+            if let Some(tx) = cdot.get_transcript(id) {
+                return self.synthesize_transcript_from_cdot(id, tx);
             }
         }
 
@@ -1034,5 +1135,205 @@ mod tests {
         assert_eq!(aliases.get("NC_000001"), Some(&"chr1".to_string()));
         assert_eq!(aliases.get("1"), Some(&"chr1".to_string()));
         assert_eq!(aliases.get("X"), Some(&"chrX".to_string()));
+    }
+
+    /// Helper: build a [`MultiFastaProvider`] from a tempdir whose only FASTA is a
+    /// genome contig `NC_TEST.1` with the 40 bases `AAAACCCCGGGGTTTT` × 2.5. No
+    /// transcript FASTA is created; the synthetic transcript exists only in cdot.
+    fn build_provider_with_synthetic_cdot(
+        strand: crate::reference::transcript::Strand,
+    ) -> MultiFastaProvider {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Transcript};
+        use std::sync::OnceLock;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_TEST.1").unwrap();
+            // 40 bases of `AAAACCCCGGGGTTTT` repeating
+            writeln!(f, "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC").unwrap();
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            // name<TAB>length<TAB>offset<TAB>line_bases<TAB>line_bytes
+            // Header ">NC_TEST.1\n" is 11 bytes, so seq offset = 11.
+            writeln!(f, "NC_TEST.1\t40\t11\t40\t41").unwrap();
+        }
+        // Leak the tempdir so the FASTA stays on disk for the lifetime of the
+        // provider; the test process exits before any cleanup matters.
+        let _kept = Box::leak(Box::new(dir));
+
+        let mut provider = MultiFastaProvider::from_directory(_kept.path()).unwrap();
+
+        // Synthetic transcript:
+        //   single exon, tx positions 1..20 (20 bases)
+        //   genome positions 11..30 (1-based inclusive on NC_TEST.1)
+        //   On + strand, bases = NC_TEST.1[10..30] = "GGTTTTAAAACCCCGGGGTT"
+        //   On - strand, bases = reverse_complement of the above
+        //                      = "AACCCCGGGGTTTTAAAACC"
+        let tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            strand,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(20),
+            exons: vec![Exon::with_genomic(1, 1, 20, 11, 30)],
+            chromosome: Some("NC_TEST.1".to_string()),
+            genomic_start: Some(11),
+            genomic_end: Some(30),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+        provider
+    }
+
+    #[test]
+    fn test_get_transcript_falls_back_to_cdot_alignment_plus_strand() {
+        use crate::reference::transcript::Strand;
+        let provider = build_provider_with_synthetic_cdot(Strand::Plus);
+
+        // NM_TEST.1 is NOT in the FASTA index (only NC_TEST.1 is). cdot has the
+        // exon alignment. Pre-fix this returns ReferenceNotFound; post-fix it
+        // reconstructs the bases from the genome FASTA.
+        let tx = provider
+            .get_transcript("NM_TEST.1")
+            .expect("cdot exon-alignment fallback should fetch transcript");
+
+        assert_eq!(tx.id, "NM_TEST.1");
+        assert_eq!(tx.sequence.as_deref(), Some("GGTTTTAAAACCCCGGGGTT"));
+        assert!(matches!(tx.strand, Strand::Plus));
+        assert_eq!(tx.gene_symbol.as_deref(), Some("TEST"));
+        assert_eq!(tx.exons.len(), 1);
+    }
+
+    #[test]
+    fn test_get_transcript_falls_back_to_cdot_alignment_minus_strand() {
+        use crate::reference::transcript::Strand;
+        let provider = build_provider_with_synthetic_cdot(Strand::Minus);
+
+        let tx = provider
+            .get_transcript("NM_TEST.1")
+            .expect("cdot exon-alignment fallback should fetch transcript");
+
+        // Genome bases [10..30] on NC_TEST.1 are `GGTTTTAAAACCCCGGGGTT`;
+        // minus-strand transcript orientation is the reverse complement:
+        //   complement: CCAAAATTTTGGGGCCCCAA
+        //   reversed:   AACCCCGGGGTTTTAAAACC
+        assert_eq!(tx.sequence.as_deref(), Some("AACCCCGGGGTTTTAAAACC"));
+        assert!(matches!(tx.strand, Strand::Minus));
+    }
+
+    #[test]
+    fn test_get_transcript_falls_back_with_multi_exon_in_tx_order() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_TEST.1").unwrap();
+            writeln!(f, "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC").unwrap();
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "NC_TEST.1\t40\t11\t40\t41").unwrap();
+        }
+        let _kept = Box::leak(Box::new(dir));
+        let mut provider = MultiFastaProvider::from_directory(_kept.path()).unwrap();
+
+        // Two exons on + strand. Genome FASTA (1-based HGVS positions):
+        //   pos:   1234 5678 9012 3456 7890 1234 5678 9012 3456 7890
+        //   bases: AAAA CCCC GGGG TTTT AAAA CCCC GGGG TTTT AAAA CCCC
+        //   exon1: tx 1..4   genome 1..4    bases at 1-based HGVS [1..=4]  = "AAAA"
+        //   exon2: tx 5..12  genome 15..22  bases at 1-based HGVS [15..=22] = "TTAAAACC"
+        // Expected concatenated transcript sequence: "AAAA" + "TTAAAACC" = "AAAATTAAAACC".
+        let tx = Transcript {
+            id: "NM_MULTI.1".to_string(),
+            gene_symbol: Some("MULTI".to_string()),
+            strand: Strand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(12),
+            exons: vec![
+                Exon::with_genomic(1, 1, 4, 1, 4),
+                Exon::with_genomic(2, 5, 12, 15, 22),
+            ],
+            chromosome: Some("NC_TEST.1".to_string()),
+            genomic_start: Some(1),
+            genomic_end: Some(22),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+
+        let synthesized = provider
+            .get_transcript("NM_MULTI.1")
+            .expect("multi-exon fallback should fetch transcript");
+        assert_eq!(synthesized.sequence.as_deref(), Some("AAAATTAAAACC"));
+        assert_eq!(synthesized.exons.len(), 2);
+    }
+
+    #[test]
+    fn test_get_transcript_falls_back_errors_when_genome_contig_absent() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        // Genome FASTA has SOME other contig but not the one cdot references.
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("decoy.fna");
+        let fai_path = dir.path().join("decoy.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_DECOY.1").unwrap();
+            writeln!(f, "ACGTACGTACGT").unwrap();
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "NC_DECOY.1\t12\t12\t12\t13").unwrap();
+        }
+        let _kept = Box::leak(Box::new(dir));
+        let mut provider = MultiFastaProvider::from_directory(_kept.path()).unwrap();
+
+        let tx = Transcript {
+            id: "NM_ORPHAN.1".to_string(),
+            gene_symbol: None,
+            strand: Strand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(10),
+            exons: vec![Exon::with_genomic(1, 1, 10, 1, 10)],
+            chromosome: Some("NC_MISSING.99".to_string()),
+            genomic_start: Some(1),
+            genomic_end: Some(10),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+
+        let err = provider
+            .get_transcript("NM_ORPHAN.1")
+            .expect_err("missing genome contig must produce a typed error, not a panic");
+        assert!(
+            matches!(err, FerroError::GenomicReferenceNotAvailable { .. }),
+            "expected GenomicReferenceNotAvailable, got {err:?}"
+        );
     }
 }
