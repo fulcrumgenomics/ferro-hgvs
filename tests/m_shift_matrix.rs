@@ -350,22 +350,24 @@ fn delins_same_ref_collapses_to_identity() {
 }
 
 #[test]
-fn delins_rewrites_to_insertion_then_stays_at_trimmed_position() {
+fn delins_rewrites_to_insertion_then_canonicalizes_to_dup() {
     // A-tract A[4] at core 3..6. `delinsAAA` over core 3-4 replaces
     // "AA" with "AAA"; shared-affix trimming reduces to a 1-base
-    // insertion of "A". Per HGVS spec, **delins is NOT 3'-shifted** —
-    // it canonicalizes via the edit-priority rewrite (sub > del >
-    // inv > dup > ins) but stays at the trimmed position. Confirms
-    // the new `normalize_mt` runs `canonicalize_delins` and returns
-    // the rewritten insertion (it does NOT apply
-    // `insertion_to_repeat`/`insertion_to_duplication` because those
-    // belong to the `Insertion` arm, not the `Delins` arm).
+    // insertion of "A". Per HGVS spec the canonical short form for an
+    // `A` insertion into an existing A-tract is `dup` (the inserted
+    // base duplicates the adjacent reference base under the 3'-rule).
+    // Closes-after #356: the delins → ins canonicalization now
+    // recurses into `normalize_na_edit` so the full Insertion pipeline
+    // (3'-shuffle + `insertion_to_duplication` recognizer) runs.
     let p = provider("ACAAAACG");
     let input = format!(
         "{}:{}",
         MT_ACCESSION,
         hgvs("m.{0}_{1}delinsAAA", &[3u64, 4u64])
     );
-    let expected = format!("{}:{}", MT_ACCESSION, hgvs("m.{0}_{1}insA", &[4u64, 5u64]));
+    // 3'-shuffle lands the resulting `insA` at the 3'-most position of
+    // the A-tract (core position 6 = `C0 + 6 - 1 = 262`), where it
+    // duplicates the preceding `A`. Canonical form is `m.262dup`.
+    let expected = format!("{}:{}", MT_ACCESSION, hgvs("m.{0}dup", &[6u64]));
     assert_eq!(normalize_to_string(p, &input), expected);
 }

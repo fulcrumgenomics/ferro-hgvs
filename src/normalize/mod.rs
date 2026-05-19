@@ -1997,14 +1997,36 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             // insertion, which is also the 1-based HGVS position
                             // of the base BEFORE — so HGVS X = after_index,
                             // Y = after_index + 1.
-                            return Ok((
-                                after_index as u64,
-                                (after_index + 1) as u64,
-                                NaEdit::Insertion {
-                                    sequence: bytes_to_inserted_seq(&ins_bytes),
-                                },
-                                warnings.clone(),
-                            ));
+                            //
+                            // Recurse into `normalize_na_edit` with the new
+                            // Insertion so the full ins pipeline (3'/5' shuffle
+                            // + `insertion_to_duplication` + `insertion_to_repeat`)
+                            // runs. Without recursion, a delins-derived
+                            // insertion that duplicates a nearby reference tract
+                            // (e.g. biocommons `g.X delinsCTTTCTT` where
+                            // ref[X+1..X+6]=TTTCTT) would skip the
+                            // ins→dup recognizer and emit the long `insTTTCTT`
+                            // form instead of the canonical `dup`. Closes-after:
+                            // #356.
+                            let new_edit = NaEdit::Insertion {
+                                sequence: bytes_to_inserted_seq(&ins_bytes),
+                            };
+                            // Preserve warnings collected for the original
+                            // delins (e.g. RefSeqMismatch in strict mode):
+                            // merge them into the recursive call's warnings
+                            // rather than dropping them by tail-returning.
+                            let (new_start, new_end, new_edit, mut child_warnings) = self
+                                .normalize_na_edit(
+                                    ref_seq,
+                                    &new_edit,
+                                    after_index as u64,
+                                    (after_index + 1) as u64,
+                                    boundaries,
+                                    is_coding,
+                                )?;
+                            let mut merged = warnings.clone();
+                            merged.append(&mut child_warnings);
+                            return Ok((new_start, new_end, new_edit, merged));
                         }
                         DelinsCanonical::Inversion { start: s0, end: e0 } => {
                             // A2 (#81): g.100_102delinsTAG where ref=CTA  ->  g.100_102inv.

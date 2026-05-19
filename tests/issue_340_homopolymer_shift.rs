@@ -150,3 +150,103 @@ fn three_prime_insertion_in_4base_homopolymer_picks_rightmost_dup() {
     let normalized = normalizer.normalize(&variant).expect("normalize");
     assert_eq!(format!("{}", normalized), "NM_LONG.1:c.13dup");
 }
+
+/// Follow-up #357: audit `insertion_to_repeat` for direction-awareness.
+/// The output of repeat notation (`A[N]`) covers the full tract, so it
+/// should be invariant under `ShuffleDirection`. The audit uses an
+/// `n.` (non-coding) context so the codon-frame gate doesn't suppress
+/// repeat notation on 1-base units.
+fn provider_with_aaa_tract_noncoding() -> MockProvider {
+    let mut provider = MockProvider::new();
+    //                          123456789012345
+    let sequence = "CGTAAAGAGAGGCAA".to_string();
+    //                  ^^^ n.4-n.6 = AAA (3-copy A tract)
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NR_REPAUDIT.1".to_string(),
+        Some("REPAUDIT".to_string()),
+        Strand::Plus,
+        sequence,
+        None,
+        None,
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// Follow-up #356: a single-position `delinsXXX` where the post-trim
+/// inserted bases duplicate a contiguous span of nearby reference
+/// bases should canonicalize to `dup` over that span. Biocommons case
+/// from #324: `NC_000001.10:g.1647893delinsCTTTCTT` → `g.1647895_1647900dup`.
+///
+/// Synthetic reproducer: 13-base genomic window where position 4
+/// holds `C` and positions 5-10 hold `TTTCTT`. The delins consumes
+/// position 4 (the `C`) and inserts `CTTTCTT`; trim leaves
+/// `insTTTCTT` at the 4_5 boundary, which matches ref[5..10] verbatim
+/// and should re-classify as `5_10dup`.
+#[test]
+fn delins_to_dup_canonicalizes_multibase_dup_on_genome() {
+    // Build a 250-byte genomic window so the default normalize window
+    // size (100 bp on each side) is satisfied. Place the variant at
+    // position 150 with the dup-target tract at positions 151-156.
+    //
+    //   pos:  ... 149 150 151 152 153 154 155 156 157 ...
+    //   ref:  ...  A   C   T   T   T   C   T   T   G  ...
+    let mut filler = "A".repeat(149);
+    filler.push_str("CTTTCTTGGGAAA"); // positions 150..162
+    filler.push_str(&"A".repeat(250 - filler.len()));
+    let mut provider = ferro_hgvs::MockProvider::new();
+    provider.add_genomic_sequence("NC_000001.10", &filler);
+    let normalizer = Normalizer::with_config(
+        provider,
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    );
+    let variant = parse_hgvs("NC_000001.10:g.150delinsCTTTCTT").expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    assert_eq!(
+        format!("{}", normalized),
+        "NC_000001.10:g.151_156dup",
+        "delinsCTTTCTT at pos 150 (where ref=C and ref[151..156]=TTTCTT) must \
+         canonicalize to 151_156dup",
+    );
+}
+
+#[test]
+fn insertion_to_repeat_output_is_direction_invariant_on_n_axis() {
+    // 2-copy insertion `AA` extends the n.4-n.6 AAA tract to 5 copies.
+    // The canonical repeat form covers the full tract; output must be
+    // identical under both shuffle directions. If `insertion_to_repeat`
+    // ever becomes direction-dependent in a way that affects the
+    // displayed range, this test will start failing and trigger a
+    // semantic decision per #357.
+    let input = "NR_REPAUDIT.1:n.6_7insAA";
+    let five_prime = {
+        let normalizer = Normalizer::with_config(
+            provider_with_aaa_tract_noncoding(),
+            NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+        );
+        let variant = parse_hgvs(input).expect("parse");
+        format!("{}", normalizer.normalize(&variant).expect("normalize"))
+    };
+    let three_prime = {
+        let normalizer = Normalizer::with_config(
+            provider_with_aaa_tract_noncoding(),
+            NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+        );
+        let variant = parse_hgvs(input).expect("parse");
+        format!("{}", normalizer.normalize(&variant).expect("normalize"))
+    };
+    assert_eq!(
+        five_prime, three_prime,
+        "insertion_to_repeat output should be direction-invariant for multi-copy \
+         inserts on the n. axis: 5prime={five_prime} 3prime={three_prime}",
+    );
+}

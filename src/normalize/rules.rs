@@ -174,6 +174,17 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// ref_end_1based, unit_bytes))` when repeat notation applies, `None`
 /// otherwise. `first_byte` is preserved for backwards-compat with the
 /// homopolymer caller; `unit_bytes` is the full tandem unit.
+///
+/// # Direction-awareness (audit per #357)
+///
+/// Unlike `insertion_to_duplication` (which picks an explicit
+/// direction-aligned slot), `insertion_to_repeat` returns the canonical
+/// `unit[N+k]` window spanning the full reference tract, anchored at
+/// `ref_start`. The returned window covers the entire tract regardless
+/// of where shuffle would have placed the original insertion, so the
+/// output is invariant under `ShuffleDirection`. A direction-parameter
+/// audit was performed in #357 and locked in by
+/// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`.
 pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
