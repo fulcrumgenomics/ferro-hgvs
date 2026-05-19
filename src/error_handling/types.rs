@@ -296,15 +296,20 @@ pub enum ErrorType {
     /// Closes-after: #355.
     VariantExceedsReference,
 
-    /// A `c.` position lies past the transcript's CDS-end (for plain
-    /// `c.<N>`) or transcript-end (for `c.*<N>`).
+    /// A `c.`, `c.*N`, `c.-N`, or `n.` position lies past the bound of
+    /// its coordinate sub-axis:
+    ///   - `c.<N>` past `cds_end - cds_start + 1`
+    ///   - `c.*<N>` past `sequence_length - cds_end`
+    ///   - `c.-<N>` past `cds_start - 1`
+    ///   - `n.<N>` past `sequence_length`
     ///
     /// Examples: `c.946G>C` on a transcript whose CDS is only 945 bases;
-    /// `c.*9G>C` on a transcript whose 3'UTR is only 8 bases. Strict mode
-    /// rejects; lenient mode emits W4004 and short-circuits normalize() to
-    /// the canonical variant (no further shifting); silent mode skips the
-    /// check entirely. `n.` variants and 5'UTR `c.-N` are out of scope for
-    /// the initial implementation (see #336).
+    /// `c.*9G>C` on a transcript whose 3'UTR is only 8 bases;
+    /// `c.-6G>C` on a transcript whose 5'UTR is only 5 bases;
+    /// `n.21G>C` on a 20-base transcript. Strict mode rejects; lenient
+    /// emits W4004 and short-circuits normalize() to the canonical
+    /// variant; silent mode skips the check entirely. Intronic offsets
+    /// remain out of scope (their bounds depend on intron size).
     PositionPastEnd,
 }
 

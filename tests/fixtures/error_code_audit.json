@@ -427,7 +427,7 @@
       "spec_section": "recommendations/general.md: position numbering must reference an existing base; c.<N> where N exceeds CDS length does not name a base in the transcript",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
       "status": "enforced",
-      "spec_section_notes": "Strict rejects via FerroError::InvalidCoordinates; lenient emits W4004 and short-circuits normalize() to the canonical variant (no further shifting); silent skips the check entirely. Wired in normalize_cds via check_cds_pos_past_end before the needs_normalization short-circuit so substitutions and indels both get checked. Uses Transcript::cds_length()/utr3_length() so the bound source-of-truth lives in one place. Intronic offsets, 5'UTR (c.-N), and n. variants are out of scope for the initial implementation."
+      "spec_section_notes": "Strict rejects via FerroError::InvalidCoordinates; lenient emits W4004 and short-circuits normalize() to the canonical variant (no further shifting); silent skips the check entirely. Wired in normalize_cds via check_cds_pos_past_end and in normalize_tx via check_tx_pos_past_end before each needs_normalization short-circuit, so substitutions and indels both get checked on both axes. Uses Transcript::cds_length()/utr3_length()/utr5_length() and sequence_length() so the bound source-of-truth lives in one place. Covers c.<N> against CDS length (bound_kind cds-end), c.*<N> against the post-CDS transcript suffix (transcript-end), c.-<N> against the 5'UTR length (5utr-start, #348), and n.<N> against full transcript length (transcript-end, #347). Intronic offsets remain out of scope."
     },
     {
       "code": "W5001",
