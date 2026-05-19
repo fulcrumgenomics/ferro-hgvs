@@ -204,30 +204,65 @@ pub fn correct_whitespace(input: &str) -> (String, Vec<DetectedCorrection>) {
     (result, corrections)
 }
 
-/// Check if the input contains position zero, which is never valid.
+/// Check if the input contains position zero on a numeric axis.
 ///
-/// Returns Some with the position if found, None otherwise.
+/// Returns `Some(byte_offset)` pointing at the `0` if found, `None`
+/// otherwise.
+///
+/// Covered axes: `c.`, `g.`, `n.`, `r.`, `m.`, `o.` (1-based numbering
+/// per HGVS `background/numbering.md` line 16 — "numbering starts with
+/// c.1 at the A of the ATG translation initiation codon" — and the
+/// analogous rule for the other coordinate systems).
+///
+/// **Excluded**: the protein axis `p.0` is the HGVS-defined "no protein
+/// product" form (translation abolished; see
+/// `recommendations/protein/description.md`); `p.0?` is the explicit
+/// "possibly no product" variant. Both are spec-valid descriptions and
+/// must NOT be flagged by this detector. Closes the `p.0` over-match
+/// gap that issue #269 surfaced while resolving the W4002 audit row.
 pub fn detect_position_zero(input: &str) -> Option<usize> {
-    // Look for patterns like "c.0", "g.0", "p.0", etc.
-    // Also check for ".0_" or ".0+" or ".0-" patterns
-    let mut chars = input.char_indices().peekable();
-
-    while let Some((i, c)) = chars.next() {
-        if c == '.' {
-            if let Some(&(_, next_c)) = chars.peek() {
-                if next_c == '0' {
-                    // Check if followed by non-digit or end of string
-                    chars.next();
-                    if let Some(&(_, after_zero)) = chars.peek() {
-                        if !after_zero.is_ascii_digit() {
-                            return Some(i + 1); // Position of the '0'
-                        }
-                    } else {
-                        return Some(i + 1);
-                    }
-                }
-            }
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] != b'.' {
+            i += 1;
+            continue;
         }
+        // Only numeric axes; the byte immediately before `.` identifies
+        // the axis marker (`c`/`g`/`n`/`r`/`m`/`o`). `p` is excluded
+        // because `p.0` is the spec-defined "no protein product" form.
+        //
+        // Require an HGVS boundary before the axis letter so identifier-
+        // embedded bytes (e.g. the `c` in `abc.0`) do not misfire: the
+        // axis must sit at string start, or the byte before it must not
+        // be an ASCII alphanumeric or `_` — that rules out accession-tail
+        // letters/digits while still admitting real grammar separators
+        // (`:`, `[`, `(`, `;`, `,`, `|`, whitespace).
+        let axis = if i == 0 { 0 } else { bytes[i - 1] };
+        let axis_has_boundary =
+            i <= 1 || !(bytes[i - 2].is_ascii_alphanumeric() || bytes[i - 2] == b'_');
+        let is_numeric_axis =
+            axis_has_boundary && matches!(axis, b'c' | b'g' | b'n' | b'r' | b'm' | b'o');
+        if !is_numeric_axis {
+            i += 1;
+            continue;
+        }
+        let zero_pos = i + 1;
+        if bytes[zero_pos] != b'0' {
+            i += 1;
+            continue;
+        }
+        // Reject multi-digit `c.10`, `c.100`, … (the `0` is part of a
+        // larger number, not a bare position zero).
+        let next_is_digit = bytes
+            .get(zero_pos + 1)
+            .map(|b| b.is_ascii_digit())
+            .unwrap_or(false);
+        if next_is_digit {
+            i += 1;
+            continue;
+        }
+        return Some(zero_pos);
     }
     None
 }
@@ -3117,6 +3152,68 @@ mod tests {
         assert!(detect_position_zero("g.0del").is_some());
         assert!(detect_position_zero("c.10A>G").is_none());
         assert!(detect_position_zero("c.100A>G").is_none());
+    }
+
+    /// Issue #269: `p.0` is the spec-defined "no protein product" form
+    /// (HGVS `recommendations/protein/description.md`) — translation is
+    /// abolished. The detector must NOT flag it as an invalid position.
+    /// The full `p.0?` ("possibly no product") form is also spec-valid.
+    #[test]
+    fn test_detect_position_zero_skips_protein_axis() {
+        assert!(
+            detect_position_zero("NP_003997.2:p.0").is_none(),
+            "p.0 is spec-valid 'no protein product'"
+        );
+        assert!(
+            detect_position_zero("NP_003997.2:p.0?").is_none(),
+            "p.0? is the explicit 'possibly no product' form"
+        );
+        assert!(
+            detect_position_zero("p.0").is_none(),
+            "bare p.0 (no accession) must also be accepted"
+        );
+    }
+
+    /// Issue #269: position zero on every numeric axis is still detected.
+    #[test]
+    fn test_detect_position_zero_covers_all_numeric_axes() {
+        for input in ["c.0A>G", "g.0del", "n.0A>G", "r.0a>g", "m.0A>G", "o.0del"] {
+            assert!(
+                detect_position_zero(input).is_some(),
+                "{input} must be detected as position zero"
+            );
+        }
+    }
+
+    /// CodeRabbit PR #370 review: the axis check used to match any `.0`
+    /// whose preceding byte happened to be `c/g/n/r/m/o`, so identifier-
+    /// embedded suffixes like `abc.0` were misclassified as position-zero
+    /// errors. The detector must require an HGVS boundary before the axis
+    /// letter (either string start, or a token separator that the HGVS
+    /// grammar can produce between the axis and the previous token).
+    #[test]
+    fn test_detect_position_zero_requires_axis_boundary() {
+        // Identifier-embedded axis byte must NOT trigger.
+        for input in ["abc.0", "xyzc.0del", "_g.0", "tagn.0A>G", "FOO123c.0"] {
+            assert!(
+                detect_position_zero(input).is_none(),
+                "{input} has no HGVS axis boundary; must not be flagged"
+            );
+        }
+        // Real HGVS boundaries (accession-separator colon, group openers)
+        // before the axis letter must still trigger.
+        for input in [
+            "NM_000088.3:c.0A>G",
+            "g.0del",   // string start
+            "(c.0A>G)", // paren-wrapped allele
+            "[c.0A>G]", // bracketed allele
+            "c.1A>G;c.0del",
+        ] {
+            assert!(
+                detect_position_zero(input).is_some(),
+                "{input} has a real HGVS axis boundary; must be flagged"
+            );
+        }
     }
 
     // Protein arrow correction tests

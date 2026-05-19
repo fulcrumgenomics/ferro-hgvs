@@ -934,7 +934,7 @@ class ErrorType(IntEnum):
     WrongDashCharacter = 2
     ExtraWhitespace = 3
     ProteinSubstitutionArrow = 4
-    PositionZero = 5
+    # Discriminant 5 was `PositionZero` (W4002), retired in issue #269.
     SingleLetterAminoAcid = 6
     WrongQuoteCharacter = 7
     LowercaseAccessionPrefix = 8
@@ -956,6 +956,13 @@ class ErrorType(IntEnum):
     SinglePositionRange = 24
     DeprecatedIvsNotation = 25
     DeprecatedConSyntax = 26
+    LengthMismatch = 27
+    AlleleFractionAnnotation = 28
+    ClinVarProseMultiAllelic = 29
+    RnaThymineCanonicalized = 30
+    ProteinBracketedAaInsertion = 31
+    # Discriminant 32 is reserved for W4004 PositionPastEnd (issue #342).
+    VariantExceedsReference = 33
     NonSpecMosaicForm = 34
 
 class ErrorOverride(IntEnum):

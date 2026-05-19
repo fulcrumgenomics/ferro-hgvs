@@ -10,7 +10,7 @@ use ferro_hgvs::cli::{
     output_error as cli_output_error, output_error_with_context as cli_output_error_with_context,
     parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line,
 };
-use ferro_hgvs::config::FerroConfig;
+use ferro_hgvs::config::{warn_unmapped_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
     get_code_info, list_all_codes, list_error_codes, list_warning_codes, ErrorConfig, ErrorMode,
     ErrorType,
@@ -245,7 +245,7 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
 
-        /// Warning codes to always reject (comma-separated, e.g., W4002)
+        /// Warning codes to always reject (comma-separated, e.g., W3003)
         #[arg(long, value_delimiter = ',')]
         reject: Vec<String>,
 
@@ -283,7 +283,7 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         ignore: Vec<String>,
 
-        /// Warning codes to always reject (comma-separated, e.g., W4002)
+        /// Warning codes to always reject (comma-separated, e.g., W3003)
         #[arg(long, value_delimiter = ',')]
         reject: Vec<String>,
 
@@ -2625,45 +2625,29 @@ fn build_error_config(mode: &str, ignore: &[String], reject: &[String]) -> Error
 
     // Apply ignore overrides (silent correct)
     for code in ignore {
-        if let Some(error_type) = code_to_error_type(code) {
+        if let Some(error_type) = ErrorType::from_code(code) {
             config.set_override(error_type, ErrorOverride::SilentCorrect);
+        } else {
+            warn_unmapped_override(code, "ignore", OverrideSource::Cli);
         }
     }
 
     // Apply reject overrides
     for code in reject {
-        if let Some(error_type) = code_to_error_type(code) {
+        if let Some(error_type) = ErrorType::from_code(code) {
             config.set_override(error_type, ErrorOverride::Reject);
+        } else {
+            warn_unmapped_override(code, "reject", OverrideSource::Cli);
         }
     }
 
     config
 }
 
-/// Map a warning code string to an ErrorType.
-fn code_to_error_type(code: &str) -> Option<ErrorType> {
-    match code.to_uppercase().as_str() {
-        "W1001" => Some(ErrorType::LowercaseAminoAcid),
-        "W1002" => Some(ErrorType::SingleLetterAminoAcid),
-        "W1003" => Some(ErrorType::LowercaseAccessionPrefix),
-        "W1004" => Some(ErrorType::MixedCaseEditType),
-        "W2001" => Some(ErrorType::WrongDashCharacter),
-        "W2002" => Some(ErrorType::WrongQuoteCharacter),
-        "W2003" => Some(ErrorType::ExtraWhitespace),
-        "W2004" => Some(ErrorType::InvalidUnicodeCharacter),
-        "W3001" => Some(ErrorType::MissingVersion),
-        "W3002" => Some(ErrorType::ProteinSubstitutionArrow),
-        "W3003" => Some(ErrorType::OldSubstitutionSyntax),
-        "W3004" => Some(ErrorType::OldAlleleFormat),
-        "W3005" => Some(ErrorType::TrailingAnnotation),
-        "W3006" => Some(ErrorType::MissingCoordinatePrefix),
-        "W3016" => Some(ErrorType::LengthMismatch),
-        "W4001" => Some(ErrorType::SwappedPositions),
-        "W4002" => Some(ErrorType::PositionZero),
-        "W5001" => Some(ErrorType::RefSeqMismatch),
-        _ => None,
-    }
-}
+// `code_to_error_type` was replaced by `ErrorType::from_code`
+// (`src/error_handling/types.rs`) so the CLI's `--ignore` / `--reject`
+// parser cannot drift away from the registered W-code set the way an
+// independent hard-coded table did.
 
 /// Run the explain command.
 fn run_explain(

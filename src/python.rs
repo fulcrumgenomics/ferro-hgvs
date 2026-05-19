@@ -1963,7 +1963,10 @@ pub enum PyErrorType {
     WrongDashCharacter = 2,
     ExtraWhitespace = 3,
     ProteinSubstitutionArrow = 4,
-    PositionZero = 5,
+    // Discriminant 5 was `PositionZero` (W4002), retired in issue #269.
+    // The numeric value is intentionally skipped so existing variants keep
+    // their stable repr-C discriminants — Python consumers that hold any
+    // value other than 5 continue to round-trip unchanged.
     SingleLetterAminoAcid = 6,
     WrongQuoteCharacter = 7,
     LowercaseAccessionPrefix = 8,
@@ -2008,7 +2011,6 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::WrongDashCharacter => PyErrorType::WrongDashCharacter,
             ErrorType::ExtraWhitespace => PyErrorType::ExtraWhitespace,
             ErrorType::ProteinSubstitutionArrow => PyErrorType::ProteinSubstitutionArrow,
-            ErrorType::PositionZero => PyErrorType::PositionZero,
             ErrorType::SingleLetterAminoAcid => PyErrorType::SingleLetterAminoAcid,
             ErrorType::WrongQuoteCharacter => PyErrorType::WrongQuoteCharacter,
             ErrorType::LowercaseAccessionPrefix => PyErrorType::LowercaseAccessionPrefix,
@@ -2049,7 +2051,6 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::WrongDashCharacter => ErrorType::WrongDashCharacter,
             PyErrorType::ExtraWhitespace => ErrorType::ExtraWhitespace,
             PyErrorType::ProteinSubstitutionArrow => ErrorType::ProteinSubstitutionArrow,
-            PyErrorType::PositionZero => ErrorType::PositionZero,
             PyErrorType::SingleLetterAminoAcid => ErrorType::SingleLetterAminoAcid,
             PyErrorType::WrongQuoteCharacter => ErrorType::WrongQuoteCharacter,
             PyErrorType::LowercaseAccessionPrefix => ErrorType::LowercaseAccessionPrefix,

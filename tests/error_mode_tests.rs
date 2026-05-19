@@ -411,33 +411,10 @@ mod w2003_extra_whitespace {
     }
 }
 
-mod w4002_position_zero {
-    use super::*;
-
-    // Position zero is not correctable, but the current implementation
-    // treats it like other error types based on mode.
-    // The recommended usage is to explicitly reject it via override.
-
-    #[test]
-    fn test_strict_rejects() {
-        let config = ErrorConfig::strict();
-        assert!(config.should_reject(ErrorType::PositionZero));
-    }
-
-    #[test]
-    fn test_is_not_correctable() {
-        // PositionZero should be marked as not correctable
-        assert!(!ErrorType::PositionZero.is_correctable());
-    }
-
-    #[test]
-    fn test_override_reject_works() {
-        // Users can explicitly reject PositionZero even in lenient mode
-        let config =
-            ErrorConfig::lenient().with_override(ErrorType::PositionZero, ErrorOverride::Reject);
-        assert!(config.should_reject(ErrorType::PositionZero));
-    }
-}
+// The `w4002_position_zero` mod (always_reject / not_correctable / override
+// behaviour for `ErrorType::PositionZero`) was retired in issue #269. The
+// `c.0…` input is now rejected at parse time as `E1003 InvalidPosition`
+// — see `test_position_zero_input_still_rejected_with_e1003` below.
 
 // ============================================================================
 // ResolvedAction Tests
@@ -607,7 +584,43 @@ fn test_error_type_code_mapping() {
     assert_eq!(ErrorType::WrongDashCharacter.code(), "W2001");
     assert_eq!(ErrorType::ExtraWhitespace.code(), "W2003");
     assert_eq!(ErrorType::MissingVersion.code(), "W3001");
-    assert_eq!(ErrorType::PositionZero.code(), "W4002");
+}
+
+// ============================================================================
+// Issue #269: W4002 PositionZero deprecation
+// ============================================================================
+//
+// W4002 was registered but never emitted; the parser's `detect_position_zero`
+// already raises `E1003 InvalidPosition` for `c.0…` inputs (a hard error, not
+// a soft validation warning). Per the issue's principled long-term resolution
+// (Option 3), the W4002 identity is removed from the registry, ErrorType
+// enum, Python bindings, and config parser so there is one canonical code
+// for the symptom.
+
+#[test]
+fn test_position_zero_input_still_rejected_with_e1003() {
+    // Behavior preserved across the deprecation: `c.0A>G` is rejected with
+    // E1003, the canonical code documented in the audit.
+    use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
+    let cfg = ErrorConfig::strict();
+    let err = parse_hgvs_with_config("NM_000088.3:c.0A>G", cfg).expect_err("c.0 must be rejected");
+    assert_eq!(
+        err.code(),
+        Some(ferro_hgvs::error::ErrorCode::InvalidPosition),
+        "c.0 rejection must carry E1003 InvalidPosition (canonical)"
+    );
+}
+
+#[test]
+fn test_w4002_no_longer_in_registry() {
+    assert!(
+        get_code_info("W4002").is_none(),
+        "W4002 must be removed from the registry per issue #269 deprecation"
+    );
+    assert!(
+        !list_warning_codes().iter().any(|c| c.code == "W4002"),
+        "W4002 must not appear in list_warning_codes()"
+    );
 }
 
 // ============================================================================
