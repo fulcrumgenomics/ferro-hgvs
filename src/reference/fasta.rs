@@ -219,6 +219,22 @@ impl FastaProvider {
     pub fn add_transcript(&mut self, transcript: Transcript) {
         self.transcripts.insert(transcript.id.clone(), transcript);
     }
+
+    /// True when `id` is declared as a chromosome/contig name — either
+    /// resolves against the FASTA `.fai` index (directly or via an alias
+    /// chain) or appears as the `chromosome` field on a registered
+    /// transcript. Used by `get_sequence` to disambiguate genomic
+    /// lookups from transcript-id lookups when the two namespaces
+    /// collide (e.g. a transcript whose id is `chrN`; see #315).
+    fn is_known_contig(&self, id: &str) -> bool {
+        let resolved = self.resolve_name(id);
+        if self.index.contains_key(&resolved) {
+            return true;
+        }
+        self.transcripts
+            .values()
+            .any(|tx| tx.chromosome.as_deref() == Some(id))
+    }
 }
 
 impl ReferenceProvider for FastaProvider {
@@ -230,6 +246,17 @@ impl ReferenceProvider for FastaProvider {
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        // If the requested id is registered as a contig — either present
+        // in the FASTA index (directly or via an alias) or referenced as
+        // the `chromosome` field on a registered transcript — resolve it
+        // strictly against the FASTA path. Without this dispatch, a
+        // transcript whose id happens to match a contig name would
+        // short-circuit the lookup and silently interpret genomic
+        // coordinates as transcript-relative indices (#315 / #311).
+        if self.is_known_contig(id) {
+            return self.get_fasta_sequence(id, start, end);
+        }
+
         // First try as transcript ID. Only return a hit when the transcript
         // has cached sequence bases; coordinate-only transcripts fall through
         // to the FASTA index lookup below.
