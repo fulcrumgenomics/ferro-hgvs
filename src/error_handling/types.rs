@@ -296,14 +296,15 @@ pub enum ErrorType {
     /// Closes-after: #355.
     VariantExceedsReference,
 
-    /// A `c.` or `n.` position lies past the transcript's CDS-end /
-    /// transcript-end (closes #336).
+    /// A `c.` position lies past the transcript's CDS-end (for plain
+    /// `c.<N>`) or transcript-end (for `c.*<N>`).
     ///
     /// Examples: `c.946G>C` on a transcript whose CDS is only 945 bases;
     /// `c.*9G>C` on a transcript whose 3'UTR is only 8 bases. Strict mode
-    /// rejects; lenient emits W4004 and lets normalization proceed (which
-    /// may then shift the position even further past the end). Silent
-    /// skips the check entirely.
+    /// rejects; lenient mode emits W4004 and short-circuits normalize() to
+    /// the canonical variant (no further shifting); silent mode skips the
+    /// check entirely. `n.` variants and 5'UTR `c.-N` are out of scope for
+    /// the initial implementation (see #336).
     PositionPastEnd,
 }
 

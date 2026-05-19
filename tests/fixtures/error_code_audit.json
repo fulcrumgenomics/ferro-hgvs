@@ -423,11 +423,11 @@
     },
     {
       "code": "W4004",
-      "description": "PositionPastEnd — c./n. position lies past the resolved transcript's CDS-end or transcript-end (e.g. 'c.946G>C' against an NM_ whose CDS is 945 bases). Closes #336.",
+      "description": "PositionPastEnd — c. position lies past the resolved transcript's CDS-end (plain c.<N>) or transcript-end (c.*<N>) (e.g. 'c.946G>C' against an NM_ whose CDS is 945 bases). See #336.",
       "spec_section": "recommendations/general.md: position numbering must reference an existing base; c.<N> where N exceeds CDS length does not name a base in the transcript",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
       "status": "enforced",
-      "spec_section_notes": "Strict rejects via FerroError::InvalidCoordinates; lenient emits W4004 and lets normalization proceed (which may shift further past the end); silent skips the check entirely. Wired in normalize_cds via check_cds_pos_past_end; covers c.<N> against CDS length and c.*<N> against post-CDS transcript suffix. Intronic offsets and 5'UTR positions are out of scope for the initial implementation."
+      "spec_section_notes": "Strict rejects via FerroError::InvalidCoordinates; lenient emits W4004 and short-circuits normalize() to the canonical variant (no further shifting); silent skips the check entirely. Wired in normalize_cds via check_cds_pos_past_end before the needs_normalization short-circuit so substitutions and indels both get checked. Uses Transcript::cds_length()/utr3_length() so the bound source-of-truth lives in one place. Intronic offsets, 5'UTR (c.-N), and n. variants are out of scope for the initial implementation."
     },
     {
       "code": "W5001",

@@ -202,7 +202,7 @@ impl NormalizeConfig {
         self.variant_exceeds_reference_action().should_warn()
     }
 
-    /// Get the resolved action for `PositionPastEnd` (closes #336).
+    /// Get the resolved action for `PositionPastEnd` (W4004).
     pub fn position_past_end_action(&self) -> ResolvedAction {
         self.error_config.action_for(ErrorType::PositionPastEnd)
     }

@@ -14,7 +14,7 @@
 
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
-use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer};
+use ferro_hgvs::{parse_hgvs, FerroError, MockProvider, NormalizeConfig, Normalizer};
 
 /// Single-exon synthetic transcript:
 ///   tx positions 1..20  (20 bases)
@@ -51,6 +51,30 @@ fn provider_with_short_cds_transcript() -> MockProvider {
     provider
 }
 
+/// Helper: assert `err` is a `FerroError::InvalidCoordinates` whose message
+/// names the W4004 code and the offending accession + position. Pinning both
+/// the variant kind and the message contents catches accidental renames in
+/// `FerroError` and silent reshapes of the error-message format.
+fn assert_past_end_error(err: &FerroError, expected_position: &str) {
+    match err {
+        FerroError::InvalidCoordinates { msg } => {
+            assert!(
+                msg.contains("W4004"),
+                "expected W4004 code in message, got: {msg}",
+            );
+            assert!(
+                msg.contains("NM_TEST.1"),
+                "expected accession NM_TEST.1 in message, got: {msg}",
+            );
+            assert!(
+                msg.contains(expected_position),
+                "expected position {expected_position} in message, got: {msg}",
+            );
+        }
+        other => panic!("expected FerroError::InvalidCoordinates, got: {other:?}"),
+    }
+}
+
 #[test]
 fn strict_mode_rejects_c_position_past_cds_end() {
     // CDS length = 9, so c.10 is past the CDS end. Strict mode must reject
@@ -62,15 +86,23 @@ fn strict_mode_rejects_c_position_past_cds_end() {
     let err = normalizer
         .normalize(&variant)
         .expect_err("c.10 (past CDS-end 9) must reject in strict mode");
+    assert_past_end_error(&err, "c.10");
+}
 
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("past")
-            || msg.contains("PositionPastEnd")
-            || msg.contains("out of")
-            || msg.contains("OutOfBounds"),
-        "expected error message to mention past-end / out-of-bounds, got: {msg}",
-    );
+#[test]
+fn strict_mode_rejects_c_position_past_cds_end_for_dup() {
+    // Mirrors the biocommons `NM_001001656.1:c.946dup` case. Duplications
+    // go through `needs_normalization`, but the bounds check runs *before*
+    // that short-circuit, so dup at past-end positions is rejected the
+    // same way as substitutions and deletions.
+    let provider = provider_with_short_cds_transcript();
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
+    let variant = parse_hgvs("NM_TEST.1:c.10dup").expect("parse");
+
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("c.10dup (past CDS-end 9) must reject in strict mode");
+    assert_past_end_error(&err, "c.10");
 }
 
 #[test]
@@ -134,13 +166,43 @@ fn strict_mode_rejects_range_end_past_cds_end() {
     let err = normalizer
         .normalize(&variant)
         .expect_err("range ending past CDS-end must reject in strict mode");
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("past")
-            || msg.contains("PositionPastEnd")
-            || msg.contains("out of")
-            || msg.contains("OutOfBounds"),
-        "expected past-end / out-of-bounds message, got: {msg}",
+    assert_past_end_error(&err, "c.10");
+}
+
+#[test]
+fn strict_mode_rejects_range_both_endpoints_past_cds_end() {
+    // c.10_11del — both endpoints past CDS-end. Both produce warnings;
+    // strict mode reports the first one (the start position).
+    let provider = provider_with_short_cds_transcript();
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
+    let variant = parse_hgvs("NM_TEST.1:c.10_11del").expect("parse");
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("c.10_11del (both past CDS-end) must reject in strict mode");
+    // The first past-end warning (start = c.10) is the one promoted to the error.
+    assert_past_end_error(&err, "c.10");
+}
+
+#[test]
+fn lenient_mode_emits_two_warnings_for_range_both_past_end() {
+    // Same input as above, but lenient mode keeps both warnings in the
+    // result vec rather than promoting only the first to an error.
+    let provider = provider_with_short_cds_transcript();
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
+    let variant = parse_hgvs("NM_TEST.1:c.10_11del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("lenient mode must not error");
+    let past_end: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.code() == "POSITION_PAST_END")
+        .collect();
+    assert_eq!(
+        past_end.len(),
+        2,
+        "lenient mode must emit one POSITION_PAST_END warning per offending endpoint; got: {:?}",
+        result.warnings,
     );
 }
 
@@ -153,14 +215,7 @@ fn strict_mode_rejects_utr3_position_past_transcript_end() {
     let err = normalizer
         .normalize(&variant)
         .expect_err("c.*9 (past transcript-end) must reject in strict mode");
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("past")
-            || msg.contains("PositionPastEnd")
-            || msg.contains("out of")
-            || msg.contains("OutOfBounds"),
-        "expected past-end / out-of-bounds message, got: {msg}",
-    );
+    assert_past_end_error(&err, "c.*9");
 }
 
 #[test]
@@ -175,9 +230,60 @@ fn strict_mode_accepts_utr3_position_at_transcript_end() {
 }
 
 #[test]
-fn _strict_mode_compiles_with_default_constructor() {
-    // Sanity: the test fixtures rely on `NormalizeConfig::strict()` / `::lenient()`
-    // / `::silent()` existing; this guards future renames.
+fn strict_mode_skips_check_when_transcript_has_no_cds_bounds() {
+    // Non-coding transcript: no cds_start / cds_end. The bounds helper
+    // conservatively returns None when CDS metadata is missing, so the
+    // bounds check is skipped and normalization proceeds.
+    //
+    // A `c.<N>` variant against a transcript without CDS bounds would
+    // typically be caught upstream (the parser still accepts it, but
+    // downstream conversion fails), but the bounds check itself must not
+    // panic. This test pins the conservative-skip path.
+    let mut provider = MockProvider::new();
+    let sequence = "AAAATGAAATAGCCCCCCCC".to_string();
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NR_TEST.1".to_string(),
+        Some("NCRNA".to_string()),
+        Strand::Plus,
+        sequence,
+        None, // cds_start
+        None, // cds_end
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
+    // Use an `n.` variant to keep the input semantically consistent with
+    // a non-coding transcript. The bounds check is currently c.-only, so
+    // this exercises the "n. is out of scope" path: no warning emitted,
+    // no rejection.
+    let variant = parse_hgvs("NR_TEST.1:n.10G>C").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("non-coding transcript path must not panic");
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "POSITION_PAST_END"),
+        "n. variant must not emit POSITION_PAST_END (out of scope for #336); got: {:?}",
+        result.warnings,
+    );
+}
+
+#[test]
+fn config_constructors_are_callable() {
+    // Sanity: the test fixtures rely on `NormalizeConfig::strict()` /
+    // `::lenient()` / `::silent()` existing; this guards against future
+    // renames or accidental removal of the convenience constructors.
     let _strict = NormalizeConfig::strict();
     let _lenient = NormalizeConfig::lenient();
     let _silent = NormalizeConfig::silent();

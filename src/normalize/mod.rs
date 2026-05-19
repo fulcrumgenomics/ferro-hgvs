@@ -61,34 +61,43 @@ fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
     )
 }
 
-/// If `pos` lies past the CDS-end or transcript-end of `transcript`, return
-/// a `PositionPastEnd` warning describing the violation; otherwise `None`.
-/// Closes #336.
+/// If `pos` lies past the CDS-end (for plain `c.<N>`) or past the
+/// transcript-end (for `c.*<N>`), return a `PositionPastEnd` warning
+/// describing the violation; otherwise `None`. See #336.
 ///
-/// Bounds policy:
-///   * `c.<N>` (plain positive integer, no offset, not utr3) must have
-///     `N <= cds_end - cds_start + 1` when both bounds are known.
-///   * `c.*<N>` (utr3) must have `N <= sequence_length - cds_end`.
-///   * Intronic offsets (`c.<N>+<M>` / `c.<N>-<M>`) are out of scope — they
-///     can validly extend past the transcript edge into the genome.
-///   * 5'UTR (`c.-N`) and unknown positions (`c.?`) are out of scope.
-///   * If the necessary bound is unknown (no `cds_end` or no `sequence`),
-///     we conservatively skip the check rather than emit a false positive.
+/// **Scope.** Only the c. coordinate system is checked here. `n.` (handled
+/// in `normalize_tx`) and 5'UTR `c.-N` are deferred — see the
+/// `NormalizationWarning::PositionPastEnd` doc and the W4004 audit row for
+/// the follow-up note. Intronic offsets (`c.<N>+<M>` / `c.<N>-<M>`) are
+/// out of scope because their bounds depend on intron size, which requires
+/// genome alignment data this helper does not consult.
+///
+/// **Conservative skip.** When the required transcript metadata is missing
+/// (no `cds_start`/`cds_end` for a c. variant), the helper returns `None`
+/// rather than emit a false positive. Bounds are derived from
+/// `Transcript::cds_length()` / `utr3_length()` / `utr5_length()`, which
+/// fall back to the exon-sum transcript length when no cached `sequence`
+/// is loaded — so the check still fires on coordinate-only transcripts.
+/// Callers wanting strict gating on missing metadata must check
+/// transcript completeness separately.
 fn check_cds_pos_past_end(
     accession: &str,
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
 ) -> Option<NormalizationWarning> {
-    // Intronic offsets and unknown positions are out of scope.
-    if pos.is_intronic() || pos.is_unknown() {
+    // Intronic offsets, unknown positions, and 5'UTR are out of scope.
+    if pos.is_intronic() || pos.is_unknown() || pos.base < 1 {
         return None;
     }
     if pos.utr3 {
-        // c.*N: N must fit in the post-CDS transcript suffix.
-        let cds_end = transcript.cds_end?;
-        let seq_len = transcript.sequence.as_ref()?.len() as u64;
-        let utr3_len = seq_len.saturating_sub(cds_end);
-        if pos.base > 0 && (pos.base as u64) > utr3_len {
+        // c.*N: N must fit in the post-CDS transcript suffix. Prefer
+        // `Transcript::utr3_length()` so the bound source-of-truth stays in
+        // one place. `utr3_length` falls back to the exon-sum transcript
+        // length when no cached `sequence` is loaded, so the check still
+        // fires for coordinate-only transcripts — a coordinate bound check
+        // should not silently degrade into a sequence-availability check.
+        let utr3_len = transcript.utr3_length()?;
+        if (pos.base as u64) > utr3_len {
             return Some(NormalizationWarning::PositionPastEnd {
                 message: format!(
                     "{}:c.*{} lies past the transcript-end (3'UTR length {})",
@@ -103,19 +112,8 @@ fn check_cds_pos_past_end(
         }
         return None;
     }
-    // 5'UTR (`c.-N`) bound is `cds_start - 1` and is symmetric with the
-    // 3'UTR case, but #336 explicitly scopes to past-CDS-end / past-tx-end.
-    // We skip 5'UTR here and leave it as a follow-up if a corpus needs it.
-    if pos.base < 1 {
-        return None;
-    }
     // Plain `c.<N>`: N must fit in the CDS.
-    let cds_start = transcript.cds_start?;
-    let cds_end = transcript.cds_end?;
-    if cds_end < cds_start {
-        return None;
-    }
-    let cds_len = cds_end - cds_start + 1;
+    let cds_len = transcript.cds_length()?;
     if (pos.base as u64) > cds_len {
         return Some(NormalizationWarning::PositionPastEnd {
             message: format!(
@@ -297,18 +295,24 @@ pub enum NormalizationWarning {
     /// A `c.` or `n.` position lies past the transcript's CDS-end or
     /// transcript-end and therefore does not reference an existing
     /// base. Closes #336. Code: `POSITION_PAST_END` (W4004).
+    ///
+    /// One warning is emitted per offending position — a range with both
+    /// endpoints past-end produces two warnings.
     PositionPastEnd {
         /// Human-readable description.
         message: String,
         /// Transcript accession (e.g. `NM_001001656.1`).
         accession: String,
-        /// Coordinate system: `"c"` or `"n"`.
+        /// Coordinate system. Currently always `"c"`; reserved for
+        /// future expansion to `"n"`.
         coordinate_system: String,
-        /// The position that violated the bound, in HGVS string form
-        /// (e.g. `"946"`, `"*9"`, `"935_946"`).
+        /// The single offending position in HGVS string form — `"946"`
+        /// for plain CDS positions, `"*9"` for 3'UTR positions. Range
+        /// strings like `"935_946"` are never produced here; each
+        /// endpoint of a range yields its own warning.
         position: String,
-        /// The bound the position exceeded — `"cds-end"` for c. or
-        /// `"transcript-end"` for n. / `c.*N`.
+        /// The bound the position exceeded — `"cds-end"` for plain
+        /// `c.<N>` or `"transcript-end"` for `c.*<N>`.
         bound_kind: String,
         /// The numeric bound (e.g. 945 if the CDS is 945 bases long).
         bound_value: u64,
@@ -557,7 +561,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // In strict mode, reject if any position lies past the CDS-end or
-        // transcript-end. Closes #336.
+        // transcript-end (W4004).
         if self.config.should_reject_position_past_end() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
                 NormalizationWarning::PositionPastEnd {
@@ -1082,7 +1086,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // check entirely. We early-return with the canonical variant since
         // normalize() cannot do sensible work on past-end input. Must run
         // BEFORE the `needs_normalization` short-circuit so substitutions
-        // (`c.946G>C`) also get checked. Closes #336.
+        // (`c.946G>C`) also get checked.
         if self.config.should_reject_position_past_end()
             || self.config.should_warn_position_past_end()
         {
