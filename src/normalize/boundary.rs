@@ -84,10 +84,47 @@ pub fn get_cds_boundaries(
     tx_pos: u64,
     config: &NormalizeConfig,
 ) -> Result<Boundaries, FerroError> {
-    // Helper: convert a 1-based-inclusive interval [a, b] to 0-based
-    // (left-inclusive, right-exclusive) `(a - 1, b)`. Both endpoints
-    // satisfy `1 <= a <= b`; the empty-or-inverted case (`a == 0` or
-    // `b < a`) is handled by saturating arithmetic in callers.
+    Ok(get_cds_boundaries_with_axis_info(transcript, tx_pos, config)?.clamped)
+}
+
+/// 0-based shuffle bounds plus the un-clamped exon bound, for callers
+/// that need to detect whether the CDS↔UTR axis clamp tightened the
+/// shuffle range (closes-after: #349). `clamped` is the axis ∩ exon
+/// intersection (what `get_cds_boundaries` returns); `exon` is the
+/// exon-only bound on the same exon-spanning rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CdsBoundariesWithAxis {
+    /// 0-based shuffle bounds = axis ∩ exon. Use this for the shuffle.
+    pub clamped: Boundaries,
+    /// 0-based exon-only bounds (without the CDS↔UTR axis clamp). Used
+    /// only to detect whether the axis clamp was operative.
+    pub exon: Boundaries,
+    /// Axis region that `tx_pos` lies in: `"5utr"`, `"cds"`, `"3utr"`,
+    /// or `"none"` for non-coding transcripts.
+    pub axis_region: AxisRegion,
+}
+
+/// Coordinate sub-axis a tx-frame position lies in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisRegion {
+    /// `tx_pos < cds_start` (HGVS `c.-N`).
+    FiveUtr,
+    /// `cds_start <= tx_pos <= cds_end` (HGVS `c.<N>`).
+    Cds,
+    /// `tx_pos > cds_end` (HGVS `c.*N`).
+    ThreeUtr,
+    /// Non-coding transcript (no `cds_start`/`cds_end`).
+    None,
+}
+
+/// Like [`get_cds_boundaries`] but also returns the un-clamped exon
+/// bound and the axis region of `tx_pos`. Used by `normalize_cds` to
+/// emit `AxisClampApplied` / `CrossAxisVariantNotShuffled` warnings.
+pub fn get_cds_boundaries_with_axis_info(
+    transcript: &Transcript,
+    tx_pos: u64,
+    config: &NormalizeConfig,
+) -> Result<CdsBoundariesWithAxis, FerroError> {
     let to_0based =
         |left_1b: u64, right_1b: u64| -> (u64, u64) { (left_1b.saturating_sub(1), right_1b) };
 
@@ -112,24 +149,60 @@ pub fn get_cds_boundaries(
     };
 
     let seq_len = transcript.sequence_length();
-    let (axis_left, axis_right) = match (transcript.cds_start, transcript.cds_end) {
+    let (axis_left, axis_right, axis_region) = match (transcript.cds_start, transcript.cds_end) {
         (Some(s), Some(e)) if e >= s => {
             if tx_pos < s {
-                to_0based(1, s.saturating_sub(1))
+                let (l, r) = to_0based(1, s.saturating_sub(1));
+                (l, r, AxisRegion::FiveUtr)
             } else if tx_pos > e {
-                to_0based(e + 1, seq_len)
+                let (l, r) = to_0based(e + 1, seq_len);
+                (l, r, AxisRegion::ThreeUtr)
             } else {
-                to_0based(s, e)
+                let (l, r) = to_0based(s, e);
+                (l, r, AxisRegion::Cds)
             }
         }
-        // Non-coding transcript: no axis sub-region to respect.
-        _ => to_0based(1, seq_len),
+        _ => {
+            let (l, r) = to_0based(1, seq_len);
+            (l, r, AxisRegion::None)
+        }
     };
 
-    Ok(Boundaries::new(
-        axis_left.max(exon_left),
-        axis_right.min(exon_right),
-    ))
+    Ok(CdsBoundariesWithAxis {
+        clamped: Boundaries::new(axis_left.max(exon_left), axis_right.min(exon_right)),
+        exon: Boundaries::new(exon_left, exon_right),
+        axis_region,
+    })
+}
+
+/// Resolve `tx_pos` to its coordinate sub-axis on `transcript`. Used
+/// alongside [`get_cds_boundaries_with_axis_info`] when callers only
+/// need the axis of a position (e.g. cross-axis detection in #350).
+pub fn axis_region_of(transcript: &Transcript, tx_pos: u64) -> AxisRegion {
+    match (transcript.cds_start, transcript.cds_end) {
+        (Some(s), Some(e)) if e >= s => {
+            if tx_pos < s {
+                AxisRegion::FiveUtr
+            } else if tx_pos > e {
+                AxisRegion::ThreeUtr
+            } else {
+                AxisRegion::Cds
+            }
+        }
+        _ => AxisRegion::None,
+    }
+}
+
+impl AxisRegion {
+    /// Lowercase short label for warning fields.
+    pub fn label(&self) -> &'static str {
+        match self {
+            AxisRegion::FiveUtr => "5utr",
+            AxisRegion::Cds => "cds",
+            AxisRegion::ThreeUtr => "3utr",
+            AxisRegion::None => "none",
+        }
+    }
 }
 
 #[cfg(test)]

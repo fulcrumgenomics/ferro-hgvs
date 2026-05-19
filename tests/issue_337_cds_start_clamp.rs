@@ -125,6 +125,146 @@ fn five_prime_inside_cds_still_shuffles() {
     );
 }
 
+/// Follow-up #350: a variant whose start and end map to different
+/// coordinate sub-axes (5'UTR / CDS / 3'UTR) has no well-defined 3'-rule
+/// shuffle, so `normalize_cds` short-circuits — preserving the input
+/// position verbatim — and emits `NormalizationWarning::CrossAxisVariantNotShuffled`.
+#[test]
+fn cross_axis_5utr_to_cds_does_not_shuffle_and_warns() {
+    // `c.-1_1del` against cds_start=4: tx_start=3 (5'UTR), tx_end=4 (CDS).
+    // The straddling range crosses the 5'UTR↔CDS axis, so the result is
+    // returned unchanged (modulo canonicalization) with a warning.
+    //
+    // Asserted under both cross_boundaries modes: the cross-axis bail is a
+    // sub-axis (CDS↔UTR) check, orthogonal to exon-crossing policy, so the
+    // warning must fire regardless of `allow_crossing_boundaries`.
+    for cross in [false, true] {
+        let mut config = NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime);
+        if cross {
+            config = config.allow_crossing_boundaries();
+        }
+        let normalizer = Normalizer::with_config(provider_with_utr_padded_transcript(), config);
+        let variant = parse_hgvs("NM_TEST.1:c.-1_1del").expect("parse");
+        let result = normalizer
+            .normalize_with_warnings(&variant)
+            .expect("normalize");
+        assert_eq!(
+            format!("{}", result.result),
+            "NM_TEST.1:c.-1_1del",
+            "cross={cross}",
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.code() == "CROSS_AXIS_VARIANT_NOT_SHUFFLED"),
+            "cross={cross}: expected CROSS_AXIS_VARIANT_NOT_SHUFFLED warning, got {:?}",
+            result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn cross_axis_cds_to_3utr_does_not_shuffle_and_warns() {
+    // `c.9_*1del` against cds_end=12: tx_start=12 (CDS), tx_end=13 (3'UTR).
+    // Same bail behavior across the CDS↔3'UTR boundary, under both
+    // cross_boundaries modes.
+    for cross in [false, true] {
+        let mut config = NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime);
+        if cross {
+            config = config.allow_crossing_boundaries();
+        }
+        let normalizer = Normalizer::with_config(provider_with_utr_padded_transcript(), config);
+        let variant = parse_hgvs("NM_TEST.1:c.9_*1del").expect("parse");
+        let result = normalizer
+            .normalize_with_warnings(&variant)
+            .expect("normalize");
+        assert_eq!(
+            format!("{}", result.result),
+            "NM_TEST.1:c.9_*1del",
+            "cross={cross}",
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.code() == "CROSS_AXIS_VARIANT_NOT_SHUFFLED"),
+            "cross={cross}: expected CROSS_AXIS_VARIANT_NOT_SHUFFLED warning, got {:?}",
+            result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn within_axis_cds_variant_does_not_emit_cross_axis_warning() {
+    // Sanity check: a purely-CDS variant must NOT emit the warning.
+    let normalizer = Normalizer::with_config(
+        provider_with_utr_padded_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+    );
+    let variant = parse_hgvs("NM_TEST.1:c.1del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.code() != "CROSS_AXIS_VARIANT_NOT_SHUFFLED"),
+        "unexpected CROSS_AXIS_VARIANT_NOT_SHUFFLED warning on within-axis variant",
+    );
+}
+
+/// Follow-up #349: when the axis clamp constrains the 3'-rule shuffle
+/// tighter than the exon bound would allow, `normalize_cds` emits
+/// `NormalizationWarning::AxisClampApplied` so callers can see why the
+/// canonical position did not shift further.
+#[test]
+fn axis_clamp_emits_warning_when_constraining_5prime_shuffle() {
+    // c.1del under 5prime+no-cross. Without the axis clamp it would shift
+    // back into the 5'UTR (per fixture: 5'UTR is `AAA`, CDS starts with
+    // `A`). The clamp holds the result at c.1del. The clamp firing must
+    // emit AxisClampApplied so callers can flag for review.
+    let normalizer = Normalizer::with_config(
+        provider_with_utr_padded_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+    );
+    let variant = parse_hgvs("NM_TEST.1:c.1del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize");
+    assert_eq!(format!("{}", result.result), "NM_TEST.1:c.1del");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "AXIS_CLAMP_APPLIED"),
+        "expected AXIS_CLAMP_APPLIED warning, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn no_axis_clamp_when_5prime_shuffle_stays_within_axis() {
+    // c.6del 5prime shifts to c.4del — entirely within CDS, no clamp.
+    let normalizer = Normalizer::with_config(
+        provider_with_utr_padded_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+    );
+    let variant = parse_hgvs("NM_TEST.1:c.6del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize");
+    assert_eq!(format!("{}", result.result), "NM_TEST.1:c.4del");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.code() != "AXIS_CLAMP_APPLIED"),
+        "unexpected AXIS_CLAMP_APPLIED on shuffle that stays within axis",
+    );
+}
+
 #[test]
 fn five_prime_shuffles_intra_cds_homopolymer_all_the_way_to_c1() {
     // Probe for the off-by-one Opus flagged in review. Build a fresh
