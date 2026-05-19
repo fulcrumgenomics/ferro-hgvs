@@ -687,40 +687,32 @@ mod compound_brackets {
 mod predicted_edit_wrapper {
     use super::*;
 
-    /// Predicted substitution `c.(123A>G)` currently parses to a
-    /// `CdsVariant`, and Display emits it as `c.123(A>G)` — the
-    /// parens migrate from wrapping the whole edit to wrapping only
-    /// the substitution body. Pin this observed re-shaping.
-    ///
-    /// TODO(issue #300): the c. side reshapes parens around the
-    /// edit body; the r. side **drops them entirely** (see the next
-    /// test). That asymmetry is a parser/Display divergence between
-    /// the two paths and is the only behavioural inconsistency the
-    /// audit surfaced. Tracked under issue #300 — either drop parens
-    /// on both sides (current `r.` behavior), or keep parens around
-    /// the body on both sides (current `c.` behavior).
-    ///
-    /// In-flight predicted-edit support: #242 / #244 / #246.
+    /// Predicted substitution `c.(123A>G)` round-trips through Display
+    /// with the outer parens preserved, matching the HGVS spec form for
+    /// predicted edits (`recommendations/uncertain.md`: examples like
+    /// `c.(76A>G)`, `r.(1388g>a)`, `p.(Cys123Gly)` all wrap position+edit
+    /// in outer parens). PR #309 harmonized the c./r. surfaces; this test
+    /// pins the spec-canonical form for the c. side.
     #[test]
-    fn predicted_cds_sub_display_wraps_edit_body() {
+    fn predicted_cds_sub_display_round_trips_outer_parens() {
         let input = format!("{ACC}:c.(123A>G)");
         let v = parse_hgvs(&input).expect("predicted c.(...) sub must parse");
         assert!(matches!(v, HgvsVariant::Cds(_)));
-        // Observed today: outer parens become body parens.
-        assert_eq!(format!("{}", v), format!("{ACC}:c.123(A>G)"));
+        assert_eq!(format!("{}", v), format!("{ACC}:c.(123A>G)"));
     }
 
-    /// Predicted RNA substitution `r.(123a>g)` parses but Display
-    /// **drops the parens entirely**, asymmetric to the c. side.
-    /// Pin this asymmetry. See TODO on the c. test above for the
-    /// follow-up to harmonize the two surfaces.
+    /// Predicted RNA substitution `r.(123a>g)` round-trips through Display
+    /// with the outer parens preserved, matching the HGVS spec
+    /// (`recommendations/uncertain.md` / `recommendations/RNA/substitution.md`
+    /// — `r.(76a>c)`, `r.(1388g>a)`, `r.(3277_3432del)` all wrap the entire
+    /// edit). PR #309 harmonized the c./r. surfaces so r. no longer drops
+    /// the parens.
     #[test]
-    fn predicted_rna_sub_display_drops_parens() {
+    fn predicted_rna_sub_display_round_trips_outer_parens() {
         let input = format!("{ACC}:r.(123a>g)");
         let v = parse_hgvs(&input).expect("predicted r.(...) sub must parse");
         assert!(matches!(v, HgvsVariant::Rna(_)));
-        // Observed today: parens are dropped on the r. side.
-        assert_eq!(format!("{}", v), format!("{ACC}:r.123a>g"));
+        assert_eq!(format!("{}", v), format!("{ACC}:r.(123a>g)"));
     }
 
     /// Coordinate mapping is unchanged by the predicted wrapper —
