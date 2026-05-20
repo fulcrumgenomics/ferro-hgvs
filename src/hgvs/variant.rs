@@ -558,25 +558,48 @@ impl AlleleVariant {
     /// Returns `Some((idx_del, idx_dup))` for the first offending pair found
     /// (deterministic by ascending pair index), or `None` otherwise.
     ///
-    /// Detection is conservative: both variants must reference the same
-    /// accession AND have simple integer position ranges (no intronic
-    /// offsets, no UTR markers, no uncertain boundaries). Variants outside
-    /// that shape are skipped — the spec example
-    /// `c.[762_768del;767_774dup]` falls inside it.
+    /// Detection covers any concrete `del` / `dup` pair on a definite
+    /// position range on the same accession: bare integer positions,
+    /// 5'-UTR (`c.-N`), 3'-UTR (`c.*N`), and intronic offsets
+    /// (`c.X+N` / `c.X-N`) on all axes that carry those flags
+    /// (`c.`, `n.`, `r.`). Positions are compared on a canonical
+    /// `(region, base, offset)` lex-order so cross-region pairs are
+    /// disjoint by construction and intronic offsets sort correctly
+    /// within their anchor.
+    ///
+    /// Variants with uncertain boundaries (`?` markers, unbounded
+    /// `<pos>?` endpoints) are still skipped — uncertainty makes
+    /// overlap undecidable.
+    ///
+    /// A single accession can host multiple HGVS coordinate axes
+    /// (e.g. `NM_*` carries both `c.` and `n.`/`r.`), so the detector
+    /// also requires both variants to share an axis before comparing
+    /// canonical ranges. A `c.` del and an `n.` dup on the same
+    /// accession with the same numeric range are not reported.
     pub fn detect_self_cancelling_pair(variants: &[HgvsVariant]) -> Option<(usize, usize)> {
         // Indexed loops are intentional: we need both `i` and `j` to return
         // the pair indices to the caller.
         #[allow(clippy::needless_range_loop)]
         for i in 0..variants.len() {
-            let Some((kind_i, range_i, acc_i)) = self_cancelling_descriptor(&variants[i]) else {
+            let Some((kind_i, axis_i, range_i, acc_i)) = self_cancelling_descriptor(&variants[i])
+            else {
                 continue;
             };
             for j in (i + 1)..variants.len() {
-                let Some((kind_j, range_j, acc_j)) = self_cancelling_descriptor(&variants[j])
+                let Some((kind_j, axis_j, range_j, acc_j)) =
+                    self_cancelling_descriptor(&variants[j])
                 else {
                     continue;
                 };
                 if acc_i.full() != acc_j.full() {
+                    continue;
+                }
+                // Gate on coordinate-axis identity: a single accession
+                // can carry multiple coordinate systems (e.g. NM_*
+                // supports both `c.` and `n.`/`r.`), and numerically
+                // identical ranges across axes describe disjoint
+                // continua. Mixing them would yield false-positive E3006.
+                if axis_i != axis_j {
                     continue;
                 }
                 let (del_idx, dup_idx) = match (kind_i, kind_j) {
@@ -659,41 +682,117 @@ enum SelfCancellingEditKind {
     Dup,
 }
 
-/// Extract `(edit-kind, [start, end] base range, accession)` if the variant
-/// is a candidate for self-cancelling-pair detection. Returns `None` for any
-/// variant that is not a simple `del` / `dup` on bare integer positions.
+/// Coordinate axis of an `HgvsVariant` arm — used by the
+/// self-cancelling detector to refuse cross-axis comparisons even when
+/// two variants share an accession.
+///
+/// A single accession can host multiple HGVS coordinate systems
+/// (`NM_*` carries `c.` plus `n.`/`r.`; `NC_*` can carry both `g.` and
+/// `m.` on the same circular contig in some assemblies), and a numeric
+/// range like `100_150` denotes a different stretch of sequence on each
+/// axis. Gating on `acc.full()` alone is therefore not enough to
+/// suppress false-positive E3006 verdicts; we also require
+/// `axis_i == axis_j` before testing range overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelfCancellingAxis {
+    Cds,
+    Genome,
+    Tx,
+    Rna,
+    Mt,
+    Circular,
+}
+
+/// Canonical comparable representation of a single position in
+/// HGVS-style "region + base + offset" coordinates.
+///
+/// Lex-ordered as `(region, base, offset)`:
+///
+/// - `region` is `false` for CDS-proper (`c.123`), 5'UTR (`c.-3`), and
+///   any axis without a `*` / `downstream` flag (genome, mito,
+///   circular). It is `true` for 3'UTR (`c.*N`, `r.*N`) and tx
+///   downstream positions (`n.*N`). Because `false < true`, every
+///   CDS-or-5'UTR endpoint sorts before every 3'UTR endpoint, which
+///   matches the HGVS coordinate continuum.
+/// - `base` carries the signed numeric value as written. 5'UTR
+///   positions are negative (`c.-3` → `base = -3`); CDS-proper and
+///   3'UTR positions are positive (`c.123` → 123, `c.*5` → 5).
+/// - `offset` is the intronic offset (`c.100+5` → 5, `c.100-5` → -5),
+///   or 0 when not set. Two positions with the same anchor sort by
+///   offset.
+///
+/// The genome/mito axes never carry a region flag and rarely an
+/// offset, but we include both for uniformity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SelfCancellingPoint {
+    region: bool,
+    base: i64,
+    offset: i64,
+}
+
+impl SelfCancellingPoint {
+    const fn new(region: bool, base: i64, offset: i64) -> Self {
+        Self {
+            region,
+            base,
+            offset,
+        }
+    }
+}
+
+type SelfCancellingRange = (SelfCancellingPoint, SelfCancellingPoint);
+
+/// Extract `(edit-kind, axis, [start, end] canonical range, accession)`
+/// if the variant is a candidate for self-cancelling-pair detection.
+/// Returns `None` for any variant that is not a concrete `del` / `dup`
+/// on a definite (non-uncertain) position range.
+///
+/// The axis is returned alongside the range because two variants on the
+/// same accession but different coordinate systems (`c.` vs `n.`, etc.)
+/// describe disjoint sequence continua and must not be compared.
 fn self_cancelling_descriptor(
     v: &HgvsVariant,
-) -> Option<(SelfCancellingEditKind, (i64, i64), &Accession)> {
+) -> Option<(
+    SelfCancellingEditKind,
+    SelfCancellingAxis,
+    SelfCancellingRange,
+    &Accession,
+)> {
     use crate::hgvs::edit::NaEdit;
-    let (edit, range, accession) = match v {
+    let (edit, axis, range, accession) = match v {
         HgvsVariant::Cds(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Cds,
             cds_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
         HgvsVariant::Genome(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Genome,
             genome_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
         HgvsVariant::Tx(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Tx,
             tx_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
         HgvsVariant::Rna(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Rna,
             rna_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
         HgvsVariant::Mt(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Mt,
             genome_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
         HgvsVariant::Circular(inner) => (
             inner.loc_edit.edit.inner()?,
+            SelfCancellingAxis::Circular,
             genome_simple_range(&inner.loc_edit.location)?,
             &inner.accession,
         ),
@@ -704,43 +803,93 @@ fn self_cancelling_descriptor(
         NaEdit::Duplication { .. } => SelfCancellingEditKind::Dup,
         _ => return None,
     };
-    Some((kind, range, accession))
+    Some((kind, axis, range, accession))
 }
 
-fn cds_simple_range(interval: &crate::hgvs::interval::CdsInterval) -> Option<(i64, i64)> {
+/// Return `Some(offset)` if `raw` is a concrete intronic offset, or
+/// `None` if it is one of the parser's "unknown offset" sentinels
+/// (`+?` → `i64::MAX`, `-?` → `i64::MIN`; see
+/// `parser::position::OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}` and
+/// `location::GENOME_OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`). The
+/// self-cancelling detector skips any endpoint with an unknown offset
+/// because overlap is undecidable.
+fn certain_offset(raw: Option<i64>) -> Option<i64> {
+    use crate::hgvs::location::{GENOME_OFFSET_UNKNOWN_NEGATIVE, GENOME_OFFSET_UNKNOWN_POSITIVE};
+    use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+    match raw {
+        None => Some(0),
+        Some(v)
+            if v == OFFSET_UNKNOWN_POSITIVE
+                || v == OFFSET_UNKNOWN_NEGATIVE
+                || v == GENOME_OFFSET_UNKNOWN_POSITIVE
+                || v == GENOME_OFFSET_UNKNOWN_NEGATIVE =>
+        {
+            None
+        }
+        Some(v) => Some(v),
+    }
+}
+
+fn cds_simple_range(interval: &crate::hgvs::interval::CdsInterval) -> Option<SelfCancellingRange> {
     let s = interval.start.inner()?;
     let e = interval.end.inner()?;
-    if s.offset.is_some() || e.offset.is_some() || s.utr3 || e.utr3 {
+    // `c.?` carries `base == CDS_BASE_UNKNOWN` even inside a `Mu::Certain`
+    // wrapper (so `inner()` returns Some). Filter explicitly: overlap on
+    // an unknown base is undecidable.
+    if s.is_unknown() || e.is_unknown() {
         return None;
     }
-    Some((s.base, e.base))
+    let s_off = certain_offset(s.offset)?;
+    let e_off = certain_offset(e.offset)?;
+    Some((
+        SelfCancellingPoint::new(s.utr3, s.base, s_off),
+        SelfCancellingPoint::new(e.utr3, e.base, e_off),
+    ))
 }
 
-fn genome_simple_range(interval: &crate::hgvs::interval::GenomeInterval) -> Option<(i64, i64)> {
+fn genome_simple_range(
+    interval: &crate::hgvs::interval::GenomeInterval,
+) -> Option<SelfCancellingRange> {
     let s = interval.start.inner()?;
     let e = interval.end.inner()?;
-    Some((s.base as i64, e.base as i64))
+    let s_off = certain_offset(s.offset)?;
+    let e_off = certain_offset(e.offset)?;
+    Some((
+        SelfCancellingPoint::new(false, s.base as i64, s_off),
+        SelfCancellingPoint::new(false, e.base as i64, e_off),
+    ))
 }
 
-fn tx_simple_range(interval: &crate::hgvs::interval::TxInterval) -> Option<(i64, i64)> {
+fn tx_simple_range(interval: &crate::hgvs::interval::TxInterval) -> Option<SelfCancellingRange> {
     let s = interval.start.inner()?;
     let e = interval.end.inner()?;
-    if s.offset.is_some() || e.offset.is_some() || s.downstream || e.downstream {
-        return None;
-    }
-    Some((s.base, e.base))
+    let s_off = certain_offset(s.offset)?;
+    let e_off = certain_offset(e.offset)?;
+    Some((
+        SelfCancellingPoint::new(s.downstream, s.base, s_off),
+        SelfCancellingPoint::new(e.downstream, e.base, e_off),
+    ))
 }
 
-fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<(i64, i64)> {
+fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<SelfCancellingRange> {
     let s = interval.start.inner()?;
     let e = interval.end.inner()?;
-    if s.offset.is_some() || e.offset.is_some() || s.utr3 || e.utr3 {
-        return None;
-    }
-    Some((s.base, e.base))
+    let s_off = certain_offset(s.offset)?;
+    let e_off = certain_offset(e.offset)?;
+    Some((
+        SelfCancellingPoint::new(s.utr3, s.base, s_off),
+        SelfCancellingPoint::new(e.utr3, e.base, e_off),
+    ))
 }
 
-fn ranges_overlap(a: (i64, i64), b: (i64, i64)) -> bool {
+/// Returns `true` when ranges `a` and `b` overlap.
+///
+/// **Precondition**: both ranges are in canonical orientation
+/// (`a.0 <= a.1`, `b.0 <= b.1`). The preprocessor's W4001 Phase 15a
+/// (`correct_swapped_positions`) enforces this for parsed input;
+/// programmatically constructed AlleleVariants must satisfy it too or
+/// the verdict may be a false negative.
+fn ranges_overlap(a: SelfCancellingRange, b: SelfCancellingRange) -> bool {
     let lo = a.0.max(b.0);
     let hi = a.1.min(b.1);
     lo <= hi
@@ -2739,5 +2888,227 @@ mod tests {
         let del = parse_variant("NC_000017.11:g.43044295_43044300del").unwrap();
         let dup = parse_variant("NC_000017.11:g.43044298_43044305dup").unwrap();
         assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some());
+    }
+
+    // ----- Issue #172: extend E3006 to *-region and intronic ranges -----
+
+    #[test]
+    fn test_self_cancelling_cds_3utr_star_overlap() {
+        // 3'UTR (`c.*N`) range; HGVS general.md line 47 forbids overlapping
+        // del+dup just as much in *-region as in the CDS proper.
+        let del = parse_variant("NM_004006.2:c.*100_*150del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.*145_*160dup").unwrap();
+        let pair = AlleleVariant::detect_self_cancelling_pair(&[del, dup]);
+        assert!(
+            pair.is_some(),
+            "overlapping 3'UTR del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_3utr_star_no_overlap() {
+        // Non-overlapping 3'UTR pair: spec-permitted.
+        let del = parse_variant("NM_004006.2:c.*100_*110del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.*200_*210dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none());
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_intronic_offset_overlap() {
+        // Intronic offsets on a CDS-relative axis (`c.100+5`).
+        let del = parse_variant("NM_004006.2:c.100+5_100+15del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.100+12_100+20dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping intronic del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_intronic_offset_no_overlap() {
+        // Same anchor, non-overlapping intronic offsets.
+        let del = parse_variant("NM_004006.2:c.100+5_100+10del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.100+15_100+20dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none());
+    }
+
+    #[test]
+    fn test_self_cancelling_tx_intronic_overlap() {
+        // Tx axis (`n.`) intronic case.
+        let del = parse_variant("NR_001234.1:n.100+5_100+15del").unwrap();
+        let dup = parse_variant("NR_001234.1:n.100+12_100+20dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping tx intronic del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_cross_region_no_overlap() {
+        // 5'UTR del (negative base) and 3'UTR dup (`*` region) are on
+        // disjoint regions even if their numeric bases coincide; must
+        // NOT be reported as overlapping.
+        let del = parse_variant("NM_004006.2:c.-50_-40del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.*40_*50dup").unwrap();
+        assert!(AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none());
+    }
+
+    #[test]
+    fn test_parse_self_cancelling_cds_3utr_rejected_via_parser() {
+        // End-to-end: the parser-level validator must reject the same
+        // overlapping 3'UTR pair with E3006.
+        let result = parse_variant("NM_004006.2:c.[*100_*150del;*145_*160dup]");
+        let err = result.expect_err("3'UTR overlapping del+dup must reject");
+        assert_eq!(
+            err.code(),
+            Some(crate::error::ErrorCode::SelfCancellingAllele)
+        );
+    }
+
+    #[test]
+    fn test_parse_self_cancelling_cds_intronic_rejected_via_parser() {
+        let result = parse_variant("NM_004006.2:c.[100+5_100+15del;100+12_100+20dup]");
+        let err = result.expect_err("intronic overlapping del+dup must reject");
+        assert_eq!(
+            err.code(),
+            Some(crate::error::ErrorCode::SelfCancellingAllele)
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_5utr_overlap() {
+        // 5'UTR positions (negative `base`) overlap by lex order on
+        // `(false, base, 0)`; positive-result coverage for the cross-region
+        // negative test above.
+        let del = parse_variant("NM_004006.2:c.-50_-30del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.-35_-20dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping 5'UTR del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_negative_intronic_offset_overlap() {
+        // `c.X-N` offsets are on the same intron as `c.(X-1)+M`, and
+        // lex-order on `(false, X, -N)` correctly places them.
+        let del = parse_variant("NM_004006.2:c.100-15_100-5del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.100-10_100-2dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping negative-intronic-offset del+dup must be detected"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_cds_cross_exon_intronic_range_ok() {
+        // Two non-overlapping ranges on opposite sides of the intron
+        // midpoint do NOT collide.
+        let del = parse_variant("NM_004006.2:c.99+1_99+10del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.100-10_100-1dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none(),
+            "non-overlapping cross-exon intronic ranges must NOT collide"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_rna_intronic_overlap() {
+        // r. axis intronic overlap — same shape as c.X+N but with the RNA
+        // coordinate system. RNA descriptions are canonically lowercase.
+        let del = parse_variant("NM_004006.2:r.100+5_100+15del").unwrap();
+        let dup = parse_variant("NM_004006.2:r.100+12_100+20dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping r. intronic del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_tx_downstream_star_overlap() {
+        // `n.*N` downstream positions are the tx-axis analogue of c.*N.
+        let del = parse_variant("NR_001234.1:n.*100_*150del").unwrap();
+        let dup = parse_variant("NR_001234.1:n.*145_*160dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
+            "overlapping n. downstream del+dup must be detected (#172)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_unknown_base_skipped() {
+        // `c.?` (unknown base) makes overlap undecidable; the detector
+        // must skip the variant rather than emit a false positive.
+        let del = parse_variant("NM_004006.2:c.?_200del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.150_160dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none(),
+            "pair containing c.? must be skipped (undecidable)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_unknown_offset_sentinel_skipped() {
+        // `c.X+?` parses to an offset sentinel (`i64::MAX`); treat it as
+        // undecidable rather than letting the sentinel poison the lex
+        // order.
+        let del = parse_variant("NM_004006.2:c.100+?_300del").unwrap();
+        let dup = parse_variant("NM_004006.2:c.150_160dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none(),
+            "pair containing `+?` offset sentinel must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_mixed_axis_same_accession_no_false_positive() {
+        // CodeRabbit #371: an accession (NM_*) carries both `c.` (CDS) and
+        // `n.` / `r.` (tx / RNA) coordinate systems. A `c.` del and an
+        // `n.` dup with the same numeric range live in disjoint coordinate
+        // continua and MUST NOT be reported as self-cancelling, even
+        // though they share `acc.full()`. The detector must gate on axis
+        // identity before comparing canonical ranges.
+        let del_cds = parse_variant("NM_004006.2:c.100_150del").unwrap();
+        let dup_tx = parse_variant("NM_004006.2:n.100_150dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del_cds, dup_tx]).is_none(),
+            "c. del and n. dup with matching numeric ranges must NOT collide \
+             (different coordinate axes)"
+        );
+
+        // Cover the c./r. pairing too — same accession, different axis.
+        let del_cds2 = parse_variant("NM_004006.2:c.100_150del").unwrap();
+        let dup_rna = parse_variant("NM_004006.2:r.100_150dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del_cds2, dup_rna]).is_none(),
+            "c. del and r. dup with matching numeric ranges must NOT collide \
+             (different coordinate axes)"
+        );
+
+        // Cover the n./r. pairing — both `region`-bearing axes but
+        // numerically different coordinate systems.
+        let del_tx = parse_variant("NM_004006.2:n.100_150del").unwrap();
+        let dup_rna2 = parse_variant("NM_004006.2:r.100_150dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del_tx, dup_rna2]).is_none(),
+            "n. del and r. dup with matching numeric ranges must NOT collide \
+             (different coordinate axes)"
+        );
+    }
+
+    #[test]
+    fn test_self_cancelling_genomic_vs_mito_no_false_positive() {
+        // Genome and mito axes are both `region=false` in the canonical
+        // representation; without an axis gate they would collide on
+        // identical numeric ranges. Practical exposure is low (the same
+        // accession won't appear as both g. and m. in real data), but
+        // `detect_self_cancelling_pair` is a public API that operates on
+        // a raw slice — synthesize the mismatch directly.
+        let del = parse_variant("NC_000017.11:g.43044295_43044300del").unwrap();
+        let dup = parse_variant("NC_000017.11:m.43044295_43044300dup").unwrap();
+        assert!(
+            AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none(),
+            "g. and m. variants with matching numeric ranges must NOT collide"
+        );
     }
 }
