@@ -200,27 +200,110 @@ impl NormalizationWarning {
     }
 }
 
-/// Result of normalization with optional warnings
+/// Info-grade signal generated during normalization.
+///
+/// Mirrors [`NormalizationWarning`] but for non-error, non-warning events
+/// callers may want to record (e.g. the shuffle layer moved the variant
+/// to a canonical position). The enum is open-ended: each variant owns the
+/// fields its code needs. Future info codes add new variants without
+/// touching existing emit sites.
+///
+/// This is the structural counterpart to mutalyzer/mutalyzer's `infos`
+/// array (codes prefixed with `I`); see [`crate::error_handling::info_map`]
+/// for the upstream-equivalent string mapping used by the corpus runner.
+///
+/// Marked `#[non_exhaustive]` so adding new info variants is non-breaking
+/// for downstream `match` arms.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum NormalizationInfo {
+    /// The shuffle layer relocated the variant per the HGVS arbitrary-
+    /// position rule. The HGVS spec mandates the 3' (rightmost) form, but
+    /// ferro supports both 3' and 5' shuffling via
+    /// [`config::ShuffleDirection`] (some VCF pipelines prefer 5'); the
+    /// direction is carried explicitly so callers can interpret the
+    /// signal correctly. Code: `SHUFFLE_APPLIED`. Mutalyzer-equivalent:
+    /// `ICORRECTEDPOINT` (mutalyzer only emits 3').
+    ShuffleApplied {
+        /// Human-readable description of the shift.
+        message: String,
+        /// Accession of the reference sequence.
+        accession: String,
+        /// Direction in which the shuffle ran for this normalization.
+        direction: config::ShuffleDirection,
+        /// Position text of the input variant (HGVS, no accession),
+        /// e.g. `"4"` or `"100_103"`.
+        original_position: String,
+        /// Position text of the normalized variant (HGVS, no accession),
+        /// e.g. `"12"` or `"108_111"`.
+        normalized_position: String,
+    },
+}
+
+impl NormalizationInfo {
+    /// The info's user-facing code string.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ShuffleApplied { .. } => "SHUFFLE_APPLIED",
+        }
+    }
+
+    /// Human-readable message for the info.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::ShuffleApplied { message, .. } => message,
+        }
+    }
+}
+
+/// Result of normalization with optional warnings and info-grade signals.
+///
+/// Marked `#[non_exhaustive]` so future diagnostic axes (e.g. a separate
+/// `notices` list) can be added without breaking downstream construction
+/// via struct literals.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NormalizeResultWithWarnings {
     /// The normalized variant
     pub result: HgvsVariant,
     /// Warnings generated during normalization
     pub warnings: Vec<NormalizationWarning>,
+    /// Info-grade signals generated during normalization (e.g. a 3'-rule
+    /// shuffle was applied). Empty when no signals fired. See
+    /// [`NormalizationInfo`] for the variant taxonomy.
+    pub infos: Vec<NormalizationInfo>,
 }
 
 impl NormalizeResultWithWarnings {
-    /// Create a new result without warnings
+    /// Create a new result without warnings or infos
     pub fn new(result: HgvsVariant) -> Self {
         Self {
             result,
             warnings: vec![],
+            infos: vec![],
         }
     }
 
-    /// Create a result with warnings
+    /// Create a result with warnings (and no infos)
     pub fn with_warnings(result: HgvsVariant, warnings: Vec<NormalizationWarning>) -> Self {
-        Self { result, warnings }
+        Self {
+            result,
+            warnings,
+            infos: vec![],
+        }
+    }
+
+    /// Create a result with both warnings and infos
+    pub fn with_diagnostics(
+        result: HgvsVariant,
+        warnings: Vec<NormalizationWarning>,
+        infos: Vec<NormalizationInfo>,
+    ) -> Self {
+        Self {
+            result,
+            warnings,
+            infos,
+        }
     }
 
     /// Add a warning to the result
@@ -228,9 +311,19 @@ impl NormalizeResultWithWarnings {
         self.warnings.push(warning);
     }
 
+    /// Add an info-grade signal to the result
+    pub fn add_info(&mut self, info: NormalizationInfo) {
+        self.infos.push(info);
+    }
+
     /// Check if there are any warnings
     pub fn has_warnings(&self) -> bool {
         !self.warnings.is_empty()
+    }
+
+    /// Check if there are any info-grade signals
+    pub fn has_infos(&self) -> bool {
+        !self.infos.is_empty()
     }
 
     /// Check if there's a reference mismatch warning
@@ -356,7 +449,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
         };
 
-        Ok(NormalizeResultWithWarnings::with_warnings(result, warnings))
+        let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
+        Ok(NormalizeResultWithWarnings::with_diagnostics(
+            result, warnings, infos,
+        ))
     }
 
     /// Normalize an allele (compound) variant
@@ -3374,6 +3470,114 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Err(_) => vec![v],
         }
     }
+}
+
+/// Position-only Display text for variant kinds that go through the
+/// shuffle pipeline.
+///
+/// Returns the `loc_edit.location` rendering (e.g. `"4"` for `c.4del`,
+/// `"100_103"` for `g.100_103del`) for the six nucleic-acid axes whose
+/// normalizers call `normalize_na_edit`. Returns `None` for:
+///
+/// - `Protein` — protein 3'-shifting not yet implemented (#91).
+/// - `Allele` — handled separately by the per-member compare path in
+///   [`detect_shuffle_infos`].
+/// - `RnaFusion` / `NullAllele` / `UnknownAllele` — no single position to
+///   compare against.
+///
+/// `Circular` (o.) is included even though its current normalizer is a
+/// pass-through clone (positions cannot change); the surface is
+/// forward-safe for when #129 wires real circular shuffling and costs
+/// nothing today (the post-hoc equality check trivially returns no info).
+fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
+    match variant {
+        HV::Genome(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Cds(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Tx(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Rna(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Mt(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Circular(v) => Some(format!("{}", v.loc_edit.location)),
+        HV::Protein(_) | HV::Allele(_) | HV::RnaFusion(_) | HV::NullAllele | HV::UnknownAllele => {
+            None
+        }
+    }
+}
+
+/// Detect shuffle infos by comparing the input variant to the normalized
+/// result.
+///
+/// A shift is recorded when the position-only Display text differs between
+/// input and output. This is structural (not byte-exact on the full
+/// description), so a canonical-form rewrite that leaves the position
+/// unchanged (e.g. an explicit `delA` → `del`, which `canonicalize_edit`
+/// applies only to the edit body, not the location) does not emit a false
+/// positive.
+///
+/// Compound-allele rules (input/output both `HV::Allele` with equal
+/// length): the comparison runs per bracket member in input order.
+/// Bracket-length mismatches (the merge layer combined or split members)
+/// are conservative no-ops — the structural rewrite is not a pure shuffle.
+///
+/// Top-level kind changes (input is `HV::Allele` but output is a bare
+/// variant after cis-collapse, or vice versa via the `wrap_allele_if_split`
+/// canonical-split path) are also conservative no-ops by construction:
+/// `position_text_if_shuffleable` returns `None` for `HV::Allele`, so the
+/// fallback arm yields no info. This narrows the surface to the cases the
+/// signal is unambiguous; #330 explicitly scopes to the simple 3'-shift
+/// channel.
+///
+/// Returns at most one info per shuffle event:
+/// - Single-axis variants: zero or one info.
+/// - Cis/trans alleles: one info per shifted member, in member order.
+fn detect_shuffle_infos(
+    input: &HgvsVariant,
+    output: &HgvsVariant,
+    direction: config::ShuffleDirection,
+) -> Vec<NormalizationInfo> {
+    match (input, output) {
+        (HV::Allele(in_allele), HV::Allele(out_allele)) => {
+            if in_allele.variants.len() != out_allele.variants.len() {
+                return Vec::new();
+            }
+            in_allele
+                .variants
+                .iter()
+                .zip(out_allele.variants.iter())
+                .filter_map(|(i, o)| single_variant_shift_info(i, o, direction))
+                .collect()
+        }
+        _ => single_variant_shift_info(input, output, direction)
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// Single-variant shift detector. Returns `Some(info)` iff the position
+/// text differs between input and output for a shuffle-eligible axis.
+fn single_variant_shift_info(
+    input: &HgvsVariant,
+    output: &HgvsVariant,
+    direction: config::ShuffleDirection,
+) -> Option<NormalizationInfo> {
+    let original_position = position_text_if_shuffleable(input)?;
+    let normalized_position = position_text_if_shuffleable(output)?;
+    if original_position == normalized_position {
+        return None;
+    }
+    let accession = input
+        .accession()
+        .map(|a| format!("{}", a))
+        .unwrap_or_default();
+    let message = format!(
+        "shuffle ({direction}) relocated variant from {original_position} to {normalized_position} on {accession}",
+    );
+    Some(NormalizationInfo::ShuffleApplied {
+        message,
+        accession,
+        direction,
+        original_position,
+        normalized_position,
+    })
 }
 
 /// Flip a fetched intronic genomic-strand window into transcript-view

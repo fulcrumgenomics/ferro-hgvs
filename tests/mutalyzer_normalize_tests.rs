@@ -463,6 +463,15 @@ fn map_mutalyzer_code(code: &str) -> Option<&'static str> {
     ferro_hgvs::error_handling::mutalyzer_to_ferro(code).map(|t| t.debug_tag())
 }
 
+/// Map a mutalyzer info code (`I*`) to the `NormalizationInfo::code()`
+/// string emitted by ferro for the equivalent signal. Delegates to
+/// `ferro_hgvs::error_handling::mutalyzer_info_to_ferro`. Unmapped codes
+/// (`None`) name signals ferro intentionally does not emit (see
+/// `info_map::NO_FERRO_INFO_EQUIV`).
+fn map_mutalyzer_info_code(code: &str) -> Option<&'static str> {
+    ferro_hgvs::error_handling::mutalyzer_info_to_ferro(code).map(|t| t.code())
+}
+
 // ----------------------------------------------------------------------------
 // Smoke tests
 // ----------------------------------------------------------------------------
@@ -780,10 +789,10 @@ fn axis_errors() {
 
 #[test]
 fn axis_infos() {
-    if manifest_path().is_none() {
+    let Some(normalizer) = normalizer() else {
         eprintln!("axis_infos: skipping — no manifest");
         return;
-    }
+    };
 
     let mut t = AxisTally::new("infos");
     for case in &fixture().cases {
@@ -794,10 +803,81 @@ fn axis_infos() {
             t.skipped += 1;
             continue;
         };
-        let expected = expected_list.join(",");
-        let actual: Result<String, String> =
-            Err("ferro-hgvs info-code surface not yet wired into this runner".to_string());
-        t.record(case, &expected, actual);
+        let expected_repr = expected_list.join(",");
+
+        let actual = catch_panics(|| -> Result<String, String> {
+            // Translate each expected mutalyzer info code into the
+            // corresponding ferro `NormalizationInfo::code()` string.
+            // Codes ferro intentionally does not model (see
+            // `info_map::NO_FERRO_INFO_EQUIV`) come back as `None`, which
+            // is a real FAIL — ferro cannot match the upstream signal.
+            let mapped: Vec<&str> = expected_list
+                .iter()
+                .map(|c| map_mutalyzer_info_code(c).unwrap_or("<unmapped>"))
+                .collect();
+            if mapped.contains(&"<unmapped>") {
+                return Err(format!(
+                    "no ferro equivalent for one of {expected_list:?} (info-axis)"
+                ));
+            }
+
+            let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e:?}"))?;
+            let result = normalizer
+                .normalize_with_warnings(&v)
+                .map_err(|e| format!("normalize error: {e:?}"))?;
+            let emitted: Vec<&str> = result.infos.iter().map(|i| i.code()).collect();
+
+            // Empty expected list ⇒ ferro must also emit nothing. Without
+            // this check the trivial "loop over empty mapped" path passes
+            // every case, even if ferro spuriously emitted infos.
+            if expected_list.is_empty() {
+                if emitted.is_empty() {
+                    return Ok(expected_repr.clone());
+                }
+                return Err(format!(
+                    "mutalyzer expected no infos; ferro emitted {emitted:?}"
+                ));
+            }
+
+            // Compare per-code multiplicities, not just presence. Using
+            // `Vec::contains` would let `[A, A]` pass even when ferro
+            // emits only `[A]` (and vice versa for over-emission). Build
+            // frequency maps over `mapped` and `emitted` so repeated
+            // expected codes require the same number of ferro emissions
+            // and any ferro over-emission is also caught honestly.
+            let mut expected_counts = std::collections::HashMap::<&str, usize>::new();
+            for tag in &mapped {
+                *expected_counts.entry(*tag).or_insert(0) += 1;
+            }
+            let mut emitted_counts = std::collections::HashMap::<&str, usize>::new();
+            for tag in &emitted {
+                *emitted_counts.entry(*tag).or_insert(0) += 1;
+            }
+            for (tag, need) in &expected_counts {
+                let got = emitted_counts.get(tag).copied().unwrap_or(0);
+                if got < *need {
+                    return Err(format!(
+                        "ferro infos {emitted:?} missing expected code {tag:?} x{need} (got {got})"
+                    ));
+                }
+            }
+            // Symmetric over-emission check: any ferro info beyond what
+            // the upstream corpus expected is also a divergence, even
+            // when every expected code is matched. Comparing counts (not
+            // just presence) catches both `[A, A]` vs `[A]` and unknown
+            // extras like `[A, B]` vs `[A]`.
+            for (tag, got) in &emitted_counts {
+                let need = expected_counts.get(tag).copied().unwrap_or(0);
+                if *got > need {
+                    return Err(format!(
+                        "ferro emitted extra info {tag:?} x{got} (expected x{need}) — full emit list {emitted:?}, expected codes {expected_list:?}"
+                    ));
+                }
+            }
+            Ok(expected_repr.clone())
+        });
+
+        t.record(case, &expected_repr, actual);
     }
     t.finish();
 }
