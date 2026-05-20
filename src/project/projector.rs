@@ -536,21 +536,95 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         })
     }
 
-    /// Project a single (non-allele) g. variant, assuming it has already been
+    /// Project a single (non-allele) variant, assuming it has already been
     /// normalized.
+    ///
+    /// Accepts g./c./n./r. inputs. Non-genomic inputs are first
+    /// projected back to their parent NG/NC reference via
+    /// [`Self::project_to_genomic`], then re-enter the g.-anchored
+    /// projection path. The parent reference must be present in the
+    /// input's `Accession.genomic_context` (per #327); inputs without
+    /// it surface a clear "no parent reference" diagnostic.
+    ///
+    /// **Transcript-id constraint.** For c./n./r. inputs the caller's
+    /// `transcript_id` must equal the input's own
+    /// `accession.transcript_accession()`. Mixing the two (e.g. passing
+    /// `c.4C>A` on NM_FOO.1 but requesting projection against NM_BAR.1)
+    /// is rejected with a clear error rather than silently projecting
+    /// through one transcript's exons then re-projecting through
+    /// another's. For g. inputs there is no such input-transcript, so
+    /// the caller's `transcript_id` is the only target.
+    ///
+    /// **3'-shift asymmetry note (re #334).** This routine receives a
+    /// pre-normalized variant. The c./n./r. normalizer respects the
+    /// HGVS exon-junction exception (does not shift across exons),
+    /// while the g. normalizer does not. Consequently, the same
+    /// biological variant fed as c. vs. g. near an exon junction can
+    /// project to different `(g., c., p.)` tuples. This is intentional:
+    /// the input axis carries the spec-correct semantic for *that*
+    /// axis. Callers who want g.-axis semantics should pass the g.
+    /// variant. The c.-input projection preserves the c.-axis canonical
+    /// form by construction.
+    /// (#328)
     fn project_single_inner(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
-        // Require a g. variant.
-        let genome_variant = match normalized {
-            HgvsVariant::Genome(g) => g.clone(),
+        // Track which g. variant feeds the downstream pipeline AND will
+        // be reported in `VariantProjection.genomic`. For g. input the
+        // two are the same; for c./n./r. input we project once and use
+        // the projected form for both — the `.genomic` field is the
+        // canonical g. representation of the variant, not the input
+        // axis.
+        let projected_genome: HgvsVariant = match normalized {
+            HgvsVariant::Genome(_) => normalized.clone(),
+            HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_) => {
+                // Reject transcript_id mismatch up front: projecting a
+                // c.-on-NM_FOO through NM_BAR's exons and back through
+                // NM_FOO's would silently produce nonsensical results.
+                if let Some(acc) = normalized.accession() {
+                    let input_tx = acc.transcript_accession();
+                    if input_tx != transcript_id {
+                        return Err(FerroError::UnsupportedProjection {
+                            reason: format!(
+                                "transcript_id mismatch: input is on {} but projection \
+                                 requested against {}; transcript-coordinate inputs must \
+                                 be projected against their own transcript",
+                                input_tx, transcript_id,
+                            ),
+                        });
+                    }
+                }
+                let g = self.project_to_genomic(normalized)?;
+                match &g {
+                    HgvsVariant::Genome(_) => g,
+                    _ => {
+                        // Defensive: project_to_genomic is documented to
+                        // return Genome for these axes. If a future
+                        // refactor changes that contract, surface a
+                        // clear error rather than silently misprojecting.
+                        return Err(FerroError::UnsupportedProjection {
+                            reason: format!(
+                                "project_to_genomic returned a non-Genome variant for {} input",
+                                normalized.variant_type()
+                            ),
+                        });
+                    }
+                }
+            }
             _ => {
                 return Err(FerroError::UnsupportedProjection {
-                    reason: "VariantProjector currently only accepts g. variants".to_string(),
+                    reason: format!(
+                        "VariantProjector does not accept {} inputs",
+                        normalized.variant_type()
+                    ),
                 });
             }
+        };
+        let genome_variant = match &projected_genome {
+            HgvsVariant::Genome(g) => g.clone(),
+            _ => unreachable!("projected_genome is always Genome by construction above"),
         };
 
         let edit = genome_variant
@@ -771,8 +845,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
 
         let frameshift = is_frameshift(&coding);
+        // `.genomic` is always the canonical g. representation. For g.
+        // input that's the (normalized) input itself; for c./n./r.
+        // input that's the variant produced by `project_to_genomic`.
+        // Using `projected_genome` for both cases keeps `.genomic`
+        // axis-correct regardless of how the caller entered.
         Ok(VariantProjection {
-            genomic: normalized.clone(),
+            genomic: projected_genome,
             coding: Some(coding),
             protein,
             transcript_id: transcript_id.to_string(),
