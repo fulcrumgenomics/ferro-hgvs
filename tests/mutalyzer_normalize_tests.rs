@@ -455,16 +455,12 @@ fn format_pairs(pairs: &[Vec<String>]) -> String {
 }
 
 /// Map a mutalyzer error/info code to a substring that should appear in the
-/// `Debug` representation of the corresponding ferro-hgvs error. Test-side
-/// (not in `src/`) so changes don't ripple through production code. Unmapped
-/// codes count as FAIL with a `no mapping for X` diagnostic — extend the
-/// table to fix.
+/// `Debug` representation of the corresponding ferro-hgvs error. Delegates to
+/// `ferro_hgvs::error_handling::mutalyzer_to_ferro` so the canonical mapping
+/// lives next to the production error taxonomy. Unmapped codes (returned as
+/// `None`) count as FAIL with a `no mapping for X` diagnostic.
 fn map_mutalyzer_code(code: &str) -> Option<&'static str> {
-    Some(match code {
-        "ESEQUENCEMISMATCH" => "SequenceMismatch",
-        // Extend as mappings are discovered. Unmapped codes default to FAIL.
-        _ => return None,
-    })
+    ferro_hgvs::error_handling::mutalyzer_to_ferro(code).map(|t| t.debug_tag())
 }
 
 // ----------------------------------------------------------------------------
