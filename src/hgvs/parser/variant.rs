@@ -4698,6 +4698,58 @@ fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     parse_phase_allele(input, AllelePhase::Chimeric)
 }
 
+/// Whether a chunk-level `parse_variant` error carries a structured
+/// `Diagnostic.code` — i.e. it's a semantic violation that
+/// `parse_phase_allele`'s syntactic-recovery fallback chain should
+/// short-circuit on rather than mask. See call site in
+/// `parse_phase_allele` for context (issue #375).
+fn chunk_error_carries_diagnostic_code(err: &FerroError) -> bool {
+    matches!(
+        err,
+        FerroError::Parse {
+            diagnostic: Some(d),
+            ..
+        } if d.code.is_some()
+    )
+}
+
+/// Re-emit a chunk-relative `FerroError::Parse` against the *full* input
+/// the user typed: shift `pos` and `Diagnostic.span.{start,end}` by
+/// `chunk_offset`, and replace `Diagnostic.source` with `full_input`.
+/// Non-`Parse` variants pass through unchanged. Used by
+/// `parse_phase_allele` to surface chunk-level structured diagnostics
+/// (E3006, W3017, …) at coordinates that match the user's typed string
+/// rather than the chunk slice (issue #375).
+fn remap_chunk_error_to_full_input(
+    err: FerroError,
+    chunk_offset: usize,
+    full_input: &str,
+) -> FerroError {
+    match err {
+        FerroError::Parse {
+            pos,
+            msg,
+            diagnostic,
+        } => {
+            let new_pos = pos.saturating_add(chunk_offset);
+            let new_diagnostic = diagnostic.map(|mut d| {
+                if let Some(span) = d.span.as_mut() {
+                    span.start = span.start.saturating_add(chunk_offset);
+                    span.end = span.end.saturating_add(chunk_offset);
+                }
+                d.source = Some(full_input.to_string());
+                d
+            });
+            FerroError::Parse {
+                pos: new_pos,
+                msg,
+                diagnostic: new_diagnostic,
+            }
+        }
+        other => other,
+    }
+}
+
 /// Shared chunk-driver for `parse_mosaic_allele` and
 /// `parse_chimeric_allele`. Splits `input` at top-level slash separators
 /// using a bracket-depth-aware scan (`split_top_level_slashes`), parses
@@ -4818,6 +4870,31 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
             match parse_variant(chunk) {
                 Ok(v) => v,
                 Err(primary_err) => {
+                    // Closes #375: a chunk-level error that carries a
+                    // structured `Diagnostic.code` is a *semantic*
+                    // violation (E3006 SelfCancellingAllele, W3017
+                    // AlleleFractionAnnotation, W3019 NonSpecMosaicForm,
+                    // W3021 ProteinBracketedAaInsertion, …) — not the
+                    // shape of failure the recovery fallbacks below were
+                    // built for. The fallbacks are for *syntactic*
+                    // shortfalls (RHS missing accession, bare-edit RHS,
+                    // ClinVar-prose multi-allelic), so handing them a
+                    // semantically-rejected chunk only produces a
+                    // misleading "Unknown variant type prefix" that
+                    // masks the genuine diagnostic. Propagate the
+                    // original error, remapping `pos`, `Diagnostic.span`
+                    // and `Diagnostic.source` to full-input coordinates
+                    // so downstream tooling (LSP, web service) can
+                    // underline the offending region in the user's
+                    // typed string rather than in the chunk slice.
+                    if chunk_error_carries_diagnostic_code(&primary_err) {
+                        let chunk_offset = chunk.as_ptr() as usize - input.as_ptr() as usize;
+                        return Err(remap_chunk_error_to_full_input(
+                            primary_err,
+                            chunk_offset,
+                            input,
+                        ));
+                    }
                     // Fallback 1: inherited-accession long form.
                     let lhs = match &first_variant {
                         Some(lhs) => lhs,
@@ -5287,9 +5364,17 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // targeted diagnostic so users get the spec alternatives instead
     // of a generic nom error from `parse_cis_allele`.
     //
-    // Spec-supported `[a;b]/[c;d]` has slashes only at bracket depth
-    // 0 (between groups), so this check does not regress that form
-    // — see `has_slash_inside_brackets`.
+    // The bracketed slash form `[a;b]/[c;d]` is not in the HGVS spec
+    // (the grammar in `syntax.yaml` defines only cis `[a;b]`, trans
+    // `[a];[b]`, unknown-phase `a(;)b`; `/` and `//` are documented in
+    // `DNA/substitution.md` and `general.md` only as separators between
+    // single edits, e.g. `c.85=/T>C`; `consultation/open-issues.md`
+    // records that the committee rejected nesting). The parser tolerates
+    // the bracketed form for interoperability with real-world
+    // submissions, splitting at top-level slashes in `parse_phase_allele`.
+    // Slashes at depth 0 keep working under this tolerance, so the
+    // depth-≥1 check here doesn't regress that path — see
+    // `has_slash_inside_brackets`.
     if has_slash_inside_brackets(input) {
         return Err(non_spec_mosaic_form_error(
             input,
@@ -6986,5 +7071,151 @@ mod tests {
         assert_eq!(*pos, 50);
         let diag = diagnostic.as_ref().expect("Diagnostic carried");
         assert_eq!(diag.span.as_ref(), Some(&span));
+    }
+
+    // ----- Issue #375: slash-form mosaic/chimeric fallback chain must not
+    // swallow chunk-level structured diagnostics (E3006, W3017, ...) -----
+
+    #[test]
+    fn test_slash_mosaic_self_cancelling_rhs_reports_e3006_full_input_relative() {
+        // Two-arm mosaic where the RHS chunk is self-cancelling. Before the
+        // fix, parse_phase_allele's fallback chain caught the chunk-level
+        // E3006 and re-emitted "Unknown variant type prefix" at pos 0 via
+        // parse_variant_with_inherited_accession (since chunk1 starts with
+        // an accession that the inherited-accession recovery can't strip).
+        // After the fix, the structured E3006 propagates, with pos and span
+        // remapped to full-input coordinates.
+        let input = "NM_004006.2:c.[100A>G;200C>T]/NM_004006.2:c.[762_768del;767_774dup]";
+        let rhs_chunk_offset = input.find("/NM").unwrap() + 1;
+        let rhs_open = rhs_chunk_offset + input[rhs_chunk_offset..].find('[').unwrap();
+        let rhs_close_excl = rhs_chunk_offset + input[rhs_chunk_offset..].rfind(']').unwrap() + 1;
+
+        let err = parse_variant(input).expect_err("RHS self-cancelling must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("expected Parse, got {err:?}");
+        };
+        assert_eq!(
+            *pos, rhs_open,
+            "E3006 pos must point at the RHS arm's '[' in the full input"
+        );
+        let diag = diagnostic.as_ref().expect("E3006 must carry a Diagnostic");
+        assert_eq!(
+            diag.code,
+            Some(crate::error::ErrorCode::SelfCancellingAllele),
+            "must carry E3006 SelfCancellingAllele code"
+        );
+        let span = diag.span.as_ref().expect("E3006 must carry a SourceSpan");
+        assert_eq!(span.start, rhs_open);
+        assert_eq!(span.end, rhs_close_excl);
+        assert_eq!(
+            diag.source.as_deref(),
+            Some(input),
+            "Diagnostic.source must be the full user input, not the chunk"
+        );
+    }
+
+    #[test]
+    fn test_slash_mosaic_self_cancelling_lhs_reports_e3006_full_input_relative() {
+        // LHS-self-cancelling regression: chunk0 starts at byte 0 so
+        // chunk-relative and full-input-relative coincide for `pos` and
+        // `span`, but `Diagnostic.source` must still be the full input
+        // (was previously the chunk slice).
+        let input = "NM_004006.2:c.[762_768del;767_774dup]/NM_004006.2:c.[100A>G;200C>T]";
+        let lhs_open = input.find('[').unwrap();
+        let lhs_close_excl = input.find(']').unwrap() + 1;
+
+        let err = parse_variant(input).expect_err("LHS self-cancelling must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("expected Parse, got {err:?}");
+        };
+        assert_eq!(*pos, lhs_open);
+        let diag = diagnostic.as_ref().expect("E3006 must carry a Diagnostic");
+        assert_eq!(
+            diag.code,
+            Some(crate::error::ErrorCode::SelfCancellingAllele),
+        );
+        let span = diag.span.as_ref().expect("E3006 must carry a SourceSpan");
+        assert_eq!(span.start, lhs_open);
+        assert_eq!(span.end, lhs_close_excl);
+        assert_eq!(diag.source.as_deref(), Some(input));
+    }
+
+    #[test]
+    fn test_slash_chimeric_self_cancelling_rhs_reports_e3006_full_input_relative() {
+        // Same as the mosaic RHS case but with the chimeric `//` separator.
+        // Both phases share the same fallback chain in parse_phase_allele,
+        // so both must propagate structured diagnostics.
+        let input = "NM_004006.2:c.[100A>G;200C>T]//NM_004006.2:c.[762_768del;767_774dup]";
+        let rhs_chunk_offset = input.find("//NM").unwrap() + 2;
+        let rhs_open = rhs_chunk_offset + input[rhs_chunk_offset..].find('[').unwrap();
+        let rhs_close_excl = rhs_chunk_offset + input[rhs_chunk_offset..].rfind(']').unwrap() + 1;
+
+        let err = parse_variant(input).expect_err("RHS self-cancelling must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("expected Parse, got {err:?}");
+        };
+        assert_eq!(*pos, rhs_open);
+        let diag = diagnostic.as_ref().expect("E3006 must carry a Diagnostic");
+        assert_eq!(
+            diag.code,
+            Some(crate::error::ErrorCode::SelfCancellingAllele),
+        );
+        let span = diag.span.as_ref().expect("E3006 must carry a SourceSpan");
+        assert_eq!(span.start, rhs_open);
+        assert_eq!(span.end, rhs_close_excl);
+        assert_eq!(diag.source.as_deref(), Some(input));
+    }
+
+    #[test]
+    fn test_inherited_accession_mosaic_still_works() {
+        // Regression: the inherited-accession fallback (RHS chunk omits the
+        // accession, inherits from LHS) must still parse cleanly when no
+        // structured diagnostic blocks it.
+        let variant = parse_variant("NM_000088.3:c.100A>G/c.200C>T")
+            .expect("inherited-accession mosaic must parse");
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::Mosaic);
+            assert_eq!(allele.variants.len(), 2);
+        } else {
+            panic!("expected Allele variant, got {variant:?}");
+        }
+    }
+
+    #[test]
+    fn test_spec_mosaic_compact_form_still_works() {
+        // Regression: the HGVS spec compact-mosaic shape `<pos>=/<edit>`
+        // (where the RHS is a bare na_edit inheriting position from LHS `=`)
+        // must still parse. It goes through `parse_compact_mosaic_rhs`,
+        // which we must preserve.
+        let variant =
+            parse_variant("LRG_199t1:c.85=/T>C").expect("spec mosaic compact form must parse");
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::Mosaic);
+            assert_eq!(allele.variants.len(), 2);
+        } else {
+            panic!("expected Allele variant, got {variant:?}");
+        }
+    }
+
+    #[test]
+    fn test_spec_chimeric_compact_form_still_works() {
+        // Regression: same as the mosaic compact form, but `//` separator.
+        let variant =
+            parse_variant("NM_004006.2:c.85=//T>C").expect("spec chimeric compact form must parse");
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::Chimeric);
+            assert_eq!(allele.variants.len(), 2);
+        } else {
+            panic!("expected Allele variant, got {variant:?}");
+        }
     }
 }
