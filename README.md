@@ -189,7 +189,7 @@ Create `.ferro.toml` in your project directory:
 [error-handling]
 mode = "lenient"
 ignore = ["W1001", "W2001"]  # Silently correct these
-reject = ["W4002"]           # Always reject these
+reject = ["W3003"]           # Always reject these
 ```
 
 ## Why ferro-hgvs?

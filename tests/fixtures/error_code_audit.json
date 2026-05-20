@@ -414,14 +414,6 @@
       "spec_section_notes": "Wired as preprocessor Phase 15a via correct_swapped_positions. Lenient mode emits W4001 and rewrites c.200_100del -> c.100_200del. Endpoint tokenizer captures (main_axis, offset) sort keys per endpoint, so intronic offsets (c.100+5_99+3del), 3'UTR markers (c.*5_*1del), 5'UTR markers (c.-3_-5del), and cross-region swaps (c.5_-3del, c.*1_100del) are all detected and rewritten with offsets/markers preserved on each endpoint (#265). Closes #81 L2 follow-up to #264."
     },
     {
-      "code": "W4002",
-      "description": "PositionZero — 'c.0A>G' rejected (no auto-correct).",
-      "spec_section": "background/numbering.md line 16: 'numbering starts with c.1 at the A of the ATG translation initiation codon'; lines 19-28 confirm there is no c.0",
-      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
-      "status": "registered",
-      "spec_section_notes": "Position zero IS rejected at runtime — detect_position_zero runs in preprocessor Phase 1 and returns a failed PreprocessResult — but the diagnostic is raised under ErrorCode::InvalidPosition (E1003), not under W4002. The W4002 ErrorType variant is reachable only via the warning-code dispatch tables (config.rs, bin/ferro.rs); no emission path tags rejections with this specific code. The spec rule is enforced by E1003; W4002 is a duplicate identity that no caller emits."
-    },
-    {
       "code": "W4003",
       "description": "SinglePositionRange — single-position range used where a single position is canonical (e.g. 'c.123_123del' rewritten to 'c.123del'; same for dup and inv).",
       "spec_section": "recommendations/DNA/deletion.md: 'position(s)_deleted should contain two different positions, e.g. 123_126 not 123_123'; analogous wording in recommendations/DNA/duplication.md and recommendations/DNA/inversion.md",

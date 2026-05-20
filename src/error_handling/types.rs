@@ -79,9 +79,11 @@ pub enum ErrorType {
     /// Arrow in protein substitution (e.g., `Val600>Glu` instead of `Val600Glu`).
     ProteinSubstitutionArrow,
 
-    /// Invalid position zero (position 0 is never valid in HGVS).
-    PositionZero,
-
+    // Note: the W4002 `PositionZero` variant was retired in issue #269.
+    // `c.0…` inputs are rejected by `detect_position_zero` as
+    // `ErrorCode::InvalidPosition` (E1003) — a hard parse error, not a
+    // soft-validation warning — which is the canonical (and only) code
+    // for the symptom now.
     /// Single-letter amino acid codes (e.g., `V` instead of `Val`).
     SingleLetterAminoAcid,
 
@@ -329,11 +331,70 @@ impl ErrorType {
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::SwappedPositions => "W4001",
-            ErrorType::PositionZero => "W4002",
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::RefSeqMismatch => "W5001",
             ErrorType::VariantExceedsReference => "W5003",
         }
+    }
+
+    /// Every `ErrorType` variant, in W-code order.
+    ///
+    /// This is the authoritative list used by `from_code` and by config
+    /// parsing to map a user-facing W-code back to its `ErrorType`. Adding
+    /// a new variant requires extending both `code()` (compile-time
+    /// exhaustiveness) and this array (the
+    /// `test_from_code_round_trips_all_variants` test asserts that every
+    /// code returned by `code()` resolves via `from_code`).
+    pub const ALL: &'static [ErrorType] = &[
+        ErrorType::LowercaseAminoAcid,
+        ErrorType::SingleLetterAminoAcid,
+        ErrorType::LowercaseAccessionPrefix,
+        ErrorType::MixedCaseEditType,
+        ErrorType::WrongDashCharacter,
+        ErrorType::WrongQuoteCharacter,
+        ErrorType::ExtraWhitespace,
+        ErrorType::InvalidUnicodeCharacter,
+        ErrorType::MissingVersion,
+        ErrorType::ProteinSubstitutionArrow,
+        ErrorType::OldSubstitutionSyntax,
+        ErrorType::OldAlleleFormat,
+        ErrorType::TrailingAnnotation,
+        ErrorType::MissingCoordinatePrefix,
+        ErrorType::DeprecatedStopCodonStar,
+        ErrorType::DeprecatedStopCodonX,
+        ErrorType::DeprecatedFrameshiftStar,
+        ErrorType::DeprecatedFrameshiftX,
+        ErrorType::DelSizeSuffix,
+        ErrorType::EmptyDelinsInsert,
+        ErrorType::RedundantRepeatLabel,
+        ErrorType::DeprecatedIvsNotation,
+        ErrorType::DeprecatedConSyntax,
+        ErrorType::LengthMismatch,
+        ErrorType::AlleleFractionAnnotation,
+        ErrorType::ClinVarProseMultiAllelic,
+        ErrorType::NonSpecMosaicForm,
+        ErrorType::RnaThymineCanonicalized,
+        ErrorType::ProteinBracketedAaInsertion,
+        ErrorType::SwappedPositions,
+        ErrorType::SinglePositionRange,
+        ErrorType::RefSeqMismatch,
+        ErrorType::VariantExceedsReference,
+    ];
+
+    /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
+    ///
+    /// Returns `None` when the code is not (or is no longer) a registered
+    /// soft-validation warning. The retired W4002 `PositionZero` code
+    /// (issue #269) is one such case — `c.0…` inputs are now rejected at
+    /// parse time as `E1003 InvalidPosition`. Comparison is
+    /// case-insensitive so `.ferro.toml` entries like `"w3003"` resolve.
+    ///
+    /// The mapping is derived from `ErrorType::ALL` and
+    /// `ErrorType::code()` so it cannot drift away from the variant set;
+    /// see `test_from_code_round_trips_all_variants`.
+    pub fn from_code(code: &str) -> Option<ErrorType> {
+        let upper = code.to_uppercase();
+        ErrorType::ALL.iter().copied().find(|t| t.code() == upper)
     }
 
     /// Returns a human-readable description of this error type.
@@ -344,7 +405,6 @@ impl ErrorType {
             ErrorType::WrongDashCharacter => "wrong dash character (en-dash or em-dash)",
             ErrorType::ExtraWhitespace => "extra whitespace in description",
             ErrorType::ProteinSubstitutionArrow => "arrow in protein substitution",
-            ErrorType::PositionZero => "invalid position zero",
             ErrorType::SingleLetterAminoAcid => "single-letter amino acid code",
             ErrorType::WrongQuoteCharacter => "wrong quote character (smart quotes)",
             ErrorType::LowercaseAccessionPrefix => "lowercase accession prefix",
@@ -406,8 +466,6 @@ impl ErrorType {
             ErrorType::WrongDashCharacter => true,
             ErrorType::ExtraWhitespace => true,
             ErrorType::ProteinSubstitutionArrow => true,
-            // Position zero is never valid and cannot be auto-corrected
-            ErrorType::PositionZero => false,
             ErrorType::SingleLetterAminoAcid => true,
             ErrorType::WrongQuoteCharacter => true,
             ErrorType::LowercaseAccessionPrefix => true,
@@ -468,7 +526,6 @@ impl ErrorType {
             ErrorType::WrongDashCharacter => ("c.100–200del", "c.100-200del"),
             ErrorType::ExtraWhitespace => ("c.100 A>G", "c.100A>G"),
             ErrorType::ProteinSubstitutionArrow => ("p.Val600>Glu", "p.Val600Glu"),
-            ErrorType::PositionZero => ("c.0A>G", "(invalid)"),
             ErrorType::SingleLetterAminoAcid => ("p.V600E", "p.Val600Glu"),
             ErrorType::WrongQuoteCharacter => {
                 ("c.100_101ins\u{201C}ATG\u{201D}", "c.100_101ins\"ATG\"")
@@ -679,7 +736,6 @@ mod tests {
         assert!(ErrorType::WrongDashCharacter.is_correctable());
         assert!(ErrorType::ExtraWhitespace.is_correctable());
         assert!(ErrorType::ProteinSubstitutionArrow.is_correctable());
-        assert!(!ErrorType::PositionZero.is_correctable());
         assert!(ErrorType::SingleLetterAminoAcid.is_correctable());
         assert!(ErrorType::WrongQuoteCharacter.is_correctable());
         assert!(ErrorType::LowercaseAccessionPrefix.is_correctable());
@@ -741,7 +797,6 @@ mod tests {
         assert_eq!(ErrorType::NonSpecMosaicForm.code(), "W3019");
         assert_eq!(ErrorType::RnaThymineCanonicalized.code(), "W3020");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
-        assert_eq!(ErrorType::PositionZero.code(), "W4002");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");
     }
@@ -843,5 +898,178 @@ mod tests {
         assert!(ResolvedAction::WarnCorrect.should_warn());
         assert!(!ResolvedAction::SilentCorrect.should_warn());
         assert!(!ResolvedAction::Accept.should_warn());
+    }
+
+    // ErrorType::ALL / from_code tests
+    #[test]
+    fn test_all_codes_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for variant in ErrorType::ALL {
+            assert!(
+                seen.insert(variant.code()),
+                "duplicate code {} in ErrorType::ALL",
+                variant.code()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_code_round_trips_all_variants() {
+        // Every variant in `ALL` must be reachable via `from_code(code())`.
+        for variant in ErrorType::ALL {
+            let code = variant.code();
+            assert_eq!(
+                ErrorType::from_code(code),
+                Some(*variant),
+                "ErrorType::from_code({code:?}) did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_contains_every_error_type_variant() {
+        // Compile-time + runtime exhaustiveness: every `ErrorType` variant
+        // must appear in `ErrorType::ALL` so `from_code` can resolve it.
+        //
+        // The `match` arms below enumerate every variant; adding a new
+        // variant to `ErrorType` produces a `non-exhaustive patterns`
+        // compile error here, forcing the author to also extend `ALL`.
+        // The runtime `contains(&v)` check catches the case where the
+        // arm is added but the entry in `ALL` is forgotten.
+        let every_variant: [ErrorType; ErrorType::ALL.len()] = [
+            ErrorType::LowercaseAminoAcid,
+            ErrorType::SingleLetterAminoAcid,
+            ErrorType::LowercaseAccessionPrefix,
+            ErrorType::MixedCaseEditType,
+            ErrorType::WrongDashCharacter,
+            ErrorType::WrongQuoteCharacter,
+            ErrorType::ExtraWhitespace,
+            ErrorType::InvalidUnicodeCharacter,
+            ErrorType::MissingVersion,
+            ErrorType::ProteinSubstitutionArrow,
+            ErrorType::OldSubstitutionSyntax,
+            ErrorType::OldAlleleFormat,
+            ErrorType::TrailingAnnotation,
+            ErrorType::MissingCoordinatePrefix,
+            ErrorType::DeprecatedStopCodonStar,
+            ErrorType::DeprecatedStopCodonX,
+            ErrorType::DeprecatedFrameshiftStar,
+            ErrorType::DeprecatedFrameshiftX,
+            ErrorType::DelSizeSuffix,
+            ErrorType::EmptyDelinsInsert,
+            ErrorType::RedundantRepeatLabel,
+            ErrorType::DeprecatedIvsNotation,
+            ErrorType::DeprecatedConSyntax,
+            ErrorType::LengthMismatch,
+            ErrorType::AlleleFractionAnnotation,
+            ErrorType::ClinVarProseMultiAllelic,
+            ErrorType::NonSpecMosaicForm,
+            ErrorType::RnaThymineCanonicalized,
+            ErrorType::ProteinBracketedAaInsertion,
+            ErrorType::SwappedPositions,
+            ErrorType::SinglePositionRange,
+            ErrorType::RefSeqMismatch,
+            ErrorType::VariantExceedsReference,
+        ];
+        // Exhaustiveness probe: if a new variant is added to the enum,
+        // this match fails to compile until `every_variant` is extended.
+        // The match must be on *every* possible value of `ErrorType`, so
+        // we run it once per slot above.
+        for v in every_variant {
+            match v {
+                ErrorType::LowercaseAminoAcid
+                | ErrorType::SingleLetterAminoAcid
+                | ErrorType::LowercaseAccessionPrefix
+                | ErrorType::MixedCaseEditType
+                | ErrorType::WrongDashCharacter
+                | ErrorType::WrongQuoteCharacter
+                | ErrorType::ExtraWhitespace
+                | ErrorType::InvalidUnicodeCharacter
+                | ErrorType::MissingVersion
+                | ErrorType::ProteinSubstitutionArrow
+                | ErrorType::OldSubstitutionSyntax
+                | ErrorType::OldAlleleFormat
+                | ErrorType::TrailingAnnotation
+                | ErrorType::MissingCoordinatePrefix
+                | ErrorType::DeprecatedStopCodonStar
+                | ErrorType::DeprecatedStopCodonX
+                | ErrorType::DeprecatedFrameshiftStar
+                | ErrorType::DeprecatedFrameshiftX
+                | ErrorType::DelSizeSuffix
+                | ErrorType::EmptyDelinsInsert
+                | ErrorType::RedundantRepeatLabel
+                | ErrorType::DeprecatedIvsNotation
+                | ErrorType::DeprecatedConSyntax
+                | ErrorType::LengthMismatch
+                | ErrorType::AlleleFractionAnnotation
+                | ErrorType::ClinVarProseMultiAllelic
+                | ErrorType::NonSpecMosaicForm
+                | ErrorType::RnaThymineCanonicalized
+                | ErrorType::ProteinBracketedAaInsertion
+                | ErrorType::SwappedPositions
+                | ErrorType::SinglePositionRange
+                | ErrorType::RefSeqMismatch
+                | ErrorType::VariantExceedsReference => {}
+            }
+            assert!(
+                ErrorType::ALL.contains(&v),
+                "ErrorType::{v:?} is missing from ErrorType::ALL"
+            );
+        }
+        // Belt-and-braces: lengths must agree.
+        assert_eq!(every_variant.len(), ErrorType::ALL.len());
+    }
+
+    #[test]
+    fn test_from_code_is_case_insensitive() {
+        assert_eq!(
+            ErrorType::from_code("w3003"),
+            Some(ErrorType::OldSubstitutionSyntax)
+        );
+        assert_eq!(
+            ErrorType::from_code("W3003"),
+            Some(ErrorType::OldSubstitutionSyntax)
+        );
+    }
+
+    #[test]
+    fn test_from_code_covers_codes_previously_missing_from_config() {
+        // Regression for CodeRabbit PR #370 review: these registered
+        // warning codes were missing from the old hard-coded
+        // `code_to_error_type` table in `src/config.rs`, so
+        // `.ferro.toml` overrides targeting them silently no-op'd.
+        let cases = [
+            ("W3007", ErrorType::DeprecatedStopCodonStar),
+            ("W3008", ErrorType::DeprecatedStopCodonX),
+            ("W3009", ErrorType::DeprecatedFrameshiftStar),
+            ("W3010", ErrorType::DeprecatedFrameshiftX),
+            ("W3011", ErrorType::DelSizeSuffix),
+            ("W3012", ErrorType::EmptyDelinsInsert),
+            ("W3013", ErrorType::RedundantRepeatLabel),
+            ("W3014", ErrorType::DeprecatedIvsNotation),
+            ("W3015", ErrorType::DeprecatedConSyntax),
+            ("W3017", ErrorType::AlleleFractionAnnotation),
+            ("W3018", ErrorType::ClinVarProseMultiAllelic),
+            ("W3020", ErrorType::RnaThymineCanonicalized),
+            ("W3021", ErrorType::ProteinBracketedAaInsertion),
+            ("W4003", ErrorType::SinglePositionRange),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(
+                ErrorType::from_code(code),
+                Some(expected),
+                "ErrorType::from_code({code:?}) regressed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_code_rejects_retired_and_unknown() {
+        // W4002 was retired in issue #269.
+        assert_eq!(ErrorType::from_code("W4002"), None);
+        // Bare nonsense.
+        assert_eq!(ErrorType::from_code("W9999"), None);
+        assert_eq!(ErrorType::from_code(""), None);
+        assert_eq!(ErrorType::from_code("not-a-code"), None);
     }
 }

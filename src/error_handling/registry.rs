@@ -67,15 +67,21 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             code: "E1003",
             name: "InvalidPosition",
             summary: "The position format is invalid.",
-            explanation: "Positions must be valid integers or offset positions (for intronic variants). \
-                Position 0 is never valid in HGVS. Negative positions indicate upstream of the start codon, \
-                and *N positions indicate downstream of the stop codon.",
+            explanation:
+                "Positions must be valid integers or offset positions (for intronic variants). \
+                Position 0 is never valid on numeric coordinate axes (c., g., n., r., m., o.); \
+                numbering starts at 1. Negative positions indicate upstream of the start codon, \
+                and *N positions indicate downstream of the stop codon. The protein axis is the \
+                deliberate exception — `p.0` (\"no protein product\") and `p.0?` (\"possibly no \
+                protein product\") are spec-defined and accepted.",
             category: CodeCategory::Parse,
             bad_examples: &["NM_000088.3:c.0A>G", "NM_000088.3:c.A>G"],
             good_examples: &["NM_000088.3:c.1A>G", "NM_000088.3:c.-10A>G"],
             mode_behavior: None,
-            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/DNA/numbering/"),
-            related_codes: &["E3001", "W4001", "W4002"],
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/numbering/",
+            ),
+            related_codes: &["E3001", "W4001"],
         },
     );
 
@@ -1107,25 +1113,10 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
-    map.insert(
-        "W4002",
-        CodeInfo {
-            code: "W4002",
-            name: "PositionZero",
-            summary: "Invalid position zero.",
-            explanation: "Position 0 does not exist in HGVS notation. Coding sequences start at \
-                position 1 (ATG start codon), with upstream positions numbered as -1, -2, etc. \
-                This error cannot be auto-corrected.",
-            category: CodeCategory::Position,
-            bad_examples: &["c.0A>G", "g.0del"],
-            good_examples: &["c.1A>G", "c.-1A>G"],
-            mode_behavior: Some(ModeBehavior::always_reject()),
-            hgvs_spec_url: Some(
-                "https://hgvs-nomenclature.org/stable/recommendations/DNA/numbering/",
-            ),
-            related_codes: &["E1003"],
-        },
-    );
+    // W4002 PositionZero was retired in issue #269: `c.0…` is rejected
+    // by `detect_position_zero` as `E1003 InvalidPosition` (a hard error),
+    // never as a soft-validation warning. Keeping a duplicate identity in
+    // the registry was a documentation artefact only.
 
     map.insert(
         "W4003",

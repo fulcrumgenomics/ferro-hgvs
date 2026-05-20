@@ -35,7 +35,10 @@
 //! | `WrongDashCharacter` | `–` → `-` | En-dash/em-dash instead of hyphen |
 //! | `ExtraWhitespace` | `c.100 A>G` → `c.100A>G` | Extra spaces in description |
 //! | `ProteinSubstitutionArrow` | `Val600>Glu` → `Val600Glu` | Arrow in protein substitution |
-//! | `PositionZero` | `c.0A>G` | Invalid position zero (always rejected) |
+//!
+//! Note: `c.0…` inputs are rejected at parse time as `E1003 InvalidPosition`
+//! — a hard error, not a soft warning. The legacy W4002 `PositionZero`
+//! identity was retired in issue #269.
 //!
 //! # Override Behaviors
 //!
@@ -307,15 +310,15 @@ mod tests {
 
     #[test]
     fn test_error_config_action_for() {
-        let config =
-            ErrorConfig::lenient().with_override(ErrorType::PositionZero, ErrorOverride::Reject);
+        let config = ErrorConfig::lenient()
+            .with_override(ErrorType::OldSubstitutionSyntax, ErrorOverride::Reject);
 
         assert_eq!(
             config.action_for(ErrorType::WrongDashCharacter),
             ResolvedAction::WarnCorrect
         );
         assert_eq!(
-            config.action_for(ErrorType::PositionZero),
+            config.action_for(ErrorType::OldSubstitutionSyntax),
             ResolvedAction::Reject
         );
     }
