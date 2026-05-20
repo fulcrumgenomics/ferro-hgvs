@@ -1545,6 +1545,43 @@ class VariantProjector:
         """
         ...
 
+    def project_variant(self, variant: HgvsVariant, transcript: str) -> VariantProjection:
+        """Normalize and project an already-parsed g. variant onto a transcript.
+
+        Equivalent to ``project(str(variant), transcript)`` but skips the re-parse.
+        Useful when the caller already holds an HgvsVariant (e.g. from
+        ``ferro_hgvs.parse(...)``) and wants to project without going back through a
+        string.
+
+        Args:
+            variant: An HgvsVariant (g.). Will be normalized before projection.
+            transcript: Transcript accession (e.g., "NM_000088.3").
+
+        Returns:
+            VariantProjection with g./c./p. representations and flags.
+
+        Raises:
+            RuntimeError: If normalization or projection fails.
+        """
+        ...
+
+    def project_variant_all(self, variant: HgvsVariant) -> list[VariantProjection]:
+        """Normalize and project an already-parsed g. variant onto ALL overlapping transcripts.
+
+        Equivalent to ``project_all(str(variant))`` but skips the re-parse.
+
+        Args:
+            variant: An HgvsVariant (g.). Will be normalized before projection.
+
+        Returns:
+            List of VariantProjection objects in clinical priority order.
+            Empty list when no transcripts overlap the variant.
+
+        Raises:
+            RuntimeError: If normalization or projection fails.
+        """
+        ...
+
     def project_normalized(self, variant: HgvsVariant, transcript: str) -> VariantProjection:
         """Project an already-normalized g. variant onto a single transcript, skipping normalization.
 
@@ -1581,5 +1618,45 @@ class VariantProjector:
 
         Raises:
             RuntimeError: If projection fails.
+        """
+        ...
+
+    def project_many(self, hgvs_strings: list[str]) -> list[list[VariantProjection]]:
+        """Batched parse + normalize + project_all over a list of g. HGVS strings.
+
+        Equivalent to ``[self.project_all(s) for s in hgvs_strings]``, but takes a
+        single Python→Rust call, releases the GIL for the entire batch, and reuses
+        the projector's internal transcript / ref-protein caches across all inputs.
+        Use this for fan-out workloads (thousands+ of variants).
+
+        Args:
+            hgvs_strings: List of g. HGVS variant strings.
+
+        Returns:
+            List of result lists — one inner list per input, in the same order.
+            Each inner list holds the per-transcript projections for that variant
+            in clinical priority order.
+
+        Raises:
+            RuntimeError: On the first parse / normalization error. Subsequent
+                inputs are not processed.
+        """
+        ...
+
+    def project_normalized_many(self, variants: list[HgvsVariant]) -> list[list[VariantProjection]]:
+        """Batched ``project_normalized_all`` over a list of already-normalized
+        g. variants.
+
+        Same batching semantics as ``project_many`` but skips renormalization on
+        each input.
+
+        Args:
+            variants: List of HgvsVariant objects (must already be normalized).
+
+        Returns:
+            List of result lists, one per input.
+
+        Raises:
+            RuntimeError: On the first projection error.
         """
         ...

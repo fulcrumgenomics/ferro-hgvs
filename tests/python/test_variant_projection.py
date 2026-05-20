@@ -486,3 +486,132 @@ class TestIssue310NonRefSeqProtein:
         # projector falls back to the transcript ID rather than silently
         # dropping the prediction.
         assert result.p_name == "MYGENE-gene.1:p.(Arg2Ser)"
+
+
+class TestProjectMany:
+    """Batched project_many / project_normalized_many entry points."""
+
+    def test_project_many_matches_individual_calls(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        """`project_many(strings)` must return the same per-input projections as
+        a list comprehension of `project_all(s)`. Result is `list[list[VariantProjection]]`."""
+        inputs = [
+            "NC_000001.11:g.1003C>A",
+            "NC_000001.11:g.1004G>A",
+            "NC_000001.11:g.1005C>A",
+        ]
+        batched = projector.project_many(inputs)
+        per_call = [projector.project_all(s) for s in inputs]
+        assert len(batched) == len(per_call) == 3
+        for b, p in zip(batched, per_call, strict=True):
+            assert len(b) == len(p)
+            for bp, pp in zip(b, p, strict=True):
+                assert bp.transcript_id == pp.transcript_id
+                assert bp.c_name == pp.c_name
+                assert bp.p_name == pp.p_name
+                assert bp.is_frameshift == pp.is_frameshift
+                assert bp.is_intronic == pp.is_intronic
+                assert bp.is_utr == pp.is_utr
+
+    def test_project_many_empty_list_returns_empty(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        assert projector.project_many([]) == []
+
+    def test_project_many_propagates_first_error(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # All-invalid input case.
+        with pytest.raises(RuntimeError):
+            projector.project_many(["not a valid hgvs string"])
+
+        # Mixed valid/invalid/valid: the invalid second entry must abort the
+        # batch immediately rather than swallow the error or carry on. The
+        # error message includes the failing input's index for diagnostics.
+        with pytest.raises(RuntimeError, match=r"input\[1\]"):
+            projector.project_many(
+                [
+                    "NC_000001.11:g.1003C>A",
+                    "not a valid hgvs string",
+                    "NC_000001.11:g.1005C>A",
+                ]
+            )
+
+    def test_project_normalized_many_matches_individual_calls(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        variants = [
+            ferro_hgvs.parse("NC_000001.11:g.1003C>A"),
+            ferro_hgvs.parse("NC_000001.11:g.1004G>A"),
+        ]
+        batched = projector.project_normalized_many(variants)
+        per_call = [projector.project_normalized_all(v) for v in variants]
+        assert len(batched) == len(per_call) == 2
+        for b, p in zip(batched, per_call, strict=True):
+            assert len(b) == len(p)
+            for bp, pp in zip(b, p, strict=True):
+                assert bp.transcript_id == pp.transcript_id
+                assert bp.c_name == pp.c_name
+                assert bp.p_name == pp.p_name
+
+    def test_project_normalized_many_propagates_first_error(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # Mirror the `project_many` fail-fast contract for the
+        # already-parsed entry point: the first failing input must abort
+        # the batch with an `input[i]:` prefix identifying its position.
+        # The second entry is a c. variant — `project_normalized_all`
+        # only accepts g. inputs, so it raises and indexed reporting kicks
+        # in.
+        variants = [
+            ferro_hgvs.parse("NC_000001.11:g.1003C>A"),
+            ferro_hgvs.parse("NM_TEST.1:c.4C>A"),
+        ]
+        with pytest.raises(RuntimeError, match=r"input\[1\]"):
+            projector.project_normalized_many(variants)
+
+
+class TestProjectVariant:
+    """Parse-once-then-project entry points: project_variant / project_variant_all.
+
+    These exist so callers that already hold an HgvsVariant (e.g. from
+    `ferro_hgvs.parse(...)`) can project without going back through a string.
+    They normalize internally — unlike `project_normalized*` which trust the
+    caller has already canonicalized."""
+
+    def test_project_variant_matches_project_string(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        hgvs_string = "NC_000001.11:g.1003C>A"
+        via_string = projector.project(hgvs_string, "NM_TEST.1")
+        variant = ferro_hgvs.parse(hgvs_string)
+        via_variant = projector.project_variant(variant, "NM_TEST.1")
+        assert via_string.c_name == via_variant.c_name
+        assert via_string.p_name == via_variant.p_name
+        assert via_string.transcript_id == via_variant.transcript_id
+
+    def test_project_variant_all_matches_project_all(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        hgvs_string = "NC_000001.11:g.1003C>A"
+        via_string = projector.project_all(hgvs_string)
+        variant = ferro_hgvs.parse(hgvs_string)
+        via_variant = projector.project_variant_all(variant)
+        assert len(via_variant) == len(via_string)
+        for a, b in zip(via_variant, via_string, strict=True):
+            assert a.transcript_id == b.transcript_id
+            assert a.c_name == b.c_name
+            assert a.p_name == b.p_name
+
+    def test_project_variant_and_project_normalized_agree_on_canonical_input(
+        self, projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # `project_variant` normalizes before projecting, `project_normalized`
+        # does not. For an already-canonical input they agree; this test pins
+        # that contract rather than chasing a fixture where shuffling would
+        # actually move the position.
+        variant = ferro_hgvs.parse("NC_000001.11:g.1003C>A")
+        canonical = projector.project_variant(variant, "NM_TEST.1")
+        skip_norm = projector.project_normalized(variant, "NM_TEST.1")
+        assert canonical.c_name == skip_norm.c_name

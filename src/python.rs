@@ -641,9 +641,16 @@ impl PyVariantProjector {
     }
 
     /// Project a g. HGVS string onto a target transcript.
-    fn project(&self, hgvs_string: &str, transcript: &str) -> PyResult<PyVariantProjection> {
-        self.inner
-            .project(hgvs_string, transcript)
+    fn project(
+        &self,
+        py: Python<'_>,
+        hgvs_string: &str,
+        transcript: &str,
+    ) -> PyResult<PyVariantProjection> {
+        let hgvs_string = hgvs_string.to_string();
+        let transcript = transcript.to_string();
+        let result = py.detach(|| self.inner.project(&hgvs_string, &transcript));
+        result
             .map(|inner| PyVariantProjection { inner })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
     }
@@ -663,9 +670,71 @@ impl PyVariantProjector {
     ///
     /// Raises:
     ///     RuntimeError: If parsing or normalization fails.
-    fn project_all(&self, hgvs_string: &str) -> PyResult<Vec<PyVariantProjection>> {
-        self.inner
-            .project_all(hgvs_string)
+    fn project_all(&self, py: Python<'_>, hgvs_string: &str) -> PyResult<Vec<PyVariantProjection>> {
+        let hgvs_string = hgvs_string.to_string();
+        let result = py.detach(|| self.inner.project_all(&hgvs_string));
+        result
+            .map(|projections| {
+                projections
+                    .into_iter()
+                    .map(|inner| PyVariantProjection { inner })
+                    .collect()
+            })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+
+    /// Normalize and project an already-parsed g. variant onto a transcript.
+    ///
+    /// Equivalent to `project(str(variant), transcript)` but skips the
+    /// re-parse — useful when a Python caller has already produced an
+    /// `HgvsVariant` via `ferro_hgvs.parse(...)` or as the result of an
+    /// earlier projection / conversion step.
+    ///
+    /// Args:
+    ///     variant: An HgvsVariant (g.). Will be normalized before projection.
+    ///     transcript: Transcript accession (e.g., "NM_000088.3").
+    ///
+    /// Returns:
+    ///     VariantProjection with g./c./p. representations and flags.
+    ///
+    /// Raises:
+    ///     RuntimeError: If normalization or projection fails.
+    fn project_variant(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+        transcript: &str,
+    ) -> PyResult<PyVariantProjection> {
+        let inner_variant = variant.inner.clone();
+        let transcript = transcript.to_string();
+        let result = py.detach(|| self.inner.project_variant(&inner_variant, &transcript));
+        result
+            .map(|inner| PyVariantProjection { inner })
+            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+
+    /// Normalize and project an already-parsed g. variant onto ALL
+    /// overlapping transcripts.
+    ///
+    /// Equivalent to `project_all(str(variant))` but skips the re-parse.
+    ///
+    /// Args:
+    ///     variant: An HgvsVariant (g.). Will be normalized before projection.
+    ///
+    /// Returns:
+    ///     List of VariantProjection objects in clinical priority order.
+    ///     Empty list when no transcripts overlap the variant.
+    ///
+    /// Raises:
+    ///     RuntimeError: If normalization or projection fails.
+    fn project_variant_all(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+    ) -> PyResult<Vec<PyVariantProjection>> {
+        let inner_variant = variant.inner.clone();
+        let result = py.detach(|| self.inner.project_variant_all(&inner_variant));
+        result
             .map(|projections| {
                 projections
                     .into_iter()
@@ -695,11 +764,14 @@ impl PyVariantProjector {
     ///     RuntimeError: If projection fails.
     fn project_normalized(
         &self,
+        py: Python<'_>,
         variant: &PyHgvsVariant,
         transcript: &str,
     ) -> PyResult<PyVariantProjection> {
-        self.inner
-            .project_normalized(&variant.inner, transcript)
+        let inner_variant = variant.inner.clone();
+        let transcript = transcript.to_string();
+        let result = py.detach(|| self.inner.project_normalized(&inner_variant, &transcript));
+        result
             .map(|inner| PyVariantProjection { inner })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
     }
@@ -721,10 +793,12 @@ impl PyVariantProjector {
     ///     RuntimeError: If projection fails.
     fn project_normalized_all(
         &self,
+        py: Python<'_>,
         variant: &PyHgvsVariant,
     ) -> PyResult<Vec<PyVariantProjection>> {
-        self.inner
-            .project_normalized_all(&variant.inner)
+        let inner_variant = variant.inner.clone();
+        let result = py.detach(|| self.inner.project_normalized_all(&inner_variant));
+        result
             .map(|projections| {
                 projections
                     .into_iter()
@@ -766,6 +840,101 @@ impl PyVariantProjector {
             .project_to_genomic(&variant.inner)
             .map(|inner| PyHgvsVariant { inner })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+    }
+
+    /// Batched parse + normalize + project_all over a list of g. HGVS strings.
+    ///
+    /// Equivalent to `[self.project_all(s) for s in hgvs_strings]`, but takes a
+    /// single Python→Rust call, releases the GIL for the entire batch, and
+    /// reuses the projector's internal transcript / ref-protein caches across
+    /// all inputs. Fast path for SatMut-style fan-out workloads.
+    ///
+    /// Args:
+    ///     hgvs_strings: List of g. HGVS variant strings.
+    ///
+    /// Returns:
+    ///     List of result lists — one inner list per input, in the same order.
+    ///     Each inner list contains the projections for that variant in
+    ///     clinical priority order.
+    ///
+    /// Raises:
+    ///     RuntimeError: On the first parse / normalization error. Subsequent
+    ///         inputs are not processed.
+    fn project_many(
+        &self,
+        py: Python<'_>,
+        hgvs_strings: Vec<String>,
+    ) -> PyResult<Vec<Vec<PyVariantProjection>>> {
+        // Capture the input index alongside the error so callers can isolate
+        // which entry in the batch failed; the underlying error is preserved
+        // unchanged after the `input[i]:` prefix.
+        let result: Result<Vec<Vec<_>>, (usize, crate::error::FerroError)> = py.detach(|| {
+            hgvs_strings
+                .iter()
+                .enumerate()
+                .map(|(i, s)| self.inner.project_all(s).map_err(|e| (i, e)))
+                .collect()
+        });
+        result
+            .map(|outer| {
+                outer
+                    .into_iter()
+                    .map(|projections| {
+                        projections
+                            .into_iter()
+                            .map(|inner| PyVariantProjection { inner })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .map_err(|(i, e)| {
+                PyRuntimeError::new_err(format!("Projection error at input[{}]: {}", i, e))
+            })
+    }
+
+    /// Batched `project_normalized_all` over a list of already-normalized g.
+    /// variants. Same batching semantics as `project_many` but skips
+    /// renormalization on each input.
+    ///
+    /// Args:
+    ///     variants: List of HgvsVariant objects (must already be normalized).
+    ///
+    /// Returns:
+    ///     List of result lists, one per input.
+    ///
+    /// Raises:
+    ///     RuntimeError: On the first projection error.
+    fn project_normalized_many(
+        &self,
+        py: Python<'_>,
+        variants: Vec<PyHgvsVariant>,
+    ) -> PyResult<Vec<Vec<PyVariantProjection>>> {
+        let inner_variants: Vec<HgvsVariant> = variants.into_iter().map(|v| v.inner).collect();
+        // Capture the input index alongside the error so callers can isolate
+        // which entry in the batch failed; the underlying error is preserved
+        // unchanged after the `input[i]:` prefix.
+        let result: Result<Vec<Vec<_>>, (usize, crate::error::FerroError)> = py.detach(|| {
+            inner_variants
+                .iter()
+                .enumerate()
+                .map(|(i, v)| self.inner.project_normalized_all(v).map_err(|e| (i, e)))
+                .collect()
+        });
+        result
+            .map(|outer| {
+                outer
+                    .into_iter()
+                    .map(|projections| {
+                        projections
+                            .into_iter()
+                            .map(|inner| PyVariantProjection { inner })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .map_err(|(i, e)| {
+                PyRuntimeError::new_err(format!("Projection error at input[{}]: {}", i, e))
+            })
     }
 }
 

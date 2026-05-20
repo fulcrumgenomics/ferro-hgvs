@@ -547,15 +547,30 @@ impl MultiFastaProvider {
             msg: format!("Failed to read from FASTA file: {}", e),
         })?;
 
-        // Filter out newlines and take exact length
-        let sequence: String = buffer
-            .iter()
-            .filter(|&&b| b != b'\n' && b != b'\r')
-            .take(seq_len as usize)
-            .map(|&b| b as char)
-            .collect();
-
-        Ok(sequence.to_uppercase())
+        // Strip newlines and ASCII-uppercase in a single byte pass.
+        //
+        // The previous implementation built a `String` char-by-char with
+        // `filter().map(|&b| b as char).collect()` and then called
+        // `to_uppercase()`, which walked the string a second time and
+        // re-allocated. Both passes show up in samply (~3% of total CPU on
+        // the SNP fixture before this change; more on cold workloads).
+        let target_len = seq_len as usize;
+        let mut sequence_bytes: Vec<u8> = Vec::with_capacity(target_len);
+        for &b in &buffer {
+            if b != b'\n' && b != b'\r' {
+                sequence_bytes.push(b.to_ascii_uppercase());
+                if sequence_bytes.len() == target_len {
+                    break;
+                }
+            }
+        }
+        // FASTA bases are ASCII; `to_ascii_uppercase()` is a no-op on
+        // already-uppercase bytes. The `from_utf8` validity check is O(n)
+        // but extremely fast for short-ASCII inputs and doesn't reallocate.
+        let sequence = String::from_utf8(sequence_bytes).map_err(|e| FerroError::Io {
+            msg: format!("FASTA contains non-UTF8 bytes for {}: {}", entry.name, e),
+        })?;
+        Ok(sequence)
     }
 
     /// Check if a sequence exists

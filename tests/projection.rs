@@ -4,8 +4,10 @@ use ferro_hgvs::data::cdot::{CdotMapper, CdotTranscript};
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
-use ferro_hgvs::reference::Strand;
-use ferro_hgvs::{VariantProjection, VariantProjector};
+use ferro_hgvs::reference::{ReferenceProvider, Strand};
+use ferro_hgvs::{FerroError, VariantProjection, VariantProjector};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Build a test (Projector, MockProvider) pair for NM_TEST.1.
 ///
@@ -200,4 +202,89 @@ fn project_intronic_c_dot_succeeds() {
     );
     // Intronic substitutions skip protein prediction.
     assert!(result.protein.is_none(), "no p. for intronic substitutions");
+}
+
+// ─── transcript-cache regression test ────────────────────────────────────────
+//
+// A counting wrapper around any `ReferenceProvider` that tallies how many times
+// each downstream method is invoked. Used below to assert that the projector's
+// transcript cache collapses N identical lookups into one.
+
+#[derive(Clone)]
+struct CountingProvider<P: ReferenceProvider + Clone> {
+    inner: P,
+    transcript_calls: Arc<AtomicUsize>,
+}
+
+impl<P: ReferenceProvider + Clone> CountingProvider<P> {
+    fn new(inner: P) -> Self {
+        Self {
+            inner,
+            transcript_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl<P: ReferenceProvider + Clone> ReferenceProvider for CountingProvider<P> {
+    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+        self.transcript_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_transcript(id)
+    }
+    fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        self.inner.get_sequence(id, start, end)
+    }
+    fn get_genomic_sequence(
+        &self,
+        contig: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        self.inner.get_genomic_sequence(contig, start, end)
+    }
+    fn has_genomic_data(&self) -> bool {
+        self.inner.has_genomic_data()
+    }
+    fn get_protein_sequence(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        self.inner.get_protein_sequence(accession, start, end)
+    }
+    fn has_protein_data(&self) -> bool {
+        self.inner.has_protein_data()
+    }
+}
+
+/// Project many substitutions on a single transcript and assert that the
+/// projector only fetches that transcript once.
+///
+/// Without the cache, every substitution variant pulls the transcript from the
+/// provider during protein prediction. With the cache, a `VariantProjector`
+/// fetches each unique `transcript_id` at most once for the lifetime of the
+/// projector.
+#[test]
+fn transcript_cache_collapses_repeat_lookups() {
+    let (projector, provider) = fixture();
+    let counting = CountingProvider::new(provider);
+    let counter = counting.transcript_calls.clone();
+    let vp = VariantProjector::new(projector, counting);
+
+    // Three substitutions at three CDS positions on the same transcript. Each
+    // hits the protein-prediction path, which is the user of `get_transcript`.
+    for s in [
+        "NC_000001.11:g.1003C>A",
+        "NC_000001.11:g.1004G>A",
+        "NC_000001.11:g.1005C>A",
+    ] {
+        vp.project(s, "NM_TEST.1")
+            .expect("projection should succeed");
+    }
+
+    let calls = counter.load(Ordering::SeqCst);
+    assert_eq!(
+        calls, 1,
+        "expected exactly one get_transcript call across 3 variants (got {calls})"
+    );
 }
