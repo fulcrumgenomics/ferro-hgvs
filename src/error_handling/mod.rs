@@ -49,6 +49,7 @@
 
 pub mod codes;
 pub mod corrections;
+pub mod info_map;
 pub mod mutalyzer_map;
 mod preprocessor;
 pub mod registry;
@@ -59,6 +60,9 @@ pub use corrections::{
     detect_accession_typo, detect_amino_acid_typo, detect_edit_type_typo, detect_missing_version,
     detect_swapped_positions, detect_typos, find_closest_match, levenshtein_distance,
     DetectedCorrection, FuzzyMatch, TypoSuggestion, TypoTokenType,
+};
+pub use info_map::{
+    all_mutalyzer_info_codes, mutalyzer_info_to_ferro, FerroInfoTag, MutalyzerInfoCode,
 };
 pub use mutalyzer_map::{
     all_mutalyzer_codes, ferro_to_mutalyzer, mutalyzer_to_ferro, FerroErrorTag, MutalyzerCode,
