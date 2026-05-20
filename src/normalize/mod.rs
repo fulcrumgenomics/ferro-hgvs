@@ -69,6 +69,33 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     )
 }
 
+/// True if the edit is a `Deletion` or `Duplication` shape — the two
+/// edit kinds the HGVS exon-junction exception applies to (HGVS
+/// general.md: "deletions/duplications around exon/exon junctions using
+/// c., r., or n. reference sequences are not shifted"). Insertions and
+/// inversions are explicitly out of scope and still 3'-shift across
+/// exon junctions. (#334)
+///
+/// An empty `delins` (`NaEdit::Delins { sequence: InsertedSequence::Empty,
+/// .. }`) is also matched here because `normalize_na_edit` rewrites it
+/// into a `NaEdit::Deletion` (HGVS issue #81 A3 — empty `delins` is
+/// semantically a deletion). That rewrite happens *inside*
+/// `normalize_na_edit`, i.e. **after** the shuffle bounds have already
+/// been picked, so without folding empty `delins` into this predicate
+/// the n./r. paths would still use the full-transcript bounds for what
+/// is effectively a deletion and shuffle across the exon junction.
+fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
+    matches!(
+        edit,
+        NaEdit::Deletion { .. }
+            | NaEdit::Duplication { .. }
+            | NaEdit::Delins {
+                sequence: InsertedSequence::Empty,
+                ..
+            }
+    )
+}
+
 /// Warning generated during normalization.
 ///
 /// This enum is open-ended: each variant owns the fields its code needs.
@@ -907,8 +934,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let tx_start = start_pos.base as u64;
         let tx_end = end_pos.base as u64;
 
-        // Get boundaries
-        let boundaries = Boundaries::new(0, transcript.sequence_length());
+        // Get boundaries.
+        //
+        // Per HGVS general.md the 3' rule has an explicit exception:
+        // "deletions/duplications around exon/exon junctions using c., r.,
+        // or n. reference sequences are not shifted." The carve-out is
+        // narrow — it names deletions and duplications only — so we apply
+        // the exon-only clamp from `get_cds_boundaries_with_axis_info`
+        // **only for `Deletion` and `Duplication` edits**. Insertions
+        // (including delins-shapes that go through the ins pipeline) and
+        // inversions still 3'-shift across exon junctions, matching the
+        // pre-#334 behavior. The CDS↔UTR axis clamp does not apply to
+        // the n. axis by HGVS spec — `n.<N>` numbering runs through the
+        // whole transcript with no CDS↔UTR sub-axis distinction,
+        // regardless of whether the underlying transcript record happens
+        // to carry `cds_start`/`cds_end`. (#334)
+        let boundaries = if edit_is_del_or_dup(edit) {
+            match boundary::get_cds_boundaries_with_axis_info(&transcript, tx_start, &self.config) {
+                Ok(b) => b.exon,
+                // `tx_start` outside every exon under `cross_boundaries=false`
+                // means the position is intronic by the boundary helper's
+                // definition. The intronic branch above should have handled
+                // it; fall back to the canonicalize-only path defensively.
+                Err(_) => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
+            }
+        } else {
+            Boundaries::new(0, transcript.sequence_length())
+        };
 
         // Perform normalization (n. non-coding tx context).
         // Coordinate-only transcripts (no cached bases) fall back to the
@@ -1262,9 +1314,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // Get boundaries (entire transcript span; r. has no exon-level
-        // junction restriction beyond the transcript ends).
-        let boundaries = Boundaries::new(0, transcript.sequence_length());
+        // Get boundaries.
+        //
+        // The previous "entire transcript span" comment was incorrect:
+        // HGVS general.md explicitly carves out the exon-junction
+        // exception for c., r., and n. references alike — deletions and
+        // duplications around exon/exon junctions are not shifted across
+        // the junction. The carve-out is narrow (it names deletions and
+        // duplications only), so we apply the exon-only clamp from
+        // `get_cds_boundaries_with_axis_info` **only for `Deletion` and
+        // `Duplication` edits**. Insertions and inversions still 3'-shift
+        // across exon junctions, matching the pre-#334 behavior. The
+        // CDS↔UTR axis clamp (which `normalize_cds` also intersects)
+        // does NOT apply to r., because r. natively spans 5'UTR (`r.-N`)
+        // / coding (`r.<N>`) / 3'UTR (`r.*N`) and existing tests pin
+        // shuffles that cross those sub-axes (see
+        // `tests/issue_163_rna_utr3_flag.rs::
+        // rna_mixed_cds_utr3_del_shifts_into_utr`). (#334)
+        let boundaries = if edit_is_del_or_dup(edit) {
+            match boundary::get_cds_boundaries_with_axis_info(&transcript, tx_start, &self.config) {
+                Ok(b) => b.exon,
+                Err(_) => return Ok((HV::Rna(variant.clone()), vec![])),
+            }
+        } else {
+            Boundaries::new(0, transcript.sequence_length())
+        };
 
         // Perform normalization (RNA context: codon-frame gate does not apply;
         // r. is not in the spec's accepted reference types for repeats).
@@ -4338,8 +4412,12 @@ mod tests {
 
     #[test]
     fn test_normalize_rna_deletion_shifts_3prime() {
-        // NM_001234.1 has G repeat at positions 13-37 (position 37 is actually T,
-        // but the normalization shifts to the 3'-most position)
+        // NM_001234.1 has a G repeat at tx positions 13-37 spanning three
+        // exons: exon 1 (1-15), exon 2 (16-30), exon 3 (31-44). Per HGVS
+        // general.md's exon-junction exception, an r. deletion does not
+        // shift across exon boundaries — so `r.14del` (a G in exon 1)
+        // shifts only as far as `r.15del` (the last G inside exon 1).
+        // Closes #334.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
@@ -4347,16 +4425,15 @@ mod tests {
         let result = normalizer.normalize(&variant).unwrap();
         let output = format!("{}", result);
 
-        // Should remain a deletion and shift 3'
         assert!(
             output.contains("del"),
             "Deletion should remain a deletion, got: {}",
             output
         );
-        // Verify it shifted 3' (position should be > 14)
+        // Spec-canonical 3' anchor inside exon 1 is position 15.
         assert!(
-            output.contains("r.37del"),
-            "Deletion should shift 3' to position 37, got: {}",
+            output.contains("r.15del"),
+            "Deletion should shift 3' to exon-1 boundary (r.15del), got: {}",
             output
         );
     }

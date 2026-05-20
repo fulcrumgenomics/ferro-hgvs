@@ -23,7 +23,9 @@
 //!   edit shapes — relies on the tx-1 axis being internally consistent
 //!   for matched-position pairs)
 //! - `src/normalize/mod.rs::test_normalize_rna_deletion_shifts_3prime`
-//!   (the `r.14del` → `r.37del` shift uses tx-1 indices)
+//!   (the `r.14del` → `r.15del` shift uses tx-1 indices; the result
+//!   halts at the exon-1 right edge per the HGVS exon-junction
+//!   exception — see PR #374 / issue #334)
 
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
