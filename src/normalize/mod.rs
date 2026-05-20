@@ -2257,14 +2257,36 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Fallback for variants we cannot remap through the window-based
-        // pipeline (unknown position, decorated position, or no provider
-        // data). Runs minimal-notation cleanup, then still applies
-        // `apply_canonical_split` so issue #160 inv-split and issue #165
-        // sub-only decomposition remain in force — those run on a narrow
-        // fetch (`fetch_ref_for_canonical_split`) that can succeed even
-        // when the wider shuffle window does not.
+        // pipeline (unknown position, decorated position, no provider
+        // data, or a reversed `<high>_<low>` wraparound range). Runs
+        // minimal-notation cleanup, then applies `apply_canonical_split`
+        // so issue #160 inv-split and issue #165 sub-only decomposition
+        // remain in force — those run on a narrow fetch
+        // (`fetch_ref_for_canonical_split`) that can succeed even when
+        // the wider shuffle window does not.
+        //
+        // Reversed ranges (`start > end`, per SVD-WG006 wraparound on
+        // `m.`/`o.`) skip `apply_canonical_split`: the helper computes
+        // `expected_span = hgvs_end - hgvs_start + 1` as `u64`, which
+        // underflows on reversed inputs. Today's shipped providers
+        // reject `start > end` at their `get_sequence` boundary, so the
+        // helper currently short-circuits via the `.ok()?` path before
+        // touching that arithmetic. Guarding here removes the latent
+        // dependency on every present and future provider doing that
+        // boundary check correctly — circular-aware split math is its
+        // own design and belongs to #129 Path 2 follow-up.
         let mt_fallback = |v: &crate::hgvs::variant::MtVariant| {
             let canonical = self.canonicalize_mt_variant(v);
+            let is_reversed = canonical
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .zip(canonical.loc_edit.location.end.inner())
+                .is_some_and(|(s, e)| s.base > e.base);
+            if is_reversed {
+                return (HV::Mt(canonical), vec![]);
+            }
             let (split, warnings) = self.apply_canonical_split(HV::Mt(canonical));
             (wrap_allele_if_split(split), warnings)
         };
@@ -2295,10 +2317,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let start = start_pos.base;
         let end = end_pos.base;
 
+        // Wraparound `<high>_<low>` ranges (per SVD-WG006: `del`/`dup`/
+        // `delins` on `m.`/`o.`) have `start > end`. Circular-aware
+        // 3'-shift across the origin is out of scope for #129 (matches
+        // mutalyzer + biocommons + strict spec reading); route these
+        // straight to the canonicalize-only fallback. Doing the gate
+        // here — rather than relying on the provider rejecting `start >
+        // end` and the post-arithmetic `rel_end = end - window_start`
+        // underflow as a fail-safe — keeps the path correct under any
+        // window-size configuration. Issue #129 follow-up: implement
+        // circular-aware shuffle modulo contig length.
+        if start > end {
+            return Ok(mt_fallback(variant));
+        }
+
         // Window-based fetch around the variant. Non-origin-crossing
-        // variants take this path exactly like genomic; wraparound
-        // `dup`/`ins`/`inv` (where `start > end`) drop through to the
-        // canonicalize-only fallback below via `get_sequence` failure.
+        // path: identical to genomic.
         let window_start = start.saturating_sub(self.config.window_size);
         let seq_result = self.provider.get_sequence(
             &accession,
