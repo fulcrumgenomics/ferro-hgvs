@@ -1068,14 +1068,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Protein(variant.clone()), vec![])),
         };
 
-        // Apply normalization based on edit type
-        let normalized_edit = match edit {
+        // Apply normalization based on edit type. May rewrite both the
+        // edit and the interval (e.g. `ins → dup` canonicalization
+        // anchors the dup at the upstream-duplicated residue range,
+        // which is a different interval than the input `<X>_<Y>ins…`).
+        let (normalized_edit, post_canon_interval) = match edit {
             ProteinEdit::Deletion { sequence, count } => {
                 // Check for redundant sequence that matches the position
-                if let Some(seq) = sequence {
+                let new_edit = if let Some(seq) = sequence {
                     if self.is_redundant_protein_deletion_sequence(&variant.loc_edit.location, seq)
                     {
-                        // Remove redundant sequence
                         ProteinEdit::Deletion {
                             sequence: None,
                             count: *count,
@@ -1085,10 +1087,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     }
                 } else {
                     edit.clone()
-                }
+                };
+                (new_edit, variant.loc_edit.location.clone())
             }
+            // HGVS Prioritization: `<X>_<Y>ins<seq>` whose inserted
+            // residues duplicate the residues immediately upstream
+            // (anchored at p.X) is canonicalized to `<a>_<b>dup` over
+            // that upstream range. The 3'-shift pass that follows will
+            // then walk the dup to its canonical anchor. (#92)
+            ProteinEdit::Insertion { sequence } => self
+                .try_protein_ins_to_dup(variant, sequence)
+                .unwrap_or_else(|| (edit.clone(), variant.loc_edit.location.clone())),
             // Other edits pass through unchanged
-            _ => edit.clone(),
+            _ => (edit.clone(), variant.loc_edit.location.clone()),
         };
 
         // Compute the post-shuffle interval. The shuffle layer operates on
@@ -1097,11 +1108,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // are shuffled — per HGVS general.md "the most 3' position
         // possible … is arbitrarily assigned" — substitutions and other
         // edit kinds keep their input position (issue #91).
+        //
+        // The shuffler receives a synthesized variant that carries the
+        // post-canonical interval (which may differ from the input's
+        // after the `ins → dup` rewrite above). Important:
+        // `shuffle_protein_3prime` reads only `loc_edit.location` from
+        // the variant — it does NOT inspect the Mu wrapping on the
+        // edit. The `map_ref` here preserves the input's Mu wrapping
+        // for the eventual output, but the shuffler's behavior must
+        // not depend on it. If a future shuffler refactor starts
+        // reading the edit's uncertainty, audit this construction.
+        let canon_variant = ProteinVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                post_canon_interval.clone(),
+                variant.loc_edit.edit.map_ref(|_| normalized_edit.clone()),
+            ),
+        };
         let (new_interval, shuffled) = match &normalized_edit {
             ProteinEdit::Deletion { .. } | ProteinEdit::Duplication => self
-                .shuffle_protein_3prime(variant, &normalized_edit)
-                .unwrap_or_else(|| (variant.loc_edit.location.clone(), false)),
-            _ => (variant.loc_edit.location.clone(), false),
+                .shuffle_protein_3prime(&canon_variant, &normalized_edit)
+                .unwrap_or_else(|| (post_canon_interval.clone(), false)),
+            _ => (post_canon_interval.clone(), false),
         };
 
         // After a 3'-shift, a `Deletion { sequence: Some(..) }` carries
@@ -1122,7 +1151,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Only create a new variant if the edit changed or the interval moved
         let edit_changed = &output_edit != edit;
-        if edit_changed || shuffled {
+        let interval_changed = post_canon_interval != variant.loc_edit.location;
+        if edit_changed || interval_changed || shuffled {
             let new_variant = ProteinVariant {
                 accession: variant.accession.clone(),
                 gene_symbol: variant.gene_symbol.clone(),
@@ -1292,6 +1322,137 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_start = ProtPos::new(new_start_aa, new_start_num);
         let new_end = ProtPos::new(new_end_aa, new_end_num);
         Some((Interval::new(new_start, new_end), true))
+    }
+
+    /// HGVS Prioritization: if a protein insertion is equivalent to a
+    /// duplication anywhere in the surrounding reference, the canonical
+    /// form is a duplication.
+    ///
+    /// Algorithm: for `<X>_<Y>ins<seq>` with `len = seq.len()` and
+    /// `Y = X + 1`, test two windows:
+    ///
+    /// 1. **Upstream window** (1-based `[X - len + 1, X]`): if equal to
+    ///    `seq`, rewrite to `<a>_<b>dup` over that upstream range. The
+    ///    inserted residues duplicate the residues immediately preceding
+    ///    the insertion point.
+    /// 2. **Downstream window** (1-based `[Y, Y + len - 1]`): if equal
+    ///    to `seq`, rewrite to `<c>_<d>dup` over that downstream range.
+    ///    The inserted residues duplicate the residues immediately
+    ///    following the insertion point — semantically the same change
+    ///    as the upstream-match case (and indeed they're related by 3'
+    ///    shift), but covers inputs anchored on the 5' side of an
+    ///    ambiguous boundary (e.g. `p.Val3_Ala4insAla` against a run
+    ///    `...VAAA...`: V is the preceding residue, but the inserted A
+    ///    duplicates the following A).
+    ///
+    /// The subsequent 3'-shift pass then walks the dup to its canonical
+    /// anchor. Both anchors are spec-equivalent; the 3'-shift converges
+    /// them to the same canonical form.
+    ///
+    /// Returns `Some((new_edit, new_interval))` on a successful rewrite.
+    /// Returns `None` when the rewrite is not applicable:
+    ///
+    /// - provider has no protein data,
+    /// - either interval endpoint is not `Mu::Certain` (uncertain or
+    ///   range boundaries are passed through unchanged so the canonical
+    ///   uncertainty marker survives),
+    /// - the interval is not the standard `<X>_<X+1>ins…` adjacent shape,
+    /// - any reference residue cannot be parsed via `from_one_letter`,
+    /// - neither window matches `seq`.
+    ///
+    /// (#92)
+    fn try_protein_ins_to_dup(
+        &self,
+        variant: &crate::hgvs::variant::ProteinVariant,
+        seq: &crate::hgvs::edit::AminoAcidSeq,
+    ) -> Option<(ProteinEdit, ProtInterval)> {
+        if seq.is_empty() {
+            return None;
+        }
+        if !self.provider.has_protein_data() {
+            return None;
+        }
+        // Require Mu::Certain at both endpoints. Uncertain or range
+        // boundaries carry semantics that the dup rewrite would silently
+        // drop (e.g. `p.(Ala4)_Ala5insAla` parenthesizing the start
+        // would not survive the rewrite to `p.Ala4dup`).
+        let start_mu = variant.loc_edit.location.start.as_single()?;
+        let end_mu = variant.loc_edit.location.end.as_single()?;
+        let start_pos = match start_mu {
+            crate::hgvs::uncertainty::Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        let end_pos = match end_mu {
+            crate::hgvs::uncertainty::Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        // An insertion is parsed as `<X>_<Y>ins<seq>` with Y = X + 1.
+        // Reject any other shape.
+        if end_pos.number != start_pos.number + 1 {
+            return None;
+        }
+        let len = seq.len() as u64;
+        let accession = variant.accession.transcript_accession();
+
+        // Upstream window: 1-based [start_pos.number - len + 1, start_pos.number].
+        if start_pos.number >= len {
+            let window_start_0 = start_pos.number - len;
+            let window_end_excl = start_pos.number;
+            if let Some(window_aas) =
+                self.fetch_protein_window(&accession, window_start_0, window_end_excl)
+            {
+                if window_aas == seq.0 {
+                    let dup_start_num = window_start_0 + 1;
+                    let dup_end_num = start_pos.number;
+                    let dup_start = ProtPos::new(window_aas[0], dup_start_num);
+                    let dup_end = ProtPos::new(*window_aas.last()?, dup_end_num);
+                    return Some((ProteinEdit::Duplication, Interval::new(dup_start, dup_end)));
+                }
+            }
+        }
+
+        // Downstream window: 1-based [end_pos.number, end_pos.number + len - 1].
+        let window_start_0 = end_pos.number - 1;
+        let window_end_excl = end_pos.number + len - 1;
+        if let Some(window_aas) =
+            self.fetch_protein_window(&accession, window_start_0, window_end_excl)
+        {
+            if window_aas == seq.0 {
+                let dup_start_num = end_pos.number;
+                let dup_end_num = end_pos.number + len - 1;
+                let dup_start = ProtPos::new(window_aas[0], dup_start_num);
+                let dup_end = ProtPos::new(*window_aas.last()?, dup_end_num);
+                return Some((ProteinEdit::Duplication, Interval::new(dup_start, dup_end)));
+            }
+        }
+
+        None
+    }
+
+    /// Fetch a reference protein window and decode each byte to
+    /// [`AminoAcid`]. Returns `None` if the provider call fails, the
+    /// returned slice has the wrong length, or any residue is not a
+    /// valid one-letter code.
+    fn fetch_protein_window(
+        &self,
+        accession: &str,
+        start_0: u64,
+        end_excl: u64,
+    ) -> Option<Vec<AminoAcid>> {
+        let expected_len = (end_excl - start_0) as usize;
+        let window = self
+            .provider
+            .get_protein_sequence(accession, start_0, end_excl)
+            .ok()?;
+        let bytes = window.as_bytes();
+        if bytes.len() != expected_len {
+            return None;
+        }
+        let mut aas = Vec::with_capacity(expected_len);
+        for &b in bytes {
+            aas.push(AminoAcid::from_one_letter(b as char)?);
+        }
+        Some(aas)
     }
 
     /// Discover the length of a protein via the `ReferenceProvider`
