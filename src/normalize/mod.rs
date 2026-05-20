@@ -1073,7 +1073,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(cds_end) => tx_start >= cds_start && tx_end <= cds_end,
             None => false,
         };
-        let (new_tx_start, new_tx_end, new_edit, mut warnings) =
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
 
         // #349: detect whether the axis clamp was operative for this
@@ -1143,6 +1143,129 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     direction: direction_str.to_string(),
                     clamp_kind: clamp_kind.to_string(),
                 });
+            }
+        }
+
+        // Issue #383 CDS-start clamp for the canonicalisation-rewrite
+        // path. Companion to PR #343 (shuffle-path clamp). The spec
+        // (§general "3'-rule applies to ALL descriptions" + the per-
+        // axis coordinate treatment) says canonicalisation may not
+        // silently move a CDS-interior input strictly into 5'UTR.
+        // ferro's pre-shift `canonicalize_delins`, 5'-shift, and post-
+        // shift ins→dup recognizer can each land such an input at
+        // `new_tx_start < cds_start` — emitted variously as
+        // `c.-N_1ins<…>`, `c.-M_-N dup`, etc. (e.g.
+        // `NM_212556.2:c.1_2insCA` (5prime+cross) → `c.-2_-1dup`).
+        //
+        // The clamp fires on `new_tx_start < cds_start` regardless of
+        // output edit-type, and rewrites by edit-type of the INPUT
+        // (not the post-canon output, whose alt may already be a
+        // rotated / duplicated derivative):
+        //
+        //   - Insertion input → `c.1_Kdelins<absorbed alt>` where
+        //     `K = max(1, X - L)` (`L = |alt|`):
+        //
+        //       new_alt = ref[c.1..c.{X+1}] ++ alt[0..L - X + K]
+        //
+        //     For `X <= L+1` (the common case) `K = 1` and the formula
+        //     collapses to `c.1delins<ref[c.1..c.{X+1}] ++ alt[..L-X+1]>`
+        //     (1-base anchor — what biocommons emits for the
+        //     NM_212556.2 corpus cases). For long left-shifts across a
+        //     homopolymer (`X > L+1`, e.g. ref `c.1..c.20 = AAAAA…`
+        //     with `c.5_6insAA`) `K = X - L` extends the delete window
+        //     so the rewrite stays anchored at c.1 instead of silently
+        //     falling through to `c.-1_1ins…`. We always verify
+        //     equivalence against the input before accepting the
+        //     rewrite — for non-homopolymer-tandem shapes where the
+        //     formula doesn't algebraically reduce, we leave
+        //     `new_edit` alone (preserving existing behaviour).
+        //   - Delins input → restore the input form unchanged. The
+        //     shared-affix trim is what pushed the residual past the
+        //     boundary; suppressing it leaves the spec-canonical form
+        //     (the input itself).
+        if matches!(start_axis, boundary::AxisRegion::Cds) && new_tx_start < cds_start {
+            match edit {
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(in_lit),
+                } => {
+                    let alt_bytes: Vec<u8> = in_lit.bases().iter().map(|b| *b as u8).collect();
+                    let x = (tx_start.saturating_sub(cds_start) + 1) as usize;
+                    let cds_start_0b = (cds_start as usize).saturating_sub(1);
+                    let prefix_end = cds_start_0b + x;
+                    // k = max(1, x - L). For x <= L+1 this is 1 (the
+                    // original 1-base-anchor formula); for the long-
+                    // shift homopolymer case (x > L+1) this widens the
+                    // delete window enough to give us a non-negative
+                    // alt_take.
+                    let k = x.saturating_sub(alt_bytes.len()).max(1);
+                    let alt_take = (alt_bytes.len() + k).saturating_sub(x);
+                    let delete_end_0b = cds_start_0b + k;
+                    if x >= 1
+                        && prefix_end <= seq.len()
+                        && delete_end_0b <= seq.len()
+                        && alt_take <= alt_bytes.len()
+                    {
+                        let prefix = &seq[cds_start_0b..prefix_end];
+                        let alt_part = &alt_bytes[..alt_take];
+                        let mut new_alt: Vec<u8> = prefix.to_vec();
+                        new_alt.extend_from_slice(alt_part);
+                        // Equivalence check: the clamped delins
+                        //   delete ref[cds_start_0b..cds_start_0b+k]
+                        //   insert new_alt (length L+k)
+                        // must yield the same final sequence as the
+                        // input
+                        //   insert alt at tx_start (length L)
+                        //   = between bytes tx_start_0b and
+                        //     tx_start_0b+1 (tx_start_0b = cds_start_0b+x-1).
+                        // After cancelling the shared prefix at
+                        // `cds_start_0b` and the shared suffix from
+                        // `cds_start_0b+x` onward, equivalence reduces
+                        // to:
+                        //   alt[..alt_take] ++ ref[cds_start_0b+k..
+                        //                          cds_start_0b+x]
+                        //       == alt
+                        // i.e. the last (x - k) bytes of `alt` must
+                        // equal the corresponding ref window. For the
+                        // x <= L+1 case (k = 1) this collapses to the
+                        // pre-existing single-base-anchor formula and
+                        // always holds because the canonicalisation
+                        // shifted past that ref window in the first
+                        // place. For x > L+1 (k = x - L) the check
+                        // accepts homopolymer / tandem-repeat cases
+                        // and rejects anything else, so we never emit
+                        // a delins that disagrees with the input.
+                        let ref_tail = &seq[delete_end_0b..prefix_end];
+                        let alt_tail_start = alt_take;
+                        let equivalent = ref_tail.len() == alt_bytes.len() - alt_tail_start
+                            && ref_tail == &alt_bytes[alt_tail_start..];
+                        if equivalent {
+                            let bases: Vec<Base> = new_alt
+                                .iter()
+                                .filter_map(|b| Base::from_char(*b as char))
+                                .collect();
+                            if bases.len() == new_alt.len() {
+                                new_edit = NaEdit::Delins {
+                                    sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                                    deleted: None,
+                                    deleted_length: None,
+                                };
+                                new_tx_start = cds_start;
+                                new_tx_end = cds_start + (k as u64) - 1;
+                            }
+                        }
+                    }
+                }
+                NaEdit::Delins { .. } => {
+                    new_edit = edit.clone();
+                    new_tx_start = tx_start;
+                    new_tx_end = tx_end;
+                }
+                _ => {
+                    // Other edit types (Deletion, Duplication directly
+                    // as input, Inversion, …) do not currently produce
+                    // 5'UTR-resident rewrites from CDS-interior inputs
+                    // in this canonicalisation path.
+                }
             }
         }
 
