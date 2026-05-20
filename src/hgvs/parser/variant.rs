@@ -5353,7 +5353,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
 
     // Spec-mandated post-parse semantic check: reject self-cancelling alleles
     // (HGVS recommendations/general.md line 47, tracked under issue #115).
-    validate_no_self_cancelling(&variant)?;
+    validate_no_self_cancelling(&variant, input)?;
 
     Ok(variant)
 }
@@ -5404,43 +5404,148 @@ fn reject_protein_bracketed_aa_insertion(input: &str) -> Result<(), FerroError> 
 /// overlapping `del` + `dup` pair (HGVS `recommendations/general.md` line 47:
 /// "descriptions removing part of a reference sequence replacing it with
 /// part of the same sequence are not allowed").
-fn validate_no_self_cancelling(variant: &HgvsVariant) -> Result<(), FerroError> {
-    use crate::error::{Diagnostic, ErrorCode};
+///
+/// `source` is the original parser input — always passed through verbatim
+/// so the attached `Diagnostic::with_source` can render against the
+/// caller's actual string. When a violation is found the offending
+/// allele's `[ ... ]` byte range is located within `source` (advancing
+/// past the parent bracket on each nested recursion) so the diagnostic
+/// points at the precise bracket; this fixes #171 where E3006 previously
+/// reported `pos: 0`.
+fn validate_no_self_cancelling(variant: &HgvsVariant, source: &str) -> Result<(), FerroError> {
+    walk_self_cancelling(variant, source, 0)
+}
+
+/// Inner helper: `search_from` is the byte offset within `source` at
+/// which to begin scanning for the next cis-allele bracket. Top-level
+/// callers pass `0`; recursive calls for nested alleles pass the byte
+/// offset *just after* the enclosing bracket's `[` so that nested
+/// diagnostics resolve to the inner bracket rather than the outer.
+fn walk_self_cancelling(
+    variant: &HgvsVariant,
+    source: &str,
+    search_from: usize,
+) -> Result<(), FerroError> {
     if let HgvsVariant::Allele(allele) = variant {
         // Only cis-phase alleles describe edits on the same physical sequence.
         // Trans/mosaic/chimeric place the edits on different alleles or cell
         // populations, so an overlapping del+dup is not self-cancelling.
         // Unknown phase is treated permissively to avoid false rejections.
+        let bracket = locate_cis_allele_bracket(source, search_from);
         if matches!(allele.phase, AllelePhase::Cis) {
             if let Some((dl, du)) =
                 crate::hgvs::variant::AlleleVariant::detect_self_cancelling_pair(&allele.variants)
             {
-                return Err(FerroError::Parse {
-                    pos: 0,
-                    msg: format!(
-                        "Self-cancelling allele: variants at index {} (del) and {} (dup) describe \
-                         overlapping reference positions",
-                        dl, du
-                    ),
-                    diagnostic: Some(Box::new(
-                        Diagnostic::new()
-                            .with_code(ErrorCode::SelfCancellingAllele)
-                            .with_hint(
-                                "HGVS does not allow describing both a deletion and a duplication \
-                                 of overlapping reference positions in the same allele \
-                                 (recommendations/general.md line 47); drop one edit or rewrite \
-                                 as a single delins",
-                            ),
-                    )),
-                });
+                let span = bracket.map(|(s, e)| crate::error::SourceSpan::new(s, e));
+                return Err(crate::hgvs::variant::build_self_cancelling_error(
+                    dl,
+                    du,
+                    span,
+                    Some(source),
+                ));
             }
         }
-        // Recurse for nested alleles.
+        // Recurse for nested alleles. A *per-child cursor* (not a single
+        // shared offset) is required because a parent allele may contain
+        // multiple sibling alleles in its `variants` list, each of which
+        // has its own `[...]` in `source`. Reusing the same
+        // `next_search_from` for every child would bind every nested
+        // E3006 diagnostic to the first sibling's bracket. After each
+        // child is walked, advance the cursor past that child's bracket
+        // (if it found one) so the next child scans the remainder of
+        // `source`. The full `source` keeps flowing so global byte
+        // offsets resolve correctly at any depth.
+        let mut cursor = bracket
+            .map(|(open, _close)| open + 1)
+            .unwrap_or(search_from);
         for inner in &allele.variants {
-            validate_no_self_cancelling(inner)?;
+            walk_self_cancelling(inner, source, cursor)?;
+            cursor = locate_cis_allele_bracket(source, cursor)
+                .map(|(open, _close)| open + 1)
+                .unwrap_or(cursor);
         }
     }
     Ok(())
+}
+
+/// Locate the first allele bracket `[...]` in `source` at or after
+/// `search_from` and return its open / exclusive-close byte range.
+///
+/// Two shapes are recognised:
+///
+/// - **Compact form**: an axis marker (`:c.`, `:g.`, `:n.`, `:r.`, `:m.`,
+///   `:o.`, `:p.`) immediately followed by `[`. This is the canonical
+///   top-level shape, e.g. `NM_004006.2:c.[762_768del;767_774dup]`.
+/// - **Expanded form / nested**: a bare `[` at `search_from` or later
+///   that is not part of an inserted-sequence (`ins[ATC]`) or repeat
+///   bracket. Disambiguation is done by looking at the byte immediately
+///   before the candidate `[`: if it's `:`, `;`, `(`, or start-of-scan,
+///   the `[` opens an allele rather than an `ins`/`dup` payload.
+///
+/// In both shapes the matching `]` is found by depth-tracking, so
+/// inserted-sequence brackets nested inside the allele (`g.X_Yins[ATC]`
+/// per #333) and repeat brackets do not confuse the closing position.
+/// Returns `None` if no allele bracket is found from `search_from`
+/// onward, or if the input has unbalanced brackets.
+fn locate_cis_allele_bracket(source: &str, search_from: usize) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+
+    // Pass 1: prefer the axis-marker form — it unambiguously identifies
+    // the allele bracket even when free `[` characters appear earlier.
+    let mut i = search_from;
+    while i + 4 <= bytes.len() {
+        let is_axis_bracket = bytes[i] == b':'
+            && matches!(bytes[i + 1], b'c' | b'g' | b'n' | b'r' | b'm' | b'o' | b'p')
+            && bytes[i + 2] == b'.'
+            && bytes[i + 3] == b'[';
+        if is_axis_bracket {
+            return close_at_depth_zero(bytes, i + 3);
+        }
+        i += 1;
+    }
+
+    // Pass 2: an inner allele bracket whose enclosing axis marker
+    // belongs to its parent. Accept a bare `[` whose preceding byte is
+    // an HGVS structural delimiter (`:`, `;`, `(`) or the start of the
+    // scan window. Crucially this rejects `ins[` and `dup[` payloads
+    // because their preceding byte is alphabetic.
+    let mut j = search_from;
+    while j < bytes.len() {
+        if bytes[j] == b'[' {
+            let prev_is_delim = j == search_from || matches!(bytes[j - 1], b':' | b';' | b'(');
+            if prev_is_delim {
+                return close_at_depth_zero(bytes, j);
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Given `bytes[open] == b'['`, return `(open, close_exclusive)` where
+/// `close_exclusive` is one past the matching `]` (tracking depth so
+/// nested `[…]` payloads close cleanly). Returns `None` for unbalanced
+/// input.
+fn close_at_depth_zero(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
+    if open >= bytes.len() || bytes[open] != b'[' {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut j = open;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, j + 1));
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -6739,5 +6844,147 @@ mod tests {
             result.is_ok(),
             "non-overlapping del+dup must be accepted: {result:?}"
         );
+    }
+
+    // ----- Issue #171: E3006 must preserve source span -----
+
+    #[test]
+    fn test_parse_self_cancelling_allele_reports_source_span() {
+        // The opening `[` in `NM_004006.2:c.[762_768del;767_774dup]` sits at
+        // byte offset 14. Issue #171: previously the diagnostic carried
+        // `pos: 0` even though the offending bracket position is well-defined
+        // from the parser. Downstream tooling (LSP, web service, structured-
+        // error consumers) needs the byte offset to underline the offending
+        // allele in source.
+        let input = "NM_004006.2:c.[762_768del;767_774dup]";
+        let expected_bracket = input.find('[').expect("input contains a bracket");
+        let result = parse_variant(input);
+        let err = result.expect_err("self-cancelling allele must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("E3006 should be a Parse error, got {err:?}");
+        };
+        assert_eq!(
+            *pos, expected_bracket,
+            "E3006 pos must point at the offending allele's '['"
+        );
+        let diag = diagnostic.as_ref().expect("E3006 must carry a Diagnostic");
+        let span = diag
+            .span
+            .as_ref()
+            .expect("E3006 Diagnostic must carry a SourceSpan");
+        assert_eq!(span.start, expected_bracket);
+        assert_eq!(
+            span.end,
+            input.rfind(']').expect("input contains close bracket") + 1
+        );
+    }
+
+    #[test]
+    fn test_locate_cis_allele_bracket_skips_ins_payload() {
+        // Compact form with an inserted-sequence bracket nested inside the
+        // allele (issue #333). Depth tracking must close the allele on
+        // its own `]`, not on the `ins[ATC]` payload's `]`.
+        let input = "NM_X:g.[100A>G;200_201ins[ATC]]";
+        let (open, close) = super::locate_cis_allele_bracket(input, 0)
+            .expect("axis-prefixed allele bracket is present");
+        assert_eq!(open, input.find('[').unwrap());
+        assert_eq!(close, input.len());
+        // Round-trip: the slice between open and close encloses the full
+        // compact allele including the ins payload.
+        assert!(input[open..close].starts_with('[') && input[open..close].ends_with(']'));
+    }
+
+    #[test]
+    fn test_locate_cis_allele_bracket_returns_none_for_plain_substitution() {
+        // No allele bracket in a single-variant input — the locator must
+        // not invent one (and must not panic on inputs that have no `[`).
+        assert!(super::locate_cis_allele_bracket("NM_004006.2:c.100A>G", 0).is_none());
+    }
+
+    #[test]
+    fn test_locate_cis_allele_bracket_returns_none_for_unbalanced_input() {
+        // Malformed input with an unbalanced `[` must not infinite-loop and
+        // must not yield a bogus span.
+        assert!(super::locate_cis_allele_bracket("NM_X:c.[762_768del", 0).is_none());
+    }
+
+    #[test]
+    fn test_locate_cis_allele_bracket_advances_past_outer_open() {
+        // Defensive coverage for `walk_self_cancelling`'s recursion:
+        // when descending into an inner allele the caller advances
+        // `search_from` past the outer `[`, so the locator must find
+        // the *next* allele bracket (`;[`, `:axis.[`) rather than
+        // re-finding the outer one. The HGVS grammar today does not
+        // produce nested-compound alleles via the parser, so this
+        // pins the locator semantics directly.
+        let input = "NM_004006.2:c.[1A>G;[762_768del;767_774dup]]";
+        let outer_open = input.find('[').unwrap();
+        let inner_open = input.find(";[").map(|p| p + 1).unwrap();
+        let inner_close_excl = input.rfind("]]").map(|p| p + 1).unwrap();
+
+        // Outer scan (search_from = 0) returns the outer bracket.
+        let (o, _) = super::locate_cis_allele_bracket(input, 0).unwrap();
+        assert_eq!(o, outer_open);
+
+        // Inner scan (search_from = outer_open + 1) returns the inner
+        // bracket and pairs it with the inner closing `]`.
+        let (s, e) = super::locate_cis_allele_bracket(input, outer_open + 1).unwrap();
+        assert_eq!(s, inner_open);
+        assert_eq!(e, inner_close_excl);
+    }
+
+    #[test]
+    fn test_self_cancelling_via_try_new_validated_takes_caller_span() {
+        // The library-level `AlleleVariant::try_new_validated` entry must
+        // forward a caller-supplied `SourceSpan` into the diagnostic so
+        // consumers that build alleles outside the parser (e.g. the web
+        // service builder) can still produce well-located E3006 errors.
+        use crate::error::SourceSpan;
+        use crate::hgvs::variant::AlleleVariant;
+
+        let del = parse_variant("NM_004006.2:c.762_768del").expect("del should parse for fixture");
+        let dup = parse_variant("NM_004006.2:c.767_774dup").expect("dup should parse for fixture");
+
+        // Without a caller-supplied span, `pos` falls back to 0 (no source
+        // available) but the diagnostic must still carry the E3006 code.
+        let err = AlleleVariant::try_new_validated(
+            vec![del.clone(), dup.clone()],
+            crate::hgvs::variant::AllelePhase::Cis,
+            None,
+        )
+        .expect_err("self-cancelling allele must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("expected Parse, got {err:?}");
+        };
+        assert_eq!(*pos, 0, "no caller span ⇒ pos remains 0");
+        assert_eq!(
+            diagnostic.as_ref().and_then(|d| d.code),
+            Some(crate::error::ErrorCode::SelfCancellingAllele),
+        );
+
+        // With a caller-supplied span, `pos` and the diagnostic span both
+        // reflect it.
+        let span = SourceSpan::new(50, 80);
+        let err = AlleleVariant::try_new_validated(
+            vec![del, dup],
+            crate::hgvs::variant::AllelePhase::Cis,
+            Some(span.clone()),
+        )
+        .expect_err("self-cancelling allele must be rejected");
+        let crate::error::FerroError::Parse {
+            pos, diagnostic, ..
+        } = &err
+        else {
+            panic!("expected Parse, got {err:?}");
+        };
+        assert_eq!(*pos, 50);
+        let diag = diagnostic.as_ref().expect("Diagnostic carried");
+        assert_eq!(diag.span.as_ref(), Some(&span));
     }
 }
