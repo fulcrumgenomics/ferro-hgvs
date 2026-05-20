@@ -179,7 +179,7 @@ fn top_level_trans_compound_repeat_fully_qualified() {
 }
 
 #[test]
-fn delins_reference_with_nested_repeat_count_round_trip() {
+fn delins_reference_with_nested_repeat_count_parses_and_defers() {
     // Companion fix in `parser/edit.rs::parse_bracketed_inserted_sequence`:
     // a `delins[…]` whose bracketed payload is a reference range that
     // *itself* contains an `[N]` repeat-count bracket previously had
@@ -187,8 +187,35 @@ fn delins_reference_with_nested_repeat_count_round_trip() {
     // (e.g. `NC_000022.11:g.100_200TG[3]`) is now scanned with the
     // depth-aware variant of the helper used by the trans-allele
     // parsers above.
+    //
+    // Issue #333 changes the *normalize* contract for cross-reference
+    // payloads: ferro now defers the cross-coord lookup as
+    // `FerroError::UnsupportedVariant`. The parser pin survives —
+    // depth-aware bracket scanning still works — but `normalize` no
+    // longer round-trips this shape unchanged. The deferral message
+    // carries `cross-reference` / `follow-up` for grep.
+    use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
     let s = "NC_000001.11:g.100_105delins[NC_000022.11:g.100_200TG[3]]";
-    assert_eq!(round_trip(s), s);
+    let variant =
+        parse_hgvs(s).unwrap_or_else(|e| panic!("nested-repeat reference must still parse: {}", e));
+    let normalizer = Normalizer::new(MockProvider::new());
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("cross-reference payload normalization must defer");
+    // Pin the concrete error variant so the message-text grep below
+    // can't accidentally pass on a different error type that happens
+    // to contain the same words.
+    assert!(
+        matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
+        "expected UnsupportedVariant for cross-reference deferral (got: {:?})",
+        err
+    );
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("cross-reference") && msg.contains("follow-up"),
+        "deferral message must mention 'cross-reference' and 'follow-up' (got: {})",
+        msg
+    );
 }
 
 // =============================================================================

@@ -48,8 +48,8 @@ use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
 use rules::{
-    canonicalize_conversion_to_delins, canonicalize_edit, needs_normalization, should_canonicalize,
-    DelinsSubedit,
+    canonicalize_conversion_to_delins, canonicalize_edit, canonicalize_insertion_expand,
+    needs_normalization, should_canonicalize, DelinsSubedit, InsCoordKind,
 };
 use shuffle::shuffle;
 
@@ -174,6 +174,22 @@ pub enum NormalizationWarning {
         /// Axis bound that did the clamping: "5utr" | "cds_start" | "cds_end" | "3utr"
         clamp_kind: String,
     },
+
+    /// Bracketed / reference-range `ins[...]` payload was expanded to a
+    /// flat literal sequence. Emitted alongside the canonical rewrite for
+    /// observability — callers can audit which inputs were canonicalized
+    /// vs. preserved verbatim. Code: `INSERTED_SEQUENCE_EXPANDED`.
+    InsertedSequenceExpanded {
+        /// Human-readable description
+        message: String,
+        /// Accession of the outer variant
+        accession: String,
+        /// Original `ins[...]` payload as written (e.g. `[ATC]` or
+        /// `[100_120inv]` or `[A;100_110]`)
+        original_payload: String,
+        /// The expanded flat literal sequence written into the AST
+        expanded_literal: String,
+    },
 }
 
 impl NormalizationWarning {
@@ -185,6 +201,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
+            Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
         }
     }
 
@@ -196,6 +213,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { message, .. } => message,
             Self::CrossAxisVariantNotShuffled { message, .. } => message,
             Self::AxisClampApplied { message, .. } => message,
+            Self::InsertedSequenceExpanded { message, .. } => message,
         }
     }
 }
@@ -542,6 +560,172 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok((result, all_warnings))
     }
 
+    /// Issue #333: expand a bracketed / reference-range `ins[...]` payload
+    /// in an `Insertion` / `Delins` / `DupIns` edit to a flat literal
+    /// sequence. Returns the rewritten edit plus a
+    /// [`NormalizationWarning::InsertedSequenceExpanded`] for
+    /// observability, or `None` when nothing was canonicalized.
+    ///
+    /// The four `normalize_<axis>` methods wrap this helper to build the
+    /// per-axis variant struct. Splitting the warning construction here
+    /// keeps the original `[ATC]` / `[A;100_110]` rendering accessible
+    /// before the edit is mutated.
+    fn try_expand_ins_edit(
+        &self,
+        edit: &NaEdit,
+        accession: &str,
+        kind: InsCoordKind,
+    ) -> Result<Option<(NaEdit, NormalizationWarning)>, FerroError> {
+        // Snapshot the inserted-sequence payload BEFORE rewriting so the
+        // warning's `original_payload` matches its documented format
+        // (e.g. `[ATC]` / `[A;100_110]`), and the per-edit display string
+        // for the human-readable message. Pure Insertion / Delins /
+        // DupIns are the only edits the helper acts on; other variants
+        // short-circuit below since `canonicalize_insertion_expand` will
+        // return `Ok(None)` for them.
+        let original_inserted = match edit {
+            NaEdit::Insertion { sequence }
+            | NaEdit::Delins { sequence, .. }
+            | NaEdit::DupIns { sequence } => sequence,
+            _ => return Ok(None),
+        };
+        let original_payload = format!("{}", original_inserted);
+        let original_edit_display = format!("{}", edit);
+
+        let new_edit = match canonicalize_insertion_expand(edit, accession, kind, &self.provider)? {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        let new_inserted = match &new_edit {
+            NaEdit::Insertion { sequence }
+            | NaEdit::Delins { sequence, .. }
+            | NaEdit::DupIns { sequence } => sequence,
+            // The expand helper preserves the edit kind, so this branch
+            // is unreachable in practice; falling back to the full edit
+            // display keeps the field non-empty if invariants change.
+            _ => {
+                let warning = NormalizationWarning::InsertedSequenceExpanded {
+                    message: format!(
+                        "ins[...] payload canonicalized to flat literal: {} -> {}",
+                        original_edit_display, new_edit
+                    ),
+                    accession: accession.to_string(),
+                    original_payload,
+                    expanded_literal: format!("{}", new_edit),
+                };
+                return Ok(Some((new_edit, warning)));
+            }
+        };
+        let expanded_literal = format!("{}", new_inserted);
+
+        let warning = NormalizationWarning::InsertedSequenceExpanded {
+            message: format!(
+                "ins[...] payload canonicalized to flat literal: {} -> {}",
+                original_edit_display, new_edit
+            ),
+            accession: accession.to_string(),
+            original_payload,
+            expanded_literal,
+        };
+        Ok(Some((new_edit, warning)))
+    }
+
+    /// `normalize_genome` companion that wraps [`Self::try_expand_ins_edit`]
+    /// and rebuilds a `GenomeVariant` carrying the rewritten edit.
+    fn try_expand_genome_ins(
+        &self,
+        variant: &GenomeVariant,
+        edit: &NaEdit,
+        accession: &str,
+    ) -> Result<Option<(GenomeVariant, NormalizationWarning)>, FerroError> {
+        let Some((new_edit, warning)) =
+            self.try_expand_ins_edit(edit, accession, InsCoordKind::Direct)?
+        else {
+            return Ok(None);
+        };
+        let new_variant = GenomeVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+            ),
+        };
+        Ok(Some((new_variant, warning)))
+    }
+
+    /// `normalize_cds` companion — c. positions are CDS-relative.
+    fn try_expand_cds_ins(
+        &self,
+        variant: &CdsVariant,
+        edit: &NaEdit,
+        accession: &str,
+    ) -> Result<Option<(CdsVariant, NormalizationWarning)>, FerroError> {
+        let Some((new_edit, warning)) =
+            self.try_expand_ins_edit(edit, accession, InsCoordKind::Cds)?
+        else {
+            return Ok(None);
+        };
+        let new_variant = CdsVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+            ),
+        };
+        Ok(Some((new_variant, warning)))
+    }
+
+    /// `normalize_tx` companion — n. positions are 1-based transcript
+    /// positions, which the helper treats as direct.
+    fn try_expand_tx_ins(
+        &self,
+        variant: &TxVariant,
+        edit: &NaEdit,
+        accession: &str,
+    ) -> Result<Option<(TxVariant, NormalizationWarning)>, FerroError> {
+        let Some((new_edit, warning)) =
+            self.try_expand_ins_edit(edit, accession, InsCoordKind::Direct)?
+        else {
+            return Ok(None);
+        };
+        let new_variant = TxVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+            ),
+        };
+        Ok(Some((new_variant, warning)))
+    }
+
+    /// `normalize_mt` companion — m. positions are direct genomic
+    /// positions on the mitochondrial accession.
+    fn try_expand_mt_ins(
+        &self,
+        variant: &MtVariant,
+        edit: &NaEdit,
+        accession: &str,
+    ) -> Result<Option<(MtVariant, NormalizationWarning)>, FerroError> {
+        let Some((new_edit, warning)) =
+            self.try_expand_ins_edit(edit, accession, InsCoordKind::Direct)?
+        else {
+            return Ok(None);
+        };
+        let new_variant = MtVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+            ),
+        };
+        Ok(Some((new_variant, warning)))
+    }
+
     /// Normalize a genomic variant
     fn normalize_genome(
         &self,
@@ -554,7 +738,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // SVD-WG009: rewrite `con` to `delins` before any further work.
-        // Pure-syntax; no reference data needed.
+        // Pure-syntax; no reference data needed. Re-run the axis
+        // normalizer on the rewritten variant so the downstream passes
+        // (issue #333 ins[...] expansion, 3' shift, ins→dup, canonical
+        // split) all see the delins form — otherwise `...con...` inputs
+        // would stop at the intermediate delins.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = GenomeVariant {
                 accession: variant.accession.clone(),
@@ -564,16 +752,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return Ok((HV::Genome(new_variant), vec![]));
+            return self.normalize_genome(&new_variant);
+        }
+
+        // Issue #333: expand bracketed / reference-range `ins[...]`
+        // payloads to a flat literal sequence so the rest of the
+        // pipeline (3' shift, ins→dup, etc.) operates on concrete
+        // bases. Same canonicalization applies to the inserted-
+        // sequence payload inside Delins and DupIns.
+        let accession = variant.accession.transcript_accession();
+        if let Some((new_variant, warning)) =
+            self.try_expand_genome_ins(variant, edit, &accession)?
+        {
+            let (result, mut warnings) = self.normalize_genome(&new_variant)?;
+            warnings.insert(0, warning);
+            return Ok((result, warnings));
         }
 
         // Only normalize indels
         if !needs_normalization(edit) {
             return Ok((HV::Genome(variant.clone()), vec![]));
         }
-
-        // Get sequence from provider - can't normalize with unknown positions
-        let accession = variant.accession.transcript_accession();
         let start = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos.base,
             None => {
@@ -661,7 +860,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Cds(variant.clone()), vec![])),
         };
 
-        // SVD-WG009: rewrite `con` to `delins`.
+        // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
+        // variant so the downstream passes (issue #333 ins[...]
+        // expansion, 3' shift, ins→dup, canonical split) all see the
+        // delins form.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = CdsVariant {
                 accession: variant.accession.clone(),
@@ -671,7 +873,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return Ok((HV::Cds(new_variant), vec![]));
+            return self.normalize_cds(&new_variant);
+        }
+
+        // Issue #333: expand bracketed / reference-range `ins[...]`
+        // payloads. CDS-coord ranges (e.g. c.X_Yins[A_B]) translate to
+        // transcript coordinates via the transcript's cds_start. Same
+        // canonicalization applies to Delins / DupIns payloads.
+        let cds_accession = variant.accession.transcript_accession();
+        if let Some((new_variant, warning)) =
+            self.try_expand_cds_ins(variant, edit, &cds_accession)?
+        {
+            let (result, mut warnings) = self.normalize_cds(&new_variant)?;
+            warnings.insert(0, warning);
+            return Ok((result, warnings));
         }
 
         // Only normalize indels
@@ -933,7 +1148,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Tx(variant.clone()), vec![])),
         };
 
-        // SVD-WG009: rewrite `con` to `delins`.
+        // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
+        // variant so the downstream passes (issue #333 ins[...]
+        // expansion, 3' shift, ins→dup, canonical split) all see the
+        // delins form.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = TxVariant {
                 accession: variant.accession.clone(),
@@ -943,7 +1161,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return Ok((HV::Tx(new_variant), vec![]));
+            return self.normalize_tx(&new_variant);
+        }
+
+        // Issue #333: expand bracketed / reference-range `ins[...]`
+        // payloads. n. positions are direct transcript positions, so
+        // the helper treats them as `InsCoordKind::Direct`.
+        let tx_accession = variant.accession.transcript_accession();
+        if let Some((new_variant, warning)) =
+            self.try_expand_tx_ins(variant, edit, &tx_accession)?
+        {
+            let (result, mut warnings) = self.normalize_tx(&new_variant)?;
+            warnings.insert(0, warning);
+            return Ok((result, warnings));
         }
 
         // Only normalize indels
@@ -1283,7 +1513,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // SVD-WG009: rewrite `con` to `delins`.
+        // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
+        // variant so downstream passes (3' shift, ins→dup, canonical
+        // split) all see the delins form. The RNA axis does not run the
+        // issue #333 ins[...] expansion step — that is wired only into
+        // the genome/cds/tx/mt axes.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = RnaVariant {
                 accession: variant.accession.clone(),
@@ -1293,7 +1527,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return Ok((HV::Rna(new_variant), vec![]));
+            return self.normalize_rna(&new_variant);
         }
 
         // Only normalize indels
@@ -1503,9 +1737,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // SVD-WG009: rewrite `con` to `delins` up front. Pure-syntax;
-        // no reference data needed. Returns immediately (no inv-split
-        // pass), matching `normalize_genome`: callers that want
-        // inv-split on the rewritten delins can re-normalize.
+        // no reference data needed. Re-run on the rewritten variant so
+        // the downstream passes (issue #333 ins[...] expansion, 3'
+        // shift, ins→dup, canonical split) all see the delins form.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = MtVariant {
                 accession: variant.accession.clone(),
@@ -1515,7 +1749,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return Ok((HV::Mt(new_variant), vec![]));
+            return self.normalize_mt(&new_variant);
+        }
+
+        // Issue #333: expand bracketed / reference-range `ins[...]`
+        // payloads. m. positions are direct genomic positions on the
+        // mitochondrial accession.
+        let mt_accession = variant.accession.transcript_accession();
+        if let Some((new_variant, warning)) =
+            self.try_expand_mt_ins(variant, edit, &mt_accession)?
+        {
+            let (result, mut warnings) = self.normalize_mt(&new_variant)?;
+            warnings.insert(0, warning);
+            return Ok((result, warnings));
         }
 
         // Only normalize indels; substitutions / identity / repeat-with-

@@ -216,50 +216,79 @@ fn conversion_edit_preserves_source_string_verbatim() {
 // 6. `normalize()` canonicalizes `con` to SVD-WG009 `delins`.
 // ---------------------------------------------------------------------
 
-/// Pins SVD-WG009 canonicalization: every accepted `con` form is
-/// rewritten to its `delins` equivalent inside `Normalizer::normalize`.
+/// Pins SVD-WG009 canonicalization combined with issue #333 ins-expand
+/// chaining: `normalize` rewrites `con` → `delins` and then re-runs the
+/// axis normalizer on the rewritten variant, so a single call carries
+/// the rewrite all the way to its flat-literal form (or to the
+/// documented deferral error for cross-references).
 ///
-/// - Same-reference position source -> bare `delins<start>_<end>`.
-/// - Cross-reference source -> `delins[<source>]` (square brackets per
-///   the spec: the reference type prefix on the source must survive).
+/// - **Cross-reference source** (e.g. `conNM_000089.1:c.789_1011`):
+///   surfaces as `FerroError::UnsupportedVariant` carrying the
+///   `cross-reference` / `follow-up` markers. Spec-allowed but
+///   deferred by ferro per the PR contract.
+/// - **Same-reference position source**: requires provider sequence at
+///   the source coordinates. With an empty `MockProvider`, the lookup
+///   fails and surfaces an error rather than passing the intermediate
+///   `delins<start>_<end>` shape through.
 ///
 /// `parse_hgvs` + `Display` continue to round-trip the legacy `con`
 /// form (pinned by tests 1-4); canonicalization happens only when
 /// callers explicitly invoke `normalize`.
 #[test]
 fn normalize_canonicalizes_conversion_to_delins() {
-    let provider = MockProvider::with_test_data();
+    let provider = MockProvider::new();
     let normalizer = Normalizer::new(provider);
 
-    let cases = [
-        // (input, expected normalized output)
-        (
-            "NM_000088.3:c.123_456conNM_000089.1:c.789_1011",
-            "NM_000088.3:c.123_456delins[NM_000089.1:c.789_1011]",
-        ),
-        (
-            "NC_000001.11:g.12345_12400conNC_000002.12:g.100_155",
-            "NC_000001.11:g.12345_12400delins[NC_000002.12:g.100_155]",
-        ),
-        (
-            "NC_000017.11:g.42522624_42522669con42536337_42536382",
-            "NC_000017.11:g.42522624_42522669delins42536337_42536382",
-        ),
-        (
-            "NM_000797.3:c.812_829con908_925",
-            "NM_000797.3:c.812_829delins908_925",
-        ),
+    // Cross-reference sources: deferred with UnsupportedVariant.
+    let cross_ref_inputs = [
+        "NM_000088.3:c.123_456conNM_000089.1:c.789_1011",
+        "NC_000001.11:g.12345_12400conNC_000002.12:g.100_155",
     ];
-    for (input, expected) in cases {
+    for input in cross_ref_inputs {
         let variant = parse_hgvs(input).expect("input must parse");
-        let result = normalizer
-            .normalize(&variant)
-            .unwrap_or_else(|e| panic!("normalize failed for {}: {}", input, e));
-        assert_eq!(
-            format!("{}", result),
-            expected,
-            "normalize() must canonicalize con to delins (input: {})",
-            input
+        let err = normalizer.normalize(&variant).expect_err(
+            "cross-reference con payload must surface as UnsupportedVariant after recursion",
+        );
+        assert!(
+            matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
+            "expected UnsupportedVariant for cross-reference con (input: {}, got: {:?})",
+            input,
+            err
+        );
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("cross-reference") && msg.contains("follow-up"),
+            "cross-reference deferral must mention 'cross-reference' and 'follow-up' for grep (input: {}, got: {})",
+            input,
+            msg
+        );
+    }
+
+    // Same-reference position-range sources: the recursion runs the
+    // intermediate `delins<start>_<end>` through the ins-expand step,
+    // which needs provider sequence at the source coordinates. The
+    // empty `MockProvider::new()` has no entry for `NC_000017.11` or
+    // for `NM_000797.3`, so each surfaces a provider-lookup error
+    // rather than passing the bracketed form through unchanged.
+    let same_ref_inputs = [
+        "NC_000017.11:g.42522624_42522669con42536337_42536382",
+        "NM_000797.3:c.812_829con908_925",
+    ];
+    for input in same_ref_inputs {
+        let variant = parse_hgvs(input).expect("input must parse");
+        let err = normalizer.normalize(&variant).expect_err(
+            "same-reference con payload requires provider sequence — no test data is loaded",
+        );
+        assert!(
+            matches!(
+                err,
+                ferro_hgvs::FerroError::GenomicReferenceNotAvailable { .. }
+                    | ferro_hgvs::FerroError::ReferenceNotFound { .. }
+                    | ferro_hgvs::FerroError::ConversionError { .. }
+            ),
+            "expected provider-lookup error for same-reference con without test data (input: {}, got: {:?})",
+            input,
+            err
         );
     }
 }
@@ -396,14 +425,23 @@ fn conversion_hash_and_eq_are_stable_across_parses() {
 // 12. Idempotency: normalize(normalize(con)) == normalize(con).
 // ---------------------------------------------------------------------
 
-/// Pins that running `normalize` twice yields the same result as
-/// running it once. After the first pass, `con` becomes `delins`; the
-/// second pass must be a no-op (the resulting `delins{Reference|
-/// PositionRange}` has no literal sequence to shuffle and isn't
-/// re-canonicalized).
+/// Pins that a single `normalize()` call on a `con` input does not
+/// stop at the bracketed `delins{Reference | PositionRange}`
+/// intermediate. Under issue #333 the axis normalizer recurses after
+/// `con` → `delins` so the rewrite runs through the ins-expand step.
+/// For these MockProvider-less inputs that means:
+///
+/// - cross-reference source → `FerroError::UnsupportedVariant` with
+///   `cross-reference` / `follow-up` markers,
+/// - same-reference position source → provider-lookup error.
+///
+/// In neither case does the bracketed intermediate survive to the
+/// caller. This is the explicit anti-test for the "stops at intermediate
+/// delins" shape: catching a regression that reintroduces the half-
+/// canonicalized output would re-break the issue #333 contract.
 #[test]
-fn normalize_is_idempotent_for_conversion() {
-    let provider = MockProvider::with_test_data();
+fn normalize_canonicalizes_conversion_to_delins_shape() {
+    let provider = MockProvider::new();
     let normalizer = Normalizer::new(provider);
 
     let inputs = [
@@ -412,13 +450,24 @@ fn normalize_is_idempotent_for_conversion() {
     ];
     for input in inputs {
         let variant = parse_hgvs(input).expect("parse");
-        let once = normalizer.normalize(&variant).expect("first normalize");
-        let twice = normalizer.normalize(&once).expect("second normalize");
-        assert_eq!(
-            format!("{}", once),
-            format!("{}", twice),
-            "normalize must be idempotent (input: {})",
-            input
+        let err = normalizer.normalize(&variant).expect_err(
+            "first normalize must drive con-rewrite through ins-expand, not stop at the bracketed intermediate",
+        );
+        // The error carries either the cross-reference deferral marker
+        // or a provider-lookup failure marker. Either is consistent
+        // with the issue #333 contract; neither leaks the half-
+        // canonicalized `delins[...]` shape to the caller.
+        assert!(
+            matches!(
+                err,
+                ferro_hgvs::FerroError::UnsupportedVariant { .. }
+                    | ferro_hgvs::FerroError::GenomicReferenceNotAvailable { .. }
+                    | ferro_hgvs::FerroError::ReferenceNotFound { .. }
+                    | ferro_hgvs::FerroError::ConversionError { .. }
+            ),
+            "expected UnsupportedVariant or provider-lookup error (input: {}, got: {:?})",
+            input,
+            err
         );
     }
 }
@@ -437,17 +486,31 @@ fn allele_compound_with_conversion_canonicalizes_member() {
 
     let input = "NM_000088.3:c.[123_456conNM_000089.1:c.789_1011;500A>G]";
     let variant = parse_hgvs(input).expect("compound con+sub must parse");
-    let normalized = normalizer.normalize(&variant).expect("normalize compound");
-    let out = format!("{}", normalized);
+    // Under issue #333 the recursion drives the `con` member's rewrite
+    // through the ins-expand step. The cross-reference half defers with
+    // `FerroError::UnsupportedVariant`, which propagates up out of the
+    // allele compound — the substitution sibling is no longer reachable
+    // because the compound short-circuits on the first member error.
+    // We assert the deferral surfaces with the expected markers and
+    // mentions the deferred source accession.
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("cross-reference con member must defer with UnsupportedVariant");
     assert!(
-        out.contains("delins[NM_000089.1:c.789_1011]"),
-        "con member must be canonicalized to delins[...] in compound; got {}",
-        out
+        matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
+        "expected UnsupportedVariant for cross-reference con member, got: {:?}",
+        err
+    );
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("NM_000089.1"),
+        "deferral message must mention the cross-reference source accession; got {}",
+        msg
     );
     assert!(
-        out.contains("500A>G"),
-        "substitution member must be untouched in compound; got {}",
-        out
+        msg.contains("cross-reference") && msg.contains("follow-up"),
+        "deferral message must carry 'cross-reference' / 'follow-up' markers; got {}",
+        msg
     );
 }
 
@@ -473,12 +536,13 @@ fn empty_source_after_con_is_rejected() {
 // 15. Cross-reference accession survives canonicalization verbatim.
 // ---------------------------------------------------------------------
 
-/// Pins that the accession + coord-system + interval payload of the
-/// `con` source is preserved character-for-character inside the
-/// resulting `delins[...]` brackets. This is the key SVD-WG009
-/// invariant: "for inserted sequences derived from another reference
-/// sequence the prefix of the reference sequence type ('g.' in the
-/// example) needs to be provided."
+/// Pins the cross-reference deferral contract under issue #333. The
+/// previous SVD-WG009 shape (`delins[source-with-accession-prefix]`)
+/// is now an internal intermediate the recursion never lets surface:
+/// a single `normalize` carries the rewrite through the ins-expand
+/// step, which defers cross-reference payloads with
+/// `FerroError::UnsupportedVariant`. The deferral message must mention
+/// the source accession so callers can route follow-up resolution.
 #[test]
 fn cross_reference_canonicalization_preserves_source_payload() {
     let provider = MockProvider::with_test_data();
@@ -487,22 +551,37 @@ fn cross_reference_canonicalization_preserves_source_payload() {
     let cases = [
         (
             "NM_000088.3:c.123_456conNM_000089.1:c.789_1011",
-            "NM_000089.1:c.789_1011",
+            "NM_000089.1",
         ),
         (
             "NC_000001.11:g.12345_12400conNC_000002.12:g.100_155",
-            "NC_000002.12:g.100_155",
+            "NC_000002.12",
         ),
     ];
-    for (input, expected_inside_brackets) in cases {
+    for (input, expected_source_accession) in cases {
         let variant = parse_hgvs(input).expect("parse");
-        let out = format!("{}", normalizer.normalize(&variant).expect("normalize"));
-        let needle = format!("delins[{}]", expected_inside_brackets);
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("cross-reference con must defer with UnsupportedVariant");
         assert!(
-            out.contains(&needle),
-            "expected {} in normalized output, got {}",
-            needle,
-            out
+            matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
+            "expected UnsupportedVariant (input: {}, got: {:?})",
+            input,
+            err
+        );
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains(expected_source_accession),
+            "deferral message must mention the source accession {} (input: {}, got: {})",
+            expected_source_accession,
+            input,
+            msg
+        );
+        assert!(
+            msg.contains("cross-reference") && msg.contains("follow-up"),
+            "deferral message must carry 'cross-reference' / 'follow-up' markers (input: {}, got: {})",
+            input,
+            msg
         );
     }
 }
