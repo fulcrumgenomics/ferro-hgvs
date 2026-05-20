@@ -172,3 +172,68 @@ fn normalize_returns_input_when_ref_window_longer_than_hgvs_span() {
         "NC_000001.11:g.100_110delinsAAGCTT",
     );
 }
+
+// Closes #355: strict mode promotes the CanonicalSplitSkipped warning
+// to FerroError::VariantExceedsReference per HGVS spec refseq.md §43
+// ("the entirety of the variant sequence must be encompassed by the
+// selected reference sequence"). Matches biocommons hgvs which raises
+// HGVSInvalidVariantError for this shape.
+#[test]
+fn strict_mode_rejects_when_variant_exceeds_reference() {
+    let provider = FixedLengthProvider {
+        payload: "AATTAAGGTATA",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
+    let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("strict mode must reject when variant exceeds reference");
+    match err {
+        FerroError::VariantExceedsReference {
+            accession,
+            hgvs_start,
+            hgvs_end,
+            expected_span,
+            actual_bytes,
+        } => {
+            assert_eq!(accession, "NG_032871.1");
+            assert_eq!(hgvs_start, 32476);
+            assert_eq!(hgvs_end, 53457);
+            assert_eq!(expected_span, 53457 - 32476 + 1);
+            assert_eq!(actual_bytes, 12); // payload.len()
+        }
+        other => panic!(
+            "expected FerroError::VariantExceedsReference, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn lenient_mode_warns_and_preserves_when_variant_exceeds_reference() {
+    // Confirms that strict-mode rejection is OPT-IN: lenient mode
+    // (default) keeps the existing behavior of warning + preserving
+    // the input. The W5003 warning is emitted via the existing
+    // CanonicalSplitSkipped code so callers can detect the condition
+    // without strict-mode rejection.
+    let provider = FixedLengthProvider {
+        payload: "AATTAAGGTATA",
+    };
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
+    let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("lenient mode preserves the variant; rejection is strict-only");
+    assert_eq!(
+        format!("{}", result.result),
+        "NG_032871.1:g.32476_53457delinsAATTAAGGTATA",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "CANONICAL_SPLIT_SKIPPED"),
+        "expected CANONICAL_SPLIT_SKIPPED warning in lenient mode, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}

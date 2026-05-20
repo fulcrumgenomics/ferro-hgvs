@@ -279,6 +279,20 @@ pub enum ErrorType {
     /// three-letter mixing), so all modes reject with an actionable hint
     /// pointing at the canonical `insAlaPro` form.
     ProteinBracketedAaInsertion,
+
+    /// Variant position range exceeds the reference sequence the
+    /// provider returned (`fetch_ref_for_canonical_split` got fewer
+    /// bytes than the HGVS interval span).
+    ///
+    /// Per HGVS spec `recommendations/background/refseq.md` §43: "the
+    /// entirety of the variant sequence **must** be encompassed by the
+    /// selected reference sequence." Biocommons hgvs raises
+    /// `HGVSInvalidVariantError` for this shape. Strict mode rejects
+    /// with `FerroError::VariantExceedsReference`; lenient mode emits
+    /// the existing `CanonicalSplitSkipped` warning and preserves the
+    /// input; silent mode preserves the input without warning.
+    /// Closes-after: #355.
+    VariantExceedsReference,
 }
 
 impl ErrorType {
@@ -318,6 +332,7 @@ impl ErrorType {
             ErrorType::PositionZero => "W4002",
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::RefSeqMismatch => "W5001",
+            ErrorType::VariantExceedsReference => "W5003",
         }
     }
 
@@ -372,6 +387,9 @@ impl ErrorType {
             }
             ErrorType::ProteinBracketedAaInsertion => {
                 "bracketed amino-acid list inside protein insertion edit"
+            }
+            ErrorType::VariantExceedsReference => {
+                "variant position range exceeds reference sequence"
             }
         }
     }
@@ -435,6 +453,10 @@ impl ErrorType {
             // rewrite: mixing 3-letter and 1-letter inside `[...]` is
             // ambiguous, so all modes reject with a hint.
             ErrorType::ProteinBracketedAaInsertion => false,
+            // Variant exceeds reference: no safe auto-correction — the
+            // variant references positions past the provider's window
+            // and we cannot conjure missing bases.
+            ErrorType::VariantExceedsReference => false,
         }
     }
 
@@ -495,6 +517,10 @@ impl ErrorType {
             ErrorType::ProteinBracketedAaInsertion => {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
+            ErrorType::VariantExceedsReference => (
+                "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
+                "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
+            ),
         }
     }
 }

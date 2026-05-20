@@ -121,18 +121,27 @@ pub enum NormalizationWarning {
 
     /// `apply_canonical_split` was unable to canonicalize because the
     /// reference window returned by the provider did not span the same
-    /// number of bytes as the HGVS interval (e.g. a cdot exon alignment
-    /// collapsed gap-positions in the genomic-to-tx projection). The
-    /// variant is returned unchanged. Closes-after: #354.
-    /// Code: `CANONICAL_SPLIT_SKIPPED`.
+    /// number of bytes as the HGVS interval. Per HGVS spec
+    /// `recommendations/background/refseq.md` §43, this means the
+    /// variant is not entirely encompassed by the reference sequence —
+    /// strict mode promotes this warning to
+    /// `FerroError::VariantExceedsReference`. The variant is returned
+    /// unchanged in lenient/silent modes.
+    /// Closes-after: #354, #355. Code: `CANONICAL_SPLIT_SKIPPED`.
     CanonicalSplitSkipped {
         /// Human-readable description
         message: String,
         /// Accession of the reference sequence
         accession: String,
-        /// Number of bytes the HGVS span demanded
+        /// HGVS span start (1-based inclusive). Carried so strict-mode
+        /// promotion can build a `FerroError::VariantExceedsReference`
+        /// with the same span information.
+        hgvs_start: u64,
+        /// HGVS span end (1-based inclusive).
+        hgvs_end: u64,
+        /// Number of bytes the HGVS span demanded.
         expected_span: usize,
-        /// Number of bytes the provider returned
+        /// Number of bytes the provider returned.
         actual_bytes: usize,
     },
 
@@ -276,6 +285,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     location: position.clone(),
                     expected: stated_ref.clone(),
                     found: actual_ref.clone(),
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // Strict mode also rejects W5003 VariantExceedsReference per
+        // HGVS spec refseq.md §43 — the variant must be entirely
+        // encompassed by the selected reference. Promotes the
+        // `CanonicalSplitSkipped` warning to a typed error. Closes
+        // #355; matches biocommons hgvs which raises
+        // `HGVSInvalidVariantError` for this shape.
+        if self.config.should_reject_variant_exceeds_reference() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::CanonicalSplitSkipped {
+                    accession,
+                    hgvs_start,
+                    hgvs_end,
+                    expected_span,
+                    actual_bytes,
+                    ..
+                } => Some(FerroError::VariantExceedsReference {
+                    accession: accession.clone(),
+                    hgvs_start: *hgvs_start,
+                    hgvs_end: *hgvs_end,
+                    expected_span: *expected_span as u64,
+                    actual_bytes: *actual_bytes as u64,
                 }),
                 _ => None,
             }) {
@@ -3128,12 +3165,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let accession = variant_accession_string(&variant);
             let warning = NormalizationWarning::CanonicalSplitSkipped {
                 message: format!(
-                    "{}: canonical-split skipped — provider returned {} bytes for an HGVS \
-                     interval spanning {} positions ({}..{}); likely an exon-alignment gap. \
-                     Returning input unchanged.",
-                    accession, n, expected_span, hgvs_start, hgvs_end,
+                    "{}: variant span {}..{} ({} bp) exceeds provider's reference window \
+                     ({} bp). Per HGVS spec refseq.md \u{00A7}43, the variant must be \
+                     entirely encompassed by the reference. Strict mode rejects.",
+                    accession, hgvs_start, hgvs_end, expected_span, n,
                 ),
                 accession,
+                hgvs_start,
+                hgvs_end,
                 expected_span,
                 actual_bytes: n,
             };

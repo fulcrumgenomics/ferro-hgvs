@@ -180,6 +180,27 @@ impl NormalizeConfig {
     pub fn should_warn_ref_mismatch(&self) -> bool {
         self.ref_mismatch_action().should_warn()
     }
+
+    /// Get the resolved action for `VariantExceedsReference` (W5003) —
+    /// fires when the provider returns fewer bytes than the HGVS
+    /// interval span (the input violates HGVS spec refseq.md §43).
+    /// Closes-after: #355.
+    pub fn variant_exceeds_reference_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::VariantExceedsReference)
+    }
+
+    /// Returns true if `VariantExceedsReference` should be rejected
+    /// (strict mode default).
+    pub fn should_reject_variant_exceeds_reference(&self) -> bool {
+        self.variant_exceeds_reference_action().should_reject()
+    }
+
+    /// Returns true if `VariantExceedsReference` should emit a warning
+    /// (lenient mode default; silent mode suppresses).
+    pub fn should_warn_variant_exceeds_reference(&self) -> bool {
+        self.variant_exceeds_reference_action().should_warn()
+    }
 }
 
 #[cfg(test)]
