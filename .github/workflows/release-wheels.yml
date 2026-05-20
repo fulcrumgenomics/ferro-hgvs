@@ -18,6 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # abi3 wheels: one wheel per (OS, arch) tagged `cp310-abi3`, runs on
+  # every CPython >= 3.10. The `-i python<X>` flag is omitted so maturin
+  # builds against pyo3's `abi3-py310` limited-API target (set in
+  # `Cargo.toml`). See
+  # https://pyo3.rs/main/building-and-distribution.html#py_limited_apiabi3
+  # and https://www.maturin.rs/bindings#py_limited_apiabi3
   linux:
     name: Linux ${{ matrix.target }} ${{ matrix.manylinux }}
     runs-on: ${{ matrix.runner }}
@@ -45,12 +51,12 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-      - name: Build wheels
+      - name: Build abi3 wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist --features python -i python3.10 python3.11 python3.12 python3.13 python3.14
+          args: --release --out dist --features python
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
@@ -58,18 +64,24 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: macOS ${{ matrix.target }} py${{ matrix.python-version }}
+    name: macOS ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15-intel, macos-14]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
           - runner: macos-15-intel
             target: x86_64
+            # macOS deployment target floor for the wheel. Pinned
+            # explicitly (rather than inherited from setup-python's
+            # build target) so a runner-image refresh that bumps the
+            # default min-target doesn't silently move the abi3 wheel's
+            # macOS floor on us.
+            macosx_deployment_target: "10.13"
           - runner: macos-14
             target: aarch64
+            # Apple Silicon: Python 3.10 on arm64 requires macOS 11+.
+            macosx_deployment_target: "11.0"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -77,25 +89,23 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Build wheel
+          python-version: "3.12"
+      - name: Build abi3 wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_deployment_target }}
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features python -i python
+          args: --release --out dist --features python
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wheels-macos-${{ matrix.target }}-py${{ matrix.python-version }}
+          name: wheels-macos-${{ matrix.target }}
           path: dist
           if-no-files-found: error
 
   windows:
-    name: Windows py${{ matrix.python-version }}
+    name: Windows
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -103,16 +113,16 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           architecture: x64
-      - name: Build wheel
+      - name: Build abi3 wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64-pc-windows-msvc
-          args: --release --out dist --features python -i python
+          args: --release --out dist --features python
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wheels-windows-py${{ matrix.python-version }}
+          name: wheels-windows
           path: dist
           if-no-files-found: error
 
@@ -158,13 +168,18 @@ jobs:
         run: uv run --no-sync twine check --strict dist/*
 
   smoke-test:
+    # Verify the abi3 promise: each OS/arch produces a single
+    # `cp310-abi3` wheel, and that wheel installs and imports under
+    # every supported CPython minor version (3.10..3.14). 3.14 is
+    # included so a future CPython release surfaces ABI breakage in the
+    # release pipeline rather than at customer install-time.
     name: Smoke ${{ matrix.runner }} py${{ matrix.python-version }}
     needs: [linux, macos, windows]
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-14, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -179,9 +194,27 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --no-index --only-binary :all: --find-links dist ferro-hgvs
-      - name: Smoke test (import + parse)
+      - name: Smoke test (import + parse + eq_int pyclass)
         shell: bash
-        run: python -c "import ferro_hgvs; v = ferro_hgvs.parse('NM_000088.3:c.459A>G'); print(repr(v))"
+        # Exercise the abi3 surface beyond just `parse`: pyclass `__eq__`
+        # / `__hash__` / `__str__`, an `eq, eq_int` pyclass enum
+        # (Consequence), and a constructor that allocates a pyclass
+        # instance. The first three lines all use pyo3 macro paths that
+        # would surface limited-API breakage if the wheel were ABI-
+        # incompatible with the running CPython.
+        run: |
+          python <<'EOF'
+          import ferro_hgvs
+          v = ferro_hgvs.parse("NM_000088.3:c.459A>G")
+          assert str(v) == "NM_000088.3:c.459A>G", f"str round-trip: {str(v)!r}"
+          assert v == ferro_hgvs.parse("NM_000088.3:c.459A>G"), "__eq__"
+          assert hash(v) == hash(ferro_hgvs.parse("NM_000088.3:c.459A>G")), "__hash__"
+          # eq_int pyclass enum (Consequence). int() cast and equality
+          # use the pyo3 limited-API codegen path that abi3 must support.
+          cons = ferro_hgvs.Consequence.CodingSequenceVariant
+          assert int(cons) == 18, f"eq_int: {int(cons)}"
+          print(f"smoke ok: {v!r} cons={cons}")
+          EOF
 
   upload:
     name: Upload to GitHub Release

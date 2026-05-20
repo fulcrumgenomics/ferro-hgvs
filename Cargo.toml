@@ -43,7 +43,7 @@ noodles-gtf = "0.52"
 smol_str = { version = "0.3", features = ["serde"] }
 flate2 = "1.0"
 ahash = { version = "0.8", optional = true }
-pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["abi3-py310", "extension-module"], optional = true }
 memmap2 = { version = "0.9", optional = true }
 memchr = "2.7"
 ureq = { version = "2.9", optional = true }
