@@ -20,6 +20,21 @@ fn provider_with_polya_protein() -> MockProvider {
     provider
 }
 
+/// Shared assertion for the "must stay as delins" negative
+/// controls below: the normalized form must keep the `delins`
+/// token and must NOT have been rewritten to a `dup`. Mirrors
+/// `assert_stays_as_ins` in `tests/issue_92_protein_ins_to_dup.rs`.
+fn assert_stays_as_delins(out: &str) {
+    assert!(
+        out.contains("delins"),
+        "variant must remain delins; got {out:?}",
+    );
+    assert!(
+        !out.contains("dup"),
+        "variant must NOT canonicalize to dup; got {out:?}",
+    );
+}
+
 /// Affix-trim collapses a delins whose inserted sequence equals the
 /// deleted sequence to a silent identity. `p.Leu7_Glu8delinsLeuGlu`
 /// over ref `LE` should normalize to `p.Leu7_Glu8=`.
@@ -131,11 +146,34 @@ fn protein_delins_without_shared_affix_stays_as_delins() {
         .expect("normalize p.Leu7_Glu8delinsAlaGly");
     let out = format!("{}", normalized);
 
-    assert!(
-        out.ends_with(":p.Leu7_Glu8delinsAlaGly"),
-        "genuine delins (no shared affix, no tandem match) must \
-         survive normalization; got {out:?}",
-    );
+    assert_stays_as_delins(&out);
+}
+
+/// Regression: a delins with **no shared affix** whose inserted
+/// residues happen to match an upstream window adjacent to the
+/// deleted range must NOT be rewritten to a bare `dup` — that
+/// would silently drop the deletion side of the edit and return
+/// a non-equivalent variant.
+///
+/// On the fixture `MKVAAALELE`, `p.Ala4_Ala5delinsLysVal` deletes
+/// `AA` (at p.4-5) and inserts `KV`. The inserted `KV` matches
+/// the upstream window p.2-3 (also `KV`), so an unguarded
+/// "treat the residual ins as a free-floating insertion and look
+/// for a tandem dup" path would emit `p.Lys2_Val3dup`, dropping
+/// the `p.4_5del` half of the edit. The canonical form must keep
+/// the `delins` token.
+#[test]
+fn protein_delins_without_shared_affix_does_not_collapse_to_upstream_dup() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant =
+        parse_hgvs("NP_TESTPROT.1:p.Ala4_Ala5delinsLysVal").expect("parse p.Ala4_Ala5delinsLysVal");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Ala4_Ala5delinsLysVal");
+    let out = format!("{}", normalized);
+
+    assert_stays_as_delins(&out);
 }
 
 /// Predicted-edit wrapper: `p.(Leu7_Glu8delinsLeuGluLeuGlu)` must
@@ -180,9 +218,5 @@ fn protein_delins_with_uncertain_start_passes_through() {
     // The exact Display form may render the partial-uncertainty
     // differently across parser/Display revisions, but the helper
     // must not collapse this to a smaller form.
-    assert!(
-        out.contains("delins"),
-        "delins with partial-uncertain endpoint must NOT be \
-         canonicalized; got {out:?}",
-    );
+    assert_stays_as_delins(&out);
 }
