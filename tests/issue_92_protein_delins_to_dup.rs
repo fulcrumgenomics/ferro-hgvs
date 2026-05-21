@@ -67,3 +67,25 @@ fn protein_delins_collapses_to_deletion_with_shared_suffix() {
         "delins must be rewritten as pure del; got {out:?}",
     );
 }
+
+/// Affix-trim leaving a 1-residue del + 1-residue ins must collapse to
+/// a substitution per Prioritization `sub > delins`. Construct on the
+/// `LELE` motif: `p.Leu7_Glu8delinsValGlu` (ref `LE`, trim trailing
+/// `Glu`) leaves del `L` + ins `Val` → `p.Leu7Val`.
+#[test]
+fn protein_delins_collapses_to_substitution_when_residual_is_single() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant =
+        parse_hgvs("NP_TESTPROT.1:p.Leu7_Glu8delinsValGlu").expect("parse p.Leu7_Glu8delinsValGlu");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Leu7_Glu8delinsValGlu");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.Leu7Val"),
+        "delins with shared suffix Glu and 1-residue residual must \
+         collapse to sub p.Leu7Val; got {out:?}",
+    );
+}
