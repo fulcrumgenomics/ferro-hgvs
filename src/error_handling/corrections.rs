@@ -2545,21 +2545,39 @@ fn try_detect_length_mismatch_at(
     input: &str,
     pos: usize,
 ) -> Option<DetectedCorrection> {
-    // Endpoint 1: bare integer (no `-` / `*` prefix, no `+`/`-` offset).
-    let (start_val, mut j) = parse_bare_int(bytes, pos)?;
+    // Endpoint 1: bare integer with optional `+offset` / `-offset`.
+    let (start_base, start_off, mut j) = parse_endpoint_with_offset(bytes, pos)?;
     // Underscore.
     if j >= bytes.len() || bytes[j] != b'_' {
         return None;
     }
     j += 1;
-    // Endpoint 2: bare integer.
-    let (end_val, mut k) = parse_bare_int(bytes, j)?;
+    // Endpoint 2: same shape.
+    let (end_base, end_off, mut k) = parse_endpoint_with_offset(bytes, j)?;
 
-    if end_val < start_val {
-        // Swapped ranges are W4001's job; don't double-flag.
-        return None;
-    }
-    let range_len = (end_val - start_val + 1) as usize;
+    // Compute the range length on the supported endpoint shapes:
+    //   (a) Both exonic (no offset on either side): `end - start + 1`.
+    //   (b) Both intronic with the same anchor base and same-sign
+    //       offsets (`c.100+5_100+10` or `c.100-5_100-2`): the span
+    //       is linear inside the intron, length = `|off2 - off1| + 1`.
+    // Anything else (one exonic + one intronic, mixed-sign offsets,
+    // different anchor bases) needs the intron length to resolve —
+    // the W3016 scan skips those cases rather than guess (#390 item 5).
+    let range_len = match (start_off, end_off) {
+        (0, 0) => {
+            if end_base < start_base {
+                return None; // W4001's job.
+            }
+            (end_base - start_base + 1) as usize
+        }
+        (so, eo) if start_base == end_base && so.signum() == eo.signum() => {
+            if eo < so {
+                return None; // W4001's job.
+            }
+            (eo - so + 1) as usize
+        }
+        _ => return None,
+    };
 
     // Identify the edit keyword. Order matters: `delins` is a prefix of
     // `del`, so check the longer first.
@@ -2623,9 +2641,11 @@ enum EditKind {
     Delins,
 }
 
-/// Parse a bare unsigned integer at `pos`. Returns `(value, end_idx)`.
-/// Refuses anything not starting with a digit (e.g. `-`, `*`, `+`).
-fn parse_bare_int(bytes: &[u8], pos: usize) -> Option<(i64, usize)> {
+/// Parse a coord endpoint at `pos` as `<base>[+<offset>|-<offset>]`,
+/// returning `(base, offset, end_idx)`. `offset` is `0` when no
+/// `+`/`-` suffix follows. Refuses inputs that start with `-`, `*`,
+/// `+`, or anything other than a digit (#390 item 5).
+fn parse_endpoint_with_offset(bytes: &[u8], pos: usize) -> Option<(i64, i64, usize)> {
     if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
         return None;
     }
@@ -2633,14 +2653,28 @@ fn parse_bare_int(bytes: &[u8], pos: usize) -> Option<(i64, usize)> {
     while j < bytes.len() && bytes[j].is_ascii_digit() {
         j += 1;
     }
-    let n: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
-    // Reject if followed by `+`/`-` (offset) or `_` and then `*` (3'UTR
-    // marker on the other endpoint) — we only handle simple integer
-    // ranges here.
+    let base: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
+    let mut offset: i64 = 0;
     if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
-        return None;
+        let sign: i64 = if bytes[j] == b'+' { 1 } else { -1 };
+        let off_start = j + 1;
+        let mut o = off_start;
+        while o < bytes.len() && bytes[o].is_ascii_digit() {
+            o += 1;
+        }
+        if o == off_start {
+            // `+` or `-` not followed by digits — not a valid offset
+            // shape; surface no detection rather than guess.
+            return None;
+        }
+        let mag: i64 = std::str::from_utf8(&bytes[off_start..o])
+            .ok()?
+            .parse()
+            .ok()?;
+        offset = sign * mag;
+        j = o;
     }
-    Some((n, j))
+    Some((base, offset, j))
 }
 
 /// Consume an IUPAC nucleotide run at `pos`. Returns the substring; empty
@@ -4623,6 +4657,42 @@ mod tests {
         let hits = detect_length_mismatch("NM_x:c.[100_103delAA;200A>G]");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].original, "100_103delAA");
+    }
+
+    /// Intronic / offset-bearing endpoints with explicit ref
+    /// sequences must be length-checked (#390 item 5). Pre-fix
+    /// `parse_bare_int` bailed on any endpoint followed by `+` / `-`,
+    /// so `c.100+5_100+10delAAAA` (intronic span of 6 bases, 4-base
+    /// ref) silently passed.
+    #[test]
+    fn test_detect_length_mismatch_intronic_same_base_positive_offsets() {
+        let hits = detect_length_mismatch("NM_x:c.100+5_100+10delAAAA");
+        assert_eq!(hits.len(), 1, "got: {:?}", hits);
+        assert_eq!(hits[0].original, "100+5_100+10delAAAA");
+    }
+
+    /// Same-base, negative-offset endpoints (`100-5_100-2`) — also
+    /// linear within the intron, span = `(-2) - (-5) + 1 = 4` bases.
+    #[test]
+    fn test_detect_length_mismatch_intronic_same_base_negative_offsets() {
+        // 4-base range, 2-base ref → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.100-5_100-2delAA");
+        assert_eq!(hits.len(), 1, "got: {:?}", hits);
+        assert_eq!(hits[0].original, "100-5_100-2delAA");
+    }
+
+    /// Differing bases or mixed-sign offsets need the intron length
+    /// to compute the range, which requires a provider. The
+    /// length-mismatch scan must skip these (no false positives).
+    #[test]
+    fn test_detect_length_mismatch_intronic_mixed_endpoints_skipped() {
+        // Different anchor bases — span needs the intron length.
+        let hits = detect_length_mismatch("NM_x:c.100+5_101-3delAA");
+        assert!(
+            hits.is_empty(),
+            "mixed-anchor intronic ranges need a provider, got: {:?}",
+            hits
+        );
     }
 
     /// Multiple mismatches inside one compound allele are all
