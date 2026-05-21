@@ -865,14 +865,29 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
             ),
         });
     }
-    let tx_len = transcript.sequence_length();
     if pos.utr3 {
+        // r.*N is the Nth base of the 3' UTR — anchored at `cds_end`
+        // (the last 1-based CDS position), so r.*1 sits at the base
+        // immediately after the stop codon (`cds_end + 1`), not at
+        // `tx_len + 1` (which is one past the end of the entire
+        // mRNA). For non-coding transcripts r.*N has no meaning;
+        // surface `MissingReferenceData` rather than fall back to
+        // `tx_len` (#390 item 2).
         if pos.base < 1 {
             return Err(ConversionError::InvalidPosition {
                 description: format!("3' UTR position *{} must be >= 1", pos.base),
             });
         }
-        return Ok(tx_len.saturating_add(pos.base as u64));
+        let cds_end = transcript
+            .cds_end
+            .ok_or_else(|| ConversionError::MissingReferenceData {
+                description: format!(
+                    "r.*{} requires a CDS end on the transcript; non-coding \
+                     transcripts have no 3'UTR anchor",
+                    pos.base
+                ),
+            })?;
+        return Ok(cds_end.saturating_add(pos.base as u64));
     }
     ensure_positive_tx(pos.base, "r", pos)
 }
@@ -2972,6 +2987,26 @@ mod tests {
         let hgvs = parse_hgvs("NM_TEST.1:c.*2A>G").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.position, 36);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    /// r.*N anchors at `cds_end`, not `sequence_length()` — closes
+    /// #390 item 2. With the test fixture (cds_end=35, tx_len=40),
+    /// r.*2 must resolve to tx position 37 (SPDI 36), matching the
+    /// equivalent `c.*2` resolution.
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_3utr_anchors_at_cds_end() {
+        let provider = make_test_provider();
+        // For SPDI emission r. lowercase is normalized to upper / U→T
+        // by the conversion path; r.*2a>g exercises the 3'UTR anchor.
+        let hgvs = parse_hgvs("NM_TEST.1:r.*2a>g").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(
+            spdi.position, 36,
+            "r.*2 must anchor at cds_end (35) + 2 → tx 37 → SPDI 36; pre-#390 \
+             this anchored at sequence_length (40) + 2 → off-sequence SPDI 41"
+        );
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "G");
     }
