@@ -120,6 +120,20 @@ pub trait ReferenceProvider {
     fn has_protein_data(&self) -> bool {
         false
     }
+
+    /// Get the total length of a stored sequence by accession.
+    ///
+    /// Used by circular-aware span math (issue #399) to compute the
+    /// wraparound length `(L − start + 1) + end` on `m.`/`o.` ranges
+    /// where `start > end`. Also consumed by W4004 PositionPastEnd on
+    /// the `m.` axis (issue #393).
+    ///
+    /// The default implementation returns
+    /// [`FerroError::ReferenceNotFound`]; providers that store length
+    /// metadata override this.
+    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+        Err(FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 /// Blanket implementation for boxed trait objects
@@ -164,5 +178,9 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
 
     fn has_protein_data(&self) -> bool {
         (**self).has_protein_data()
+    }
+
+    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+        (**self).get_seq_length(id)
     }
 }

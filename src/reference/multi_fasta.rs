@@ -1087,6 +1087,11 @@ impl ReferenceProvider for MultiFastaProvider {
             .keys()
             .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
     }
+
+    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.sequence_length(id)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 /// Load a FASTA index (.fai) file
