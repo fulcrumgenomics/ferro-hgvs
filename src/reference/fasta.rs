@@ -245,8 +245,12 @@ impl ReferenceProvider for FastaProvider {
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
-    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        // On miss, retry with any trailing `.<digits>` accession-version
+        // suffix stripped so versioned RefSeq accessions (e.g. `NC_012920.1`)
+        // resolve via the unversioned alias (`NC_012920 -> chrM`).
         self.sequence_length(id)
+            .or_else(|| strip_accession_version(id).and_then(|base| self.sequence_length(base)))
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
@@ -443,6 +447,21 @@ fn is_gzip_file<P: AsRef<Path>>(path: P) -> Result<bool, FerroError> {
     }
 }
 
+/// Strip a trailing `.<digits>` accession-version suffix, if present.
+///
+/// Returns the base accession for inputs like `NC_012920.1` (-> `NC_012920`)
+/// so a versioned RefSeq accession can fall back to the unversioned alias
+/// table. Returns `None` when the input has no `.` or has non-digit
+/// characters after the last `.`, so regular sequence names like `chr1.foo`
+/// are left untouched.
+fn strip_accession_version(name: &str) -> Option<&str> {
+    let (base, ver) = name.rsplit_once('.')?;
+    if ver.is_empty() || !ver.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(base)
+}
+
 /// Build default chromosome aliases
 fn build_default_aliases() -> HashMap<String, String> {
     let mut aliases = HashMap::new();
@@ -598,6 +617,15 @@ impl ReferenceProvider for CachedFastaProvider {
         self.cache.insert(key, sequence.clone());
 
         Ok(sequence)
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        // Same versioned-accession fallback as the underlying FastaProvider:
+        // `NC_012920.1` should resolve via the unversioned `NC_012920 -> chrM`
+        // alias when the versioned form is not in the FAI index.
+        self.sequence_length(id)
+            .or_else(|| strip_accession_version(id).and_then(|base| self.sequence_length(base)))
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 }
 
@@ -896,6 +924,15 @@ impl ReferenceProvider for MmapFastaProvider {
         };
 
         self.get_sequence_from_mmap(entry, start, end)
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        // Mmap path has the same versioned-accession gap: `NC_012920.1` is
+        // not in the alias table, so fall back to the unversioned alias on
+        // miss.
+        self.sequence_length(id)
+            .or_else(|| strip_accession_version(id).and_then(|base| self.sequence_length(base)))
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 }
 
@@ -1552,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn fasta_provider_get_seq_length_returns_length_for_known_contig() {
+    fn test_fasta_provider_get_sequence_length_returns_length_for_known_contig() {
         let provider = FastaProvider {
             path: PathBuf::new(),
             index: {
@@ -1573,13 +1610,16 @@ mod tests {
             transcripts: HashMap::new(),
         };
 
-        assert_eq!(provider.get_seq_length("chrM").unwrap(), 16569);
+        assert_eq!(provider.get_sequence_length("chrM").unwrap(), 16569);
         // NC_012920 aliases to chrM via build_default_aliases
-        assert_eq!(provider.get_seq_length("NC_012920").unwrap(), 16569);
+        assert_eq!(provider.get_sequence_length("NC_012920").unwrap(), 16569);
+        // The versioned RefSeq accession `NC_012920.1` must resolve via the
+        // same alias by stripping the trailing `.\d+` suffix before lookup.
+        assert_eq!(provider.get_sequence_length("NC_012920.1").unwrap(), 16569);
     }
 
     #[test]
-    fn fasta_provider_get_seq_length_errors_for_unknown_contig() {
+    fn test_fasta_provider_get_sequence_length_errors_for_unknown_contig() {
         let provider = FastaProvider {
             path: PathBuf::new(),
             index: HashMap::new(),
@@ -1587,12 +1627,12 @@ mod tests {
             transcripts: HashMap::new(),
         };
 
-        let err = provider.get_seq_length("chrZ").unwrap_err();
+        let err = provider.get_sequence_length("chrZ").unwrap_err();
         assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
 
     #[test]
-    fn fasta_index_entry_clone() {
+    fn test_fasta_index_entry_clone() {
         let entry = FastaIndexEntry {
             name: "chr1".to_string(),
             length: 1000,
