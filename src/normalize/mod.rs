@@ -1269,6 +1269,109 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // Issue #387 CDS-end clamp for the canonicalisation-rewrite path
+        // (3'-direction mirror of PR #385 / issue #383's CDS-start
+        // clamp). HGVS DNA §general "3'-rule applies to ALL
+        // descriptions" plus the per-axis coordinate treatment forbid
+        // silently re-axing a CDS-interior input onto the 3'UTR
+        // (`c.*<N>`) axis. ferro's 3'-shift on an alt whose rotated
+        // form keeps matching reference past `c.<cds_end>` can leave
+        // `new_tx_end > cds_end` — observed on
+        // `NM_212556.2:c.1400_1401insAC` (3prime+cross & 3prime+no-cross)
+        // emitting `c.1401_*1insCA`.
+        //
+        // For an Insertion input `c.X_X+1ins<alt>` rewrite as
+        // `c.<cds_end>delins<new_alt>` where:
+        //
+        //     new_alt = alt[Y_c - 1 .. |alt|]     // tail of the original alt
+        //             ++ ref[c.X+1 .. c.<cds_end>+1]   // CDS bases the shift walked past
+        //     Y_c     = cds_end_c. - X        // distance from input start to cds_end
+        //
+        // Derived by equating post-edit genotype positions of the
+        // original ins (positions X+1..X+|alt| = alt) with the clamped
+        // delins (positions cds_end..cds_end+|alt| = new_alt). The
+        // `Y_c-1` head of alt is consumed by the genotype shift the
+        // first `Y_c-1` of which fall before `c.<cds_end>`; the
+        // ref-byte suffix encodes the CDS bases pushed back by the
+        // insertion. Length invariant `|new_alt| = |alt| + 1` keeps
+        // the net length change matching the original ins.
+        //
+        // For a Delins input the symmetric `c.<cds_start>` case for #383
+        // restored the original form unchanged; we mirror that here so
+        // a Delins whose canonicalisation would push the residual ins
+        // strictly past `cds_end` is suppressed.
+        //
+        // **Output edit-type gate.** Per the HGVS spec a `dup` is the
+        // priority canonical form even when its span bridges the
+        // CDS/3'UTR boundary — e.g. `NM_000051.3:c.9170_9171insAT` →
+        // `c.9171_*1dup` (biocommons; ferro already emits this) is a
+        // valid boundary-bridging dup that must NOT be rewritten as a
+        // delins-at-`c.<cds_end>`. Restrict the clamp to outputs whose
+        // post-canon edit-type is `Insertion` (= ins didn't promote to
+        // dup). Duplication outputs that touch / cross `cds_end` are
+        // the spec-canonical form and stay.
+        if let Some(cds_end_tx) = transcript.cds_end {
+            if matches!(start_axis, boundary::AxisRegion::Cds)
+                && new_tx_end > cds_end_tx
+                && matches!(new_edit, NaEdit::Insertion { .. })
+            {
+                match edit {
+                    NaEdit::Insertion {
+                        sequence: InsertedSequence::Literal(in_lit),
+                    } => {
+                        let alt_bytes: Vec<u8> = in_lit.bases().iter().map(|b| *b as u8).collect();
+                        // Y_c = cds_end_c. - X = cds_end_tx - tx_start
+                        // (both 1-based tx; the cds_start offsets cancel
+                        // because the input start in c.-axis 1-based is
+                        // `tx_start - cds_start + 1`).
+                        let y_c = cds_end_tx.saturating_sub(tx_start);
+                        // y_c >= 1 here (else `new_tx_end > cds_end_tx`
+                        // could not have fired for an Insertion that
+                        // started strictly inside CDS proper). Bound the
+                        // alt-tail offset on the alt length too, so a
+                        // pathological state (`y_c > |alt| + 1`) leaves
+                        // the result untouched rather than panicking.
+                        let alt_take_start = y_c.saturating_sub(1) as usize;
+                        let suffix_start = (tx_end as usize).saturating_sub(1);
+                        let suffix_end = cds_end_tx as usize;
+                        if y_c >= 1
+                            && alt_take_start <= alt_bytes.len()
+                            && suffix_start <= suffix_end
+                            && suffix_end <= seq.len()
+                        {
+                            let alt_part = &alt_bytes[alt_take_start..];
+                            let suffix = &seq[suffix_start..suffix_end];
+                            let mut new_alt: Vec<u8> = alt_part.to_vec();
+                            new_alt.extend_from_slice(suffix);
+                            let bases: Vec<Base> = new_alt
+                                .iter()
+                                .filter_map(|b| Base::from_char(*b as char))
+                                .collect();
+                            if bases.len() == new_alt.len() {
+                                new_edit = NaEdit::Delins {
+                                    sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                                    deleted: None,
+                                    deleted_length: None,
+                                };
+                                new_tx_start = cds_end_tx;
+                                new_tx_end = cds_end_tx;
+                            }
+                        }
+                    }
+                    NaEdit::Delins { .. } => {
+                        new_edit = edit.clone();
+                        new_tx_start = tx_start;
+                        new_tx_end = tx_end;
+                    }
+                    _ => {
+                        // Other edit types do not currently produce
+                        // 3'UTR-resident rewrites from CDS-interior
+                        // inputs in this canonicalisation path.
+                    }
+                }
+            }
+        }
+
         // Convert back to CDS coordinates
         let new_start = self.tx_to_cds_pos(new_tx_start, cds_start, transcript.cds_end)?;
         let new_end = self.tx_to_cds_pos(new_tx_end, cds_start, transcript.cds_end)?;
