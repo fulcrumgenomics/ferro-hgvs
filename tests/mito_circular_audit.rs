@@ -310,68 +310,55 @@ fn audit_mt_wrapping_ins_rejected() {
 // fix surfaces.
 // -----------------------------------------------------------------------------
 
-/// `get_indel_length` on a wrapping m. dup returns a value that is
-/// **wrong** under circular semantics (today: a large negative number,
-/// because compute_span = end - start + 1 with end < start). #129
-/// accepts the parse but does NOT yet wire contig-length math, so the
-/// indel-length miscompute is still pinned as a known follow-up. Pin
-/// the exact value so a future contig-length-aware fix surfaces.
+/// Wraparound `dup` returns `None` from the no-provider
+/// `get_indel_length` since `compute_span` now guards `Mt(_)`. Pin so
+/// any regression (silent wrong value) surfaces. The spec-correct
+/// value (+15) is asserted via `get_indel_length_with_provider` in
+/// `tests/issue_399_mt_circular_followup.rs`.
 #[test]
-fn audit_mt_wrapping_dup_indel_length_still_miscomputes_today() {
+fn audit_mt_wrapping_dup_indel_length_is_none_without_provider() {
     let input = "NC_012920.1:m.16560_5dup";
     let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
-    let observed = get_indel_length(&variant);
-    // Today: end (5) - start (16560) + 1 = -16554; sign flipped by the
-    // Duplication branch is not applied — that branch returns
-    // `Some(compute_span(variant)?)` directly, so we get -16554.
-    // The right answer for a wraparound dup of length (16569 - 16560 +
-    // 1) + 5 = 15 is +15. Tracked as a follow-up to #129; needs
-    // contig-length plumbing.
     assert_eq!(
-        observed,
-        Some(-16554),
-        "PINNED: `compute_span` lacks circular-aware math, so a wraparound \
-         m. dup yields a silently-wrong indel length. Follow-up to #129 \
-         must compute the real circular span using contig length."
+        get_indel_length(&variant),
+        None,
+        "PINNED: wraparound m. dup yields None without a provider; \
+         the provider-backed variant in tests/issue_399_mt_circular_followup.rs \
+         asserts the spec-correct +15."
     );
 }
 
-/// Wraparound `del` newly parses post-#129 and hits the same
-/// `compute_span` miscompute as `dup`. Pin the value so the
-/// contig-length-aware fix surfaces this case too.
+/// Wraparound `del` returns `None` from the no-provider `get_indel_length`
+/// since `compute_span` now guards `Mt(_)`. Pin so any regression (silent
+/// wrong value) surfaces. The spec-correct value (-2) is asserted via
+/// `get_indel_length_with_provider` in `tests/issue_399_mt_circular_followup.rs`.
 #[test]
-fn audit_mt_wrapping_del_indel_length_still_miscomputes_today() {
+fn audit_mt_wrapping_del_indel_length_is_none_without_provider() {
     let input = "NC_012920.1:m.16569_1del";
     let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
-    let observed = get_indel_length(&variant);
-    // Today: ref-span = end (1) - start (16569) + 1 = -16567; the
-    // del branch reports the magnitude of the deleted region, so the
-    // observed value is 16567 (the wrong way to compute span on a
-    // circle). Spec-correct answer is 2 (positions 16569 and 1).
     assert_eq!(
-        observed,
-        Some(16567),
-        "PINNED: wraparound m. del shares the dup miscompute; follow-up \
-         to #129 must teach compute_span the contig-length-aware math."
+        get_indel_length(&variant),
+        None,
+        "PINNED: wraparound m. del yields None without a provider; \
+         the provider-backed variant in tests/issue_399_mt_circular_followup.rs \
+         asserts the spec-correct -2."
     );
 }
 
-/// Wraparound `delins` shares the same miscompute. Pin alongside del/dup.
+/// Wraparound `delins` returns `None` from the no-provider `get_indel_length`
+/// since `compute_span` now guards `Mt(_)`. Pin so any regression (silent
+/// wrong value) surfaces. The spec-correct value (-1) is asserted via
+/// `get_indel_length_with_provider` in `tests/issue_399_mt_circular_followup.rs`.
 #[test]
-fn audit_mt_wrapping_delins_indel_length_still_miscomputes_today() {
+fn audit_mt_wrapping_delins_indel_length_is_none_without_provider() {
     let input = "NC_012920.1:m.16569_1delinsT";
     let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
-    let observed = get_indel_length(&variant);
-    // Today: ref-span = -16567 with the delins branch adjusting by the
-    // inserted-length offset, yielding 16568 (= 16567 + 1, both signs
-    // unfortunate). Spec-correct answer for delinsT (replacing the
-    // 2-nt wraparound window with 1 nt) is -1; pinned exact so a
-    // future contig-length-aware fix surfaces this case too.
     assert_eq!(
-        observed,
-        Some(16568),
-        "PINNED: wraparound m. delins miscomputes; follow-up to #129 \
-         must teach compute_span contig-length-aware math.",
+        get_indel_length(&variant),
+        None,
+        "PINNED: wraparound m. delins yields None without a provider; \
+         the provider-backed variant in tests/issue_399_mt_circular_followup.rs \
+         asserts the spec-correct -1."
     );
 }
 

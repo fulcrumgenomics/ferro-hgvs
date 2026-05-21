@@ -9,6 +9,7 @@ use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::HgvsVariant;
 use crate::normalize::ShuffleDirection;
+use crate::reference::provider::ReferenceProvider;
 
 /// Get the variant type as a string
 ///
@@ -352,13 +353,13 @@ pub fn is_identity(variant: &HgvsVariant) -> bool {
 /// insertions, whose length comes from the inserted sequence rather than the
 /// flanking positions.
 ///
-/// Returns `None` for circular (`o.`) variants where `end < start`, which
-/// represent origin-crossing intervals whose span depends on the contig length
-/// (not available here).
+/// Returns `None` for mitochondrial (`m.`) and circular (`o.`) variants where
+/// `end < start`, which represent origin-crossing intervals whose span depends
+/// on the contig length (not available here — see [`compute_span_with_provider`]).
 fn compute_span(variant: &HgvsVariant) -> Option<i64> {
     let start = get_variant_start(variant)?;
     let end = get_variant_end(variant)?;
-    if matches!(variant, HgvsVariant::Circular(_)) && end < start {
+    if end < start && matches!(variant, HgvsVariant::Circular(_) | HgvsVariant::Mt(_)) {
         return None;
     }
     Some((end - start) + 1)
@@ -387,6 +388,57 @@ pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
+        }
+        _ => None,
+    }
+}
+
+/// Like [`compute_span`] but uses a provider to compute the wraparound length on
+/// `m.`/`o.` ranges where `end < start`.
+///
+/// Wraparound span = `(L − start + 1) + end` where `L` is the contig length returned by
+/// [`ReferenceProvider::get_sequence_length`]. Returns `None` if the variant has no
+/// accession, no positions, or the provider has no length for the accession.
+fn compute_span_with_provider<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Option<i64> {
+    let start = get_variant_start(variant)?;
+    let end = get_variant_end(variant)?;
+    if end >= start {
+        return Some((end - start) + 1);
+    }
+    if !matches!(variant, HgvsVariant::Circular(_) | HgvsVariant::Mt(_)) {
+        return None;
+    }
+    let acc = variant.accession()?;
+    let length = provider.get_sequence_length(&acc.to_string()).ok()? as i64;
+    // Wraparound is only meaningful when both endpoints are positive 1-based
+    // positions and `start` lies within the contig. Out-of-range inputs
+    // (e.g. `m.16600_5del` on a 16569 bp contig) would otherwise produce a
+    // zero/negative span from `(L − start + 1) + end`.
+    if start < 1 || end < 1 || start > length {
+        return None;
+    }
+    Some((length - start + 1) + end)
+}
+
+/// Like [`get_indel_length`] but uses a provider so wraparound `m.`/`o.` ranges compute
+/// the spec-correct circular span via [`compute_span_with_provider`].
+pub fn get_indel_length_with_provider<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Option<i64> {
+    match get_na_edit(variant)? {
+        NaEdit::Substitution { .. }
+        | NaEdit::SubstitutionNoRef { .. }
+        | NaEdit::Inversion { .. }
+        | NaEdit::Identity { .. } => Some(0),
+        NaEdit::Deletion { .. } => Some(-compute_span_with_provider(variant, provider)?),
+        NaEdit::Duplication { .. } => Some(compute_span_with_provider(variant, provider)?),
+        NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
+        NaEdit::Delins { sequence, .. } => {
+            Some(inserted_sequence_len(sequence)? - compute_span_with_provider(variant, provider)?)
         }
         _ => None,
     }
