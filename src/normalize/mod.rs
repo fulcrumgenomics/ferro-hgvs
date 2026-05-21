@@ -516,6 +516,23 @@ pub enum NormalizationWarning {
         clamp_kind: String,
     },
 
+    /// Canonicalization (e.g. `p.ins → p.dup` or `p.delins → p.dup`)
+    /// produced a `Duplication` whose interval includes p.1 — the
+    /// initiator methionine. The duplication form is spec-permitted
+    /// (Prioritization rule is unconditional; spec uses Met1-inclusive
+    /// ranges in deletion.md:63-65), but consumers may also wish to
+    /// describe the protein-level consequence per the substitution
+    /// rule for start-codon variants (substitution.md:45-65).
+    /// Closes-after: #92. Code: `INITIATOR_MET_CANONICALIZATION`.
+    InitiatorMetCanonicalization {
+        /// Human-readable description.
+        message: String,
+        /// Accession of the reference sequence.
+        accession: String,
+        /// Final dup interval text, e.g. "Met1" or "Met1_Lys2".
+        location: String,
+    },
+
     /// Bracketed / reference-range `ins[...]` payload was expanded to a
     /// flat literal sequence. Emitted alongside the canonical rewrite for
     /// observability — callers can audit which inputs were canonicalized
@@ -572,6 +589,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
+            Self::InitiatorMetCanonicalization { .. } => "INITIATOR_MET_CANONICALIZATION",
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
         }
@@ -585,6 +603,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { message, .. } => message,
             Self::CrossAxisVariantNotShuffled { message, .. } => message,
             Self::AxisClampApplied { message, .. } => message,
+            Self::InitiatorMetCanonicalization { message, .. } => message,
             Self::InsertedSequenceExpanded { message, .. } => message,
             Self::PositionPastEnd { message, .. } => message,
         }
