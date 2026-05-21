@@ -1318,6 +1318,17 @@ impl CdotMapper {
         self.transcripts.contains_key(accession)
     }
 
+    /// Name of the genome build whose data populates [`Self::transcripts`].
+    ///
+    /// This is the "primary" build set at load time
+    /// (e.g. via [`from_transcripts_with_build`](Self::from_transcripts_with_build)
+    /// or [`from_cdot_file_with_build`](Self::from_cdot_file_with_build));
+    /// any other builds live in [`Self::alt_build_transcripts`] and are
+    /// reachable only through [`get_transcript_on_build`](Self::get_transcript_on_build).
+    pub fn primary_build(&self) -> &str {
+        &self.primary_build
+    }
+
     /// RefSeq transcript if an LRG mapping has been loaded.
     ///
     /// Supports version fallback: if "NM_000088.2" is not found but "NM_000088.3"
