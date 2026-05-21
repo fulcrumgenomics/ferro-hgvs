@@ -2246,22 +2246,53 @@ impl<P: ReferenceProvider> Normalizer<P> {
             _ => normalized_edit.clone(),
         };
 
-        // Only create a new variant if the edit changed or the interval moved
+        // Build the post-canonical variant; if no rewrite applied,
+        // fall back to the input.
         let edit_changed = &output_edit != edit;
         let interval_changed = post_canon_interval != variant.loc_edit.location;
-        if edit_changed || interval_changed || shuffled {
-            let new_variant = ProteinVariant {
+        let final_variant = if edit_changed || interval_changed || shuffled {
+            ProteinVariant {
                 accession: variant.accession.clone(),
                 gene_symbol: variant.gene_symbol.clone(),
                 loc_edit: LocEdit::with_uncertainty(
                     new_interval,
-                    variant.loc_edit.edit.map_ref(|_| output_edit),
+                    variant.loc_edit.edit.map_ref(|_| output_edit.clone()),
                 ),
-            };
-            Ok((HV::Protein(new_variant), vec![]))
+            }
         } else {
-            Ok((HV::Protein(variant.clone()), vec![]))
+            variant.clone()
+        };
+
+        // Met1 soft-warning: emit when the final edit is a dup whose
+        // interval includes position 1. (#92 sub-item 3)
+        let mut warnings: Vec<NormalizationWarning> = Vec::new();
+        if matches!(output_edit, ProteinEdit::Duplication) {
+            if let (Some(s), Some(e)) = (
+                final_variant.loc_edit.location.start.inner(),
+                final_variant.loc_edit.location.end.inner(),
+            ) {
+                if s.number <= 1 && e.number >= 1 {
+                    let location = if s.number == e.number {
+                        format!("{}{}", s.aa, s.number)
+                    } else {
+                        format!("{}{}_{}{}", s.aa, s.number, e.aa, e.number)
+                    };
+                    warnings.push(NormalizationWarning::InitiatorMetCanonicalization {
+                        message: format!(
+                            "canonical form `p.{}dup` includes the initiator \
+                             methionine; the predicted protein consequence may \
+                             also be described as `p.0?` or `p.(Met1?)` per HGVS \
+                             Substitution recommendations",
+                            location
+                        ),
+                        accession: final_variant.accession.transcript_accession().to_string(),
+                        location,
+                    });
+                }
+            }
         }
+
+        Ok((HV::Protein(final_variant), warnings))
     }
 
     /// Apply the HGVS 3' rule to a protein deletion or duplication.
