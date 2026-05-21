@@ -259,10 +259,13 @@ mod spdi_to_hgvs_direct {
 
     #[test]
     fn insertion_emits_ins() {
+        // SPDI 100 is the 0-based interbase position AFTER 1-based base
+        // 100 → HGVS `g.100_101ins…` (#390 corrects a prior off-by-one
+        // that emitted `g.101_102ins…`).
         let s = SpdiVariant::insertion("NC_000001.11", 100, "ATG");
         assert_eq!(
             spdi_to_hgvs(&s).unwrap().to_string(),
-            "NC_000001.11:g.101_102insATG"
+            "NC_000001.11:g.100_101insATG"
         );
     }
 
