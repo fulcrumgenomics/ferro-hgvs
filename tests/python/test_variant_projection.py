@@ -561,12 +561,13 @@ class TestProjectMany:
         # Mirror the `project_many` fail-fast contract for the
         # already-parsed entry point: the first failing input must abort
         # the batch with an `input[i]:` prefix identifying its position.
-        # The second entry is a c. variant — `project_normalized_all`
-        # only accepts g. inputs, so it raises and indexed reporting kicks
-        # in.
+        # The second entry is a p. variant — post-#389 the fan-out accepts
+        # g./c./n./r. but still rejects p./m./o./fusion/allele-of-unsupported,
+        # so a protein input raises `UnsupportedProjection` and indexed
+        # reporting kicks in.
         variants = [
             ferro_hgvs.parse("NC_000001.11:g.1003C>A"),
-            ferro_hgvs.parse("NM_TEST.1:c.4C>A"),
+            ferro_hgvs.parse("NP_TEST.1:p.Arg2Cys"),
         ]
         with pytest.raises(RuntimeError, match=r"input\[1\]"):
             projector.project_normalized_many(variants)

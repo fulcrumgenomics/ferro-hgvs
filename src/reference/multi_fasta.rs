@@ -967,7 +967,12 @@ impl MultiFastaProvider {
     ///      consulted as a fallback when a hint is supplied; callers
     ///      wanting that behavior must pass `None`.
     ///   2. With `None`, the attached [`CdotMapper`]'s primary build is
-    ///      used (matched against the same canonical names).
+    ///      used when known (matched against the same canonical names).
+    ///      An attached cdot whose `primary_build()` is `None` (e.g. a
+    ///      bincode snapshot that pre-dates build tracking) surfaces as
+    ///      [`GenomeBuild::Unknown`] rather than fabricating a default —
+    ///      see #389 follow-up: the prior behavior of silently stamping
+    ///      `GRCh38` re-introduced the mis-tag this PR removes.
     ///   3. With `None` and no cdot mapper attached, default to GRCh38
     ///      (preserves the historical FASTA-only behavior).
     ///
@@ -983,16 +988,23 @@ impl MultiFastaProvider {
         build_hint: Option<&str>,
     ) -> crate::reference::transcript::GenomeBuild {
         use crate::reference::transcript::GenomeBuild;
-        let resolved: &str = build_hint.unwrap_or_else(|| {
-            self.cdot_mapper
-                .as_ref()
-                .map(CdotMapper::primary_build)
-                .unwrap_or("GRCh38")
-        });
-        match resolved {
-            "GRCh37" => GenomeBuild::GRCh37,
-            "GRCh38" => GenomeBuild::GRCh38,
-            _ => GenomeBuild::Unknown,
+        // 1. Explicit hint wins.
+        if let Some(h) = build_hint {
+            return match h {
+                "GRCh37" => GenomeBuild::GRCh37,
+                "GRCh38" => GenomeBuild::GRCh38,
+                _ => GenomeBuild::Unknown,
+            };
+        }
+        // 2/3. Consult the attached cdot (if any). An unknown primary
+        // build is surfaced as `Unknown` so callers don't get a wrong
+        // canonical stamp on a snapshot that lacks build provenance.
+        match self.cdot_mapper.as_ref().and_then(|c| c.primary_build()) {
+            Some("GRCh37") => GenomeBuild::GRCh37,
+            Some("GRCh38") => GenomeBuild::GRCh38,
+            Some(_) => GenomeBuild::Unknown,
+            None if self.cdot_mapper.is_some() => GenomeBuild::Unknown,
+            None => GenomeBuild::GRCh38,
         }
     }
 
