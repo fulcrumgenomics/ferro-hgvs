@@ -332,7 +332,7 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
 /// assert_eq!(spdi.to_string(), "NC_000001.11:99:ATG:");
 /// ```
-pub fn hgvs_to_spdi<P: ReferenceProvider>(
+pub fn hgvs_to_spdi<P: ReferenceProvider + ?Sized>(
     variant: &HgvsVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -496,7 +496,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 /// `NM_000088.3`), matching NCBI Variation Services' convention. Short-form
 /// `Deletion` / `Duplication` / `Delins` edits trigger a provider fetch on
 /// the transcript accession to populate SPDI's `del` field.
-fn cds_to_spdi_with_provider<P: ReferenceProvider>(
+fn cds_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &CdsVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -527,7 +527,7 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider>(
 /// Convert an `n.` variant with provider-backed reference fetch and
 /// transcript-aware position resolution (intronic offsets, downstream
 /// `*N`, non-positive base).
-fn tx_to_spdi_with_provider<P: ReferenceProvider>(
+fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &TxVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -564,7 +564,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider>(
 /// Convert an `r.` variant with provider-backed reference fetch. Same
 /// coordinate resolution as `n.`; alphabet conversion `u → T` is applied
 /// via [`AlphabetMode::Rna`].
-fn rna_to_spdi_with_provider<P: ReferenceProvider>(
+fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &RnaVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -748,7 +748,7 @@ fn rna_needs_provider(interval: &Interval<RnaPos>) -> bool {
 /// on the transcript accession without first projecting to genomic coords.
 /// That projection is intentionally out of scope for this entry point —
 /// callers needing it can use the genomic conversion path explicitly.
-fn resolve_cds_to_tx<P: ReferenceProvider>(
+fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &CdsPos,
     end: &CdsPos,
@@ -786,7 +786,7 @@ fn resolve_cds_to_tx<P: ReferenceProvider>(
 
 /// Resolve an `n.` (TxPos) pair to 1-based transcript positions, including
 /// intronic and downstream forms, using the provider.
-fn resolve_tx_to_provider_tx<P: ReferenceProvider>(
+fn resolve_tx_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &TxPos,
     end: &TxPos,
@@ -804,7 +804,7 @@ fn resolve_tx_to_provider_tx<P: ReferenceProvider>(
     Ok((s, e))
 }
 
-fn resolve_rna_to_provider_tx<P: ReferenceProvider>(
+fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &RnaPos,
     end: &RnaPos,
