@@ -121,17 +121,21 @@ pub trait ReferenceProvider {
         false
     }
 
-    /// Get the total length of a stored sequence by accession.
+    /// Return the total number of bases in the named reference sequence.
     ///
-    /// Used by circular-aware span math (issue #399) to compute the
-    /// wraparound length `(L − start + 1) + end` on `m.`/`o.` ranges
-    /// where `start > end`. Also consumed by W4004 PositionPastEnd on
-    /// the `m.` axis (issue #393).
+    /// # Arguments
     ///
-    /// The default implementation returns
+    /// * `id` - Sequence accession or contig name (e.g., `"NC_012920.1"`, `"chrM"`)
+    ///
+    /// # Returns
+    ///
+    /// The length in bases, or [`FerroError::ReferenceNotFound`] if the
+    /// accession is unknown to this provider.
+    ///
+    /// The default implementation always returns
     /// [`FerroError::ReferenceNotFound`]; providers that store length
-    /// metadata override this.
-    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+    /// metadata (e.g. from a FASTA index) override this method.
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         Err(FerroError::ReferenceNotFound { id: id.to_string() })
     }
 }
@@ -180,7 +184,7 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
         (**self).has_protein_data()
     }
 
-    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
-        (**self).get_seq_length(id)
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        (**self).get_sequence_length(id)
     }
 }

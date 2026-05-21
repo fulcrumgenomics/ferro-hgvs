@@ -434,7 +434,7 @@ impl ReferenceProvider for MockProvider {
         !self.genomic_sequences.is_empty()
     }
 
-    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         self.genomic_sequences
             .get(id)
             .map(|s| s.len() as u64)
@@ -629,16 +629,16 @@ mod tests {
     }
 
     #[test]
-    fn mock_provider_returns_seq_length_for_added_sequence() {
+    fn test_mock_provider_returns_sequence_length_for_added_sequence() {
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence("NC_012920.1", "A".repeat(16569));
-        assert_eq!(provider.get_seq_length("NC_012920.1").unwrap(), 16569);
+        assert_eq!(provider.get_sequence_length("NC_012920.1").unwrap(), 16569);
     }
 
     #[test]
-    fn mock_provider_seq_length_errors_for_unknown_id() {
+    fn test_mock_provider_sequence_length_errors_for_unknown_id() {
         let provider = MockProvider::new();
-        let err = provider.get_seq_length("missing").unwrap_err();
+        let err = provider.get_sequence_length("missing").unwrap_err();
         assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
 

@@ -245,7 +245,7 @@ impl ReferenceProvider for FastaProvider {
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
-    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         self.sequence_length(id)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
@@ -599,6 +599,11 @@ impl ReferenceProvider for CachedFastaProvider {
 
         Ok(sequence)
     }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.sequence_length(id)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 /// Memory-mapped FASTA provider for high-performance sequence access
@@ -896,6 +901,11 @@ impl ReferenceProvider for MmapFastaProvider {
         };
 
         self.get_sequence_from_mmap(entry, start, end)
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.sequence_length(id)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 }
 
@@ -1552,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn fasta_provider_get_seq_length_returns_length_for_known_contig() {
+    fn test_fasta_provider_get_sequence_length_returns_length_for_known_contig() {
         let provider = FastaProvider {
             path: PathBuf::new(),
             index: {
@@ -1573,13 +1583,13 @@ mod tests {
             transcripts: HashMap::new(),
         };
 
-        assert_eq!(provider.get_seq_length("chrM").unwrap(), 16569);
+        assert_eq!(provider.get_sequence_length("chrM").unwrap(), 16569);
         // NC_012920 aliases to chrM via build_default_aliases
-        assert_eq!(provider.get_seq_length("NC_012920").unwrap(), 16569);
+        assert_eq!(provider.get_sequence_length("NC_012920").unwrap(), 16569);
     }
 
     #[test]
-    fn fasta_provider_get_seq_length_errors_for_unknown_contig() {
+    fn test_fasta_provider_get_sequence_length_errors_for_unknown_contig() {
         let provider = FastaProvider {
             path: PathBuf::new(),
             index: HashMap::new(),
@@ -1587,12 +1597,12 @@ mod tests {
             transcripts: HashMap::new(),
         };
 
-        let err = provider.get_seq_length("chrZ").unwrap_err();
+        let err = provider.get_sequence_length("chrZ").unwrap_err();
         assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
 
     #[test]
-    fn fasta_index_entry_clone() {
+    fn test_fasta_index_entry_clone() {
         let entry = FastaIndexEntry {
             name: "chr1".to_string(),
             length: 1000,
