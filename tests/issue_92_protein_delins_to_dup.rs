@@ -137,3 +137,27 @@ fn protein_delins_without_shared_affix_stays_as_delins() {
          survive normalization; got {out:?}",
     );
 }
+
+/// Predicted-edit wrapper: `p.(Leu7_Glu8delinsLeuGluLeuGlu)` must
+/// canonicalize the inner form (delins → trim → ins → dup → 3'-shift)
+/// while preserving the outer `(...)` predicted-edit marker. Pins
+/// that `Mu::Uncertain` wrapping is not silently dropped by the
+/// delins helper, mirroring the existing
+/// `protein_predicted_ins_canonicalizes_inside_parens` invariant.
+#[test]
+fn protein_predicted_delins_canonicalizes_inside_parens() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.(Leu7_Glu8delinsLeuGluLeuGlu)")
+        .expect("parse p.(Leu7_Glu8delinsLeuGluLeuGlu)");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.(Leu7_Glu8delinsLeuGluLeuGlu)");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.(Leu9_Glu10dup)"),
+        "predicted delins must canonicalize to predicted dup with \
+         parens preserved; got {out:?}",
+    );
+}
