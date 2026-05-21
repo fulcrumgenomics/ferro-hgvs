@@ -245,6 +245,11 @@ impl ReferenceProvider for FastaProvider {
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
+    fn get_seq_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.sequence_length(id)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
+
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
         // If the requested id is registered as a contig — either present
         // in the FASTA index (directly or via an alias) or referenced as
@@ -1547,7 +1552,47 @@ mod tests {
     }
 
     #[test]
-    fn test_fasta_index_entry_clone() {
+    fn fasta_provider_get_seq_length_returns_length_for_known_contig() {
+        let provider = FastaProvider {
+            path: PathBuf::new(),
+            index: {
+                let mut idx = HashMap::new();
+                idx.insert(
+                    "chrM".to_string(),
+                    FastaIndexEntry {
+                        name: "chrM".to_string(),
+                        length: 16569,
+                        offset: 0,
+                        line_bases: 50,
+                        line_bytes: 51,
+                    },
+                );
+                idx
+            },
+            aliases: build_default_aliases(),
+            transcripts: HashMap::new(),
+        };
+
+        assert_eq!(provider.get_seq_length("chrM").unwrap(), 16569);
+        // NC_012920 aliases to chrM via build_default_aliases
+        assert_eq!(provider.get_seq_length("NC_012920").unwrap(), 16569);
+    }
+
+    #[test]
+    fn fasta_provider_get_seq_length_errors_for_unknown_contig() {
+        let provider = FastaProvider {
+            path: PathBuf::new(),
+            index: HashMap::new(),
+            aliases: HashMap::new(),
+            transcripts: HashMap::new(),
+        };
+
+        let err = provider.get_seq_length("chrZ").unwrap_err();
+        assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
+    }
+
+    #[test]
+    fn fasta_index_entry_clone() {
         let entry = FastaIndexEntry {
             name: "chr1".to_string(),
             length: 1000,
