@@ -2503,22 +2503,36 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
 
     // Walk the input looking for any of the coord markers (`c.`, `g.`,
     // `n.`, `m.`, `o.`, `r.`) preceded by `:`, `[`, `(`, `;`, or start of
-    // string. Multiple ranges per input (compound alleles) are handled
-    // by continuing past each match.
+    // string. Compound-allele inner members (digits immediately after
+    // `[` or `;` — they inherit the outer coord axis, no second `c.`
+    // prefix appears) are also scanned so `c.[100A>G;200_205delAAAA]`
+    // catches the inner `200_205delAAAA` (#390 item 4). Multiple ranges
+    // per input are handled by continuing past each match.
     let mut i = 0usize;
     while i + 1 < bytes.len() {
         let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';');
         let is_coord =
             matches!(bytes[i], b'c' | b'g' | b'n' | b'm' | b'o' | b'r') && bytes[i + 1] == b'.';
-        if !(prev_ok && is_coord) {
-            i += 1;
+        if prev_ok && is_coord {
+            let start_idx = i + 2;
+            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
+                hits.push(hit);
+            }
+            i = start_idx;
             continue;
         }
-        let start_idx = i + 2;
-        if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
-            hits.push(hit);
+        // Compound-allele inner-member fast path: a digit right after
+        // `[` or `;` is the start of a range that inherits the outer
+        // axis. `try_detect_length_mismatch_at` returns `None` for
+        // anything that isn't a `<int>_<int><edit><refseq>` pattern,
+        // so over-triggering is safe.
+        let prev_is_compound_separator = i > 0 && matches!(bytes[i - 1], b'[' | b';');
+        if prev_is_compound_separator && bytes[i].is_ascii_digit() {
+            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, i) {
+                hits.push(hit);
+            }
         }
-        i = start_idx;
+        i += 1;
     }
 
     hits
@@ -4580,6 +4594,46 @@ mod tests {
         let hits = detect_length_mismatch("NR_001234.1:r.10_15dupacg");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+    }
+
+    /// Compound allele inner members inherit the outer coord-system
+    /// axis; the W3016 scan must walk them too. Pre-#390 only ranges
+    /// preceded by a literal coord marker (`c.`, `g.`, …) — or by `:`
+    /// at the variant-string start — triggered detection, so inner
+    /// members after `;`/`,` inside `c.[…]` were silently skipped.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_inner_member() {
+        // `200_205delAAAA`: 4-base ref vs 6-base range → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.[100A>G;200_205delAAAA]");
+        assert_eq!(
+            hits.len(),
+            1,
+            "inner member after ';' inside c.[…] should be scanned, got: {:?}",
+            hits.iter().map(|h| &h.original).collect::<Vec<_>>()
+        );
+        assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+        assert_eq!(hits[0].original, "200_205delAAAA");
+    }
+
+    /// First member of a compound allele (right after `[`): no `c.`
+    /// prefix immediately precedes it, but it must still be scanned.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_first_member() {
+        // `100_103delAA`: 2-base ref vs 4-base range → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.[100_103delAA;200A>G]");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "100_103delAA");
+    }
+
+    /// Multiple mismatches inside one compound allele are all
+    /// surfaced.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_multiple() {
+        let hits = detect_length_mismatch("NM_x:c.[100_103delA;200_205delAAAA]");
+        assert_eq!(hits.len(), 2);
+        let originals: Vec<&str> = hits.iter().map(|h| h.original.as_str()).collect();
+        assert!(originals.contains(&"100_103delA"));
+        assert!(originals.contains(&"200_205delAAAA"));
     }
 
     // ----- Issue #115: retracted c.IVS notation (W3014) -----
