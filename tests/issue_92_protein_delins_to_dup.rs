@@ -43,3 +43,27 @@ fn protein_delins_collapses_to_identity_when_insert_equals_delete() {
         "delins must NOT survive the affix-trim collapse; got {out:?}",
     );
 }
+
+/// Affix-trim with shared *trailing* residue collapses a delins to a
+/// pure deletion. `p.Leu7_Glu8delinsGlu` over ref `LE` (trailing `E`
+/// matches both sides) should normalize to `p.Leu7del`.
+#[test]
+fn protein_delins_collapses_to_deletion_with_shared_suffix() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant =
+        parse_hgvs("NP_TESTPROT.1:p.Leu7_Glu8delinsGlu").expect("parse p.Leu7_Glu8delinsGlu");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Leu7_Glu8delinsGlu");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.Leu7del"),
+        "delins with shared suffix Glu must trim to p.Leu7del; got {out:?}",
+    );
+    assert!(
+        !out.contains("delins"),
+        "delins must be rewritten as pure del; got {out:?}",
+    );
+}
