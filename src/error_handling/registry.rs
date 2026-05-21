@@ -1148,6 +1148,36 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W4004",
+        CodeInfo {
+            code: "W4004",
+            name: "PositionPastEnd",
+            summary: "Position lies past its coordinate sub-axis bound.",
+            explanation: "A `c.`, `c.*N`, `c.-N`, or `n.` position must reference a position \
+                that exists in the resolved transcript. Plain integer `c.<N>` positions cannot \
+                exceed the CDS length; 3'UTR `c.*N` positions cannot exceed the post-CDS \
+                transcript length; 5'UTR `c.-N` positions cannot exceed the pre-CDS transcript \
+                length; `n.<N>` positions cannot exceed the transcript length. Strict mode \
+                rejects past-end inputs; lenient mode emits W4004 and short-circuits \
+                normalize() to the canonical variant (no further shifting). Has no safe \
+                auto-correction — the user could have meant a different position or a \
+                different reference. Intronic offsets remain out of scope (their bounds \
+                depend on intron size, which requires alignment data this helper does not \
+                consult).",
+            category: CodeCategory::Position,
+            bad_examples: &[
+                "NM_001001656.1:c.946G>C (CDS-end = 945)",
+                "NM_001001656.1:c.946dup",
+                "NM_001001656.1:c.935_946del",
+            ],
+            good_examples: &["NM_001001656.1:c.945G>C", "NM_001001656.1:c.*1G>C"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["E3001", "W3016"],
+        },
+    );
+
     // --- Semantic Warnings (W5xxx) ---
 
     map.insert(

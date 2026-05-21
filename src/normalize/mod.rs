@@ -61,6 +61,137 @@ fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
     )
 }
 
+/// If `pos` lies past the CDS-end (for plain `c.<N>`), past the
+/// transcript-end (for `c.*<N>`), or past the 5'UTR-start (for `c.-N`),
+/// return a `PositionPastEnd` warning describing the violation;
+/// otherwise `None`. See #336 (CDS-end / `c.*N`) and #348 (`c.-N`).
+///
+/// **Scope.** This helper handles the c. axis: plain `c.<N>` (cds-end),
+/// `c.*<N>` (transcript-end), and `c.-<N>` (5utr-start). The `n.` axis is
+/// handled by [`check_tx_pos_past_end`] (#347). Intronic offsets
+/// (`c.<N>+<M>` / `c.<N>-<M>`) remain out of scope because their bounds
+/// depend on intron size, which requires genome alignment data this
+/// helper does not consult.
+///
+/// **Conservative skip.** When the required transcript metadata is missing
+/// (no `cds_start`/`cds_end` for a c. variant), the helper returns `None`
+/// rather than emit a false positive. Bounds are derived from
+/// `Transcript::cds_length()` / `utr3_length()` / `utr5_length()`, which
+/// fall back to the exon-sum transcript length when no cached `sequence`
+/// is loaded — so the check still fires on coordinate-only transcripts.
+/// Callers wanting strict gating on missing metadata must check
+/// transcript completeness separately.
+fn check_cds_pos_past_end(
+    accession: &str,
+    pos: &CdsPos,
+    transcript: &crate::reference::transcript::Transcript,
+) -> Option<NormalizationWarning> {
+    // Intronic offsets and unknown positions are out of scope.
+    if pos.is_intronic() || pos.is_unknown() {
+        return None;
+    }
+    if pos.utr3 {
+        // c.*N: N must fit in the post-CDS transcript suffix. Prefer
+        // `Transcript::utr3_length()` so the bound source-of-truth stays in
+        // one place. `utr3_length` falls back to the exon-sum transcript
+        // length when no cached `sequence` is loaded, so the check still
+        // fires for coordinate-only transcripts — a coordinate bound check
+        // should not silently degrade into a sequence-availability check.
+        let utr3_len = transcript.utr3_length()?;
+        if pos.base > 0 && (pos.base as u64) > utr3_len {
+            return Some(NormalizationWarning::PositionPastEnd {
+                message: format!(
+                    "{}:c.*{} lies past the transcript-end (3'UTR length {})",
+                    accession, pos.base, utr3_len
+                ),
+                accession: accession.to_string(),
+                coordinate_system: "c".to_string(),
+                position: format!("*{}", pos.base),
+                bound_kind: "transcript-end".to_string(),
+                bound_value: utr3_len,
+            });
+        }
+        return None;
+    }
+    if pos.base < 1 {
+        // 5'UTR `c.-N`: |N| must fit in `cds_start - 1`. `Transcript::utr5_length()`
+        // returns `cds_start.saturating_sub(1)`. Closes #348.
+        let utr5_len = transcript.utr5_length()?;
+        let abs_n = pos.base.unsigned_abs();
+        if abs_n > utr5_len {
+            return Some(NormalizationWarning::PositionPastEnd {
+                message: format!(
+                    "{}:c.{} lies past the 5'UTR start (5'UTR length {})",
+                    accession, pos.base, utr5_len
+                ),
+                accession: accession.to_string(),
+                coordinate_system: "c".to_string(),
+                position: pos.base.to_string(),
+                bound_kind: "5utr-start".to_string(),
+                bound_value: utr5_len,
+            });
+        }
+        return None;
+    }
+    // Plain `c.<N>`: N must fit in the CDS.
+    let cds_len = transcript.cds_length()?;
+    if (pos.base as u64) > cds_len {
+        return Some(NormalizationWarning::PositionPastEnd {
+            message: format!(
+                "{}:c.{} lies past the CDS-end (CDS length {})",
+                accession, pos.base, cds_len
+            ),
+            accession: accession.to_string(),
+            coordinate_system: "c".to_string(),
+            position: pos.base.to_string(),
+            bound_kind: "cds-end".to_string(),
+            bound_value: cds_len,
+        });
+    }
+    None
+}
+
+/// If `pos` (an `n.<N>` transcript position) lies past the transcript's
+/// total length, return a `PositionPastEnd` warning describing the
+/// violation; otherwise `None`. Closes #347.
+///
+/// Bounds: plain `n.<N>` must satisfy `1 <= N <= sequence_length`.
+/// Intronic offsets (`n.<N>+<M>`) are out of scope (their bounds depend
+/// on intron size, which requires alignment data this helper does not
+/// consult). Unknown positions (`n.?`) and `N < 1` are skipped.
+///
+/// Bounds source: `Transcript::sequence_length()`, which falls back to
+/// the sum of exon spans for coordinate-only transcripts — a coordinate
+/// bound check should not silently degrade into a sequence-availability
+/// check, so the gate fires regardless of whether bases are cached.
+fn check_tx_pos_past_end(
+    accession: &str,
+    pos: &TxPos,
+    transcript: &crate::reference::transcript::Transcript,
+) -> Option<NormalizationWarning> {
+    if has_unknown_offset_tx(pos) || pos.offset.is_some() || pos.is_downstream() {
+        return None;
+    }
+    if pos.base < 1 {
+        return None;
+    }
+    let seq_len = transcript.sequence_length();
+    if (pos.base as u64) > seq_len {
+        return Some(NormalizationWarning::PositionPastEnd {
+            message: format!(
+                "{}:n.{} lies past the transcript-end (transcript length {})",
+                accession, pos.base, seq_len
+            ),
+            accession: accession.to_string(),
+            coordinate_system: "n".to_string(),
+            position: pos.base.to_string(),
+            bound_kind: "transcript-end".to_string(),
+            bound_value: seq_len,
+        });
+    }
+    None
+}
+
 /// Check if a TxPos has an unknown (?) offset sentinel value
 fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     matches!(
@@ -99,8 +230,13 @@ fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
 /// Warning generated during normalization.
 ///
 /// This enum is open-ended: each variant owns the fields its code needs.
-/// Future warning codes add new variants without touching existing emit sites.
+/// Future warning codes add new variants without touching existing emit
+/// sites. Marked `#[non_exhaustive]` so downstream callers must include a
+/// wildcard arm when matching — adding a new variant is therefore not a
+/// breaking change. Mirrors the same attribute on
+/// [`NormalizationInfo`] / [`NormalizeResultWithWarnings`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum NormalizationWarning {
     /// Reference sequence mismatch. Stated ref bases in the HGVS expression
     /// do not match the actual reference sequence. Code: `REFSEQ_MISMATCH`.
@@ -217,6 +353,36 @@ pub enum NormalizationWarning {
         /// The expanded flat literal sequence written into the AST
         expanded_literal: String,
     },
+
+    /// A position lies past one of the transcript bounds — the CDS-end
+    /// (for plain `c.<N>`), the transcript-end (for `c.*<N>` or `n.<N>`),
+    /// or the 5'UTR-start (for `c.-<N>`) — and therefore does not
+    /// reference an existing base. Code: `POSITION_PAST_END` (W4004).
+    ///
+    /// One warning is emitted per offending position — a range with both
+    /// endpoints past-end produces two warnings. Covers both the `c.`
+    /// axis (#336, #348) and the `n.` axis (#347); intronic offsets
+    /// remain out of scope (they depend on intron-size alignment data
+    /// this check does not consult).
+    PositionPastEnd {
+        /// Human-readable description.
+        message: String,
+        /// Transcript accession (e.g. `NM_001001656.1`).
+        accession: String,
+        /// Coordinate system: `"c"` for c. (cds-end / transcript-end /
+        /// 5utr-start) or `"n"` for n. (transcript-end).
+        coordinate_system: String,
+        /// The single offending position in HGVS string form — `"946"`
+        /// for plain CDS positions, `"*9"` for 3'UTR positions. Range
+        /// strings like `"935_946"` are never produced here; each
+        /// endpoint of a range yields its own warning.
+        position: String,
+        /// The bound the position exceeded — `"cds-end"` for plain
+        /// `c.<N>` or `"transcript-end"` for `c.*<N>`.
+        bound_kind: String,
+        /// The numeric bound (e.g. 945 if the CDS is 945 bases long).
+        bound_value: u64,
+    },
 }
 
 impl NormalizationWarning {
@@ -229,6 +395,7 @@ impl NormalizationWarning {
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
+            Self::PositionPastEnd { .. } => "POSITION_PAST_END",
         }
     }
 
@@ -241,6 +408,7 @@ impl NormalizationWarning {
             Self::CrossAxisVariantNotShuffled { message, .. } => message,
             Self::AxisClampApplied { message, .. } => message,
             Self::InsertedSequenceExpanded { message, .. } => message,
+            Self::PositionPastEnd { message, .. } => message,
         }
     }
 }
@@ -451,6 +619,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     hgvs_end: *hgvs_end,
                     expected_span: *expected_span as u64,
                     actual_bytes: *actual_bytes as u64,
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // In strict mode, reject if any position lies past the CDS-end or
+        // transcript-end (W4004).
+        if self.config.should_reject_position_past_end() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::PositionPastEnd {
+                    accession,
+                    coordinate_system,
+                    position,
+                    bound_kind,
+                    bound_value,
+                    ..
+                } => Some(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "{accession}:{coordinate_system}.{position} is past the {bound_kind} \
+                         ({bound_value}); position does not reference a base in the transcript \
+                         (PositionPastEnd / W4004)"
+                    ),
                 }),
                 _ => None,
             }) {
@@ -887,10 +1079,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Cds(variant.clone()), vec![])),
         };
 
-        // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
-        // variant so the downstream passes (issue #333 ins[...]
-        // expansion, 3' shift, ins→dup, canonical split) all see the
-        // delins form.
+        // SVD-WG009: rewrite `con` to `delins`. Recurse on the rewritten
+        // variant so the bounds-check + needs_normalization gates below still
+        // fire — otherwise `c.<past-end>conT` slips past W4004. The downstream
+        // passes (issue #333 ins[...] expansion, 3' shift, ins→dup, canonical
+        // split) then all see the delins form.
+        // `canonicalize_conversion_to_delins` only matches `NaEdit::Conversion`
+        // and the rewrite swaps it for `Delins`, so the recursion terminates
+        // on the second entry.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = CdsVariant {
                 accession: variant.accession.clone(),
@@ -903,11 +1099,70 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return self.normalize_cds(&new_variant);
         }
 
+        // Bounds check: `c.<N>` where N exceeds the CDS length, or `c.*<N>` where
+        // N exceeds the 3'UTR length, is malformed input. Strict and lenient
+        // both emit a `PositionPastEnd` warning; the outer `normalize` wrapper
+        // converts it to a typed error in strict mode. Silent mode skips the
+        // check entirely. We early-return with the canonical variant since
+        // normalize() cannot do sensible work on past-end input. Must run
+        // BEFORE both the `try_expand_cds_ins` `ins[...]` expansion (so the
+        // `con`-rewrite path `c.<past-end>conT` does not surface a misleading
+        // `UnsupportedVariant` for the `T` payload) and the
+        // `needs_normalization` short-circuit so substitutions
+        // (`c.946G>C`) also get checked.
+        //
+        // The bounds check requires the transcript and concrete positions, but
+        // is *optional* — when the transcript can't be fetched or the positions
+        // are unknown/`?`-offset, we skip the gate and fall through so callers
+        // without manifest data (e.g. the spec-fixture / parse-only path) still
+        // hit the downstream `try_expand_cds_ins` and canonicalization passes.
+        let accession = variant.accession.transcript_accession();
+        let transcript_for_intronic =
+            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                self.provider
+                    .get_transcript_for_variant(&HV::Cds(variant.clone()))
+            };
+        let transcript_opt = self.provider.get_transcript(&accession).ok();
+        if self.config.should_reject_position_past_end()
+            || self.config.should_warn_position_past_end()
+        {
+            if let (Some(transcript), Some(start_pos), Some(end_pos)) = (
+                transcript_opt.as_ref(),
+                variant.loc_edit.location.start.inner(),
+                variant.loc_edit.location.end.inner(),
+            ) {
+                if !has_unknown_offset_cds(start_pos) && !has_unknown_offset_cds(end_pos) {
+                    let mut bounds_warnings: Vec<NormalizationWarning> = Vec::new();
+                    let acc_str = accession.clone();
+                    if let Some(w) = check_cds_pos_past_end(&acc_str, start_pos, transcript) {
+                        bounds_warnings.push(w);
+                    }
+                    let end_distinct = end_pos.base != start_pos.base
+                        || end_pos.utr3 != start_pos.utr3
+                        || end_pos.offset != start_pos.offset;
+                    if end_distinct {
+                        if let Some(w) = check_cds_pos_past_end(&acc_str, end_pos, transcript) {
+                            bounds_warnings.push(w);
+                        }
+                    }
+                    if !bounds_warnings.is_empty() {
+                        return Ok((
+                            HV::Cds(self.canonicalize_cds_variant(variant)),
+                            bounds_warnings,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Issue #333: expand bracketed / reference-range `ins[...]`
         // payloads. CDS-coord ranges (e.g. c.X_Yins[A_B]) translate to
         // transcript coordinates via the transcript's cds_start. Same
-        // canonicalization applies to Delins / DupIns payloads.
-        let cds_accession = variant.accession.transcript_accession();
+        // canonicalization applies to Delins / DupIns payloads. Runs
+        // AFTER the bounds gate above so past-end `con`/`delins` inputs
+        // reject on the coordinate rather than on a downstream
+        // `ins[...]` expansion failure.
+        let cds_accession = accession.clone();
         if let Some((new_variant, warning)) =
             self.try_expand_cds_ins(variant, edit, &cds_accession)?
         {
@@ -916,12 +1171,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((result, warnings));
         }
 
-        // Only normalize indels
-        if !needs_normalization(edit) {
-            return Ok((HV::Cds(variant.clone()), vec![]));
-        }
-
-        // Check for intronic variants or unknown positions - can't normalize those
+        // Extract positions for the post-expansion path. Substitutions (and
+        // other non-shifted edits) also need normalization fall-through, so
+        // we look up positions BEFORE the `needs_normalization`
+        // short-circuit below.
         let start_pos = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos,
             None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
@@ -936,25 +1189,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![]));
         }
 
-        // Try to get transcript first - we need it for intronic normalization too.
-        //
-        // For intronic / boundary-spanning positions we route through
-        // `get_transcript_for_variant` so providers that hold cdot data
-        // (e.g. `MultiFastaProvider`) can pick a genome build informed by
-        // the input's `genomic_context` (NG_* / NC_* parent). For the
-        // pure-exonic CDS path the build hint is irrelevant — `get_transcript`
-        // is sufficient.
-        let accession = variant.accession.transcript_accession();
-        let transcript_for_intronic =
-            || -> Result<crate::reference::transcript::Transcript, FerroError> {
-                self.provider
-                    .get_transcript_for_variant(&HV::Cds(variant.clone()))
-            };
-        let transcript = match self.provider.get_transcript(&accession) {
-            Ok(t) => t,
+        // Re-fetch the transcript for the downstream normalization passes
+        // (intronic / boundary / 3' shuffle / canonical split). The bounds
+        // gate above used `transcript_opt`, which may be `None` for callers
+        // without a manifest; reaching this point implies we still need the
+        // transcript and must early-return if it can't be fetched.
+        let transcript = match transcript_opt {
+            Some(t) => t,
             // Can't do full normalization without transcript, but apply minimal notation
-            Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+            None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
+
+        // Only normalize indels (the bounds check above runs regardless).
+        if !needs_normalization(edit) {
+            return Ok((HV::Cds(variant.clone()), vec![]));
+        }
 
         // Handle intronic variants specially
         if start_pos.is_intronic() || end_pos.is_intronic() {
@@ -1298,10 +1547,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Tx(variant.clone()), vec![])),
         };
 
-        // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
-        // variant so the downstream passes (issue #333 ins[...]
-        // expansion, 3' shift, ins→dup, canonical split) all see the
-        // delins form.
+        // SVD-WG009: rewrite `con` to `delins`. Recurse on the rewritten
+        // variant so the bounds-check + needs_normalization gates below still
+        // fire — otherwise `n.<past-end>conT` slips past W4004. The downstream
+        // passes (issue #333 ins[...] expansion, 3' shift, ins→dup, canonical
+        // split) then all see the delins form. The recursion terminates on the
+        // second entry because the rewrite emits `Delins`, which
+        // `canonicalize_conversion_to_delins` no longer matches.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = TxVariant {
                 accession: variant.accession.clone(),
@@ -1314,10 +1566,62 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return self.normalize_tx(&new_variant);
         }
 
+        // Bounds check: `n.<N>` where N exceeds the transcript length is
+        // malformed input. Mirrors normalize_cds's PositionPastEnd wiring;
+        // closes #347. Must run BEFORE the `try_expand_tx_ins` expansion (so
+        // `n.<past-end>conT` rejects on the coordinate rather than the
+        // downstream `ins[...]` failure) and BEFORE the
+        // `needs_normalization` short-circuit so substitutions
+        // (`n.<N>G>C`) also get checked.
+        //
+        // The gate is optional — if the transcript can't be fetched or the
+        // positions are unknown/`?`-offset, skip the check and fall through
+        // so callers without manifest data still hit the downstream
+        // `try_expand_tx_ins` and canonicalization passes.
+        let accession = variant.accession.transcript_accession();
+        let transcript_for_intronic =
+            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+                self.provider
+                    .get_transcript_for_variant(&HV::Tx(variant.clone()))
+            };
+        let transcript_opt = self.provider.get_transcript(&accession).ok();
+        if self.config.should_reject_position_past_end()
+            || self.config.should_warn_position_past_end()
+        {
+            if let (Some(transcript), Some(start_pos), Some(end_pos)) = (
+                transcript_opt.as_ref(),
+                variant.loc_edit.location.start.inner(),
+                variant.loc_edit.location.end.inner(),
+            ) {
+                if !has_unknown_offset_tx(start_pos) && !has_unknown_offset_tx(end_pos) {
+                    let mut bounds_warnings: Vec<NormalizationWarning> = Vec::new();
+                    if let Some(w) = check_tx_pos_past_end(&accession, start_pos, transcript) {
+                        bounds_warnings.push(w);
+                    }
+                    let end_distinct =
+                        end_pos.base != start_pos.base || end_pos.offset != start_pos.offset;
+                    if end_distinct {
+                        if let Some(w) = check_tx_pos_past_end(&accession, end_pos, transcript) {
+                            bounds_warnings.push(w);
+                        }
+                    }
+                    if !bounds_warnings.is_empty() {
+                        return Ok((
+                            HV::Tx(self.canonicalize_tx_variant(variant)),
+                            bounds_warnings,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Issue #333: expand bracketed / reference-range `ins[...]`
         // payloads. n. positions are direct transcript positions, so
-        // the helper treats them as `InsCoordKind::Direct`.
-        let tx_accession = variant.accession.transcript_accession();
+        // the helper treats them as `InsCoordKind::Direct`. Runs AFTER
+        // the bounds gate above so past-end `con`/`delins` inputs reject
+        // on the coordinate rather than on a downstream `ins[...]`
+        // expansion failure.
+        let tx_accession = accession.clone();
         if let Some((new_variant, warning)) =
             self.try_expand_tx_ins(variant, edit, &tx_accession)?
         {
@@ -1326,12 +1630,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((result, warnings));
         }
 
-        // Only normalize indels
-        if !needs_normalization(edit) {
-            return Ok((HV::Tx(variant.clone()), vec![]));
-        }
-
-        // Check for intronic variants or unknown positions
+        // Extract positions for the post-expansion path. Substitutions (and
+        // other non-shifted edits) also need normalization fall-through, so
+        // we look up positions BEFORE the `needs_normalization`
+        // short-circuit below.
         let start_pos = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos,
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
@@ -1346,19 +1648,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![]));
         }
 
-        // Try to get transcript first - we need it for intronic normalization too.
-        // See `normalize_cds` for the rationale behind the dual lookup.
-        let accession = variant.accession.transcript_accession();
-        let transcript_for_intronic =
-            || -> Result<crate::reference::transcript::Transcript, FerroError> {
-                self.provider
-                    .get_transcript_for_variant(&HV::Tx(variant.clone()))
-            };
-        let transcript = match self.provider.get_transcript(&accession) {
-            Ok(t) => t,
-            // Can't do full normalization without transcript, but apply minimal notation
-            Err(_) => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
+        // Re-bind the transcript for the downstream normalization passes.
+        // See `normalize_cds` for the rationale; reaching this point
+        // implies we still need the transcript and must early-return if
+        // it can't be fetched.
+        let transcript = match transcript_opt {
+            Some(t) => t,
+            None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
+
+        // Only normalize indels (the bounds check above runs regardless).
+        if !needs_normalization(edit) {
+            return Ok((HV::Tx(variant.clone()), vec![]));
+        }
 
         if start_pos.is_intronic() || end_pos.is_intronic() {
             // Switch to the variant-aware lookup so an NG/NC-parented input
@@ -1372,6 +1674,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
             });
+        }
+
+        // Downstream `n.*N` positions encode a post-stop distance, not a
+        // transcript index — feeding `pos.base` into the in-transcript path
+        // below would normalize against the wrong window. `simple_tx_pos`
+        // already skips these elsewhere; mirror that here. `check_tx_pos_past_end`
+        // also short-circuits them, so this guard catches the remaining
+        // shift-only edits (del/dup/ins).
+        if start_pos.is_downstream() || end_pos.is_downstream() {
+            return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![]));
         }
 
         // Only normalize positive positions (within transcript)

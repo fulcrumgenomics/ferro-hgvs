@@ -481,7 +481,11 @@ fn normalize_canonicalizes_conversion_to_delins_shape() {
 /// `delins` while the substitution member is unchanged.
 #[test]
 fn allele_compound_with_conversion_canonicalizes_member() {
-    let provider = MockProvider::with_test_data();
+    // Empty provider: the cross-reference deferral path is provider-
+    // independent and must not be gated by the issue #336 PositionPastEnd
+    // bounds check (which would otherwise fire on `c.123_456` against
+    // the cds_end=60 NM_000088.3 entry in `with_test_data()`).
+    let provider = MockProvider::new();
     let normalizer = Normalizer::new(provider);
 
     let input = "NM_000088.3:c.[123_456conNM_000089.1:c.789_1011;500A>G]";
@@ -545,7 +549,11 @@ fn empty_source_after_con_is_rejected() {
 /// the source accession so callers can route follow-up resolution.
 #[test]
 fn cross_reference_canonicalization_preserves_source_payload() {
-    let provider = MockProvider::with_test_data();
+    // Empty provider: the cross-reference deferral path is provider-
+    // independent and must not be gated by the issue #336 PositionPastEnd
+    // bounds check (which would otherwise fire on `c.123_456` against
+    // the cds_end=60 NM_000088.3 entry in `with_test_data()`).
+    let provider = MockProvider::new();
     let normalizer = Normalizer::new(provider);
 
     let cases = [
