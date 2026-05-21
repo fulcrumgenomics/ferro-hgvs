@@ -89,3 +89,28 @@ fn protein_delins_collapses_to_substitution_when_residual_is_single() {
          collapse to sub p.Leu7Val; got {out:?}",
     );
 }
+
+/// Affix-trim leaving a zero-width del + non-empty ins must route the
+/// residual through the existing `try_protein_ins_to_dup`. Construct
+/// on the `LELE` motif: `p.Leu7_Glu8delinsLeuGluLeuGlu` (ref `LE`,
+/// trim leading `LeuGlu`) leaves an ins of `LeuGlu` between p.8 and
+/// p.9. The upstream window ref[7..8] = `LE` matches → dup over
+/// p.7..p.8. Then 3'-shift through the LELE motif lands at
+/// `p.Leu9_Glu10dup`.
+#[test]
+fn protein_delins_routes_residual_ins_to_dup() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.Leu7_Glu8delinsLeuGluLeuGlu")
+        .expect("parse p.Leu7_Glu8delinsLeuGluLeuGlu");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Leu7_Glu8delinsLeuGluLeuGlu");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.Leu9_Glu10dup"),
+        "delins whose residual is a tandem ins must canonicalize to \
+         dup at the 3'-shifted anchor; got {out:?}",
+    );
+}
