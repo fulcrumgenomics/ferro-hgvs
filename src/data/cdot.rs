@@ -1467,9 +1467,9 @@ impl CdotMapper {
             .collect()
     }
 
-    /// Genomic extent `(min_exon_start, max_exon_end)` of a transcript, taken
-    /// from a cached side-table that's built lazily on first call alongside
-    /// the contig stab-query index.
+    /// Genomic extent `(min_exon_start, max_exon_end)` of a transcript on
+    /// the mapper's primary build, taken from a cached side-table that's
+    /// built lazily on first call alongside the contig stab-query index.
     ///
     /// Used by `VariantProjector::project_single_inner` instead of folding
     /// `tx.exons.iter().map(|e| e[0]).min()/max()` per call — the inputs are
@@ -1480,6 +1480,32 @@ impl CdotMapper {
             .transcript_genome_spans
             .get_or_init(|| self.build_transcript_genome_spans());
         spans.get(transcript_id).copied()
+    }
+
+    /// Build-aware variant of [`transcript_genome_span`]: when `build`
+    /// matches the primary build the cached side-table is used; otherwise
+    /// the span is computed on demand from the alt-build view returned by
+    /// [`get_transcript_on_build`]. Returns `None` if cdot has no
+    /// alignment for the requested build (or the alignment has no exons).
+    ///
+    /// The alt-build branch folds the exon table on every call rather
+    /// than caching like the primary side-table. This is an acceptable
+    /// trade-off until profiling shows otherwise; for callers that
+    /// routinely project alt-build inputs against a multi-build cdot it
+    /// becomes a per-call O(exons) cost worth caching parallel to
+    /// [`Self::transcript_genome_spans`].
+    pub fn transcript_genome_span_on_build(
+        &self,
+        transcript_id: &str,
+        build: &str,
+    ) -> Option<(u64, u64)> {
+        if build == self.primary_build {
+            return self.transcript_genome_span(transcript_id);
+        }
+        let tx = self.get_transcript_on_build(transcript_id, build)?;
+        let min = tx.exons.iter().map(|e| e[0]).min()?;
+        let max = tx.exons.iter().map(|e| e[1]).max()?;
+        Some((min, max))
     }
 
     /// Build the per-transcript span side-table. Same single-pass shape as

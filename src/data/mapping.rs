@@ -54,7 +54,8 @@ impl CoordinateMapper {
         &self.cdot
     }
 
-    /// Convert a CDS position to a genomic position.
+    /// Convert a CDS position to a genomic position using the cdot mapper's
+    /// primary build.
     ///
     /// # Arguments
     ///
@@ -69,10 +70,32 @@ impl CoordinateMapper {
         transcript_id: &str,
         cds_pos: &CdsPos,
     ) -> Result<MappingResult<GenomePos>, FerroError> {
-        let tx = self.cdot.get_transcript(transcript_id).ok_or_else(|| {
-            FerroError::ReferenceNotFound {
-                id: transcript_id.to_string(),
-            }
+        self.cds_to_genome_on_build(transcript_id, cds_pos, None)
+    }
+
+    /// Build-aware [`cds_to_genome`](Self::cds_to_genome): when `build` is
+    /// `Some`, the transcript is resolved via
+    /// [`CdotMapper::get_transcript_on_build`] so a multi-build cdot load
+    /// returns the alignment for the requested build (rather than silently
+    /// using the primary build's view). Used by the projector to honor an
+    /// input variant's NG/NC parent (issue #389).
+    ///
+    /// When `build` is `None`, this is equivalent to
+    /// [`cds_to_genome`](Self::cds_to_genome) — exposed so call sites that
+    /// computed an `Option<&str>` build hint once can pass it through
+    /// without branching on `None`.
+    pub fn cds_to_genome_on_build(
+        &self,
+        transcript_id: &str,
+        cds_pos: &CdsPos,
+        build: Option<&str>,
+    ) -> Result<MappingResult<GenomePos>, FerroError> {
+        let tx = match build {
+            Some(b) => self.cdot.get_transcript_on_build(transcript_id, b),
+            None => self.cdot.get_transcript(transcript_id),
+        }
+        .ok_or_else(|| FerroError::ReferenceNotFound {
+            id: transcript_id.to_string(),
         })?;
 
         let (genome_pos, info) = self.cds_pos_to_genome_pos(tx, cds_pos, transcript_id)?;
@@ -135,7 +158,8 @@ impl CoordinateMapper {
         })
     }
 
-    /// Convert a genomic position to a CDS position.
+    /// Convert a genomic position to a CDS position using the cdot mapper's
+    /// primary build.
     ///
     /// # Arguments
     ///
@@ -150,10 +174,31 @@ impl CoordinateMapper {
         transcript_id: &str,
         genome_pos: &GenomePos,
     ) -> Result<MappingResult<CdsPos>, FerroError> {
-        let tx = self.cdot.get_transcript(transcript_id).ok_or_else(|| {
-            FerroError::ReferenceNotFound {
-                id: transcript_id.to_string(),
-            }
+        self.genome_to_cds_on_build(transcript_id, genome_pos, None)
+    }
+
+    /// Build-aware [`genome_to_cds`](Self::genome_to_cds): when `build` is
+    /// `Some`, the transcript is resolved via
+    /// [`CdotMapper::get_transcript_on_build`] so a multi-build cdot load
+    /// returns the alignment for the requested build. Used by the
+    /// projector to honor a g. input's chromosome version (issue #389).
+    ///
+    /// When `build` is `None`, this is equivalent to
+    /// [`genome_to_cds`](Self::genome_to_cds) — exposed so call sites that
+    /// computed an `Option<&str>` build hint once can pass it through
+    /// without branching on `None`.
+    pub fn genome_to_cds_on_build(
+        &self,
+        transcript_id: &str,
+        genome_pos: &GenomePos,
+        build: Option<&str>,
+    ) -> Result<MappingResult<CdsPos>, FerroError> {
+        let tx = match build {
+            Some(b) => self.cdot.get_transcript_on_build(transcript_id, b),
+            None => self.cdot.get_transcript(transcript_id),
+        }
+        .ok_or_else(|| FerroError::ReferenceNotFound {
+            id: transcript_id.to_string(),
         })?;
 
         let (cds_pos, info) = self.genome_pos_to_cds_pos(tx, genome_pos, transcript_id)?;

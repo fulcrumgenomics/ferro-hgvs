@@ -124,6 +124,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .map(|gc| gc.to_string())
     }
 
+    /// Infer the genome build to consult cdot under for `variant`.
+    ///
+    /// Examines the variant's own accession first: a g. variant on
+    /// `NC_*.10` carries GRCh37, on `NC_*.11` carries GRCh38, and an
+    /// assembly-style `GRCh37(chr1):g.…` carries GRCh37 directly. If the
+    /// variant has no inherent build (e.g. a c. variant on a bare NM)
+    /// but does have a `genomic_context` (NG/NC parent), the parent is
+    /// consulted. Anything else returns `None` so the caller falls back
+    /// to the build-agnostic primary-cdot path (issue #389).
+    fn build_hint_for_variant(variant: &HgvsVariant) -> Option<&'static str> {
+        use crate::liftover::aliases::infer_genome_build_from_accession;
+        let acc = variant.accession()?;
+        if let Some(b) = infer_genome_build_from_accession(acc) {
+            return Some(b);
+        }
+        if let Some(parent) = acc.genomic_context.as_deref() {
+            return infer_genome_build_from_accession(parent);
+        }
+        None
+    }
+
     fn cached_get_transcript_for_variant(
         &self,
         variant: &HgvsVariant,
@@ -447,15 +468,22 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    store used by the g. → c./n. path).  Working directly off cdot
         //    keeps us symmetric with `project_single_inner` and avoids a
         //    second `provider.get_transcript` load whose exon entries may
-        //    lack genomic coordinates.
+        //    lack genomic coordinates. When the NG/NC parent's version
+        //    disambiguates a genome build (NC_*.10 → GRCh37, NC_*.11 →
+        //    GRCh38) we ask cdot for that build's view so multi-build cdot
+        //    loads project against the correct alignment (issue #389).
         let transcript_id = accession.transcript_accession();
+        let build_hint = crate::liftover::aliases::infer_genome_build_from_accession(&parent);
         let cdot_mapper = self.projector.mapper();
-        let cdot_tx = cdot_mapper
-            .cdot()
-            .get_transcript(&transcript_id)
-            .ok_or_else(|| FerroError::ReferenceNotFound {
-                id: transcript_id.to_string(),
-            })?;
+        let cdot_tx = match build_hint {
+            Some(b) => cdot_mapper
+                .cdot()
+                .get_transcript_on_build(&transcript_id, b),
+            None => cdot_mapper.cdot().get_transcript(&transcript_id),
+        }
+        .ok_or_else(|| FerroError::ReferenceNotFound {
+            id: transcript_id.to_string(),
+        })?;
         let strand = cdot_tx.strand;
         if strand == RefStrand::Unknown {
             return Err(FerroError::UnsupportedProjection {
@@ -474,7 +502,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let is_coding = cdot_tx.cds_start.is_some() && cdot_tx.cds_end.is_some();
         let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
             if is_coding {
-                let result = cdot_mapper.cds_to_genome(&transcript_id, &p)?;
+                let result = cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint)?;
                 Ok(result.variant.base)
             } else {
                 if p.offset.is_some() {
@@ -625,16 +653,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // branch must behave the same to avoid silently returning bogus
         // projections for typo'd or missing accessions.
         if allele.variants.is_empty() {
-            let gene_symbol = self
-                .projector
-                .mapper()
-                .cdot()
-                .get_transcript(transcript_id)
-                .ok_or_else(|| FerroError::ReferenceNotFound {
-                    id: transcript_id.to_string(),
-                })?
-                .gene_name
-                .clone();
+            // Honor the input's parent NG/NC (or assembly tag) when
+            // resolving the gene_name from cdot, so an NG/NC-parented
+            // allele on a multi-build cdot picks the correct build's
+            // transcript record (issue #389).
+            let build_hint = Self::build_hint_for_variant(original);
+            let gene_symbol = match build_hint {
+                Some(b) => self
+                    .projector
+                    .mapper()
+                    .cdot()
+                    .get_transcript_on_build(transcript_id, b),
+                None => self.projector.mapper().cdot().get_transcript(transcript_id),
+            }
+            .ok_or_else(|| FerroError::ReferenceNotFound {
+                id: transcript_id.to_string(),
+            })?
+            .gene_name
+            .clone();
             return Ok(VariantProjection {
                 genomic: original.clone(),
                 coding: None,
@@ -795,15 +831,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 reason: "g. variant has no concrete edit".to_string(),
             })?;
 
-        // Look up the transcript in the cdot mapper.
-        let cdot_tx = self
-            .projector
-            .mapper()
-            .cdot()
-            .get_transcript(transcript_id)
-            .ok_or_else(|| FerroError::ReferenceNotFound {
-                id: transcript_id.to_string(),
-            })?;
+        // Look up the transcript in the cdot mapper. When the projected
+        // g. accession is NC_*, infer the genome build from its version
+        // (NC_*.10 → GRCh37, NC_*.11 → GRCh38, etc.) so multi-build cdot
+        // loads return the alignment matching the input chromosome rather
+        // than silently using the primary build's view (issue #389).
+        let build_hint =
+            crate::liftover::aliases::infer_genome_build_from_accession(&genome_variant.accession);
+        let cdot_tx = match build_hint {
+            Some(b) => self
+                .projector
+                .mapper()
+                .cdot()
+                .get_transcript_on_build(transcript_id, b),
+            None => self.projector.mapper().cdot().get_transcript(transcript_id),
+        }
+        .ok_or_else(|| FerroError::ReferenceNotFound {
+            id: transcript_id.to_string(),
+        })?;
         let strand = cdot_tx.strand;
         let gene_symbol = cdot_tx.gene_name.clone();
         let cdot_protein = cdot_tx.protein.clone();
@@ -833,15 +878,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Genomic extent of the transcript — used to short-circuit the
         // genome-to-CDS mapping when the variant is outside the transcript's
-        // span. `transcript_genome_span` consults a cached side-table on the
-        // CdotMapper (built once); before c14 this re-folded `cdot_tx.exons`
-        // (min/max) on every call.
-        let (tx_genome_start, tx_genome_end) = mapper
-            .cdot()
-            .transcript_genome_span(transcript_id)
-            .ok_or_else(|| FerroError::ReferenceNotFound {
-                id: transcript_id.to_string(),
-            })?;
+        // span. The cached primary-build side-table is consulted via
+        // `transcript_genome_span_on_build`; for alt builds the span is
+        // computed on demand against the alt-build exon table (#389).
+        let (tx_genome_start, tx_genome_end) = match build_hint {
+            Some(b) => mapper
+                .cdot()
+                .transcript_genome_span_on_build(transcript_id, b),
+            None => mapper.cdot().transcript_genome_span(transcript_id),
+        }
+        .ok_or_else(|| FerroError::ReferenceNotFound {
+            id: transcript_id.to_string(),
+        })?;
 
         // Helper: map one GenomePos → CdsPos, converting out-of-range errors.
         // `normalized.to_string()` is only consumed by the error message and
@@ -855,7 +903,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     transcript_id: transcript_id.to_string(),
                 });
             }
-            match mapper.genome_to_cds(transcript_id, gp) {
+            match mapper.genome_to_cds_on_build(transcript_id, gp, build_hint) {
                 Ok(res) => Ok((res.variant, res.info)),
                 Err(FerroError::InvalidCoordinates { .. })
                 | Err(FerroError::ConversionError { .. }) => {
@@ -2585,6 +2633,312 @@ mod tests {
                 }
                 other => panic!("expected UnsupportedProjection, got: {:?}", other),
             }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-build cdot build-hint propagation (closes #389 item 2)
+    //
+    // Both `project_to_genomic` (c./n./r. → g.) and `project_single_inner`
+    // (g. → c./n./r.) MUST consult the genome build implied by the
+    // input's NG/NC parent (resp. the g. variant's NC_* accession) when
+    // looking up the transcript and converting coordinates. Pre-#389
+    // those sites used `cdot.get_transcript` / `transcript_genome_span` /
+    // `cds_to_genome` / `genome_to_cds` directly, which always returned
+    // the primary build's view — silently mis-projecting GRCh37 inputs
+    // against a GRCh38-primary cdot (and vice versa).
+    // -------------------------------------------------------------------------
+    mod multi_build_projection_tests {
+        use super::*;
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::{CdsInterval, GenomeInterval};
+        use crate::hgvs::location::{CdsPos, GenomePos};
+        use crate::hgvs::variant::{Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit};
+
+        /// Minimal multi-build cdot fixture: one coding transcript whose
+        /// GRCh37 view sits at genome [10000, 10010) on NC_000001.10 and
+        /// whose GRCh38 view sits at genome [20000, 20010) on
+        /// NC_000001.11. Different genomic coords across builds is what
+        /// lets us tell which view the projector consulted.
+        ///
+        /// `start_codon = 0`, `stop_codon = 10` ⇒ the whole exon is CDS
+        /// (no UTRs), so c.1..c.10 maps to tx_pos 0..9. The fixture is
+        /// coding so `project_single_inner`'s `genome_to_cds_on_build`
+        /// call lands on the CDS branch — non-coding would hit a separate
+        /// "Cannot convert tx position to CDS" error unrelated to #389.
+        fn multi_build_cdot_json() -> &'static str {
+            r#"
+            {
+                "transcripts": {
+                    "NM_MB_TEST.1": {
+                        "gene_name": "MBTEST",
+                        "genome_builds": {
+                            "GRCh37": {
+                                "contig": "NC_000001.10",
+                                "strand": "+",
+                                "exons": [[10000, 10010, 1, 0, 10, "M10"]]
+                            },
+                            "GRCh38": {
+                                "contig": "NC_000001.11",
+                                "strand": "+",
+                                "exons": [[20000, 20010, 1, 0, 10, "M10"]]
+                            }
+                        },
+                        "start_codon": 0,
+                        "stop_codon": 10
+                    }
+                }
+            }
+            "#
+        }
+
+        /// Build a `VariantProjector` whose cdot mapper has the two-build
+        /// fixture above. `primary` selects which build the primary
+        /// transcripts table is populated from (the other build lives in
+        /// `alt_build_transcripts`). The `MockProvider` carries
+        /// NM_MB_TEST.1 so that downstream protein prediction inside
+        /// `project_single_inner` can fetch the transcript without
+        /// hitting `ReferenceNotFound`.
+        fn make_multi_build_projector(primary: &str) -> VariantProjector<MockProvider> {
+            use crate::reference::transcript::{
+                Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
+                Transcript as RefTranscript,
+            };
+            use std::sync::OnceLock;
+
+            let cdot =
+                CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), primary)
+                    .expect("multi-build cdot JSON should parse");
+            let projector = Projector::new(cdot);
+            let mut provider = MockProvider::new();
+            provider.add_transcript(RefTranscript {
+                id: "NM_MB_TEST.1".to_string(),
+                gene_symbol: Some("MBTEST".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAATC".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(10),
+                exons: vec![Exon::new(1, 1, 10)],
+                chromosome: Some("NC_000001.11".to_string()),
+                genomic_start: Some(20000),
+                genomic_end: Some(20009),
+                genome_build: RefGenomeBuild::GRCh38,
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+            VariantProjector::new(projector, provider)
+        }
+
+        fn nc_chr1(version: u32) -> Accession {
+            Accession::new("NC", "000001", Some(version))
+        }
+
+        fn ng_parent(num: &str, version: u32) -> Accession {
+            Accession::new("NG", num, Some(version))
+        }
+
+        /// Smoke test the JSON parses into a usable multi-build mapper —
+        /// keeps the later test failures readable if the JSON ever drifts.
+        #[test]
+        fn fixture_loads_both_builds() {
+            let cdot =
+                CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh38")
+                    .expect("multi-build JSON must parse");
+            assert_eq!(cdot.primary_build(), "GRCh38");
+            assert_eq!(cdot.transcript_count(), 1);
+            let tx38 = cdot
+                .get_transcript_on_build("NM_MB_TEST.1", "GRCh38")
+                .expect("GRCh38 view must be populated in primary transcripts");
+            assert_eq!(tx38.contig, "NC_000001.11");
+            assert_eq!(tx38.exons, vec![[20000, 20010, 0, 10]]);
+            assert_eq!(tx38.cds_start, Some(0));
+            assert_eq!(tx38.cds_end, Some(10));
+            let tx37 = cdot
+                .get_transcript_on_build("NM_MB_TEST.1", "GRCh37")
+                .expect("GRCh37 view must be populated in alt_build_transcripts");
+            assert_eq!(tx37.contig, "NC_000001.10");
+            assert_eq!(tx37.exons, vec![[10000, 10010, 0, 10]]);
+        }
+
+        /// c.5A>T against NC_000001.10(NM_MB_TEST.1) → expect GRCh37
+        /// coordinates (g.10004; cdot's internal exon[0] is HGVS-numeric,
+        /// so c.1 sits at g.10000 and c.5 at g.10004). Pre-fix, this
+        /// would have used the primary (GRCh38) view and produced
+        /// ~g.20004, despite the parent's GRCh37 version.
+        #[test]
+        fn project_to_genomic_uses_grch37_view_for_nc_v10_parent() {
+            let vp = make_multi_build_projector("GRCh38");
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MB_TEST.1").with_genomic_context(nc_chr1(10)),
+                gene_symbol: Some("MBTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("GRCh37 parent should project against GRCh37 exon table");
+            match out {
+                HgvsVariant::Genome(g) => {
+                    let s = g.to_string();
+                    assert!(
+                        s.contains(":g.10004A>T"),
+                        "expected GRCh37 coord g.10004A>T, got: {}",
+                        s
+                    );
+                }
+                other => panic!("expected Genome, got: {:?}", other),
+            }
+        }
+
+        /// c.5A>T against NC_000001.11(NM_MB_TEST.1) → expect GRCh38
+        /// coordinates (g.20004). Sibling to the GRCh37 case; together
+        /// they prove the parent's build version is what drives the
+        /// cdot view selection.
+        #[test]
+        fn project_to_genomic_uses_grch38_view_for_nc_v11_parent() {
+            let vp = make_multi_build_projector("GRCh38");
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MB_TEST.1").with_genomic_context(nc_chr1(11)),
+                gene_symbol: Some("MBTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("GRCh38 parent should project against GRCh38 exon table");
+            match out {
+                HgvsVariant::Genome(g) => {
+                    let s = g.to_string();
+                    assert!(
+                        s.contains(":g.20004A>T"),
+                        "expected GRCh38 coord g.20004A>T, got: {}",
+                        s
+                    );
+                }
+                other => panic!("expected Genome, got: {:?}", other),
+            }
+        }
+
+        /// g. → c.: NC_000001.10:g.10004A>T projected onto NM_MB_TEST.1
+        /// → expect c.5A>T. Pre-fix, `project_single_inner` used the
+        /// primary (GRCh38) `transcript_genome_span` of [20000, 20010),
+        /// so position 10004 fell outside and the call returned
+        /// `TranscriptNotOverlapping`. Post-fix the GRCh37 span
+        /// [10000, 10010) is consulted and the projection succeeds.
+        #[test]
+        fn project_normalized_uses_grch37_view_for_nc_v10_input() {
+            let vp = make_multi_build_projector("GRCh38");
+            let g = GenomeVariant {
+                accession: nc_chr1(10),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(10004)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let projection = vp
+                .project_normalized(&HgvsVariant::Genome(g), "NM_MB_TEST.1")
+                .expect("GRCh37 g. input must project via the alt-build cdot view");
+            let coding = projection
+                .coding
+                .as_ref()
+                .expect("coding (c.) form of the projection must be present");
+            let s = coding.to_string();
+            assert!(
+                s.contains(":c.5A>T"),
+                "expected c.5A>T for NC_000001.10 g. input, got: {}",
+                s
+            );
+        }
+
+        /// NG_* parents are build-agnostic per the HGVS spec — the
+        /// projector falls back to the primary cdot view rather than
+        /// forcing an alt-build lookup. With primary=GRCh38 the c.5
+        /// position must therefore come back at the GRCh38 exon's
+        /// position (g.20004) regardless of any GRCh37 alt-build data.
+        #[test]
+        fn project_to_genomic_with_ng_parent_uses_primary_build() {
+            let vp = make_multi_build_projector("GRCh38");
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MB_TEST.1")
+                    .with_genomic_context(ng_parent("MBTEST", 1)),
+                gene_symbol: Some("MBTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("NG-parented variant should project via the primary cdot view");
+            match out {
+                HgvsVariant::Genome(g) => {
+                    let s = g.to_string();
+                    assert!(
+                        s.starts_with("NG_MBTEST.1"),
+                        "expected output to inherit NG_ parent accession, got: {}",
+                        s
+                    );
+                    assert!(
+                        s.contains(":g.20004A>T"),
+                        "NG (build-agnostic) parent must use primary (GRCh38) coords, got: {}",
+                        s
+                    );
+                }
+                other => panic!("expected Genome, got: {:?}", other),
+            }
+        }
+
+        /// Same as above but for NC_000001.11 (GRCh38, the primary build).
+        /// Confirms the primary-build path still works alongside the new
+        /// alt-build dispatch.
+        #[test]
+        fn project_normalized_uses_grch38_view_for_nc_v11_input() {
+            let vp = make_multi_build_projector("GRCh38");
+            let g = GenomeVariant {
+                accession: nc_chr1(11),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(20004)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let projection = vp
+                .project_normalized(&HgvsVariant::Genome(g), "NM_MB_TEST.1")
+                .expect("GRCh38 g. input must project via the primary cdot view");
+            let coding = projection
+                .coding
+                .as_ref()
+                .expect("coding (c.) form of the projection must be present");
+            let s = coding.to_string();
+            assert!(
+                s.contains(":c.5A>T"),
+                "expected c.5A>T for NC_000001.11 g. input, got: {}",
+                s
+            );
         }
     }
 

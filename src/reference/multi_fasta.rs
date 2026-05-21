@@ -996,35 +996,14 @@ impl MultiFastaProvider {
         }
     }
 
-    /// Infer the genome build for an `NC_*` parent accession by checking
-    /// `ContigAliases::default_human()` for membership under each build.
-    /// Returns `None` for `NG_*` parents (build-agnostic) and for any NC
-    /// accession not in the human alias table.
+    /// Infer the genome build for an `NC_*` parent accession.
+    ///
+    /// Thin wrapper around the shared
+    /// [`crate::liftover::aliases::infer_genome_build_from_accession`] —
+    /// kept on the impl so existing call sites and tests stay terse;
+    /// see the free function for the canonical contract.
     fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
-        use crate::liftover::aliases::ContigAliases;
-        use crate::reference::transcript::GenomeBuild;
-        // Only `NC_*` carries a build-distinguishing version; `NG_*` is
-        // build-agnostic, return None so the caller probes multiple builds.
-        if &*parent.prefix != "NC" {
-            return None;
-        }
-        let aliases = ContigAliases::default_human();
-        // `Accession::full()` re-renders `NC_000017.11` etc. and avoids a
-        // separate format!() here.
-        let parent_str = parent.full();
-        if aliases
-            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh38)
-            .is_some()
-        {
-            return Some("GRCh38");
-        }
-        if aliases
-            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh37)
-            .is_some()
-        {
-            return Some("GRCh37");
-        }
-        None
+        crate::liftover::aliases::infer_genome_build_from_accession(parent)
     }
 }
 

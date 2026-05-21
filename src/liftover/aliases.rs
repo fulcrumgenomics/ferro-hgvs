@@ -97,12 +97,17 @@ impl ContigAliases {
             .refseq_to_ensembl
             .insert("NC_000024.10".to_string(), "Y".to_string());
 
-        // Mitochondrial
+        // Mitochondrial — NC_012920.1 is the canonical rCRS accession on
+        // both GRCh37 and GRCh38 (mtDNA was not re-assembled between
+        // builds), so register a self-alias under each build. Without
+        // the GRCh38 self-alias `infer_genome_build_from_accession` would
+        // misclassify NC_012920.1 inputs as GRCh37-only.
         aliases.add_alias("chrM", GenomeBuild::GRCh37, "NC_012920.1");
         aliases.add_alias("MT", GenomeBuild::GRCh37, "NC_012920.1");
         aliases.add_alias("NC_012920.1", GenomeBuild::GRCh37, "NC_012920.1");
         aliases.add_alias("chrM", GenomeBuild::GRCh38, "NC_012920.1");
         aliases.add_alias("MT", GenomeBuild::GRCh38, "NC_012920.1");
+        aliases.add_alias("NC_012920.1", GenomeBuild::GRCh38, "NC_012920.1");
         aliases
             .refseq_to_ucsc
             .insert("NC_012920.1".to_string(), "chrM".to_string());
@@ -212,6 +217,65 @@ impl ContigAliases {
             .map(|s| s.to_string())
             .unwrap_or_else(|| name.to_string())
     }
+}
+
+/// Lazily-constructed singleton of [`ContigAliases::default_human`] so
+/// repeated build inference (per projection) does not rebuild the
+/// ~150-entry alias table every call.
+fn default_human_aliases() -> &'static ContigAliases {
+    use std::sync::OnceLock;
+    static ALIASES: OnceLock<ContigAliases> = OnceLock::new();
+    ALIASES.get_or_init(ContigAliases::default_human)
+}
+
+/// Infer the canonical genome build name for a chromosome accession.
+///
+/// Sources of build information consulted, in order:
+///   1. `accession.assembly` — assembly-style references like
+///      `GRCh37(chr1):g.…` carry the build verbatim.
+///   2. `NC_*` accessions are looked up in [`ContigAliases::default_human`].
+///      `NC_*` carries a build-distinguishing version (e.g.
+///      `NC_000017.10` is GRCh37 chr17, `NC_000017.11` is GRCh38). NC
+///      accessions present under both builds (e.g. mtDNA `NC_012920.1`)
+///      resolve to GRCh38, our default-when-ambiguous.
+///   3. Everything else (`NG_*`, `LRG_*`, `NW_*`, unknown prefixes, NC
+///      accessions outside the human alias table) returns `None` so the
+///      caller falls back to the build-agnostic probe order.
+///
+/// Centralized here so call sites that need to disambiguate cdot lookups
+/// against multi-build data (e.g. `MultiFastaProvider`, `VariantProjector`)
+/// share one implementation rather than duplicating the GRCh37/GRCh38
+/// inference logic.
+pub fn infer_genome_build_from_accession(
+    accession: &crate::hgvs::variant::Accession,
+) -> Option<&'static str> {
+    // Assembly-style references (`GRCh37(chr1)`, `GRCh38(chrX)`) carry the
+    // build name explicitly; honor it before the prefix check.
+    if let Some(asm) = accession.assembly.as_deref() {
+        match asm {
+            "GRCh37" => return Some("GRCh37"),
+            "GRCh38" => return Some("GRCh38"),
+            _ => {}
+        }
+    }
+    if &*accession.prefix != "NC" {
+        return None;
+    }
+    let aliases = default_human_aliases();
+    let acc_str = accession.full();
+    if aliases
+        .resolve_to_refseq(&acc_str, GenomeBuild::GRCh38)
+        .is_some()
+    {
+        return Some("GRCh38");
+    }
+    if aliases
+        .resolve_to_refseq(&acc_str, GenomeBuild::GRCh37)
+        .is_some()
+    {
+        return Some("GRCh37");
+    }
+    None
 }
 
 #[cfg(test)]
