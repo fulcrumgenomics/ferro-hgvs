@@ -161,3 +161,28 @@ fn protein_predicted_delins_canonicalizes_inside_parens() {
          parens preserved; got {out:?}",
     );
 }
+
+/// Uncertain position endpoints carry semantics that the affix-trim
+/// rewrite would silently drop (e.g. `(Leu7)_Glu8` parenthesizing
+/// only the start would not survive a rewrite to a smaller range).
+/// The helper must reject these and let the input pass through.
+#[test]
+fn protein_delins_with_uncertain_start_passes_through() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.(Leu7)_Glu8delinsLeuGlu")
+        .expect("parse p.(Leu7)_Glu8delinsLeuGlu");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.(Leu7)_Glu8delinsLeuGlu");
+    let out = format!("{}", normalized);
+
+    // The exact Display form may render the partial-uncertainty
+    // differently across parser/Display revisions, but the helper
+    // must not collapse this to a smaller form.
+    assert!(
+        out.contains("delins"),
+        "delins with partial-uncertain endpoint must NOT be \
+         canonicalized; got {out:?}",
+    );
+}
