@@ -13,8 +13,8 @@
       "diverges": 146,
       "false-acceptance": 83,
       "needs-reference": 31,
-      "parse-error": 339,
-      "preserved": 631
+      "parse-error": 338,
+      "preserved": 632
     },
     "by_coordinate_system": {
       "c": 464,
@@ -9747,19 +9747,6 @@
       ]
     },
     {
-      "input": "NC_012920.1:m.16563_13del",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"16563_13del\", code: Verify })",
-      "spec_expected": "NC_012920.1:m.16563_13del",
-      "status": "parse-error",
-      "coordinate_system": "m",
-      "source_kind": "consultation",
-      "source_paths": [
-        "docs/consultation/SVD-WG006.md"
-      ],
-      "working_group": "SVD-WG006",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "m.",
       "input_prefixed": "NC_012920.1:m.",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Eof })",
@@ -9841,6 +9828,18 @@
         "docs/background/numbering.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
+      "input": "NC_012920.1:m.16563_13del",
+      "current": "NC_012920.1:m.16563_13del",
+      "spec_expected": "NC_012920.1:m.16563_13del",
+      "status": "preserved",
+      "coordinate_system": "m",
+      "source_kind": "consultation",
+      "source_paths": [
+        "docs/consultation/SVD-WG006.md"
+      ],
+      "working_group": "SVD-WG006"
     },
     {
       "input": "n.611T=",

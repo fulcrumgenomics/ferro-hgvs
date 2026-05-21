@@ -38,17 +38,18 @@
 //! introduces will need a corresponding extension of the spec-corpus
 //! fixtures — that is also out of scope here.
 //!
-//! ### What ferro does today (May 2026, pre-F1)
+//! ### What ferro does today (May 2026, post-#129 Path 1)
 //!
-//! There is no special handling for circular references anywhere in
-//! the crate:
+//! Partial handling of circular references:
 //!
-//! - `src/hgvs/parser/variant.rs::parse_genome_interval` rejects any
-//!   range whose `start.base > end.base` for non-structural edits — so
-//!   wraparound `del` / `delins` / `sub` ranges fail to parse at all.
-//!   (`ins`, `dup`, `inv`, and complex `delins` are exempt from the
-//!   inverted-range check, but for unrelated reasons. Sections 2, 3, 5
-//!   below pin both halves of the asymmetry.)
+//! - `src/hgvs/parser/variant.rs::parse_genome_interval_for_circular`
+//!   plus the `check_circular_reversed_range` post-parse validator
+//!   accept wraparound `del`, `delins`, and `dup` ranges on `m.`/`o.`
+//!   per SVD-WG006 (and `deletion.md:17`). `ins` and `inv` wraparound
+//!   forms are rejected by `check_circular_reversed_range` — the spec
+//!   is silent on them, and ferro prefers a clear parse error to the
+//!   prior silent-accept with mis-computed indel length. (#129 Path 1;
+//!   see the file-level assertions for each edit kind.)
 //! - `src/normalize/mod.rs::normalize_mt` now mirrors `normalize_genome`
 //!   for non-origin-crossing variants (issue #210): window-based 3'
 //!   shuffle and repeat-notation canonicalization, with
@@ -135,18 +136,18 @@ fn audit_mt_non_wrapping_sub_normalizes_to_self() {
 // circular-aware interval and normalize accordingly.
 // -----------------------------------------------------------------------------
 
-/// `m.16569_1del` is rejected by the parser today (inverted range).
-/// F1 must replace this with a successful parse + circular-aware
-/// normalize result.
+/// `m.16569_1del` is the SVD-WG006 example — spec-authorised wraparound
+/// del. Per HGVS v19.01 + `deletion.md:17`, must parse and round-trip.
+/// (#129 flipped this from the prior parser-rejection assertion.)
 #[test]
-fn audit_mt_wrapping_del_at_origin_currently_rejected() {
+fn audit_mt_wrapping_del_at_origin_parses() {
     let input = "NC_012920.1:m.16569_1del";
-    let result = parse_hgvs(input);
-    assert!(
-        result.is_err(),
-        "PINNED: ferro currently rejects wraparound m. ranges; F1 must change this. \
-         Got Ok({:?}) — update this test as part of the F1 implementation.",
-        result.ok()
+    let variant =
+        parse_hgvs(input).expect("spec-authorised wraparound del must parse (#129, SVD-WG006)");
+    assert_eq!(
+        format!("{}", variant),
+        input,
+        "wraparound del must round-trip 3'→5' on m.",
     );
 }
 
@@ -159,17 +160,14 @@ fn audit_mt_wrapping_del_at_origin_currently_rejected() {
 // general N-nt wraparound case.
 // -----------------------------------------------------------------------------
 
-/// Longer wraparound deletion is also rejected by the parser today.
+/// Longer wraparound deletion also parses per the same SVD-WG006
+/// exception. (#129 flipped this from the prior rejection assertion.)
 #[test]
-fn audit_mt_wrapping_del_longer_currently_rejected() {
+fn audit_mt_wrapping_del_longer_parses() {
     let input = "NC_012920.1:m.16569_5del";
-    let result = parse_hgvs(input);
-    assert!(
-        result.is_err(),
-        "PINNED: wraparound m. deletion across origin is rejected today. \
-         Got Ok({:?}) — update this test as part of the F1 implementation.",
-        result.ok()
-    );
+    let variant =
+        parse_hgvs(input).expect("longer wraparound del must parse on m. (#129, SVD-WG006)");
+    assert_eq!(format!("{}", variant), input);
 }
 
 // -----------------------------------------------------------------------------
@@ -238,40 +236,27 @@ fn audit_mt_full_span_dup_normalizes_to_self_today() {
 // accepted without circular-aware normalize support.
 // -----------------------------------------------------------------------------
 
-/// Wrapping `delins` at the origin is rejected today (same parser path
-/// as `del`).
+/// Wrapping `delins` at the origin parses per the same SVD-WG006
+/// exception (delins inherits via del+ins composition). (#129 flipped
+/// this from the prior rejection assertion.)
 #[test]
-fn audit_mt_wrapping_delins_currently_rejected() {
+fn audit_mt_wrapping_delins_parses() {
     let input = "NC_012920.1:m.16569_1delinsT";
-    let result = parse_hgvs(input);
-    assert!(
-        result.is_err(),
-        "PINNED: wraparound m. delins is rejected today on the same \
-         inverted-range check as del. F1 must change this. \
-         Got Ok({:?}).",
-        result.ok()
-    );
+    let variant = parse_hgvs(input).expect("wraparound delins must parse on m. (#129, SVD-WG006)");
+    assert_eq!(format!("{}", variant), input);
 }
 
-/// Wrapping `dup` at the origin **parses** today and (with no provider
-/// data) falls back to minimal-notation cleanup, which preserves the
-/// input verbatim. Pinned to expose the parser asymmetry: wraparound
-/// `del` is rejected, but wraparound `dup` is silently accepted.
+/// Wrapping `dup` at the origin parses per SVD-WG006:23 (explicit
+/// example `J01749.1:o.4344_197dup`) and SVD-WG006:33 ("simplifies
+/// the description of deletions/duplications"). (#129 made this
+/// official-rather-than-silently-accepted; the round-trip and
+/// no-reference-fallback behaviour are unchanged.)
 #[test]
-fn audit_mt_wrapping_dup_silently_accepted_today() {
+fn audit_mt_wrapping_dup_parses() {
     let input = "NC_012920.1:m.16560_5dup";
-    let variant = parse_hgvs(input).unwrap_or_else(|e| {
-        panic!(
-            "PINNED: wraparound m. dup parses today (parser exempts dup from \
-             the inverted-range check). Got Err({e}); update if F1 tightens this."
-        )
-    });
-    assert_eq!(
-        format!("{}", variant),
-        input,
-        "PINNED: wraparound m. dup round-trips verbatim today. F1 must \
-         define a circular-aware canonical form."
-    );
+    let variant =
+        parse_hgvs(input).expect("spec-authorised wraparound dup must parse (#129, SVD-WG006)");
+    assert_eq!(format!("{}", variant), input);
     let normalizer = Normalizer::new(MockProvider::new());
     let normalized = normalizer
         .normalize(&variant)
@@ -280,35 +265,37 @@ fn audit_mt_wrapping_dup_silently_accepted_today() {
         format!("{}", normalized),
         input,
         "PINNED: with no provider data, wraparound dup falls back to \
-         minimal-notation cleanup and is preserved unchanged. F1 must \
-         define a circular-aware canonical form."
+         minimal-notation cleanup and is preserved unchanged. \
+         Wraparound 3'-shift is still a no-op (matches mutalyzer + \
+         biocommons + strict spec reading).",
     );
 }
 
-/// Wrapping `inv` at the origin parses today (same parser exemption).
+/// Wrapping `inv` is rejected per #129 (spec-silent on inv wraparound;
+/// SVD-WG006 names only del/dup in its rationale and examples).
+/// Was previously silently accepted with mis-computed length.
 #[test]
-fn audit_mt_wrapping_inv_silently_accepted_today() {
+fn audit_mt_wrapping_inv_rejected() {
     let input = "NC_012920.1:m.16500_500inv";
-    let variant = parse_hgvs(input).unwrap_or_else(|e| {
-        panic!(
-            "PINNED: wraparound m. inv parses today (parser exempts inv from \
-             the inverted-range check). Got Err({e})."
-        )
-    });
-    assert_eq!(format!("{}", variant), input);
+    let result = parse_hgvs(input);
+    assert!(
+        result.is_err(),
+        "wraparound inv has no spec exception (SVD-WG006 names only \
+         del/dup); must be rejected. Got {result:?}",
+    );
 }
 
-/// Wrapping `ins` at the origin parses today (same parser exemption).
+/// Wrapping `ins` is rejected per #129 (spec-silent on ins
+/// wraparound). Was previously silently accepted.
 #[test]
-fn audit_mt_wrapping_ins_silently_accepted_today() {
+fn audit_mt_wrapping_ins_rejected() {
     let input = "NC_012920.1:m.16569_1insT";
-    let variant = parse_hgvs(input).unwrap_or_else(|e| {
-        panic!(
-            "PINNED: wraparound m. ins parses today (parser exempts ins from \
-             the inverted-range check). Got Err({e})."
-        )
-    });
-    assert_eq!(format!("{}", variant), input);
+    let result = parse_hgvs(input);
+    assert!(
+        result.is_err(),
+        "wraparound ins has no spec exception (SVD-WG006 names only \
+         del/dup); must be rejected. Got {result:?}",
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -325,24 +312,66 @@ fn audit_mt_wrapping_ins_silently_accepted_today() {
 
 /// `get_indel_length` on a wrapping m. dup returns a value that is
 /// **wrong** under circular semantics (today: a large negative number,
-/// because compute_span = end - start + 1 with end < start). Pin the
-/// exact value so F1 surfaces.
+/// because compute_span = end - start + 1 with end < start). #129
+/// accepts the parse but does NOT yet wire contig-length math, so the
+/// indel-length miscompute is still pinned as a known follow-up. Pin
+/// the exact value so a future contig-length-aware fix surfaces.
 #[test]
-fn audit_mt_wrapping_dup_indel_length_silent_miscompute_today() {
+fn audit_mt_wrapping_dup_indel_length_still_miscomputes_today() {
     let input = "NC_012920.1:m.16560_5dup";
-    let variant = parse_hgvs(input).expect("parse should succeed (Scenario 5)");
+    let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
     let observed = get_indel_length(&variant);
     // Today: end (5) - start (16560) + 1 = -16554; sign flipped by the
     // Duplication branch is not applied — that branch returns
     // `Some(compute_span(variant)?)` directly, so we get -16554.
     // The right answer for a wraparound dup of length (16569 - 16560 +
-    // 1) + 5 = 15 is +15. We are nowhere near that.
+    // 1) + 5 = 15 is +15. Tracked as a follow-up to #129; needs
+    // contig-length plumbing.
     assert_eq!(
         observed,
         Some(-16554),
-        "PINNED: `compute_span` lacks an `Mt` guard, so a wraparound m. \
-         dup yields a silently-wrong indel length. F1 must extend the \
-         guard or compute the real circular span using contig length."
+        "PINNED: `compute_span` lacks circular-aware math, so a wraparound \
+         m. dup yields a silently-wrong indel length. Follow-up to #129 \
+         must compute the real circular span using contig length."
+    );
+}
+
+/// Wraparound `del` newly parses post-#129 and hits the same
+/// `compute_span` miscompute as `dup`. Pin the value so the
+/// contig-length-aware fix surfaces this case too.
+#[test]
+fn audit_mt_wrapping_del_indel_length_still_miscomputes_today() {
+    let input = "NC_012920.1:m.16569_1del";
+    let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
+    let observed = get_indel_length(&variant);
+    // Today: ref-span = end (1) - start (16569) + 1 = -16567; the
+    // del branch reports the magnitude of the deleted region, so the
+    // observed value is 16567 (the wrong way to compute span on a
+    // circle). Spec-correct answer is 2 (positions 16569 and 1).
+    assert_eq!(
+        observed,
+        Some(16567),
+        "PINNED: wraparound m. del shares the dup miscompute; follow-up \
+         to #129 must teach compute_span the contig-length-aware math."
+    );
+}
+
+/// Wraparound `delins` shares the same miscompute. Pin alongside del/dup.
+#[test]
+fn audit_mt_wrapping_delins_indel_length_still_miscomputes_today() {
+    let input = "NC_012920.1:m.16569_1delinsT";
+    let variant = parse_hgvs(input).expect("parse should succeed per #129 / SVD-WG006");
+    let observed = get_indel_length(&variant);
+    // Today: ref-span = -16567 with the delins branch adjusting by the
+    // inserted-length offset, yielding 16568 (= 16567 + 1, both signs
+    // unfortunate). Spec-correct answer for delinsT (replacing the
+    // 2-nt wraparound window with 1 nt) is -1; pinned exact so a
+    // future contig-length-aware fix surfaces this case too.
+    assert_eq!(
+        observed,
+        Some(16568),
+        "PINNED: wraparound m. delins miscomputes; follow-up to #129 \
+         must teach compute_span contig-length-aware math.",
     );
 }
 

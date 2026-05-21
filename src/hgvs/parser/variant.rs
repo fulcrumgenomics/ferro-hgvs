@@ -235,6 +235,34 @@ fn starts_with_special_pos(bytes: &[u8]) -> bool {
 /// Optimized: fast path for simple positions and ranges (starting with digit)
 #[inline]
 fn parse_genome_interval(input: &str) -> IResult<&str, GenomeInterval> {
+    parse_genome_interval_inner(input, false)
+}
+
+/// Parse a genomic-axis interval, optionally relaxing the inverted-range
+/// check for circular references (`m.`/`o.`).
+///
+/// HGVS spec authorises reversed `<high>_<low>` ranges on `o.`/`m.`
+/// references for **deletions** (`deletion.md:17`) and **duplications**
+/// (`docs/consultation/SVD-WG006.md` line 15 + line 23 example
+/// `J01749.1:o.4344_197dup`, line 33 names "deletions/duplications" as
+/// the spec-authorised scope). `delins` inherits the exception via the
+/// `del + ins` composition. `ins` and `inv` are spec-silent — the
+/// general "5'→3'" rule applies. `check_circular_reversed_range`,
+/// called post-parse by `parse_mt_variant` / `parse_circular_variant`
+/// (and the bracket / unknown-phase / inherited-accession helpers),
+/// enforces the edit-kind authorisation so the rejection has access to
+/// the parsed edit kind.
+///
+/// When `circular = true` the parse-level inverted-range check is
+/// removed for the simple-range fast path; post-parse validation in the
+/// caller catches the spec-unauthorised edit kinds. The complex
+/// uncertain-range paths still reject reversed bounds since the spec
+/// exception only applies to plain `<high>_<low>` reversed forms.
+fn parse_genome_interval_for_circular(input: &str) -> IResult<&str, GenomeInterval> {
+    parse_genome_interval_inner(input, true)
+}
+
+fn parse_genome_interval_inner(input: &str, circular: bool) -> IResult<&str, GenomeInterval> {
     let bytes = input.as_bytes();
     if bytes.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -258,7 +286,10 @@ fn parse_genome_interval(input: &str) -> IResult<&str, GenomeInterval> {
                 // - either position is special (pter/qter have no comparable base values)
                 // - the edit is a structural variant type that may use inverted coordinates
                 //   (insertions, duplications, inversions, and complex delins)
-                let allows_inverted = remaining.starts_with("dupins")
+                // - this is a circular (`m.`/`o.`) reference. The caller validates
+                //   the spec-authorised edit kinds post-parse (#129).
+                let allows_inverted = circular
+                    || remaining.starts_with("dupins")
                     || remaining.starts_with("inv")
                     || remaining.starts_with("ins")
                     || remaining.starts_with("dup");
@@ -462,6 +493,87 @@ fn cds_pos_is_inverted(start: &CdsPos, end: &CdsPos) -> bool {
     } else {
         // 5' UTR or CDS: -100 < -1 < 1 < 100
         start.base > end.base
+    }
+}
+
+/// Validate a parsed circular-axis (`m.`/`o.`) interval+edit pair against
+/// the HGVS spec's circular range-orientation rules.
+///
+/// HGVS spec sources:
+/// - `recommendations/DNA/deletion.md:17` — explicit exception for
+///   `o.`/`m.` references allowing reversed `<high>_<low>` ranges on
+///   deletions.
+/// - `docs/consultation/SVD-WG006.md` (accepted into HGVS v19.01,
+///   founding proposal for circular DNA) — line 15 grants the
+///   exception for any "rearrangement" that "includes both the last
+///   and first nucleotides of the reference sequence", with explicit
+///   examples for both `del` (`NC_012920.1:m.16563_13del`) and `dup`
+///   (`J01749.1:o.4344_197dup`). Line 33 explicitly names
+///   "deletions/duplications" as the scope.
+///
+/// So the spec-authorised set is `del`, `dup`, and `delins` (the
+/// latter by composition: `delins` is a `del + ins` rewrite and the
+/// del side carries the exception). `ins` and `inv` are spec-silent
+/// (no examples and not named in the rationale); the general "5' to 3'"
+/// rule applies and ferro rejects those reversed forms — closing the
+/// silent-accept gap pinned by the audit tests.
+///
+/// This helper is called post-parse from `parse_mt_variant` and
+/// `parse_circular_variant` to reject the unauthorised forms. Returns
+/// `Ok(())` when the form is spec-compliant, or `Err(_)` with a
+/// nom-style verify-error so the caller can short-circuit the parse.
+/// (#129)
+fn check_circular_reversed_range<'a>(
+    interval: &GenomeInterval,
+    edit: &crate::hgvs::edit::NaEdit,
+    input: &'a str,
+) -> Result<(), nom::Err<nom::error::Error<&'a str>>> {
+    use crate::hgvs::edit::NaEdit;
+
+    // Only the plain `<start>_<end>` (Single(Certain), Single(Certain))
+    // shape can be reversed; complex range/uncertain boundaries are
+    // already rejected by parse_genome_interval_inner before reaching
+    // here for reversed cases.
+    let (s, e) = match (&interval.start, &interval.end) {
+        (UncertainBoundary::Single(Mu::Certain(s)), UncertainBoundary::Single(Mu::Certain(e))) => {
+            (s, e)
+        }
+        _ => return Ok(()),
+    };
+    // Special positions (pter/qter/cen) carry base=0 sentinels; ordering
+    // is not numeric. Spec doesn't address these on circular refs;
+    // pass through unchanged.
+    if s.is_special() || e.is_special() {
+        return Ok(());
+    }
+    if s.base <= e.base {
+        return Ok(());
+    }
+    // Reversed range. Allow `del`, `dup`, and `delins` (the
+    // spec-authorised set per SVD-WG006); reject everything else.
+    //
+    // The `_` arm explicitly covers:
+    //   - `Substitution` / `SubstitutionNoRef` — single-position
+    //     edits; `<high>_<low>` is structurally undefined.
+    //   - `Insertion`, `Inversion` — spec-silent on circular refs
+    //     (SVD-WG006 names only del/dup; insertion.md / inversion.md
+    //     give no wraparound exception).
+    //   - `DupIns` — non-standard ClinVar shape; no spec
+    //     authorisation, defensive reject.
+    //   - `Repeat` / `MultiRepeat` — spec is silent on wraparound
+    //     repeat tracts.
+    //   - `Identity` — `<high>_<low>=` is semantically degenerate.
+    //   - `Conversion` — defensive default-reject; the canonicaliser
+    //     rewrites `con` → `delins` post-parse but cannot fire here
+    //     because the validator runs immediately after `parse_na_edit`.
+    //   - `Unknown` — `?` edits carry no positional semantics on a
+    //     reversed range; reject defensively.
+    match edit {
+        NaEdit::Deletion { .. } | NaEdit::Delins { .. } | NaEdit::Duplication { .. } => Ok(()),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
     }
 }
 
@@ -1085,15 +1197,36 @@ impl GenomeKind {
 /// `parse_cds_bracket_member`. #243.
 fn parse_genome_bracket_member(
     part: &str,
+    kind: GenomeKind,
 ) -> IResult<&str, LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>> {
+    let is_circular = matches!(kind, GenomeKind::Mt | GenomeKind::Circular);
+    // For `m.`/`o.` the circular variant allows the spec-authorised
+    // reversed `<high>_<low>` forms; post-parse we still run
+    // `check_circular_reversed_range` to reject edit kinds the spec
+    // doesn't authorise. For `g.` the linear parser is unchanged. (#129)
     if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
-        if let Ok((remaining, (interval, edit))) =
+        let predicted = if is_circular {
+            delimited(
+                char('('),
+                (parse_genome_interval_for_circular, parse_na_edit),
+                char(')'),
+            )
+            .parse(part)
+        } else {
             delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(part)
-        {
+        };
+        if let Ok((remaining, (interval, edit))) = predicted {
+            if is_circular {
+                check_circular_reversed_range(&interval, &edit, part)?;
+            }
             return Ok((remaining, LocEdit::new_predicted(interval, edit)));
         }
     }
-    let (remaining, interval) = parse_genome_interval(part)?;
+    let (remaining, interval) = if is_circular {
+        parse_genome_interval_for_circular(part)?
+    } else {
+        parse_genome_interval(part)?
+    };
     let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
         (r, e)
     } else {
@@ -1105,6 +1238,9 @@ fn parse_genome_bracket_member(
             },
         )
     };
+    if is_circular {
+        check_circular_reversed_range(&interval, &edit, part)?;
+    }
     Ok((remaining, LocEdit::new(interval, edit)))
 }
 
@@ -1322,7 +1458,7 @@ fn parse_genome_kind_compound_allele(
                 nom::error::ErrorKind::Verify,
             )));
         }
-        let (final_remaining, loc_edit) = parse_genome_bracket_member(part)?;
+        let (final_remaining, loc_edit) = parse_genome_bracket_member(part, kind)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
@@ -1372,7 +1508,12 @@ fn parse_genome_position_unknown_phase(
             )));
         }
 
-        let (edit_remaining, interval) = parse_genome_interval(part)?;
+        let is_circular = matches!(kind, GenomeKind::Mt | GenomeKind::Circular);
+        let (edit_remaining, interval) = if is_circular {
+            parse_genome_interval_for_circular(part)?
+        } else {
+            parse_genome_interval(part)?
+        };
         let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
 
         if !final_remaining.trim().is_empty() {
@@ -1380,6 +1521,9 @@ fn parse_genome_position_unknown_phase(
                 final_remaining,
                 nom::error::ErrorKind::Tag,
             )));
+        }
+        if is_circular {
+            check_circular_reversed_range(&interval, &edit, part)?;
         }
 
         variants.push(kind.build_variant(accession.clone(), gene_symbol.clone(), interval, edit));
@@ -1431,7 +1575,8 @@ fn parse_genome_trans_allele_shorthand(
         } else {
             // Route through parse_genome_bracket_member so the predicted-wrapper
             // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
+            let (final_remaining, loc_edit) =
+                parse_genome_bracket_member(content, GenomeKind::Genome)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -2411,9 +2556,15 @@ fn parse_mt_variant(
 
         // Predicted variant: m.(positionEdit). #241.
         if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
-            if let Ok((remaining, (interval, edit))) =
-                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            if let Ok((remaining, (interval, edit))) = delimited(
+                char('('),
+                (parse_genome_interval_for_circular, parse_na_edit),
+                char(')'),
+            )
+            .parse(input)
             {
+                // Reject spec-unauthorised reversed ranges (#129).
+                check_circular_reversed_range(&interval, &edit, input)?;
                 return Ok((
                     remaining,
                     HgvsVariant::Mt(MtVariant {
@@ -2425,8 +2576,11 @@ fn parse_mt_variant(
             }
         }
 
-        let (input, interval) = parse_genome_interval(input)?;
+        let original_input = input;
+        let (input, interval) = parse_genome_interval_for_circular(input)?;
         let (input, edit) = parse_na_edit(input)?;
+        // Reject spec-unauthorised reversed ranges (#129).
+        check_circular_reversed_range(&interval, &edit, original_input)?;
 
         Ok((
             input,
@@ -2472,7 +2626,9 @@ fn parse_mt_trans_allele_shorthand(
         } else {
             // Route through parse_genome_bracket_member so the predicted-wrapper
             // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
+            // Pass `GenomeKind::Mt` so the helper uses the circular interval
+            // parser + spec-authorised reversed-range validator (#129).
+            let (final_remaining, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Mt)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3750,9 +3906,15 @@ fn parse_circular_variant(
 
         // Predicted variant: o.(positionEdit). #241.
         if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
-            if let Ok((remaining, (interval, edit))) =
-                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            if let Ok((remaining, (interval, edit))) = delimited(
+                char('('),
+                (parse_genome_interval_for_circular, parse_na_edit),
+                char(')'),
+            )
+            .parse(input)
             {
+                // Reject spec-unauthorised reversed ranges (#129).
+                check_circular_reversed_range(&interval, &edit, input)?;
                 return Ok((
                     remaining,
                     HgvsVariant::Circular(CircularVariant {
@@ -3764,8 +3926,11 @@ fn parse_circular_variant(
             }
         }
 
-        let (input, interval) = parse_genome_interval(input)?;
+        let original_input = input;
+        let (input, interval) = parse_genome_interval_for_circular(input)?;
         let (input, edit) = parse_na_edit(input)?;
+        // Reject spec-unauthorised reversed ranges (#129).
+        check_circular_reversed_range(&interval, &edit, original_input)?;
 
         Ok((
             input,
@@ -3811,7 +3976,10 @@ fn parse_circular_trans_allele_shorthand(
         } else {
             // Route through parse_genome_bracket_member so the predicted-wrapper
             // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            let (final_remaining, loc_edit) = parse_genome_bracket_member(content)?;
+            // Pass `GenomeKind::Circular` so the helper uses the circular
+            // interval parser + spec-authorised reversed-range validator (#129).
+            let (final_remaining, loc_edit) =
+                parse_genome_bracket_member(content, GenomeKind::Circular)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -4634,11 +4802,16 @@ fn parse_variant_with_inherited_accession(
             loc_edit: LocEdit::new(interval, edit),
         }))
     } else if let Some(rest) = input.strip_prefix("m.") {
-        let (remaining, interval) = parse_genome_interval(rest).map_err(|e| FerroError::Parse {
-            pos: 2,
-            msg: format!("Failed to parse mitochondrial interval: {:?}", e),
-            diagnostic: None,
-        })?;
+        // Use the circular-aware interval parser + post-parse spec
+        // authorisation check so inherited-accession `…/m.<high>_<low>del`
+        // slash-form inputs accept the SVD-WG006 wraparound exception
+        // (#129).
+        let (remaining, interval) =
+            parse_genome_interval_for_circular(rest).map_err(|e| FerroError::Parse {
+                pos: 2,
+                msg: format!("Failed to parse mitochondrial interval: {:?}", e),
+                diagnostic: None,
+            })?;
         let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
             pos: input.len() - remaining.len(),
             msg: format!("Failed to parse edit: {:?}", e),
@@ -4651,17 +4824,23 @@ fn parse_variant_with_inherited_accession(
                 diagnostic: None,
             });
         }
+        check_circular_reversed_range(&interval, &edit, rest).map_err(|e| FerroError::Parse {
+            pos: 2,
+            msg: format!("spec-unauthorised reversed range on m. axis: {:?}", e),
+            diagnostic: None,
+        })?;
         Ok(HgvsVariant::Mt(MtVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.cloned(),
             loc_edit: LocEdit::new(interval, edit),
         }))
     } else if let Some(rest) = input.strip_prefix("o.") {
-        let (remaining, interval) = parse_genome_interval(rest).map_err(|e| FerroError::Parse {
-            pos: 2,
-            msg: format!("Failed to parse circular interval: {:?}", e),
-            diagnostic: None,
-        })?;
+        let (remaining, interval) =
+            parse_genome_interval_for_circular(rest).map_err(|e| FerroError::Parse {
+                pos: 2,
+                msg: format!("Failed to parse circular interval: {:?}", e),
+                diagnostic: None,
+            })?;
         let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
             pos: input.len() - remaining.len(),
             msg: format!("Failed to parse edit: {:?}", e),
@@ -4674,6 +4853,11 @@ fn parse_variant_with_inherited_accession(
                 diagnostic: None,
             });
         }
+        check_circular_reversed_range(&interval, &edit, rest).map_err(|e| FerroError::Parse {
+            pos: 2,
+            msg: format!("spec-unauthorised reversed range on o. axis: {:?}", e),
+            diagnostic: None,
+        })?;
         Ok(HgvsVariant::Circular(CircularVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.cloned(),
