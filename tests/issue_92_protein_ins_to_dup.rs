@@ -196,3 +196,61 @@ fn protein_ins_longer_than_upstream_window_stays_as_ins() {
 
     assert_stays_as_ins(&out);
 }
+
+/// Met1-touching dup canonicalization must emit the
+/// `InitiatorMetCanonicalization` soft-warning so downstream
+/// consumers can detect the start-codon interaction. The protein
+/// fixture starts with `M K V A A A L E L E`; inserting M between p.1
+/// and p.2 canonicalizes to `p.Met1dup` (upstream window matches),
+/// which includes position 1 → warning fires.
+#[test]
+fn protein_met1_dup_emits_initiator_warning() {
+    use ferro_hgvs::normalize::NormalizationWarning;
+
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.Met1_Lys2insMet").expect("parse p.Met1_Lys2insMet");
+
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize p.Met1_Lys2insMet");
+    let out = format!("{}", result.result);
+    assert!(
+        out.ends_with(":p.Met1dup"),
+        "ins→dup must canonicalize to p.Met1dup; got {out:?}",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::InitiatorMetCanonicalization { .. })),
+        "Met1-touching dup must emit InitiatorMetCanonicalization; \
+         got warnings: {:?}",
+        result.warnings,
+    );
+}
+
+/// Negative control: a non-Met1 dup must NOT emit the warning.
+/// `p.Glu8_Leu9insLeuGlu` canonicalizes to `p.Leu9_Glu10dup` (from
+/// the existing test `protein_range_ins_becomes_range_dup_at_3prime_anchor`),
+/// which is entirely past p.1 → no warning.
+#[test]
+fn protein_non_met1_dup_does_not_emit_initiator_warning() {
+    use ferro_hgvs::normalize::NormalizationWarning;
+
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant =
+        parse_hgvs("NP_TESTPROT.1:p.Glu8_Leu9insLeuGlu").expect("parse p.Glu8_Leu9insLeuGlu");
+
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize p.Glu8_Leu9insLeuGlu");
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::InitiatorMetCanonicalization { .. })),
+        "non-Met1 dup must NOT emit InitiatorMetCanonicalization; \
+         got warnings: {:?}",
+        result.warnings,
+    );
+}
