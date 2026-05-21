@@ -200,6 +200,73 @@ fn protein_predicted_delins_canonicalizes_inside_parens() {
     );
 }
 
+/// Regression: when affix-trim leaves a zero-width del + non-empty
+/// ins, and `try_protein_ins_to_dup` finds no tandem-match, the helper
+/// falls through to emitting a plain insertion anchored at the
+/// trimmed-range flanks. The AA letters attached to those flank
+/// positions MUST match the reference at the labelled positions —
+/// otherwise the helper produces a self-contradictory HGVS string
+/// (positions saying one thing, AA labels saying another).
+///
+/// Construct on the fixture `MKVAAALELE`: `p.Leu7_Glu8delinsLeuMetGluGlu`
+/// trims leading `Leu` and trailing `Glu` (lcp = lcs = 1), leaving a
+/// zero-width del and a `MetGlu` residual ins anchored between p.Leu7
+/// and p.Glu8 (new_start = 8). The residual `MetGlu` matches no upstream
+/// (`AlaLeu`) or downstream (`GluLeu`) window, so the ins→dup helper
+/// returns None and execution falls through to the plain insertion emit
+/// path. Expected: `p.Leu7_Glu8insMetGlu` — Leu at p.7 and Glu at p.8
+/// both match the reference. A buggy fallback that fetches the wrong
+/// window would emit `p.Glu7_Leu8insMetGlu` (E and L swapped) or fail.
+#[test]
+fn protein_delins_fallback_ins_uses_correct_flank_residues() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.Leu7_Glu8delinsLeuMetGluGlu")
+        .expect("parse p.Leu7_Glu8delinsLeuMetGluGlu");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Leu7_Glu8delinsLeuMetGluGlu");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.Leu7_Glu8insMetGlu"),
+        "delins fallback must emit insertion with flank AAs matching \
+         the reference at the labelled positions; got {out:?}",
+    );
+}
+
+/// Regression: the fallback insertion emit path runs unsigned
+/// arithmetic on `new_start`. When `new_start <= 1` the fallback
+/// cannot label a left flank (position 0 is invalid in HGVS protein
+/// coordinates) and the helper must bail out cleanly — without the
+/// guard, the fallback emits an HGVS string anchored at position 0
+/// (e.g. `p.Met0_Lys1ins...`) which downstream tools cannot parse.
+///
+/// Construct on the fixture `MKVAAALELE`: `p.Met1delinsValMet` has
+/// ref = `Met` and ins = `ValMet`. Affix-trim finds lcp = 0 (V vs M)
+/// and lcs = 1 (trailing Met), leaving residual_del = empty and
+/// residual_seq = `Val`. The trimmed anchor is new_start = 1, so
+/// flank_start = 0 and the upstream ins→dup block is skipped
+/// (`flank_start >= 1` is false). Execution reaches the fallback code
+/// path with new_start == 1, where the helper must not emit a
+/// position-0 label.
+#[test]
+fn protein_delins_fallback_ins_rejects_position_zero_label() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant = parse_hgvs("NP_TESTPROT.1:p.Met1delinsValMet").expect("parse p.Met1delinsValMet");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Met1delinsValMet");
+    let out = format!("{}", normalized);
+
+    assert!(
+        !out.contains("Met0") && !out.contains("_0"),
+        "delins fallback must not emit a position-0 protein label \
+         (positions are 1-based in HGVS); got {out:?}",
+    );
+}
+
 /// Uncertain position endpoints carry semantics that the affix-trim
 /// rewrite would silently drop (e.g. `(Leu7)_Glu8` parenthesizing
 /// only the start would not survive a rewrite to a smaller range).

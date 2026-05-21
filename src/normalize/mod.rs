@@ -2441,15 +2441,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if end_pos.number < start_pos.number {
             return None;
         }
+        if start_pos.number == 0 {
+            return None;
+        }
         if !self.provider.has_protein_data() {
             return None;
         }
 
         let accession = variant.accession.transcript_accession();
-        let del_len = (end_pos.number - start_pos.number + 1) as usize;
+        let expected_len = (end_pos.number - start_pos.number + 1) as usize;
         let ref_aas =
             self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
-        if ref_aas.len() != del_len {
+        if ref_aas.len() != expected_len {
             return None;
         }
 
@@ -2497,7 +2500,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // caller via the `Mu` wrapper on the edit; here we mirror
             // the certain form. `whole_protein: false` because the
             // identity is position-specific, not whole-protein.
-            let _ = del_len; // silence unused
             return Some((
                 ProteinEdit::Identity {
                     predicted: false,
@@ -2547,15 +2549,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     return Some((edit, interval));
                 }
             }
-            // Fall back to the trimmed insertion.
-            let ins_start = ProtPos::new(
-                self.fetch_protein_window(&accession, new_start - 1, new_start)?[0],
-                new_start - 1,
-            );
-            let ins_end = ProtPos::new(
-                self.fetch_protein_window(&accession, new_start - 1, new_start)?[0],
-                new_start,
-            );
+            // Fall back to the trimmed insertion. Fetch both flanking
+            // residues in one provider call covering 1-based
+            // [new_start - 1, new_start] (0-based half-open
+            // [new_start - 2, new_start)). new_start <= 1 cannot
+            // anchor a left flank in 1-based HGVS coordinates, so
+            // bail out — the caller keeps the input delins.
+            if new_start <= 1 {
+                return None;
+            }
+            let flank_aas = self.fetch_protein_window(&accession, new_start - 2, new_start)?;
+            if flank_aas.len() != 2 {
+                return None;
+            }
+            let ins_start = ProtPos::new(flank_aas[0], new_start - 1);
+            let ins_end = ProtPos::new(flank_aas[1], new_start);
             return Some((
                 ProteinEdit::Insertion {
                     sequence: residual_seq,
