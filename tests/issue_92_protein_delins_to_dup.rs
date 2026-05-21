@@ -114,3 +114,26 @@ fn protein_delins_routes_residual_ins_to_dup() {
          dup at the 3'-shifted anchor; got {out:?}",
     );
 }
+
+/// A genuine delins with no shared affixes and no tandem-match must
+/// stay as delins. `p.Leu7_Glu8delinsAlaGly` over ref `LE` shares no
+/// prefix/suffix with `AlaGly`, and `AlaGly` does not match any
+/// upstream or downstream window. Per Prioritization, delins is the
+/// last-resort form, so it survives.
+#[test]
+fn protein_delins_without_shared_affix_stays_as_delins() {
+    let normalizer = Normalizer::new(provider_with_polya_protein());
+    let variant =
+        parse_hgvs("NP_TESTPROT.1:p.Leu7_Glu8delinsAlaGly").expect("parse p.Leu7_Glu8delinsAlaGly");
+
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("normalize p.Leu7_Glu8delinsAlaGly");
+    let out = format!("{}", normalized);
+
+    assert!(
+        out.ends_with(":p.Leu7_Glu8delinsAlaGly"),
+        "genuine delins (no shared affix, no tandem match) must \
+         survive normalization; got {out:?}",
+    );
+}
