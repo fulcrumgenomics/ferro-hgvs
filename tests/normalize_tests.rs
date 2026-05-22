@@ -5194,7 +5194,7 @@ mod ins_bracketed_expansion {
         let variant =
             parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
         let outcome = normalizer
-            .normalize_with_warnings(&variant)
+            .normalize_with_diagnostics(&variant)
             .unwrap_or_else(|e| panic!("normalize failed for {}: {}", input, e));
         // Display round-trips identically.
         assert_eq!(format!("{}", outcome.result), input);
@@ -5226,7 +5226,7 @@ mod ins_bracketed_expansion {
         let variant =
             parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
         let outcome = normalizer
-            .normalize_with_warnings(&variant)
+            .normalize_with_diagnostics(&variant)
             .unwrap_or_else(|e| panic!("normalize failed for {}: {}", input, e));
         assert_eq!(
             format!("{}", outcome.result),

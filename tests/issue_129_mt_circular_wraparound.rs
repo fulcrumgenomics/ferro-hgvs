@@ -242,7 +242,7 @@ fn mt_wraparound_delins_normalize_does_not_emit_canonical_split_skipped() {
         parse_hgvs(&format!("{MT}:m.16569_1delinsT")).expect("wraparound delins must parse");
     let normalizer = Normalizer::new(MockProvider::new());
     let normalized = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize must succeed on no-reference fallback");
     assert_eq!(
         format!("{}", normalized.result),
@@ -270,7 +270,7 @@ fn mt_wraparound_del_normalize_does_not_emit_canonical_split_skipped() {
         parse_hgvs(&format!("{MT}:m.16563_13del")).expect("wraparound del must parse (SVD-WG006)");
     let normalizer = Normalizer::new(MockProvider::new());
     let normalized = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize must succeed on no-reference fallback");
     assert!(
         !normalized

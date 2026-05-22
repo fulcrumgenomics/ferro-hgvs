@@ -901,7 +901,7 @@ fn axis_infos() {
 
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e:?}"))?;
             let result = normalizer
-                .normalize_with_warnings(&v)
+                .normalize_with_diagnostics(&v)
                 .map_err(|e| format!("normalize error: {e:?}"))?;
             let emitted: Vec<&str> = result.infos.iter().map(|i| i.code()).collect();
 

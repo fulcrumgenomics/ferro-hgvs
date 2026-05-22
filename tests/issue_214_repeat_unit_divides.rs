@@ -75,7 +75,7 @@ fn normalize_lenient_warnings(
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs(input).expect("parse failed");
     let r = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient normalize failed");
     (format!("{}", r.result), r.warnings)
 }

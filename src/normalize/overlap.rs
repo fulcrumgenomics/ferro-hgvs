@@ -10,7 +10,6 @@
 //! boundary `[end, start]`, not a single-base location).
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::{Interval, UncertainBoundary};
@@ -63,30 +62,13 @@ pub(crate) fn detect_overlap_conflicts(
             .filter_map(|&i| edit_kind(&variants[i]).map(|s| s.to_string()))
             .collect();
         // group_key already filtered to variants with a known edit kind, so
-        // edit_kinds.len() == indices.len() in practice. Defensive equality
-        // keeps the message accurate if that invariant is ever loosened.
+        // edit_kinds.len() == indices.len() in practice. Preserved as a
+        // debug assert against future drift.
         debug_assert_eq!(edit_kinds.len(), indices.len());
         let location_str = location_for_variant(&variants[indices[0]])
             .expect("group_key established a renderable location");
 
-        let mut message = String::new();
-        let _ = write!(
-            message,
-            "{} cis edits share identical bounds at {}:{}.{}: ",
-            indices.len(),
-            key.accession,
-            key.coord_system,
-            location_str,
-        );
-        for (i, kind) in edit_kinds.iter().enumerate() {
-            if i > 0 {
-                message.push_str(", ");
-            }
-            message.push_str(kind);
-        }
-
         warnings.push(NormalizationWarning::OverlapConflict {
-            message,
             accession: key.accession.clone(),
             coordinate_system: key.coord_system.to_string(),
             location: location_str,
@@ -483,7 +465,9 @@ mod tests {
 
         let normalizer = Normalizer::new(MockProvider::new());
         let v = parse_hgvs("NC_000001.11:g.[100G>A;100A>C]").expect("parse");
-        let result = normalizer.normalize_with_warnings(&v).expect("normalize");
+        let result = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize");
         assert!(
             result
                 .warnings

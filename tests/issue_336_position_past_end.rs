@@ -124,7 +124,7 @@ fn lenient_mode_warns_on_c_position_past_cds_end() {
     let variant = parse_hgvs("NM_TEST.1:c.10G>C").expect("parse");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error on past-end positions");
 
     assert!(
@@ -144,7 +144,7 @@ fn silent_mode_accepts_c_position_past_cds_end_without_warning() {
     let variant = parse_hgvs("NM_TEST.1:c.10G>C").expect("parse");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("silent mode must not error");
 
     assert!(
@@ -202,7 +202,7 @@ fn lenient_mode_emits_two_warnings_for_range_both_past_end() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs("NM_TEST.1:c.10_11del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     let past_end: Vec<_> = result
         .warnings
@@ -249,7 +249,7 @@ fn strict_mode_n_in_bounds_does_not_emit_warning() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
     let variant = parse_hgvs("NR_TEST.1:n.10G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("in-bounds n. variant must not error");
     assert!(
         !result
@@ -331,7 +331,7 @@ fn lenient_mode_warns_on_c_minus_position_past_5utr_start() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs("NM_5UTR.1:c.-6G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     assert!(
         result
@@ -408,7 +408,7 @@ fn lenient_mode_warns_on_n_position_past_transcript_end() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs("NR_TEST.1:n.21G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     assert!(
         result
@@ -454,7 +454,7 @@ fn silent_mode_accepts_c_minus_position_past_5utr_start_without_warning() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::silent());
     let variant = parse_hgvs("NM_5UTR.1:c.-6G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("silent mode must not error");
     assert!(
         !result
@@ -472,7 +472,7 @@ fn silent_mode_accepts_n_position_past_transcript_end_without_warning() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::silent());
     let variant = parse_hgvs("NR_TEST.1:n.21G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("silent mode must not error");
     assert!(
         !result
@@ -532,7 +532,7 @@ fn lenient_mode_skips_n_downstream_position() {
     // post-transcript region.
     let variant = parse_hgvs("NR_TEST.1:n.*5G>C").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("downstream n. must not error in lenient mode");
     assert!(
         !result
@@ -556,7 +556,7 @@ fn lenient_mode_preserves_downstream_n_indel_without_normalization() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs("NR_TEST.1:n.*5_*7del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("downstream n. indel must not error in lenient mode");
     assert!(
         !result
