@@ -1,16 +1,25 @@
-//! Strand-aware transformation of `NaEdit` from g. to c./n.
+//! Strand-aware transformation of `NaEdit` between g. and c./n./r.
 
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
 use crate::reference::Strand;
 
-/// Transform a g.-coordinate edit into the equivalent edit on the transcript strand.
+/// Transform an edit between the genomic axis and the transcript axis.
 ///
-/// On the plus strand, the edit is returned unchanged. On the minus strand, the
-/// ref/alt bases (and any embedded sequences) are reverse-complemented so the
-/// resulting edit reads correctly on the transcript's sense strand.
-pub(crate) fn transform_edit_for_strand(edit: &NaEdit, strand: Strand) -> NaEdit {
+/// On the **plus strand**, no reverse-complement is needed — the
+/// transcript reads the same as the genome. However, r. inputs carry
+/// `Base::U` which is not a valid DNA letter; when projecting
+/// r.→g. we still need to translate every `U` to `T` so the output
+/// is valid DNA. Closes #395 item 4: previously the plus-strand path
+/// returned the edit unchanged, which left RNA `u` substitutions
+/// emitting invalid `g.<N>U>A` shapes. Non-U bases are passed
+/// through unchanged.
+///
+/// On the **minus strand**, ref/alt bases (and any embedded sequences)
+/// are reverse-complemented. The `Base::U → Base::A` complement in
+/// `complement_base` already handles RNA `u` correctly on this path.
+pub fn transform_edit_for_strand(edit: &NaEdit, strand: Strand) -> NaEdit {
     if strand == Strand::Plus {
-        return edit.clone();
+        return u_to_t_edit(edit);
     }
     match edit {
         NaEdit::Substitution {
@@ -98,6 +107,88 @@ fn revcomp_sequence(s: &Sequence) -> Sequence {
 fn revcomp_inserted(ins: &InsertedSequence) -> InsertedSequence {
     match ins {
         InsertedSequence::Literal(seq) => InsertedSequence::Literal(revcomp_sequence(seq)),
+        other => other.clone(),
+    }
+}
+
+/// U→T translation for an edit, used by `transform_edit_for_strand` on
+/// `Strand::Plus`. Translates RNA `U` to DNA `T` in single bases and
+/// embedded sequences without reversing or complementing other bases.
+/// Closes #395 item 4.
+fn u_to_t_edit(edit: &NaEdit) -> NaEdit {
+    match edit {
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => NaEdit::Substitution {
+            reference: u_to_t_base(*reference),
+            alternative: u_to_t_base(*alternative),
+        },
+        NaEdit::SubstitutionNoRef { alternative } => NaEdit::SubstitutionNoRef {
+            alternative: u_to_t_base(*alternative),
+        },
+        NaEdit::Deletion { sequence, length } => NaEdit::Deletion {
+            sequence: sequence.as_ref().map(u_to_t_sequence),
+            length: *length,
+        },
+        NaEdit::Insertion { sequence } => NaEdit::Insertion {
+            sequence: u_to_t_inserted(sequence),
+        },
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => NaEdit::Delins {
+            sequence: u_to_t_inserted(sequence),
+            deleted: deleted.as_ref().map(u_to_t_sequence),
+            deleted_length: *deleted_length,
+        },
+        NaEdit::Duplication {
+            sequence,
+            length,
+            uncertain_extent,
+        } => NaEdit::Duplication {
+            sequence: sequence.as_ref().map(u_to_t_sequence),
+            length: *length,
+            uncertain_extent: uncertain_extent.clone(),
+        },
+        NaEdit::DupIns { sequence } => NaEdit::DupIns {
+            sequence: u_to_t_inserted(sequence),
+        },
+        NaEdit::Inversion { sequence, length } => NaEdit::Inversion {
+            sequence: sequence.as_ref().map(u_to_t_sequence),
+            length: *length,
+        },
+        // Other edit shapes have no embedded sequence to translate.
+        other => other.clone(),
+    }
+}
+
+fn u_to_t_base(b: Base) -> Base {
+    match b {
+        Base::U => Base::T,
+        other => other,
+    }
+}
+
+fn u_to_t_sequence(s: &Sequence) -> Sequence {
+    let translated: String = s
+        .to_string()
+        .chars()
+        .map(|c| match c {
+            'U' => 'T',
+            'u' => 't',
+            other => other,
+        })
+        .collect();
+    translated
+        .parse()
+        .expect("U→T translation produces only valid IUPAC bases")
+}
+
+fn u_to_t_inserted(ins: &InsertedSequence) -> InsertedSequence {
+    match ins {
+        InsertedSequence::Literal(seq) => InsertedSequence::Literal(u_to_t_sequence(seq)),
         other => other.clone(),
     }
 }
