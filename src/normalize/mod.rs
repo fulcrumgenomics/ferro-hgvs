@@ -1584,8 +1584,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // unchanged.
         let spanning_dup_exception =
             matches!(new_edit, NaEdit::Duplication { .. }) && new_tx_end >= cds_start;
+        // Issue #418 extension: when `cds_start == 1` (transcript has no
+        // 5'UTR) the 5'-shuffle on an Insertion saturates at the
+        // transcript start (`new_start = new_end = cds_start`) instead
+        // of producing a true `new_tx_start < cds_start` signal. The
+        // coordinate conversion from a 0-based shuffle result of 0 back
+        // to 1-based HGVS clamps at 1, so the position-only gate
+        // misses the saturation case. Detect it by the degenerate
+        // (start == end) Insertion shape that only arises from
+        // left-saturation, and fire the clamp the same way the
+        // non-degenerate case does.
+        let cds_start_left_saturated = matches!(edit, NaEdit::Insertion { .. })
+            && new_tx_start == cds_start
+            && new_tx_end == cds_start;
         if matches!(start_axis, boundary::AxisRegion::Cds)
-            && new_tx_start < cds_start
+            && (new_tx_start < cds_start || cds_start_left_saturated)
             && !spanning_dup_exception
         {
             match edit {
@@ -3904,6 +3917,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             // ins→dup recognizer and emit the long `insTTTCTT`
                             // form instead of the canonical `dup`. Closes-after:
                             // #356.
+                            //
+                            // Issue #418 guard: when shared-affix trimming
+                            // collapses a Delins-at-tx-start (e.g. `c.1delinsCA`
+                            // on a transcript with `cds_start = 1` whose c.1=A —
+                            // the suffix `A` matches ref[c.1] and trims to
+                            // `Insertion("C")` at `after_index = 0`) the
+                            // recursive call would pass `tx_start = 0`, which is
+                            // not a valid 1-based HGVS position and underflows
+                            // `hgvs_pos_to_index(0)` downstream. Spec-canonical
+                            // behavior for a Delins input whose
+                            // canonicalisation rewrite would land strictly past
+                            // the start of the transcript is to restore the
+                            // input form unchanged (this is the same disposition
+                            // the post-shift #383 clamp gives Delins inputs
+                            // that cross the CDS-start boundary into 5'UTR).
+                            // Suppress the recursion to avoid the panic and
+                            // emit the input verbatim.
+                            if after_index == 0 {
+                                return Ok((start, end, edit.clone(), warnings.clone()));
+                            }
                             let new_edit = NaEdit::Insertion {
                                 sequence: bytes_to_inserted_seq(&ins_bytes),
                             };
