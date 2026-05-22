@@ -445,6 +445,13 @@ fn inserted_sequence_len(seq: &InsertedSequence) -> Option<i64> {
 /// Re-export of `crate::hgvs::variant::is_frameshift`. Lives in `hgvs::variant`
 /// so core code (e.g. `crate::project`) does not need to depend on the
 /// Python-bindings helper module.
+///
+/// Note: no `_with_provider` variant exists. `is_frameshift` calls
+/// [`get_indel_length`] (the no-provider path), which returns `None` for
+/// wraparound `m.`/`o.` ranges — so `is_frameshift` will return `false` on
+/// those variants. Callers needing frameshift detection on wraparound input
+/// should compute it themselves from [`get_indel_length_with_provider`]
+/// (`len.is_some_and(|n| n != 0 && n % 3 != 0)`).
 pub use crate::hgvs::variant::is_frameshift;
 
 /// Get the number of sub-variants in an allele, or 1 for simple variants.
