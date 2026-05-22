@@ -5531,6 +5531,13 @@ fn prose_multi_allelic_diagnostic_msg(rhs: &str) -> String {
 /// - Variant types ordered by frequency (c. > p. > g. > n. > r. > m.)
 /// - Allele detection for compound variants
 pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
+    // NB: per HGVS v21 (general.md:96) whitespace is not permitted in any
+    // HGVS description. ferro's lenient parser trims outer whitespace and
+    // strips spaces after `;` inside allele brackets for interop with
+    // real-world submissions; this is intentional and documented by
+    // gene_selector_display_preserve / protein_*_outer_whitespace_is_trimmed
+    // tests. The F1 test family in `tests/input_hygiene_rejections.rs`
+    // pins this divergence so any future tightening is intentional.
     let input = input.trim();
 
     // Pre-parse rejection for protein bracketed-amino-acid insertion
