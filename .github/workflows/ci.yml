@@ -159,6 +159,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
+      - name: "Note: reference-aware tests are skipped without a manifest"
+        # `tests/mutalyzer_normalize_tests.rs` and the biocommons
+        # reference-aware suite both silently no-op when
+        # `FERRO_MANIFEST` is unset (PR CI does not provision the
+        # multi-GB reference manifest). Surface a GitHub annotation
+        # so reviewers see the skip explicitly in the PR check
+        # summary; the nightly `nightly-mutalyzer.yml` workflow runs
+        # the same suite with a real manifest. #397 item 6.
+        run: |
+          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
       - name: Run Rust tests
         run: cargo nextest run --features dev
       - name: Verify HGVS v21.0 fixture is up to date
