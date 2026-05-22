@@ -177,6 +177,15 @@ fn spdi_conversion_still_accepts_linear_mt() {
 }
 
 #[test]
+fn spdi_conversion_simple_accepts_linear_circular() {
+    // Non-wraparound o. variants now convert successfully via the new
+    // circular_to_spdi_simple path added alongside the wraparound guard.
+    // Pins the positive side of the new o. dispatch.
+    let v = parse_hgvs("J01749.1:o.100A>G").unwrap();
+    assert!(hgvs_to_spdi_simple(&v).is_ok());
+}
+
+#[test]
 fn spdi_conversion_simple_rejects_wraparound_mt_del() {
     // hgvs_to_spdi_simple also converts m. variants and must apply the same guard.
     let v = parse_hgvs("NC_012920.1:m.16569_1del").unwrap();

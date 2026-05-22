@@ -44,6 +44,10 @@
 //!
 //! - `g.` (genomic) — direct.
 //! - `m.` (mito) — the mito accession is genomic; same path as `g.`.
+//!   Wraparound ranges (`start > end`) on circular references are rejected
+//!   per issue #399 — SPDI has no native wraparound representation.
+//! - `o.` (circular) — same path as `g.`/`m.`; wraparound ranges rejected
+//!   as above.
 //! - `n.` (non-coding tx) — exonic, positive base; SPDI on the transcript
 //!   accession.
 //! - `r.` (RNA) — exonic, positive base; `u`/`U` rewritten to `T` for
@@ -209,7 +213,8 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 /// | HGVS coord | Supported here | Notes |
 /// |------------|----------------|-------|
 /// | `g.` (genomic) | yes | direct 1→0-based conversion |
-/// | `m.` (mito) | yes | mito accession is genomic; same as `g.` |
+/// | `m.` (mito) | yes | mito accession is genomic; same as `g.`; wraparound rejected |
+/// | `o.` (circular) | yes | same path as `g.`/`m.`; wraparound rejected |
 /// | `n.` (non-coding tx) | exonic, positive base | SPDI sits on the transcript accession |
 /// | `r.` (RNA) | exonic, positive base | `u`/`U` rewritten to `T`; SPDI uses DNA alphabet |
 /// | `c.` (CDS) | NO — needs CDS start | use [`hgvs_to_spdi`] |
