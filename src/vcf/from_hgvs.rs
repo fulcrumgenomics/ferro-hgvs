@@ -18,27 +18,13 @@
 use crate::convert::mapper::CoordinateMapper;
 use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
-use crate::hgvs::interval::GenomeInterval;
+use crate::hgvs::interval::interval_is_wraparound;
 use crate::hgvs::location::CdsPos;
 use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, TxVariant};
 use crate::reference::transcript::{GenomeBuild, Transcript};
 use crate::reference::ReferenceProvider;
 
 use super::record::VcfRecord;
-
-/// Return `true` when a `GenomeInterval` wraps around a circular contig,
-/// i.e., the start base is numerically greater than the end base.
-///
-/// Returns `false` when either endpoint is `Unknown` (`?`) or a range
-/// boundary — in those cases the normal conversion path surfaces whatever
-/// error it would produce. Uncertain-but-numeric positions (`(123)`) are
-/// resolved like any other numeric position.
-fn interval_is_wraparound(loc: &GenomeInterval) -> bool {
-    match (loc.start.inner(), loc.end.inner()) {
-        (Some(start), Some(end)) => start.base > end.base,
-        _ => false,
-    }
-}
 
 /// Result of converting an HGVS variant to VCF
 #[derive(Debug, Clone)]
