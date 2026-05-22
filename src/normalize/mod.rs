@@ -339,6 +339,45 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     )
 }
 
+/// If `pos.base` lies past the contig length on a mitochondrial accession,
+/// return a `PositionPastEnd` warning describing the violation; otherwise
+/// `None`. Closes #393.
+///
+/// Bounds: `m.<N>` must satisfy `1 <= N <= contig_length`. The contig
+/// length is sourced from [`ReferenceProvider::get_sequence_length`].
+/// Wraparound ranges (`m.<high>_<low>`, where `high > low` on a valid
+/// circular contig, per SVD-WG006) are NOT past-end if both endpoints
+/// fit in the contig — this check fires only when an endpoint itself
+/// exceeds the contig length.
+///
+/// Skipped cases (mirrors `check_tx_pos_past_end`): special positions
+/// (`pter`/`qter`/`cen`, encoded as `base == 0`) and positions carrying
+/// an offset (non-standard on mt but parseable), because the final
+/// coordinate isn't determined by `base` alone.
+fn check_mt_pos_past_end(
+    accession: &str,
+    pos: &GenomePos,
+    contig_length: u64,
+) -> Option<NormalizationWarning> {
+    if pos.base < 1 || pos.offset.is_some() {
+        return None;
+    }
+    if pos.base > contig_length {
+        return Some(NormalizationWarning::PositionPastEnd {
+            message: format!(
+                "{}:m.{} lies past the contig-end (contig length {})",
+                accession, pos.base, contig_length
+            ),
+            accession: accession.to_string(),
+            coordinate_system: "m".to_string(),
+            position: pos.base.to_string(),
+            bound_kind: "contig-end".to_string(),
+            bound_value: contig_length,
+        });
+    }
+    None
+}
+
 /// True if the edit is a `Deletion` or `Duplication` shape — the two
 /// edit kinds the HGVS exon-junction exception applies to (HGVS
 /// general.md: "deletions/duplications around exon/exon junctions using
@@ -765,8 +804,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        // In strict mode, reject if any position lies past the CDS-end or
-        // transcript-end (W4004).
+        // In strict mode, reject if any position lies past the CDS-end,
+        // transcript-end, or contig-end (W4004). Use an axis-aware noun
+        // for the reference structure — `m.` lives on a contig, not a
+        // transcript, so the rejection message must say so.
         if self.config.should_reject_position_past_end() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
                 NormalizationWarning::PositionPastEnd {
@@ -776,13 +817,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     bound_kind,
                     bound_value,
                     ..
-                } => Some(FerroError::InvalidCoordinates {
-                    msg: format!(
-                        "{accession}:{coordinate_system}.{position} is past the {bound_kind} \
-                         ({bound_value}); position does not reference a base in the transcript \
-                         (PositionPastEnd / W4004)"
-                    ),
-                }),
+                } => {
+                    let reference_noun = match coordinate_system.as_str() {
+                        "m" => "contig",
+                        _ => "transcript",
+                    };
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}:{coordinate_system}.{position} is past the {bound_kind} \
+                             ({bound_value}); position does not reference a base in the \
+                             {reference_noun} (PositionPastEnd / W4004)"
+                        ),
+                    })
+                }
                 _ => None,
             }) {
                 return Err(err);
@@ -2924,8 +2971,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // SVD-WG009: rewrite `con` to `delins` up front. Pure-syntax;
         // no reference data needed. Re-run on the rewritten variant so
-        // the downstream passes (issue #333 ins[...] expansion, 3'
-        // shift, ins→dup, canonical split) all see the delins form.
+        // the downstream passes (past-end bounds gate, issue #333 ins[...]
+        // expansion, 3' shift, ins→dup, canonical split) all see the delins
+        // form — otherwise `m.<past>conT` would early-return through the
+        // bounds gate below in non-canonical `con` form, mirroring the
+        // silent bypass previously fixed on the c./n. axes (see
+        // `normalize_cds` / `normalize_tx` and the `*_for_con_rewrite`
+        // tests in `tests/issue_336_position_past_end.rs`).
+        // `canonicalize_conversion_to_delins` only matches `NaEdit::Conversion`
+        // and the rewrite swaps it for `Delins`, so the recursion terminates
+        // on the second entry.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = MtVariant {
                 accession: variant.accession.clone(),
@@ -2936,6 +2991,57 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ),
             };
             return self.normalize_mt(&new_variant);
+        }
+
+        // Past-end bounds check (#393, W4004). Fires when an m. position
+        // exceeds the contig length, e.g. `m.16570A>G` on the 16569-bp mtDNA.
+        // Wraparound ranges (start > end, valid per SVD-WG006) bypass this
+        // only when both endpoints fit in the contig.
+        // Conservative skip when the provider has no length data for this
+        // accession — mirrors the transcript-absent skip in normalize_cds.
+        // Runs AFTER the `con -> delins` rewrite above so past-end inputs
+        // arriving via the `con` fast path (e.g. `m.16570conT`) re-enter
+        // this function in canonical `delins` form before the gate fires.
+        let mt_accession_bounds = variant.accession.transcript_accession();
+        if self.config.should_reject_position_past_end()
+            || self.config.should_warn_position_past_end()
+        {
+            if let (Some(start_pos), Some(end_pos)) = (
+                variant.loc_edit.location.start.inner(),
+                variant.loc_edit.location.end.inner(),
+            ) {
+                if let Ok(contig_length) = self.provider.get_sequence_length(&mt_accession_bounds) {
+                    let mut bounds_warnings: Vec<NormalizationWarning> = Vec::new();
+                    if let Some(w) =
+                        check_mt_pos_past_end(&mt_accession_bounds, start_pos, contig_length)
+                    {
+                        bounds_warnings.push(w);
+                    }
+                    // Mirror the c./n. dedupe guard: compare the full
+                    // (base, offset) tuple, not just `base`. A range like
+                    // `m.16570+1_16570` shares the same `base` on both
+                    // endpoints but the offset differs — checking only
+                    // `base` would skip the in-bounds endpoint and lose
+                    // W4004 on the other one. Offsets are non-standard on
+                    // m. but are parseable today (see
+                    // `check_mt_pos_past_end`'s skip on `pos.offset.is_some()`).
+                    let end_distinct =
+                        end_pos.base != start_pos.base || end_pos.offset != start_pos.offset;
+                    if end_distinct {
+                        if let Some(w) =
+                            check_mt_pos_past_end(&mt_accession_bounds, end_pos, contig_length)
+                        {
+                            bounds_warnings.push(w);
+                        }
+                    }
+                    if !bounds_warnings.is_empty() {
+                        return Ok((
+                            HV::Mt(self.canonicalize_mt_variant(variant)),
+                            bounds_warnings,
+                        ));
+                    }
+                }
+            }
         }
 
         // Issue #333: expand bracketed / reference-range `ins[...]`
