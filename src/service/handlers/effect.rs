@@ -88,10 +88,14 @@ fn predict_from_variant(
             let accession = v.accession.to_string();
             let cds_pos = extract_cds_position(&v.loc_edit);
 
+            // Span length derived from the position interval; required for
+            // accurate delins frameshift classification (closes #394 item 1).
+            let span_len = span_len_from_cds_interval(&v.loc_edit.location);
+
             // Get the edit info
             let (edit_type, is_frameshift, ref_len, alt_len) =
                 if let Some(edit) = v.loc_edit.edit.inner() {
-                    analyze_na_edit(edit)
+                    analyze_na_edit(edit, span_len)
                 } else {
                     ("unknown", false, 0, 0)
                 };
@@ -122,7 +126,8 @@ fn predict_from_variant(
         }
         HgvsVariant::Genome(v) => {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, _, _, _) = analyze_na_edit(edit);
+                let span_len = span_len_from_genome_interval(&v.loc_edit.location);
+                let (edit_type, _, _, _) = analyze_na_edit(edit, span_len);
                 let effect = predict_genomic_effect(edit_type);
                 (Some(effect), None, None)
             } else {
@@ -148,7 +153,8 @@ fn predict_from_variant(
         }
         HgvsVariant::Tx(v) => {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, _, _, _) = analyze_na_edit(edit);
+                let span_len = span_len_from_tx_interval(&v.loc_edit.location);
+                let (edit_type, _, _, _) = analyze_na_edit(edit, span_len);
                 let effect = SequenceEffect {
                     so_term: "SO:0001619".to_string(),
                     name: "non_coding_transcript_variant".to_string(),
@@ -183,8 +189,24 @@ fn extract_cds_position(
     }
 }
 
-/// Analyze nucleic acid edit to determine type and properties
-fn analyze_na_edit(edit: &crate::hgvs::edit::NaEdit) -> (&'static str, bool, usize, usize) {
+/// Analyze nucleic acid edit to determine type and properties.
+///
+/// Returns `(edit_type, is_frameshift, ref_len, alt_len)`. The
+/// `span_len` parameter is the length of the position interval (`end -
+/// start + 1`) when computable from base coordinates; pass `None` when
+/// the interval has intronic offsets, decorated positions (pter/qter/
+/// cen), or unknown endpoints. Used by the `Delins` arm to derive
+/// `ref_len` and `is_frameshift = (alt_len - ref_len) % 3 != 0` per the
+/// HGVS frameshift spec (`recommendations/protein/frameshift.md`).
+///
+/// When `span_len` is `None` for a delins, `is_frameshift` is
+/// conservatively reported as `false` — better than the previous
+/// always-`true` default which over-predicted frameshift on every
+/// non-trivial delins.
+pub fn analyze_na_edit(
+    edit: &crate::hgvs::edit::NaEdit,
+    span_len: Option<usize>,
+) -> (&'static str, bool, usize, usize) {
     use crate::hgvs::edit::NaEdit;
 
     match edit {
@@ -214,9 +236,20 @@ fn analyze_na_edit(edit: &crate::hgvs::edit::NaEdit) -> (&'static str, bool, usi
             ("insertion", len % 3 != 0, 0, len)
         }
         NaEdit::Delins { sequence, .. } => {
+            // Closes #394 item 1. Previously hardcoded `is_frameshift =
+            // true` with "Can't determine ref length easily"; the
+            // information IS available via `span_len`. Conservative
+            // fallback (false) when the interval can't yield a span_len
+            // (intronic / decorated / unknown endpoints).
             let alt_len = sequence.to_string().len();
-            // Delins is frameshift if net change not divisible by 3
-            ("delins", true, 0, alt_len) // Can't determine ref length easily
+            let (ref_len, is_frameshift) = match span_len {
+                Some(rl) => {
+                    let net_delta = alt_len as isize - rl as isize;
+                    (rl, net_delta.rem_euclid(3) != 0)
+                }
+                None => (0, false),
+            };
+            ("delins", is_frameshift, ref_len, alt_len)
         }
         NaEdit::Duplication {
             sequence, length, ..
@@ -234,6 +267,87 @@ fn analyze_na_edit(edit: &crate::hgvs::edit::NaEdit) -> (&'static str, bool, usi
         NaEdit::Unknown { .. } => ("unknown", false, 0, 0),
         _ => ("other", false, 0, 0),
     }
+}
+
+/// Compute the position-interval span length for a c. (CDS) interval.
+///
+/// Returns `Some(end.base - start.base + 1)` only when both endpoints are
+/// present, integer-only (no offset), non-special (no pter/qter/cen),
+/// and on the same coordinate sub-axis (both 5'UTR, both CDS, or both
+/// 3'UTR — mixed `c.-N_M` style ranges have no well-defined integer
+/// span in tx-frame from the c. values alone).
+///
+/// Returns `None` for any case where the span can't be computed from
+/// base coordinates alone — the conservative-skip contract used by the
+/// effect classifier for delins frameshift inference.
+pub fn span_len_from_cds_interval(interval: &crate::hgvs::interval::CdsInterval) -> Option<usize> {
+    let start = interval.start.inner()?;
+    let end = interval.end.inner()?;
+    // Intronic-offset positions have no base-only span.
+    if start.offset.is_some() || end.offset.is_some() {
+        return None;
+    }
+    // Mixed axis sides (5'UTR ↔ CDS, CDS ↔ 3'UTR, etc.) — base values
+    // are in different numbering frames, so `end - start + 1` does not
+    // count tx-frame nucleotides.
+    if start.utr3 != end.utr3 {
+        return None;
+    }
+    // 5'UTR vs CDS distinction (signed base): same `utr3` flag but
+    // negative-vs-positive bases also cross the CDS-start boundary.
+    if (start.base < 0) != (end.base < 0) {
+        return None;
+    }
+    if end.base < start.base {
+        return None;
+    }
+    Some(((end.base - start.base) + 1) as usize)
+}
+
+/// Compute the position-interval span length for a g. (genome) interval.
+///
+/// Returns `Some(end.base - start.base + 1)` only when both endpoints are
+/// present, integer-only, and non-special. See
+/// [`span_len_from_cds_interval`] for the conservative-skip contract.
+pub fn span_len_from_genome_interval(
+    interval: &crate::hgvs::interval::GenomeInterval,
+) -> Option<usize> {
+    let start = interval.start.inner()?;
+    let end = interval.end.inner()?;
+    if start.offset.is_some() || end.offset.is_some() {
+        return None;
+    }
+    if start.is_special() || end.is_special() {
+        return None;
+    }
+    if end.base < start.base {
+        return None;
+    }
+    Some(((end.base - start.base) + 1) as usize)
+}
+
+/// Compute the position-interval span length for an n. (tx) interval.
+///
+/// Returns `Some(end.base - start.base + 1)` only when both endpoints are
+/// present, integer-only (no offset), and non-downstream (no `n.*N`).
+/// See [`span_len_from_cds_interval`] for the conservative-skip
+/// contract.
+pub fn span_len_from_tx_interval(interval: &crate::hgvs::interval::TxInterval) -> Option<usize> {
+    let start = interval.start.inner()?;
+    let end = interval.end.inner()?;
+    if start.offset.is_some() || end.offset.is_some() {
+        return None;
+    }
+    if start.downstream != end.downstream {
+        return None;
+    }
+    if (start.base < 0) != (end.base < 0) {
+        return None;
+    }
+    if end.base < start.base {
+        return None;
+    }
+    Some(((end.base - start.base) + 1) as usize)
 }
 
 /// Predict effect for CDS variant
@@ -573,7 +687,7 @@ mod tests {
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350C>T").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit);
+                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, None);
                 assert_eq!(edit_type, "substitution");
                 assert!(!is_frameshift);
             }
@@ -585,7 +699,7 @@ mod tests {
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350del").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit);
+                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, None);
                 assert_eq!(edit_type, "deletion");
                 assert!(is_frameshift); // Single base deletion causes frameshift
             }
@@ -597,7 +711,7 @@ mod tests {
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350_352del").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, _is_frameshift, _, _) = analyze_na_edit(edit);
+                let (edit_type, _is_frameshift, _, _) = analyze_na_edit(edit, None);
                 assert_eq!(edit_type, "deletion");
                 // Note: For span deletions, we'd need to calculate the actual length
                 // This test shows the structure works
