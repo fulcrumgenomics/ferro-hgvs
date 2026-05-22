@@ -221,6 +221,20 @@ pub type RnaInterval = Interval<RnaPos>;
 /// Protein interval (p. coordinates)
 pub type ProtInterval = Interval<ProtPos>;
 
+/// Return `true` when a [`GenomeInterval`] wraps around a circular contig,
+/// i.e., the start base is numerically greater than the end base.
+///
+/// Returns `false` when either endpoint is `Unknown` (`?`) or a range
+/// boundary — in those cases the normal conversion path surfaces whatever
+/// error it would produce. Uncertain-but-numeric positions (`(123)`) are
+/// resolved like any other numeric position.
+pub(crate) fn interval_is_wraparound(loc: &GenomeInterval) -> bool {
+    match (loc.start.inner(), loc.end.inner()) {
+        (Some(start), Some(end)) => start.base > end.base,
+        _ => false,
+    }
+}
+
 impl GenomeInterval {
     /// Get the length of this interval (returns 0 if either position is unknown)
     pub fn len(&self) -> u64 {

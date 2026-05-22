@@ -211,3 +211,42 @@ fn spdi_conversion_rejects_wraparound_circular() {
         "expected error mentioning 'wraparound' and 'o.', got: {msg}"
     );
 }
+
+// =============================================================================
+// Validate handler: wraps_origin field on ValidateResponse
+// =============================================================================
+
+#[cfg(feature = "web-service")]
+mod validate_response_tests {
+    use super::*;
+    use ferro_hgvs::service::handlers::validate::validate_hgvs;
+
+    #[test]
+    fn validate_response_wraps_origin_true_for_wraparound_mt() {
+        let response = validate_hgvs("NC_012920.1:m.16569_1del", &mt_provider());
+        assert!(
+            response.wraps_origin,
+            "expected wraps_origin=true on wraparound m. del"
+        );
+    }
+
+    #[test]
+    fn validate_response_wraps_origin_true_for_wraparound_circular() {
+        let mut p = MockProvider::new();
+        p.add_genomic_sequence("J01749.1", "A".repeat(5386));
+        let response = validate_hgvs("J01749.1:o.4344_197dup", &p);
+        assert!(
+            response.wraps_origin,
+            "expected wraps_origin=true on wraparound o. dup"
+        );
+    }
+
+    #[test]
+    fn validate_response_wraps_origin_false_for_linear_mt() {
+        let response = validate_hgvs("NC_012920.1:m.100A>G", &mt_provider());
+        assert!(
+            !response.wraps_origin,
+            "expected wraps_origin=false on linear m. sub"
+        );
+    }
+}
