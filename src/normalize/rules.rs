@@ -330,10 +330,38 @@ pub(crate) fn insertion_to_duplication(
         let mut rotated = Vec::with_capacity(u_len);
         rotated.extend_from_slice(&base_unit[r..]);
         rotated.extend_from_slice(&base_unit[..r]);
-        if let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated) {
-            if ref_count > 0 && best.as_ref().is_none_or(|(_, _, bc)| ref_count > *bc) {
-                best = Some((rotated, ref_start, ref_count));
-            }
+        let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated)
+        else {
+            continue;
+        };
+        if ref_count == 0 {
+            continue;
+        }
+        // Selection rules:
+        // - Higher `ref_count` wins outright (preserves the multi-copy
+        //   tract phase per #132 / #180).
+        // - On ties, the rotation whose anchor is direction-canonical
+        //   wins: most-5' (smallest `ref_start`) for `FivePrime`,
+        //   most-3' (largest `ref_start`, which orders the same as
+        //   `tract_end` since all rotations share `u_len`) for
+        //   `ThreePrime`. Without this tie-break, the `ref_count == 1`
+        //   case — an isolated single tandem unit adjacent to the
+        //   insertion point — falls to first-found iteration order and
+        //   disagrees with biocommons on the anchor position. Closes
+        //   #403.
+        let is_better = match best.as_ref() {
+            None => true,
+            Some((_, best_ref_start, best_ref_count)) => match ref_count.cmp(best_ref_count) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => match direction {
+                    ShuffleDirection::FivePrime => ref_start < *best_ref_start,
+                    ShuffleDirection::ThreePrime => ref_start > *best_ref_start,
+                },
+            },
+        };
+        if is_better {
+            best = Some((rotated, ref_start, ref_count));
         }
     }
 
