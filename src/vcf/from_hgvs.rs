@@ -18,6 +18,7 @@
 use crate::convert::mapper::CoordinateMapper;
 use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
+use crate::hgvs::interval::interval_is_wraparound;
 use crate::hgvs::location::CdsPos;
 use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, TxVariant};
 use crate::reference::transcript::{GenomeBuild, Transcript};
@@ -77,6 +78,16 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                     .to_string(),
             }),
             HgvsVariant::Mt(mt) => {
+                if interval_is_wraparound(&mt.loc_edit.location) {
+                    return Err(FerroError::ConversionError {
+                        msg: format!(
+                            "Cannot convert wraparound m. variant to VCF: \
+                             VCF has no representation for circular-contig records. \
+                             Variant: {}",
+                            mt
+                        ),
+                    });
+                }
                 // Mitochondrial variants use the same format as genomic
                 let genome = GenomeVariant {
                     accession: mt.accession.clone(),
@@ -116,6 +127,16 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 msg: "Unknown allele marker [?] cannot be converted to VCF".to_string(),
             }),
             HgvsVariant::Circular(circular) => {
+                if interval_is_wraparound(&circular.loc_edit.location) {
+                    return Err(FerroError::ConversionError {
+                        msg: format!(
+                            "Cannot convert wraparound o. variant to VCF: \
+                             VCF has no representation for circular-contig records. \
+                             Variant: {}",
+                            circular
+                        ),
+                    });
+                }
                 // Circular variants use the same format as genomic, convert to linear coordinates
                 let genome = GenomeVariant {
                     accession: circular.accession.clone(),

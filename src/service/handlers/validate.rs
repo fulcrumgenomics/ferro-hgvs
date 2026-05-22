@@ -3,10 +3,11 @@
 use axum::{extract::State, http::StatusCode, response::Json};
 use std::time::Instant;
 
+use crate::hgvs::interval::interval_is_wraparound;
 use crate::service::{
     server::AppState,
     types::{ErrorResponse, ParsedVariantDetails, PositionDetails, ServiceError, ValidateResponse},
-    validation::validate_hgvs,
+    validation::validate_hgvs as security_validate_hgvs,
 };
 
 /// Request for single variant validation
@@ -29,7 +30,7 @@ pub async fn validate_single(
     let start = Instant::now();
 
     // First, do security validation on the input
-    if let Err(validation_error) = validate_hgvs(&request.hgvs) {
+    if let Err(validation_error) = security_validate_hgvs(&request.hgvs) {
         let error = ServiceError::InvalidHgvs(validation_error.to_string());
         return Err((
             StatusCode::from_u16(error.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -37,15 +38,32 @@ pub async fn validate_single(
         ));
     }
 
-    // Parse using ferro's lenient parser
+    // Parse using ferro's lenient parser; fold the strict parse for
+    // wraps_origin into the same blocking task so neither parse runs on
+    // the async runtime thread.
     let hgvs_str = request.hgvs.clone();
-    let parse_result =
-        tokio::task::spawn_blocking(move || crate::hgvs::parser::parse_hgvs_lenient(&hgvs_str))
-            .await
-            .map_err(|e| {
-                let error = ServiceError::InternalError(format!("Task error: {}", e));
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(error.to_response()))
-            })?;
+    let (parse_result, wraps_origin_for_ok) = tokio::task::spawn_blocking(move || {
+        let lenient = crate::hgvs::parser::parse_hgvs_lenient(&hgvs_str);
+        // TODO(#399): the secondary strict parse is needed because W4001
+        // SwappedPositions auto-correction in parse_hgvs_lenient swaps reversed
+        // ranges before grammar parsing, destroying the wraparound signal. A
+        // cleaner fix would be to make detect_swapped_positions in
+        // src/error_handling/corrections.rs axis-aware (skip m./o.). Tracked
+        // as a follow-up; opening a dedicated issue is also fine.
+        let wraps = crate::hgvs::parser::parse_hgvs(&hgvs_str)
+            .map(|v| variant_wraps_origin(&v))
+            // Falls back to false if strict parse fails (e.g. on a secondary
+            // preprocessor-correctable error like an en-dash). In that case the
+            // lenient path would also yield wraparound=false after correction, so
+            // the two paths agree on the observable output.
+            .unwrap_or(false);
+        (lenient, wraps)
+    })
+    .await
+    .map_err(|e| {
+        let error = ServiceError::InternalError(format!("Task error: {}", e));
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(error.to_response()))
+    })?;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -53,6 +71,7 @@ pub async fn validate_single(
         Ok(result) => {
             // Extract component details
             let components = extract_variant_details(&result.result);
+            let wraps_origin = wraps_origin_for_ok;
 
             // Collect any warnings as potential issues
             let errors = if result.warnings.is_empty() {
@@ -67,6 +86,7 @@ pub async fn validate_single(
                 errors,
                 components,
                 processing_time_ms: elapsed_ms,
+                wraps_origin,
             }))
         }
         Err(e) => Ok(Json(ValidateResponse {
@@ -75,7 +95,71 @@ pub async fn validate_single(
             errors: Some(vec![e.to_string()]),
             components: None,
             processing_time_ms: elapsed_ms,
+            wraps_origin: false,
         })),
+    }
+}
+
+/// Return `true` if the variant is a wraparound range on a circular contig
+/// (i.e. an `m.` or `o.` variant whose start position exceeds its end position
+/// per SVD-WG006). Always returns `false` for linear coordinate systems.
+fn variant_wraps_origin(variant: &crate::hgvs::variant::HgvsVariant) -> bool {
+    use crate::hgvs::variant::HgvsVariant;
+    match variant {
+        HgvsVariant::Mt(v) => interval_is_wraparound(&v.loc_edit.location),
+        HgvsVariant::Circular(v) => interval_is_wraparound(&v.loc_edit.location),
+        _ => false,
+    }
+}
+
+/// Validate an HGVS string and return a [`ValidateResponse`] with component
+/// breakdown and the `wraps_origin` flag.
+///
+/// Unlike the async `validate_single` axum handler, this function is
+/// synchronous and suitable for unit tests and non-HTTP callers.
+///
+/// `wraps_origin` is derived from the strict (no-preprocessor) parse so
+/// that the preprocessor's position-swap correction does not mask the
+/// reversed `<high>_<low>` form that marks a circular-contig wraparound.
+pub fn validate_hgvs(hgvs: &str) -> ValidateResponse {
+    match crate::hgvs::parser::parse_hgvs_lenient(hgvs) {
+        Ok(result) => {
+            let components = extract_variant_details(&result.result);
+            // TODO(#399): the secondary strict parse is needed because W4001
+            // SwappedPositions auto-correction in parse_hgvs_lenient swaps reversed
+            // ranges before grammar parsing, destroying the wraparound signal. A
+            // cleaner fix would be to make detect_swapped_positions in
+            // src/error_handling/corrections.rs axis-aware (skip m./o.). Tracked
+            // as a follow-up; opening a dedicated issue is also fine.
+            let wraps_origin = crate::hgvs::parser::parse_hgvs(hgvs)
+                .map(|v| variant_wraps_origin(&v))
+                // Falls back to false if strict parse fails (e.g. on a secondary
+                // preprocessor-correctable error like an en-dash). In that case the
+                // lenient path would also yield wraparound=false after correction, so
+                // the two paths agree on the observable output.
+                .unwrap_or(false);
+            let errors = if result.warnings.is_empty() {
+                None
+            } else {
+                Some(result.warnings.iter().map(|w| w.message.clone()).collect())
+            };
+            ValidateResponse {
+                input: hgvs.to_string(),
+                valid: true,
+                errors,
+                components,
+                processing_time_ms: 0,
+                wraps_origin,
+            }
+        }
+        Err(e) => ValidateResponse {
+            input: hgvs.to_string(),
+            valid: false,
+            errors: Some(vec![e.to_string()]),
+            components: None,
+            processing_time_ms: 0,
+            wraps_origin: false,
+        },
     }
 }
 
@@ -176,6 +260,28 @@ fn extract_variant_details(
             Some(ParsedVariantDetails {
                 reference: v.accession.to_string(),
                 coordinate_system: "m".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0,
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Circular(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "o".to_string(),
                 variant_type,
                 position: PositionDetails {
                     start: 0,

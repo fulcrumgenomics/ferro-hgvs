@@ -433,6 +433,13 @@ impl ReferenceProvider for MockProvider {
     fn has_genomic_data(&self) -> bool {
         !self.genomic_sequences.is_empty()
     }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.genomic_sequences
+            .get(id)
+            .map(|s| s.len() as u64)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 #[cfg(test)]
@@ -619,6 +626,20 @@ mod tests {
         let provider = MockProvider::from_json(file.path())
             .expect("convert-gff JSON with version/genome_build metadata should load");
         assert!(provider.is_empty());
+    }
+
+    #[test]
+    fn test_mock_provider_returns_sequence_length_for_added_sequence() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_012920.1", "A".repeat(16569));
+        assert_eq!(provider.get_sequence_length("NC_012920.1").unwrap(), 16569);
+    }
+
+    #[test]
+    fn test_mock_provider_sequence_length_errors_for_unknown_id() {
+        let provider = MockProvider::new();
+        let err = provider.get_sequence_length("missing").unwrap_err();
+        assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
 
     #[test]

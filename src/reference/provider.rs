@@ -120,6 +120,24 @@ pub trait ReferenceProvider {
     fn has_protein_data(&self) -> bool {
         false
     }
+
+    /// Return the total number of bases in the named reference sequence.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Sequence accession or contig name (e.g., `"NC_012920.1"`, `"chrM"`)
+    ///
+    /// # Returns
+    ///
+    /// The length in bases, or [`FerroError::ReferenceNotFound`] if the
+    /// accession is unknown to this provider.
+    ///
+    /// The default implementation always returns
+    /// [`FerroError::ReferenceNotFound`]; providers that store length
+    /// metadata (e.g. from a FASTA index) override this method.
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        Err(FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 /// Blanket implementation for boxed trait objects
@@ -164,5 +182,9 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
 
     fn has_protein_data(&self) -> bool {
         (**self).has_protein_data()
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        (**self).get_sequence_length(id)
     }
 }

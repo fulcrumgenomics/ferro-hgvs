@@ -1125,6 +1125,11 @@ impl ReferenceProvider for MultiFastaProvider {
             .keys()
             .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
     }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.sequence_length(id)
+            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
 }
 
 /// Load a FASTA index (.fai) file
@@ -1421,6 +1426,73 @@ mod tests {
         assert_eq!(aliases.get("NC_000001"), Some(&"chr1".to_string()));
         assert_eq!(aliases.get("1"), Some(&"chr1".to_string()));
         assert_eq!(aliases.get("X"), Some(&"chrX".to_string()));
+    }
+
+    #[test]
+    fn test_multi_fasta_provider_get_sequence_length_returns_length_for_known_contig() {
+        let dir = tempdir().unwrap();
+
+        let fasta_path = dir.path().join("test.fna");
+        let fai_path = dir.path().join("test.fna.fai");
+
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">NM_000001.1").unwrap();
+        writeln!(fasta_file, "ATGCATGCAT").unwrap();
+
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "NM_000001.1\t10\t13\t10\t11").unwrap();
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        assert_eq!(provider.get_sequence_length("NM_000001.1").unwrap(), 10);
+        // Also verify the unversioned alias resolves
+        assert_eq!(provider.get_sequence_length("NM_000001").unwrap(), 10);
+    }
+
+    #[test]
+    fn test_multi_fasta_provider_get_sequence_length_resolves_versioned_chromosome_alias() {
+        let dir = tempdir().unwrap();
+
+        // FASTA keyed as chrM (UCSC style); the versioned RefSeq accession
+        // `NC_012920.1` must resolve to it via the `NC_012920 -> chrM` alias
+        // after the version suffix is stripped.
+        let fasta_path = dir.path().join("chrM.fa");
+        let fai_path = dir.path().join("chrM.fa.fai");
+
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">chrM").unwrap();
+        writeln!(fasta_file, "ATGCATGCAT").unwrap();
+
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "chrM\t10\t6\t10\t11").unwrap();
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        assert_eq!(provider.get_sequence_length("chrM").unwrap(), 10);
+        assert_eq!(provider.get_sequence_length("NC_012920").unwrap(), 10);
+        assert_eq!(provider.get_sequence_length("NC_012920.1").unwrap(), 10);
+    }
+
+    #[test]
+    fn test_multi_fasta_provider_get_sequence_length_errors_for_unknown_id() {
+        let dir = tempdir().unwrap();
+
+        let fasta_path = dir.path().join("test.fna");
+        let fai_path = dir.path().join("test.fna.fai");
+
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">NM_000001.1").unwrap();
+        writeln!(fasta_file, "ATGCATGCAT").unwrap();
+
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "NM_000001.1\t10\t13\t10\t11").unwrap();
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        let err = provider
+            .get_sequence_length("NM_NONEXISTENT.1")
+            .unwrap_err();
+        assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
 
     /// Helper: write a tempdir genome FASTA with `>NC_TEST.1` carrying 40
