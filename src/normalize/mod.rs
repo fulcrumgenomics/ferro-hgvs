@@ -789,6 +789,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // In strict mode, reject when two or more cis-allele edits
+        // share identical reference bounds (W5002). The registry
+        // already declared `ModeBehavior::always_warn_if_not_rejected`
+        // (Strict → Reject) but the emit site at `overlap.rs:88`
+        // unconditionally pushed the warning. Closes #395 item 6.
+        if self.config.should_reject_overlap_conflict() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::OverlapConflict {
+                    accession,
+                    coordinate_system,
+                    location,
+                    edit_kinds,
+                    ..
+                } => Some(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "{accession}:{coordinate_system}.{location} has \
+                         {n} coincident cis-allele edits ({kinds}); HGVS spec defines no \
+                         canonical form for this case (OverlapConflictingEdits / W5002)",
+                        n = edit_kinds.len(),
+                        kinds = edit_kinds.join(", "),
+                    ),
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         Ok(result.result)
     }
 
