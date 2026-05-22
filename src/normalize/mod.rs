@@ -1575,6 +1575,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // post-canon edit-type is `Insertion` (= ins didn't promote to
         // dup). Duplication outputs that touch / cross `cds_end` are
         // the spec-canonical form and stay.
+        //
+        // Mirror of the CDS-start clamp's `spanning_dup_exception` gate
+        // above (#401). The two clamps use opposite gate styles —
+        // CDS-end positive-lists `Insertion`, CDS-start negative-lists
+        // `Duplication` whose end reaches CDS — but both have the same
+        // intent: preserve spanning duplications, clamp everything
+        // else.
         if let Some(cds_end_tx) = transcript.cds_end {
             if matches!(start_axis, boundary::AxisRegion::Cds)
                 && new_tx_end > cds_end_tx
