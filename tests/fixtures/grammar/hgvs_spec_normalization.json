@@ -13,8 +13,8 @@
       "diverges": 146,
       "false-acceptance": 83,
       "needs-reference": 31,
-      "parse-error": 338,
-      "preserved": 632
+      "parse-error": 337,
+      "preserved": 633
     },
     "by_coordinate_system": {
       "c": 464,
@@ -14475,19 +14475,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "r.[76a>u];[=]",
-      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"=\", code: Digit })",
-      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "r.[83g>u,73_93del]",
       "input_prefixed": "NM_004006.3:r.[83g>u,73_93del]",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \",73_93del\", code: Tag })",
@@ -15737,6 +15724,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/delins.md"
+      ]
+    },
+    {
+      "input": "r.[76a>u];[=]",
+      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
+      "current": "NM_004006.3:r.[76a>u];[=]",
+      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
       ]
     },
     {

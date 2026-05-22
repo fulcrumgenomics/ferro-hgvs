@@ -3578,15 +3578,71 @@ fn parse_rna_position_unknown_phase(
     ))
 }
 
-/// Parse a single bracket-member position+edit (RNA), recognising the
-/// predicted-wrapper form `(<pos><edit>)` and returning a `LocEdit`
-/// with `Mu::Uncertain` in that case. Falls back to `<pos>[<edit>]`
-/// (edit optional, defaults to identity). Mirrors
-/// `parse_cds_bracket_member`. #287 follow-up to #243 / PR #244.
+/// Parse a single bracket-member position+edit (RNA), recognising
+/// whole-entity edits (`=`, `?`, `0`, `spl`, `spl?`, `(spl)`,
+/// `(spl?)`), the predicted-wrapper form `(<pos><edit>)`, and bare
+/// `<pos><edit>` (edit optional, defaults to identity). Mirrors
+/// `parse_cds_bracket_member`. #287 follow-up to #243 / PR #244;
+/// whole-entity dispatch added by #396 item 3.
 fn parse_rna_bracket_member(
     part: &str,
 ) -> IResult<&str, LocEdit<RnaInterval, crate::hgvs::edit::NaEdit>> {
-    // Try predicted wrapper first
+    // Whole-entity RNA edits have no positional content, so attach a
+    // dummy interval at position 1 (mirrors `parse_rna_variant`'s
+    // handling of the same forms at the top level). These probes run
+    // BEFORE the position-based predicted wrapper / bare-position
+    // parsers so a bracket like `[(spl?)]` matches the predicted-splice
+    // marker rather than being routed into `parse_rna_interval`. #396
+    // item 3.
+    fn dummy_rna_interval() -> RnaInterval {
+        RnaInterval::point(crate::hgvs::location::RnaPos {
+            base: 1,
+            offset: None,
+            utr3: false,
+        })
+    }
+
+    if let Ok((remaining, mu_edit)) = parse_whole_rna_identity(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_rna_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_whole_rna_unknown(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_rna_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_rna_no_product(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_rna_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, edit)) = parse_whole_rna_predicted_splice(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_rna_interval(),
+                edit: Mu::Uncertain(edit),
+            },
+        ));
+    }
+    if let Ok((remaining, edit)) = parse_rna_splice(part) {
+        return Ok((remaining, LocEdit::new(dummy_rna_interval(), edit)));
+    }
+
+    // Position-based predicted wrapper: `(<pos><edit>)`.
     if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
         if let Ok((remaining, (interval, edit))) =
             delimited(char('('), (parse_rna_interval, parse_na_edit), char(')')).parse(part)
