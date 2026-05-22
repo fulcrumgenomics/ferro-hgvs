@@ -210,12 +210,17 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
 /// circular contig, per SVD-WG006) are NOT past-end if both endpoints
 /// fit in the contig — this check fires only when an endpoint itself
 /// exceeds the contig length.
+///
+/// Skipped cases (mirrors `check_tx_pos_past_end`): special positions
+/// (`pter`/`qter`/`cen`, encoded as `base == 0`) and positions carrying
+/// an offset (non-standard on mt but parseable), because the final
+/// coordinate isn't determined by `base` alone.
 fn check_mt_pos_past_end(
     accession: &str,
     pos: &GenomePos,
     contig_length: u64,
 ) -> Option<NormalizationWarning> {
-    if pos.base < 1 {
+    if pos.base < 1 || pos.offset.is_some() {
         return None;
     }
     if pos.base > contig_length {
@@ -660,8 +665,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        // In strict mode, reject if any position lies past the CDS-end or
-        // transcript-end (W4004).
+        // In strict mode, reject if any position lies past the CDS-end,
+        // transcript-end, or contig-end (W4004). Use an axis-aware noun
+        // for the reference structure — `m.` lives on a contig, not a
+        // transcript, so the rejection message must say so.
         if self.config.should_reject_position_past_end() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
                 NormalizationWarning::PositionPastEnd {
@@ -671,13 +678,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     bound_kind,
                     bound_value,
                     ..
-                } => Some(FerroError::InvalidCoordinates {
-                    msg: format!(
-                        "{accession}:{coordinate_system}.{position} is past the {bound_kind} \
-                         ({bound_value}); position does not reference a base in the transcript \
-                         (PositionPastEnd / W4004)"
-                    ),
-                }),
+                } => {
+                    let reference_noun = match coordinate_system.as_str() {
+                        "m" => "contig",
+                        _ => "transcript",
+                    };
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}:{coordinate_system}.{position} is past the {bound_kind} \
+                             ({bound_value}); position does not reference a base in the \
+                             {reference_noun} (PositionPastEnd / W4004)"
+                        ),
+                    })
+                }
                 _ => None,
             }) {
                 return Err(err);
@@ -2815,7 +2828,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     {
                         bounds_warnings.push(w);
                     }
-                    if end_pos.base != start_pos.base {
+                    // Mirror the c./n. dedupe guard: compare the full
+                    // (base, offset) tuple, not just `base`. A range like
+                    // `m.16570+1_16570` shares the same `base` on both
+                    // endpoints but the offset differs — checking only
+                    // `base` would skip the in-bounds endpoint and lose
+                    // W4004 on the other one. Offsets are non-standard on
+                    // m. but are parseable today (see
+                    // `check_mt_pos_past_end`'s skip on `pos.offset.is_some()`).
+                    let end_distinct =
+                        end_pos.base != start_pos.base || end_pos.offset != start_pos.offset;
+                    if end_distinct {
                         if let Some(w) =
                             check_mt_pos_past_end(&mt_accession_bounds, end_pos, contig_length)
                         {
@@ -2823,7 +2846,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         }
                     }
                     if !bounds_warnings.is_empty() {
-                        return Ok((HV::Mt(variant.clone()), bounds_warnings));
+                        return Ok((
+                            HV::Mt(self.canonicalize_mt_variant(variant)),
+                            bounds_warnings,
+                        ));
                     }
                 }
             }

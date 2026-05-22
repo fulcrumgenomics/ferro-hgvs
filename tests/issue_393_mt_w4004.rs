@@ -45,6 +45,11 @@ fn strict_mode_rejects_m_position_past_contig_end() {
                 msg.contains("contig-end"),
                 "expected contig-end bound-kind tag, got: {msg}",
             );
+            // Axis-aware wording: m. lives on a contig, not a transcript.
+            assert!(
+                msg.contains("contig") && !msg.contains("transcript"),
+                "expected mt-axis wording to say `contig` not `transcript`; got: {msg}",
+            );
         }
         other => panic!("expected FerroError::InvalidCoordinates, got: {other:?}"),
     }
@@ -108,8 +113,20 @@ fn strict_mode_accepts_m_position_at_contig_end() {
         result.warnings,
     );
     // Strict mode: the bounds check must not reject for a valid position.
-    // (Ref mismatch from the placeholder might fire, but not W4004.)
-    let _ = normalizer.normalize(&variant); // either ok or ref-mismatch, not W4004
+    // A ref-mismatch failure is acceptable (placeholder bases may not match),
+    // but the error message must NOT mention W4004 / POSITION_PAST_END.
+    match normalizer.normalize(&variant) {
+        Ok(_) => {}
+        Err(ferro_hgvs::FerroError::InvalidCoordinates { msg }) => {
+            assert!(
+                !msg.contains("W4004") && !msg.contains("POSITION_PAST_END"),
+                "m.16569 must not be treated as past-end in strict mode; got: {msg}",
+            );
+        }
+        Err(_) => {
+            // other strict-mode rejections (e.g. ref mismatch) are allowed
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +174,33 @@ fn lenient_mode_warns_on_partial_wraparound_with_start_past_contig() {
             .iter()
             .any(|w| w.code() == "POSITION_PAST_END"),
         "expected W4004 for past-end start m.16570; got: {:?}",
+        result.warnings,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Same-base endpoints with distinct offsets must still check both ends
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lenient_mode_w4004_when_only_offset_endpoint_distinguishes_positions() {
+    // `m.16570+1_16570del` — start has a non-standard `+1` offset (skipped by
+    // `check_mt_pos_past_end`'s offset guard), end is plain `m.16570` which
+    // exceeds the 16569-bp contig. A naive `if start.base != end.base` dedupe
+    // would skip the end position because the bases match, and W4004 would
+    // be silently lost. The endpoint distinctness check must compare the
+    // full `(base, offset)` tuple — mirrors the c./n. dedupe pattern.
+    let variant = parse_hgvs("NC_012920.1:m.16570+1_16570del").expect("parse must succeed");
+    let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("lenient mode must not error");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "POSITION_PAST_END"),
+        "expected W4004 for past-end plain end m.16570 (start has +1 offset); got: {:?}",
         result.warnings,
     );
 }
