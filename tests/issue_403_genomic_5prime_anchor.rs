@@ -80,3 +80,16 @@ fn five_prime_no_cross_emits_five_prime_anchored_dup() {
     );
     assert_eq!(out, "NC_TEST.1:g.101_102dup");
 }
+
+#[test]
+fn three_prime_no_cross_emits_three_prime_anchored_dup() {
+    // Symmetry with `three_prime_cross_emits_three_prime_anchored_dup`:
+    // no axis boundaries on a g.-only contig, so cross=false matches
+    // cross=true under the 3' direction.
+    let out = normalize(
+        "NC_TEST.1:g.101_102insGA",
+        ShuffleDirection::ThreePrime,
+        false,
+    );
+    assert_eq!(out, "NC_TEST.1:g.102_103dup");
+}
