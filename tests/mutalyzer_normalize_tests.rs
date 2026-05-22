@@ -221,22 +221,62 @@ struct AcceptedDivergence {
     note: Option<String>,
 }
 
+/// Closed enum of HGVS spec section identifiers cited from `cases.json`.
+/// Mirrors [`Policy`]'s shape: adding a new section requires a code
+/// change here, which forces deliberate review of every new citation
+/// rather than allowing ad-hoc string typing in `cases.json` (#430,
+/// follow-up to #397 item 2). The `#[serde(rename = "...")]` annotation
+/// keeps the JSON wire format stable.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum SpecSection {
+    /// HGVS §Prioritization — the spec's edit-prioritization rules (dup
+    /// over ins, etc.) that ferro applies during normalization. This is
+    /// a ferro-internal label, not a stable spec heading: the upstream
+    /// spec submodule (`assets/hgvs-nomenclature/docs/recommendations/`)
+    /// has no `Prioritization` anchor today, so binding to a path here
+    /// would create a brittle pointer. The human label is the stable
+    /// catalog key; the rename string preserves the byte sequence in
+    /// `cases.json`.
+    #[serde(rename = "HGVS §Prioritization")]
+    HgvsPrioritization,
+}
+
+impl SpecSection {
+    /// Stable identifier used in summary lines so reviewers can grep
+    /// across runs. Matches the `#[serde(rename)]` strings byte-for-byte
+    /// to preserve the pre-enum summary-line format.
+    fn as_str(self) -> &'static str {
+        match self {
+            SpecSection::HgvsPrioritization => "HGVS §Prioritization",
+        }
+    }
+}
+
+impl std::fmt::Display for SpecSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Spec-citation annotation. Documentary only — does NOT affect tally
 /// bucketing. Used to record that the `cases.json` expected output for
 /// `axis` has been corrected to ferro's spec-correct value (versus
 /// mutalyzer's spec-incorrect output), with a citation to the relevant
 /// HGVS spec section.
 ///
-/// `axis` is a closed enum (see [`Axis`]); `section` remains a free-form
-/// string because HGVS spec section identifiers don't yet have a stable
-/// catalog worth pinning.
+/// `axis` and `section` are now closed enums (see [`Axis`], [`SpecSection`]);
+/// serde rejects unknown variants at fixture-parse time, so a misspelled
+/// section identifier surfaces as a hard parse error rather than silently
+/// losing cataloguability.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 struct SpecCitation {
     /// Axis this citation applies to.
     axis: Axis,
-    /// HGVS spec section the citation references (e.g. `"HGVS §Prioritization"`).
-    section: String,
+    /// HGVS spec section the citation references (e.g.
+    /// `SpecSection::HgvsPrioritization`).
+    section: SpecSection,
     /// Optional human-readable note expanding on the citation.
     #[serde(default)]
     note: Option<String>,
@@ -416,7 +456,7 @@ impl AxisTally {
             if let Some(sc) = &case.spec_citation {
                 if sc.axis == self.axis {
                     self.spec_overridden
-                        .push((case.input.clone(), sc.section.clone()));
+                        .push((case.input.clone(), sc.section.to_string()));
                     return;
                 }
             }
@@ -1147,6 +1187,31 @@ mod comparator_tests {
         );
     }
 
+    /// Issue #430 closes `SpecCitation.section` to a [`SpecSection`] enum so
+    /// a misspelled section identifier surfaces as a hard parse error
+    /// rather than silently losing cataloguability in `cases.json`. Mirrors
+    /// `case_axis_typo_rejected_at_deserialization` and
+    /// `case_policy_typo_rejected_at_deserialization`.
+    #[test]
+    fn case_section_typo_rejected_at_deserialization() {
+        // Missing the `§` sigil — looks plausible but is not the
+        // canonical identifier.
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "spec_citation": {
+                    "axis": "normalized",
+                    "section": "HGVS Prioritization"
+                }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected typo'd section (`HGVS Prioritization` vs `HGVS §Prioritization`) to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
     // (2) `accepted_divergence` deserializes including the optional `note`.
     #[test]
     fn case_parses_with_accepted_divergence() {
@@ -1184,7 +1249,7 @@ mod comparator_tests {
         );
         let sc = case.spec_citation.as_ref().expect("spec_citation present");
         assert_eq!(sc.axis, Axis::Normalized);
-        assert_eq!(sc.section, "HGVS §Prioritization");
+        assert_eq!(sc.section, SpecSection::HgvsPrioritization);
         assert_eq!(sc.note.as_deref(), Some("dup over ins"));
     }
 
@@ -1294,7 +1359,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: "HGVS §Prioritization".to_string(),
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1318,7 +1383,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: "HGVS §Prioritization".to_string(),
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1341,7 +1406,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Errors,
-                section: "HGVS §Prioritization".to_string(),
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1377,7 +1442,7 @@ mod comparator_tests {
                 None,
                 Some(SpecCitation {
                     axis: Axis::Normalized,
-                    section: "HGVS §Prioritization".to_string(),
+                    section: SpecSection::HgvsPrioritization,
                     note: None,
                 }),
             ),
@@ -1411,7 +1476,7 @@ mod comparator_tests {
             }),
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: "HGVS §Prioritization".to_string(),
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
