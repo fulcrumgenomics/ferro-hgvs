@@ -1112,11 +1112,9 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 p.0, p.0?, or p.(Met1?)). Consumers should consider both \
                 interpretations.",
             category: CodeCategory::Format,
-            bad_examples: &[],
-            good_examples: &[
-                "NP_000088.3:p.Met1_Lys2insMet (canonicalized to p.Met1dup with W3022)",
-            ],
-            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            bad_examples: &["NP_000088.3:p.Met1_Lys2insMet"],
+            good_examples: &["NP_000088.3:p.Met1dup"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
             related_codes: &["W3021"],
         },
