@@ -5,10 +5,17 @@
 //! returns `None` for wraparound on `m.`/`o.` (pinned by
 //! `tests/mito_circular_audit.rs`); these tests pin the spec-correct
 //! values when a provider can supply contig length.
+//!
+//! The second section (vcf_conversion_*) verifies that `HgvsToVcfConverter`
+//! rejects wraparound `m.`/`o.` variants with a clear error rather than
+//! silently producing garbage from calling `get_reference_sequence` with
+//! `start > end`.
 
 use ferro_hgvs::parse_hgvs;
 use ferro_hgvs::python_helpers::get_indel_length_with_provider;
 use ferro_hgvs::reference::mock::MockProvider;
+use ferro_hgvs::reference::transcript::{GenomeBuild, ManeStatus, Strand, Transcript};
+use ferro_hgvs::vcf::HgvsToVcfConverter;
 
 fn mt_provider() -> MockProvider {
     let mut p = MockProvider::new();
@@ -40,4 +47,73 @@ fn wraparound_delins_indel_length_is_spec_correct_with_provider() {
     let p = mt_provider();
     // 2-nt window replaced with 1-nt insert; net = 1 − 2 = −1.
     assert_eq!(get_indel_length_with_provider(&v, &p), Some(-1));
+}
+
+// =============================================================================
+// VCF conversion: wraparound m./o. variants must be rejected at the boundary
+// =============================================================================
+
+/// Minimal transcript stub for VCF converter tests.
+///
+/// `HgvsToVcfConverter` needs a `&Transcript` but for `Mt`/`Circular` variants
+/// `convert_genome` derives the chromosome from the accession, not from the
+/// transcript. The stub only needs to be structurally valid.
+fn minimal_transcript() -> Transcript {
+    Transcript::new(
+        "NC_012920.1".to_string(),
+        None,
+        Strand::Plus,
+        None,
+        None,
+        None,
+        vec![],
+        Some("chrM".to_string()),
+        None,
+        None,
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    )
+}
+
+#[test]
+fn vcf_conversion_rejects_wraparound_mt_del() {
+    let v = parse_hgvs("NC_012920.1:m.16569_1del").unwrap();
+    let tx = minimal_transcript();
+    let p = mt_provider();
+    let converter = HgvsToVcfConverter::new(&tx, &p);
+    let err = converter.convert(&v).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("wraparound") || msg.contains("circular"),
+        "expected wraparound-rejection error, got: {msg}"
+    );
+}
+
+#[test]
+fn vcf_conversion_rejects_wraparound_mt_delins() {
+    let v = parse_hgvs("NC_012920.1:m.16569_1delinsT").unwrap();
+    let tx = minimal_transcript();
+    let p = mt_provider();
+    let converter = HgvsToVcfConverter::new(&tx, &p);
+    assert!(converter.convert(&v).is_err());
+}
+
+#[test]
+fn vcf_conversion_rejects_wraparound_mt_dup() {
+    let v = parse_hgvs("NC_012920.1:m.16560_5dup").unwrap();
+    let tx = minimal_transcript();
+    let p = mt_provider();
+    let converter = HgvsToVcfConverter::new(&tx, &p);
+    assert!(converter.convert(&v).is_err());
+}
+
+#[test]
+fn vcf_conversion_still_accepts_linear_mt_sub() {
+    let v = parse_hgvs("NC_012920.1:m.100A>G").unwrap();
+    let tx = minimal_transcript();
+    let p = mt_provider();
+    let converter = HgvsToVcfConverter::new(&tx, &p);
+    assert!(converter.convert(&v).is_ok());
 }
