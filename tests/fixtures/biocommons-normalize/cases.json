@@ -8,12 +8,12 @@
   "cases": [
     {
       "input": "NG_029146.1:g.6494delG",
-      "normalized": null,
-      "expects_error": true,
+      "normalized": "NG_029146.1:g.6496del",
       "shuffle_direction": "3prime",
       "cross_boundaries": true,
       "source_function": "issue_293_parser_attribute_assignment_error",
-      "to_test": true
+      "to_test": true,
+      "spec_citation_note": "biocommons hgvs issue #293 rejects this input but the rejection is a Python attribute-assignment error inside its normalizer, not an HGVS spec rule. The actual reference base at NG_029146.1:g.6494 IS `G` (confirmed via manifest-mode FASTA: g.6490..6500 = \"GCTGGGTAAG\"), so there is no RefSeqMismatch. The 3'-shuffle correctly walks through the GGG tract at g.6494..g.6496 and lands at g.6496del. ferro emits the spec-canonical answer; documenting the divergence here rather than mimicking biocommons' bug."
     },
     {
       "input": "NM_000535.5:c.1673_1674inv",
