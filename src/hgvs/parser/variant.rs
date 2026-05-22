@@ -1546,11 +1546,28 @@ fn parse_genome_position_unknown_phase(
 /// (with the `g.` already consumed by the caller). Each bracketed group holds
 /// a single sub-variant rendered with this allele's accession. Mirrors
 /// `parse_cds_trans_allele_shorthand` and `parse_rna_trans_allele_shorthand`.
-fn parse_genome_trans_allele_shorthand(
+/// Generic trans-allele shorthand parser shared by 6 of 7 axes (g., c., n.,
+/// m., r., o.). Owns the bracketed-member loop, the `[0]`/`[?]`
+/// cross-coordinate special-cases, the bracket-balance check, the
+/// `len < 2` guard, and the final `AlleleVariant::new(.., Trans)` wrap.
+///
+/// Each axis-specific shim provides `parse_member`, a closure that
+/// consumes the bracket content and constructs the per-axis
+/// `HgvsVariant::<Axis>` (or returns a parse error). The closure also
+/// owns the post-parse "content fully consumed" check so axes are free
+/// to use their own bracket-member primitives without recomputing the
+/// remainder.
+///
+/// Protein keeps its own bespoke helper because it overrides the
+/// special-marker arm (`[0]`/`[0?]`/`[(0)]` → `ProteinEdit::NoProtein`
+/// rather than the cross-coordinate `NullAllele`).
+fn parse_trans_allele_shorthand_generic<F>(
     input: &str,
-    accession: Accession,
-    gene_symbol: Option<String>,
-) -> IResult<&str, HgvsVariant> {
+    mut parse_member: F,
+) -> IResult<&str, HgvsVariant>
+where
+    F: FnMut(&str) -> IResult<&str, HgvsVariant>,
+{
     let mut variants = Vec::with_capacity(2);
     let mut remaining = input;
 
@@ -1573,23 +1590,14 @@ fn parse_genome_trans_allele_shorthand(
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            // Route through parse_genome_bracket_member so the predicted-wrapper
-            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            let (final_remaining, loc_edit) =
-                parse_genome_bracket_member(content, GenomeKind::Genome)?;
-
+            let (final_remaining, variant) = parse_member(content)?;
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     final_remaining,
                     nom::error::ErrorKind::Tag,
                 )));
             }
-
-            HgvsVariant::Genome(GenomeVariant {
-                accession: accession.clone(),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit,
-            })
+            variant
         };
 
         variants.push(variant);
@@ -1611,6 +1619,24 @@ fn parse_genome_trans_allele_shorthand(
         remaining,
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
     ))
+}
+
+fn parse_genome_trans_allele_shorthand(
+    input: &str,
+    accession: Accession,
+    gene_symbol: Option<String>,
+) -> IResult<&str, HgvsVariant> {
+    parse_trans_allele_shorthand_generic(input, |content| {
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Genome)?;
+        Ok((
+            rest,
+            HgvsVariant::Genome(GenomeVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit,
+            }),
+        ))
+    })
 }
 
 /// Parse whole-genome identity: g.=
@@ -2084,69 +2110,17 @@ fn parse_cds_trans_allele_shorthand(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
-    // Pre-allocate with capacity for trans alleles (typically 2)
-    let mut variants = Vec::with_capacity(2);
-    let mut remaining = input;
-
-    while !remaining.is_empty() {
-        // Must start with [
-        if !remaining.starts_with('[') {
-            break;
-        }
-
-        // Find closing bracket
-        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(
-                remaining,
-                nom::error::ErrorKind::Tag,
-            ))
-        })?;
-
-        let content = &remaining[1..close_bracket].trim();
-
-        // Check for special markers
-        let variant = if *content == "0" {
-            HgvsVariant::NullAllele
-        } else if *content == "?" {
-            HgvsVariant::UnknownAllele
-        } else {
-            // Parse as CDS variant (interval + edit, with predicted-wrapper support).
-            let (final_remaining, loc_edit) = parse_cds_bracket_member(content)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
+    parse_trans_allele_shorthand_generic(input, |content| {
+        let (rest, loc_edit) = parse_cds_bracket_member(content)?;
+        Ok((
+            rest,
             HgvsVariant::Cds(CdsVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
                 loc_edit,
-            })
-        };
-
-        variants.push(variant);
-        remaining = &remaining[close_bracket + 1..];
-
-        // Check for more variants (semicolon separator)
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    Ok((
-        remaining,
-        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
-    ))
+            }),
+        ))
+    })
 }
 
 /// Parse transcript variant (n.)
@@ -2297,66 +2271,17 @@ fn parse_tx_trans_allele_shorthand(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
-    let mut variants = Vec::with_capacity(2);
-    let mut remaining = input;
-
-    while !remaining.is_empty() {
-        if !remaining.starts_with('[') {
-            break;
-        }
-
-        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(
-                remaining,
-                nom::error::ErrorKind::Tag,
-            ))
-        })?;
-
-        let content = remaining[1..close_bracket].trim();
-
-        let variant = if content == "0" {
-            HgvsVariant::NullAllele
-        } else if content == "?" {
-            HgvsVariant::UnknownAllele
-        } else {
-            // Route through parse_tx_bracket_member so the predicted-wrapper
-            // form `(<pos><edit>)` is recognised on trans-shorthand members
-            // too. #287.
-            let (final_remaining, loc_edit) = parse_tx_bracket_member(content)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
+    parse_trans_allele_shorthand_generic(input, |content| {
+        let (rest, loc_edit) = parse_tx_bracket_member(content)?;
+        Ok((
+            rest,
             HgvsVariant::Tx(TxVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
                 loc_edit,
-            })
-        };
-
-        variants.push(variant);
-        remaining = &remaining[close_bracket + 1..];
-
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    Ok((
-        remaining,
-        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
-    ))
+            }),
+        ))
+    })
 }
 
 /// Parse a compound allele with `n.` (transcript) variants:
@@ -2602,67 +2527,19 @@ fn parse_mt_trans_allele_shorthand(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
-    let mut variants = Vec::with_capacity(2);
-    let mut remaining = input;
-
-    while !remaining.is_empty() {
-        if !remaining.starts_with('[') {
-            break;
-        }
-
-        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(
-                remaining,
-                nom::error::ErrorKind::Tag,
-            ))
-        })?;
-
-        let content = remaining[1..close_bracket].trim();
-
-        let variant = if content == "0" {
-            HgvsVariant::NullAllele
-        } else if content == "?" {
-            HgvsVariant::UnknownAllele
-        } else {
-            // Route through parse_genome_bracket_member so the predicted-wrapper
-            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            // Pass `GenomeKind::Mt` so the helper uses the circular interval
-            // parser + spec-authorised reversed-range validator (#129).
-            let (final_remaining, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Mt)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
+    parse_trans_allele_shorthand_generic(input, |content| {
+        // `GenomeKind::Mt` routes through the circular interval parser +
+        // spec-authorised reversed-range validator (#129).
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Mt)?;
+        Ok((
+            rest,
             HgvsVariant::Mt(MtVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
                 loc_edit,
-            })
-        };
-
-        variants.push(variant);
-        remaining = &remaining[close_bracket + 1..];
-
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    Ok((
-        remaining,
-        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
-    ))
+            }),
+        ))
+    })
 }
 
 /// Parse whole-protein identity: p.= or p.(=)
@@ -2843,10 +2720,19 @@ fn parse_protein_allele_shorthand(
 
 /// Parse a protein trans-allele compact-prefix shorthand:
 /// `[edit1];[edit2]` (with `p.` already consumed by the caller). Each
-/// bracketed group holds a single sub-variant. Mirrors
-/// `parse_genome_trans_allele_shorthand`, but parses protein intervals +
+/// bracketed group holds a single sub-variant. Parses protein intervals +
 /// edits and does NOT allow a bare-position (Identity) fallback — the
 /// protein grammar requires an edit.
+///
+/// Intentionally NOT routed through `parse_trans_allele_shorthand_generic`
+/// (used by the other 6 axes): protein has three special-case markers
+/// (`[0]`, `[0?]`, `[(0)]`) that resolve to `ProteinEdit::NoProtein` rather
+/// than the cross-coordinate `HgvsVariant::NullAllele`, because the `p.`
+/// compact prefix has already pinned the coordinate system. The generic
+/// helper hard-codes the cross-coordinate `[0]`/`[?]` →
+/// `NullAllele`/`UnknownAllele` mapping appropriate for the other 6 axes.
+/// See the inline comment at the `content == "0"` branch below for the
+/// full spec arbitration (#277, follow-up to PR #130).
 fn parse_protein_trans_allele_shorthand(
     input: &str,
     accession: Accession,
@@ -3782,66 +3668,17 @@ fn parse_rna_trans_allele_shorthand(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
-    let mut variants = Vec::with_capacity(2);
-    let mut remaining = input;
-
-    while !remaining.is_empty() {
-        if !remaining.starts_with('[') {
-            break;
-        }
-
-        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(
-                remaining,
-                nom::error::ErrorKind::Tag,
-            ))
-        })?;
-
-        let content = &remaining[1..close_bracket].trim();
-
-        let variant = if *content == "0" {
-            HgvsVariant::NullAllele
-        } else if *content == "?" {
-            HgvsVariant::UnknownAllele
-        } else {
-            // Route through parse_rna_bracket_member so the predicted-wrapper
-            // form `(<pos><edit>)` is recognised on trans-shorthand members
-            // too. #287.
-            let (final_remaining, loc_edit) = parse_rna_bracket_member(content)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
+    parse_trans_allele_shorthand_generic(input, |content| {
+        let (rest, loc_edit) = parse_rna_bracket_member(content)?;
+        Ok((
+            rest,
             HgvsVariant::Rna(RnaVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
                 loc_edit,
-            })
-        };
-
-        variants.push(variant);
-        remaining = &remaining[close_bracket + 1..];
-
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    Ok((
-        remaining,
-        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
-    ))
+            }),
+        ))
+    })
 }
 
 /// Parse circular DNA variant (o.) - SVD-WG006
@@ -3963,68 +3800,19 @@ fn parse_circular_trans_allele_shorthand(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
-    let mut variants = Vec::with_capacity(2);
-    let mut remaining = input;
-
-    while !remaining.is_empty() {
-        if !remaining.starts_with('[') {
-            break;
-        }
-
-        let close_bracket = find_top_level_close_bracket(remaining).ok_or_else(|| {
-            nom::Err::Error(nom::error::Error::new(
-                remaining,
-                nom::error::ErrorKind::Tag,
-            ))
-        })?;
-
-        let content = remaining[1..close_bracket].trim();
-
-        let variant = if content == "0" {
-            HgvsVariant::NullAllele
-        } else if content == "?" {
-            HgvsVariant::UnknownAllele
-        } else {
-            // Route through parse_genome_bracket_member so the predicted-wrapper
-            // form `(<pos><edit>)` is recognised on trans-shorthand members too.
-            // Pass `GenomeKind::Circular` so the helper uses the circular
-            // interval parser + spec-authorised reversed-range validator (#129).
-            let (final_remaining, loc_edit) =
-                parse_genome_bracket_member(content, GenomeKind::Circular)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
+    parse_trans_allele_shorthand_generic(input, |content| {
+        // `GenomeKind::Circular` routes through the circular interval parser
+        // + spec-authorised reversed-range validator (#129).
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Circular)?;
+        Ok((
+            rest,
             HgvsVariant::Circular(CircularVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
                 loc_edit,
-            })
-        };
-
-        variants.push(variant);
-        remaining = &remaining[close_bracket + 1..];
-
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
-        }
-    }
-
-    if variants.len() < 2 {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
-    Ok((
-        remaining,
-        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
-    ))
+            }),
+        ))
+    })
 }
 
 /// Parse a single variant (not an allele) from input
