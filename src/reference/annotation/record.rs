@@ -74,6 +74,18 @@ fn parse_phase<E>(nphase: Option<Result<Phase, E>>, trimmed: &str) -> Option<u8>
     }
 }
 
+/// Decode a GFF3 attribute value as a list of IDs. noodles-gff parses
+/// comma-separated values as `Value::Array` and single values as
+/// `Value::String`; both shapes flow into the same `Vec<String>` here.
+/// Used for both `Parent` and `Derives_from` parent-edge attributes.
+fn parse_gff_id_list(value: &noodles_gff::record::attributes::field::Value) -> Vec<String> {
+    use noodles_gff::record::attributes::field::Value as GffValue;
+    match value {
+        GffValue::String(s) => vec![s.to_string()],
+        GffValue::Array(arr) => arr.iter().map(|cow| cow.to_string()).collect(),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RecordParseError {
     #[error("invalid coordinate '{0}' in column {1}")]
@@ -145,9 +157,15 @@ impl Gff3Record {
         let strand = parse_strand(nrecord.strand(), trimmed)?;
         let phase = parse_phase(nrecord.phase(), trimmed);
 
-        // Extract ID, Parent, and remaining attributes.
+        // Extract ID, Parent (+ FlyBase `Derives_from`), and remaining
+        // attributes. `Derives_from` indicates a derives-from edge rather
+        // than the standard part-of relationship; for ferro's feature
+        // graph both establish a parent edge, so the two are merged into
+        // a single parent list (dedup'd, Parent values first, Derives_from
+        // values appended). #397 item 1.
         let mut id: Option<String> = None;
         let mut parents: Vec<String> = Vec::new();
+        let mut derives_from: Vec<String> = Vec::new();
         let mut attrs: AttributeMap = Vec::new();
 
         for result in nrecord.attributes().iter() {
@@ -159,18 +177,10 @@ impl Gff3Record {
                     id = Some(value.as_ref().to_string());
                 }
                 "Parent" => {
-                    // noodles-gff parses comma-separated values as Value::Array,
-                    // and single-parent lines as Value::String.
-                    use noodles_gff::record::attributes::field::Value as GffValue;
-                    match value {
-                        GffValue::String(s) => {
-                            // A single parent — the string itself (already URL-decoded).
-                            parents = vec![s.to_string()];
-                        }
-                        GffValue::Array(arr) => {
-                            parents = arr.iter().map(|cow| cow.to_string()).collect();
-                        }
-                    }
+                    parents = parse_gff_id_list(&value);
+                }
+                "Derives_from" => {
+                    derives_from = parse_gff_id_list(&value);
                 }
                 _ => {
                     // value.as_ref() gives &BStr; convert to str for SmolStr.
@@ -179,6 +189,14 @@ impl Gff3Record {
                         SmolStr::new(value.as_ref().to_string()),
                     ));
                 }
+            }
+        }
+
+        // Merge `Derives_from` IDs into `parents`, preserving order and
+        // de-duplicating against the existing parents.
+        for d in derives_from {
+            if !parents.contains(&d) {
+                parents.push(d);
             }
         }
 
@@ -404,6 +422,54 @@ mod tests {
             .expect("parse")
             .expect("not comment");
         assert_eq!(rec.parents(), &["tx1", "tx2"]);
+    }
+
+    #[test]
+    fn gff3_record_honors_derives_from_as_parent_edge() {
+        // FlyBase emits `Derives_from` for transcripts derived from
+        // pseudogenes / alleles. Treat it as an additional parent edge
+        // so the feature graph captures the part-of relationship. #397
+        // item 1.
+        let line = "2L\tFlyBase\tmRNA\t100\t200\t.\t+\t.\tID=FBtr0000001;Derives_from=FBgn0000001";
+        let rec = Gff3Record::parse(line, 1)
+            .expect("parse")
+            .expect("not comment");
+        assert_eq!(rec.parents(), &["FBgn0000001"]);
+    }
+
+    #[test]
+    fn gff3_record_merges_parent_and_derives_from() {
+        // Both attributes present — parent set is the union (Parent
+        // values first, Derives_from values appended). De-duplicate
+        // identical IDs.
+        let line = "2L\tFlyBase\tmRNA\t100\t200\t.\t+\t.\tID=FBtr0000001;Parent=FBgn0000001;Derives_from=FBgn0000002";
+        let rec = Gff3Record::parse(line, 1)
+            .expect("parse")
+            .expect("not comment");
+        assert_eq!(rec.parents(), &["FBgn0000001", "FBgn0000002"]);
+    }
+
+    #[test]
+    fn gff3_record_handles_multi_value_derives_from() {
+        // `Derives_from=A,B` (comma-separated multi-value) — both
+        // values flow into the parent set.
+        let line = "2L\tFlyBase\tmRNA\t100\t200\t.\t+\t.\tID=FBtr0000001;Derives_from=FBgn0000001,FBgn0000002";
+        let rec = Gff3Record::parse(line, 1)
+            .expect("parse")
+            .expect("not comment");
+        assert_eq!(rec.parents(), &["FBgn0000001", "FBgn0000002"]);
+    }
+
+    #[test]
+    fn gff3_record_dedups_identical_parent_and_derives_from() {
+        // If a record lists the same ID under both `Parent` and
+        // `Derives_from`, only one parent edge should land in the
+        // graph.
+        let line = "2L\tFlyBase\tmRNA\t100\t200\t.\t+\t.\tID=FBtr0000001;Parent=FBgn0000001;Derives_from=FBgn0000001";
+        let rec = Gff3Record::parse(line, 1)
+            .expect("parse")
+            .expect("not comment");
+        assert_eq!(rec.parents(), &["FBgn0000001"]);
     }
 
     #[test]
