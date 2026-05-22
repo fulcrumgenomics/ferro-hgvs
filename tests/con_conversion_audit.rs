@@ -239,28 +239,30 @@ fn normalize_canonicalizes_conversion_to_delins() {
     let provider = MockProvider::new();
     let normalizer = Normalizer::new(provider);
 
-    // Cross-reference sources: deferred with UnsupportedVariant.
+    // Cross-reference sources: #422 wired actual lookup through the
+    // cross-reference resolver, so an empty provider surfaces the
+    // missing inner accession via `ReferenceNotFound` rather than the
+    // earlier `UnsupportedVariant` placeholder. The semantic point —
+    // "the recursion does not pass the bracketed form through
+    // unchanged" — is preserved.
     let cross_ref_inputs = [
         "NM_000088.3:c.123_456conNM_000089.1:c.789_1011",
         "NC_000001.11:g.12345_12400conNC_000002.12:g.100_155",
     ];
     for input in cross_ref_inputs {
         let variant = parse_hgvs(input).expect("input must parse");
-        let err = normalizer.normalize(&variant).expect_err(
-            "cross-reference con payload must surface as UnsupportedVariant after recursion",
-        );
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("cross-reference con payload must error against an empty provider");
         assert!(
-            matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
-            "expected UnsupportedVariant for cross-reference con (input: {}, got: {:?})",
+            matches!(
+                err,
+                ferro_hgvs::FerroError::ReferenceNotFound { .. }
+                    | ferro_hgvs::FerroError::GenomicReferenceNotAvailable { .. }
+            ),
+            "expected provider-lookup error for cross-reference con without test data (input: {}, got: {:?})",
             input,
             err
-        );
-        let msg = format!("{}", err);
-        assert!(
-            msg.contains("cross-reference") && msg.contains("follow-up"),
-            "cross-reference deferral must mention 'cross-reference' and 'follow-up' for grep (input: {}, got: {})",
-            input,
-            msg
         );
     }
 
@@ -490,30 +492,27 @@ fn allele_compound_with_conversion_canonicalizes_member() {
 
     let input = "NM_000088.3:c.[123_456conNM_000089.1:c.789_1011;500A>G]";
     let variant = parse_hgvs(input).expect("compound con+sub must parse");
-    // Under issue #333 the recursion drives the `con` member's rewrite
-    // through the ins-expand step. The cross-reference half defers with
-    // `FerroError::UnsupportedVariant`, which propagates up out of the
-    // allele compound — the substitution sibling is no longer reachable
+    // Under #333 + #422 the recursion drives the `con` member's rewrite
+    // through the ins-expand step. The cross-reference half now hits
+    // the actual resolver, which surfaces `ReferenceNotFound` against
+    // the empty provider — the substitution sibling is unreachable
     // because the compound short-circuits on the first member error.
-    // We assert the deferral surfaces with the expected markers and
-    // mentions the deferred source accession.
     let err = normalizer
         .normalize(&variant)
-        .expect_err("cross-reference con member must defer with UnsupportedVariant");
+        .expect_err("cross-reference con member must surface a provider-lookup error");
     assert!(
-        matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
-        "expected UnsupportedVariant for cross-reference con member, got: {:?}",
+        matches!(
+            err,
+            ferro_hgvs::FerroError::ReferenceNotFound { .. }
+                | ferro_hgvs::FerroError::GenomicReferenceNotAvailable { .. }
+        ),
+        "expected provider-lookup error for cross-reference con member, got: {:?}",
         err
     );
     let msg = format!("{}", err);
     assert!(
         msg.contains("NM_000089.1"),
-        "deferral message must mention the cross-reference source accession; got {}",
-        msg
-    );
-    assert!(
-        msg.contains("cross-reference") && msg.contains("follow-up"),
-        "deferral message must carry 'cross-reference' / 'follow-up' markers; got {}",
+        "lookup error must cite the missing source accession; got {}",
         msg
     );
 }
@@ -570,24 +569,25 @@ fn cross_reference_canonicalization_preserves_source_payload() {
         let variant = parse_hgvs(input).expect("parse");
         let err = normalizer
             .normalize(&variant)
-            .expect_err("cross-reference con must defer with UnsupportedVariant");
+            .expect_err("cross-reference con must surface a provider-lookup error");
+        // #422 replaced the `UnsupportedVariant` placeholder with actual
+        // cross-reference resolution; an empty provider surfaces
+        // `ReferenceNotFound` against the missing inner accession.
         assert!(
-            matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
-            "expected UnsupportedVariant (input: {}, got: {:?})",
+            matches!(
+                err,
+                ferro_hgvs::FerroError::ReferenceNotFound { .. }
+                    | ferro_hgvs::FerroError::GenomicReferenceNotAvailable { .. }
+            ),
+            "expected provider-lookup error (input: {}, got: {:?})",
             input,
             err
         );
         let msg = format!("{}", err);
         assert!(
             msg.contains(expected_source_accession),
-            "deferral message must mention the source accession {} (input: {}, got: {})",
+            "lookup error must cite the missing source accession {} (input: {}, got: {})",
             expected_source_accession,
-            input,
-            msg
-        );
-        assert!(
-            msg.contains("cross-reference") && msg.contains("follow-up"),
-            "deferral message must carry 'cross-reference' / 'follow-up' markers (input: {}, got: {})",
             input,
             msg
         );
