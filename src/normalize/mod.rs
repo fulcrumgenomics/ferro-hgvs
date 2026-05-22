@@ -1487,9 +1487,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // #350: bail on cross-axis variants. Both endpoints must live in
         // the same axis region for a 3'-rule shuffle to be defined.
+        //
+        // **Insertion exception (#402).** A boundary-straddling
+        // `c.X_X+1ins<alt>` is zero-width — its shuffle is well-defined
+        // (the insertion point can move toward either axis as long as
+        // the alt continues to match reference) and the canonical
+        // form may land entirely on one axis as an `insAlt` or
+        // `dup`. Let Insertion inputs proceed through `normalize_na_edit`
+        // and rely on the post-shift CDS-start / CDS-end clamps
+        // (PR #385 / PR #388, with the #401 spanning-dup exception) to
+        // catch any result that would silently re-ax the input.
+        let is_zero_width_insertion =
+            matches!(edit, NaEdit::Insertion { .. }) && tx_end == tx_start + 1;
         if start_axis != end_axis
             && !matches!(start_axis, boundary::AxisRegion::None)
             && !matches!(end_axis, boundary::AxisRegion::None)
+            && !is_zero_width_insertion
         {
             let acc = variant.accession.transcript_accession();
             let warning = NormalizationWarning::CrossAxisVariantNotShuffled {
@@ -4472,67 +4485,94 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         seq_bytes.clone()
                     };
 
-                    if !codon_blocks_dup
-                        && rules::insertion_is_duplication(ref_seq, result.start, &rotated_seq)
-                    {
-                        // For duplication, use minimal notation without explicit sequence
-                        // Position: for c.X_(X+1)ins that duplicates preceding sequence,
-                        // the result is c.(X-len+1)_Xdup
-                        let dup_len = rotated_seq.len() as u64;
-                        // `insertion_is_duplication` returns true if EITHER the
-                        // preceding ref tract (BEFORE: `ref[pos-L..pos]`) OR the
-                        // following one (AFTER: `ref[pos..pos+L]`) equals the
-                        // (possibly rotated) alt. Which side matched determines
-                        // where the duplicated region sits in HGVS coordinates:
+                    // `insertion_is_duplication` checks both sides of the
+                    // post-shuffle insertion point. We need to know which
+                    // side actually matched so we anchor the dup notation
+                    // there — anchoring on the wrong side lands one position
+                    // too far in the wrong direction.
+                    let pos_idx = result.start as usize;
+                    let ins_len = rotated_seq.len();
+                    let five_prime_match = pos_idx >= ins_len
+                        && pos_idx <= ref_seq.len()
+                        && ref_seq[pos_idx - ins_len..pos_idx] == rotated_seq[..];
+                    let three_prime_match = pos_idx + ins_len <= ref_seq.len()
+                        && ref_seq[pos_idx..pos_idx + ins_len] == rotated_seq[..];
+
+                    if !codon_blocks_dup && (five_prime_match || three_prime_match) {
+                        // Side-aware dup anchor. `insertion_is_duplication`-
+                        // equivalent checks above return true if EITHER the
+                        // preceding ref tract (5'-side: `ref[pos-L..pos]`)
+                        // OR the following one (3'-side: `ref[pos..pos+L]`)
+                        // equals the (possibly rotated) alt. Which side
+                        // matched determines where the duplicated region
+                        // sits in HGVS coordinates:
                         //
-                        //   BEFORE-match (`ref[pos-L..pos] == alt`): the alt
-                        //   duplicates the immediately-preceding tract, so the
-                        //   dup region is `c.{new_start-L+1}..c.{new_start}`. This
-                        //   is the natural 3'-shuffle stopping shape — at the
-                        //   3'-most equivalent position, the alt phase aligns
-                        //   with the tract just behind the insertion.
+                        //   5'-side match (`ref[pos-L..pos] == alt`): the
+                        //   alt duplicates the immediately-preceding tract,
+                        //   so the dup region is `(new_start-L+1, new_start)`.
+                        //   This is the natural 3'-shuffle stopping shape —
+                        //   at the 3'-most equivalent position, the alt
+                        //   phase aligns with the tract just behind the
+                        //   insertion.
                         //
-                        //   AFTER-match (`ref[pos..pos+L] == alt`): the alt
-                        //   duplicates the immediately-following tract, so the
-                        //   dup region is `c.{new_start+1}..c.{new_start+L}`.
-                        //   This is the natural 5'-shuffle stopping shape — at
-                        //   the 5'-most equivalent position the alt aligns with
-                        //   the tract just AHEAD of the insertion (the one the
-                        //   shuffle walked through). Issue #418 (b): without
-                        //   this branch, ferro emitted `c.{X-L+1}_{X}dup` —
-                        //   bases preceding the 5'-shuffled stopping point —
-                        //   which is a *different haplotype* (since the
-                        //   preceding bases don't equal the alt). The
-                        //   off-by-(2 in NM_001166478.1:c.36_37insTC) error
-                        //   comes from emitting a dup of the WRONG tract.
-                        let pos = result.start as usize;
-                        let rseq = rotated_seq.as_slice();
-                        let before_matches =
-                            pos >= rseq.len() && &ref_seq[pos - rseq.len()..pos] == rseq;
-                        let (dup_start, dup_end) = if dup_len == 1 {
-                            // Single-base dup still has to choose which
-                            // flanking position the alt actually
-                            // duplicates: BEFORE → `new_start`, AFTER →
-                            // `new_start + 1`. The original "single
-                            // position for single-base dup" shortcut
-                            // ignored `before_matches` and always
-                            // anchored at `new_start`, emitting the
-                            // wrong haplotype on AFTER-only single-copy
-                            // matches (e.g. `...CT[insT]` adjacent to
-                            // an isolated `T` — buggy `c.40dup` (= C)
-                            // vs correct `c.41dup` (= T)).
-                            if before_matches {
-                                (new_start, new_start)
-                            } else {
-                                (new_start + 1, new_start + 1)
+                        //   3'-side match (`ref[pos..pos+L] == alt`): the
+                        //   alt duplicates the immediately-following tract,
+                        //   so the dup region is `(new_start+1, new_start+L)`.
+                        //   This is the natural 5'-shuffle stopping shape —
+                        //   at the 5'-most equivalent position the alt
+                        //   aligns with the tract just AHEAD of the
+                        //   insertion (the one the shuffle walked through).
+                        //   Without this case, an `ins → dup` canon firing
+                        //   only on the 3' side (e.g. the post-5'-shift
+                        //   `c.9170_9171insA` where ref[c.9171] = A — closes
+                        //   #402, or the issue #418 (b) NM_001166478.1:
+                        //   c.36_37insTC off-by-2) labels the dup at the
+                        //   wrong base — emitting bases that DON'T equal
+                        //   the alt, i.e. a different haplotype.
+                        //
+                        //   Both sides match → the alt sits in a 2+-copy
+                        //   tract, which is path (a) territory above (it
+                        //   would have returned with `ref_count >= 2`
+                        //   before reaching here). Reach this branch only
+                        //   on `ref_count == 1` tracts where exactly one
+                        //   side matches in practice; the shuffle-direction
+                        //   tie-break below is defensive for the
+                        //   unreachable both-match case (5'-most for
+                        //   `FivePrime`, 3'-most for `ThreePrime`).
+                        //
+                        // Single-base dups (`dup_len == 1`) must still
+                        // choose the correct flanking position: 5'-side
+                        // anchors at `new_start`, 3'-side at `new_start+1`.
+                        // The old "single position for single-base dup"
+                        // shortcut anchored unconditionally at `new_start`,
+                        // emitting the wrong haplotype on 3'-side-only
+                        // single-copy matches (e.g. `...CT[insT]` adjacent
+                        // to an isolated `T` — buggy `c.40dup` (= C) vs
+                        // correct `c.41dup` (= T)).
+                        let prefer_three_prime = match (five_prime_match, three_prime_match) {
+                            (false, true) => true,
+                            (true, false) => false,
+                            (true, true) => {
+                                matches!(
+                                    self.config.shuffle_direction,
+                                    ShuffleDirection::ThreePrime
+                                )
                             }
-                        } else if before_matches {
-                            (new_start - dup_len + 1, new_start)
+                            (false, false) => {
+                                unreachable!("outer guard requires at least one side matched")
+                            }
+                        };
+                        let dup_len = rotated_seq.len() as u64;
+                        let (dup_start, dup_end) = if prefer_three_prime {
+                            if dup_len == 1 {
+                                (new_start + 1, new_start + 1)
+                            } else {
+                                (new_start + 1, new_start + dup_len)
+                            }
+                        } else if dup_len == 1 {
+                            (new_start, new_start)
                         } else {
-                            // AFTER-branch must match (since
-                            // `insertion_is_duplication` returned true and
-                            // BEFORE doesn't).
-                            (new_start + 1, new_start + dup_len)
+                            (new_start - dup_len + 1, new_start)
                         };
                         (
                             dup_start,
