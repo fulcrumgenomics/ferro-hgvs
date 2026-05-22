@@ -1728,6 +1728,19 @@ pub fn is_frameshift(variant: &HgvsVariant) -> bool {
     }
 }
 
+/// Like [`is_frameshift`] but uses a provider so wraparound `m.`/`o.`
+/// ranges compute the spec-correct circular indel length via
+/// [`crate::python_helpers::get_indel_length_with_provider`].
+pub fn is_frameshift_with_provider<P: crate::reference::provider::ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> bool {
+    match crate::python_helpers::get_indel_length_with_provider(variant, provider) {
+        Some(len) if len != 0 => len % 3 != 0,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
