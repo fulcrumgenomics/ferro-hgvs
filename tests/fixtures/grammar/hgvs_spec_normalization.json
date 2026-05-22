@@ -13237,7 +13237,7 @@
     },
     {
       "input": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(578c>u\", code: Digit })",
+      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(578c>u;1339a>g;1680del)\", code: Digit })",
       "spec_expected": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
       "status": "parse-error",
       "coordinate_system": "r",
