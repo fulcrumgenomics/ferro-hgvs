@@ -242,6 +242,20 @@ fn anchor_for_variant(v: &HgvsVariant) -> Option<Anchor> {
 
 /// Position-only counterpart of `anchor_from_loc_edit`. Mirrors its
 /// edit-kind and edit-certainty filters but does not touch alt bases.
+/// Returns `true` when a `Region::Genome` interval has `start > end`,
+/// which identifies a wraparound mitochondrial range (e.g. `m.16569_1del`)
+/// whose raw endpoints must not participate in linear-adjacency merging.
+///
+/// Defensive: span/indel math is covered separately by `tests/mito_circular_audit.rs`
+/// and `tests/issue_399_mt_circular_followup.rs`; this guard exists so a future
+/// refactor doesn't accidentally re-introduce silent-wrong merges across the
+/// origin. `HgvsVariant::Circular` (`o.`) variants are excluded from merging
+/// at the dispatch level above and never reach this check.
+#[inline]
+fn is_wraparound_genome(region: Region, start: i64, end: i64) -> bool {
+    start > end && matches!(region, Region::Genome)
+}
+
 fn simple_range_for_loc_edit<L>(
     loc_edit: &LocEdit<Interval<L>, NaEdit>,
     range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
@@ -251,13 +265,7 @@ fn simple_range_for_loc_edit<L>(
     }
     let edit = loc_edit.edit.inner()?;
     let (region, start, end) = range_fn(&loc_edit.location)?;
-    if start > end && matches!(region, Region::Genome) {
-        // Defensive: wraparound m./o. endpoints (start > end) must not
-        // participate in linear-adjacency merging. The audit pins in
-        // tests/mito_circular_audit.rs and the issue-399 tests cover
-        // span/indel math separately; this guard exists so a future
-        // refactor doesn't accidentally re-introduce silent-wrong
-        // merges across the origin.
+    if is_wraparound_genome(region, start, end) {
         return None;
     }
     match edit {
@@ -309,13 +317,7 @@ fn anchor_from_loc_edit<L>(
     }
     let edit = loc_edit.edit.inner()?;
     let (region, start, end) = range_fn(&loc_edit.location)?;
-    if start > end && matches!(region, Region::Genome) {
-        // Defensive: wraparound m./o. endpoints (start > end) must not
-        // participate in linear-adjacency merging. The audit pins in
-        // tests/mito_circular_audit.rs and the issue-399 tests cover
-        // span/indel math separately; this guard exists so a future
-        // refactor doesn't accidentally re-introduce silent-wrong
-        // merges across the origin.
+    if is_wraparound_genome(region, start, end) {
         return None;
     }
     match edit {
@@ -712,6 +714,28 @@ mod tests {
             &MockProvider::new(),
         );
         assert_eq!(out.len(), 2, "expected no merge across origin wraparound");
+        assert_eq!(out[0], v1);
+        assert_eq!(out[1], v2);
+    }
+
+    #[test]
+    fn merge_skips_wraparound_mt_when_wraparound_arrives_second() {
+        // Reverse ordering: a linear sub at position 1 followed by a wraparound
+        // del whose start (16569) is the natural "next" position after end (1).
+        // Exercises the `simple_range_for_loc_edit` guard explicitly (the prior
+        // test exercises `anchor_from_loc_edit`).
+        let v1 = parse_hgvs("NC_012920.1:m.1A>G").unwrap();
+        let v2 = parse_hgvs("NC_012920.1:m.16569_1del").unwrap();
+        let out = merge_consecutive_edits(
+            vec![v1.clone(), v2.clone()],
+            AllelePhase::Cis,
+            &MockProvider::new(),
+        );
+        assert_eq!(
+            out.len(),
+            2,
+            "expected no merge when wraparound arrives as next"
+        );
         assert_eq!(out[0], v1);
         assert_eq!(out[1], v2);
     }
