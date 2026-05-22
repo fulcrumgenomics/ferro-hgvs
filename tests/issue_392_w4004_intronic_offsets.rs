@@ -42,12 +42,9 @@ use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
 ///   exon 2:                       130-141 (12 bases)
 /// ```
 ///
-/// CDS spans the entire transcript (cds_start=1, cds_end=22) so `c.<N>`
-/// = tx `<N>` to keep position arithmetic transparent. c.7 is the last
-/// CDS base of exon 1 (tx 10); c.8 is the first CDS base of exon 2 (tx
-/// 11). Wait — with cds_start=1, c.1 = tx 1, c.10 = tx 10 (last base of
-/// exon 1), c.11 = tx 11 (first base of exon 2). So the exon-1/exon-2
-/// junction is between c.10 and c.11.
+/// Because cds_start=1 and cds_end=22, `c.<N>` maps 1:1 to tx `<N>`.
+/// The exon-1/exon-2 junction is between c.10 and c.11; intron 1 is
+/// the 20-bp gap between them.
 ///
 /// Intron-1 length = 129 - 110 + 1 = 20 bp. So:
 /// - `c.10+M` valid for `M` in `1..=20`
@@ -123,6 +120,95 @@ fn provider_with_intronic_noncoding_transcript() -> MockProvider {
         Some("chr_int".to_string()),
         Some(100),
         Some(141),
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// 3-exon plus-strand transcript with introns inside both the 5'UTR
+/// and the 3'UTR, used to exercise `cds_pos_to_tx_boundary`'s
+/// `pos.base < 0` (5'UTR-intronic) and `pos.utr3` (3'UTR-intronic)
+/// branches that the `provider_with_intronic_transcript` fixture (CDS
+/// = entire transcript) does not reach.
+///
+/// Transcript layout (tx coords on a 33-bp transcript):
+/// ```text
+///   tx pos: 1..6  | 7..18    | 19..33
+///   region: 5'UTR | CDS      | 3'UTR
+///   exons : exon1 | exon2    | exon3
+///   genomic: 100..105 (6 bp) | 130..141 (12 bp) | 170..184 (15 bp)
+///   intron 1 (between exons 1 and 2): genomic 106..129 = 24 bp
+///   intron 2 (between exons 2 and 3): genomic 142..169 = 28 bp
+/// ```
+///
+/// cds_start = 7 (first base of exon 2 = c.1), cds_end = 18 (last
+/// base of exon 2 = c.12). Intron 1 sits entirely in the 5'UTR
+/// (between tx 6 / c.-1 and tx 7 / c.1); intron 2 sits entirely in
+/// the 3'UTR (between tx 18 / c.12 and tx 19 / c.*1). Both UTR
+/// introns therefore live at the *exon-end / next-exon-start*
+/// boundary, addressed via `c.-1+M` (UTR-5 intron 5' side),
+/// `c.1-M` (UTR-5 intron 3' side), `c.12+M` (UTR-3 intron 5' side),
+/// and `c.*1-M` (UTR-3 intron 3' side).
+fn provider_with_utr_intronic_transcript() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let transcript = Transcript::new(
+        "NM_UTRINT.1".to_string(),
+        Some("UTRINT".to_string()),
+        Strand::Plus,
+        Some("CCCCCCATGAAATAACCCCCCCCCCCCCCCAAA".to_string()),
+        Some(7),
+        Some(18),
+        vec![
+            Exon::with_genomic(1, 1, 6, 100, 105),
+            Exon::with_genomic(2, 7, 18, 130, 141),
+            Exon::with_genomic(3, 19, 33, 170, 184),
+        ],
+        Some("chr_int".to_string()),
+        Some(100),
+        Some(184),
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// 2-exon **minus-strand** transcript with explicit genomic coords —
+/// mirror of `provider_with_intronic_transcript` to pin
+/// strand-invariance of the intron-length math.
+///
+/// Per `compute_introns` (`src/reference/transcript.rs:649-655`),
+/// minus-strand intron genomic coords are derived from
+/// `downstream.genomic_end + 1 .. upstream.genomic_start - 1`. So with:
+/// ```text
+///   exon 1 (tx 1-10, coding-start side):  genomic 200..209  (10 bp)
+///   exon 2 (tx 11-22, coding-end side):   genomic 130..141  (12 bp)
+///   intron 1: genomic 142..199 = 58 bp
+/// ```
+/// (exon 1 maps to the higher genomic range because the transcript
+/// reads 3'→5' along the genome.)
+fn provider_with_minus_strand_intronic_transcript() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let transcript = Transcript::new(
+        "NM_MINT.1".to_string(),
+        Some("MINT".to_string()),
+        Strand::Minus,
+        Some("AAAATGCCCCGGGGTAGAATAA".to_string()),
+        Some(1),
+        Some(22),
+        vec![
+            Exon::with_genomic(1, 1, 10, 200, 209),
+            Exon::with_genomic(2, 11, 22, 130, 141),
+        ],
+        Some("chr_mint".to_string()),
+        Some(130),
+        Some(209),
         Default::default(),
         ManeStatus::None,
         None,
@@ -304,5 +390,117 @@ fn intronic_offset_past_last_exon_skips_no_intron_exists() {
     assert!(
         !position_past_end_fires(provider_with_intronic_transcript(), "NM_INT.1:c.22+5del"),
         "unexpected POSITION_PAST_END for c.22+5 when no intron exists 3' of the last exon",
+    );
+}
+
+// --- 5'UTR-intronic (c.-N+M / c.-N-M) --------------------------------------
+
+#[test]
+fn c_dot_5utr_intronic_plus_offset_past_intron_end_emits_w4004() {
+    // Intron 1 of `NM_UTRINT.1` is the 24-bp gap between exon 1 (tx 6 =
+    // c.-1, last 5'UTR base) and exon 2 (tx 7 = c.1, first CDS base).
+    // `c.-1+25` (25 > 24) is past-end via the 5'UTR-intron's "+" form.
+    assert!(
+        position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.-1+25del"
+        ),
+        "expected POSITION_PAST_END (W4004) for c.-1+25 on a 24-bp 5'UTR intron",
+    );
+}
+
+#[test]
+fn c_dot_5utr_intronic_plus_offset_within_intron_does_not_emit_w4004() {
+    // `c.-1+5del` is well within the 24-bp 5'UTR intron.
+    assert!(
+        !position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.-1+5del"
+        ),
+        "unexpected POSITION_PAST_END for c.-1+5 (within 24-bp 5'UTR intron)",
+    );
+}
+
+#[test]
+fn c_dot_cds_start_minus_offset_past_intron_5utr_emits_w4004() {
+    // `c.1-25del` — `c.1` is the first CDS base; the intron immediately
+    // 5' of it is the same 24-bp 5'UTR intron. Past-end via the "-" form.
+    assert!(
+        position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.1-25del"
+        ),
+        "expected POSITION_PAST_END (W4004) for c.1-25 on a 24-bp 5'UTR intron",
+    );
+}
+
+// --- 3'UTR-intronic (c.*N+M / c.NNN+M off last CDS base) -------------------
+
+#[test]
+fn c_dot_3utr_intronic_plus_offset_past_intron_end_emits_w4004() {
+    // Intron 2 of `NM_UTRINT.1` is the 28-bp gap between exon 2 (tx 18
+    // = c.12, last CDS base) and exon 3 (tx 19 = c.*1, first 3'UTR
+    // base). `c.12+29` (29 > 28) is past-end on the 3'UTR-intron's "+"
+    // form.
+    assert!(
+        position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.12+29del"
+        ),
+        "expected POSITION_PAST_END (W4004) for c.12+29 on a 28-bp 3'UTR intron",
+    );
+}
+
+#[test]
+fn c_dot_3utr_intronic_minus_offset_past_intron_end_emits_w4004() {
+    // `c.*1-29del` — `c.*1` is the first 3'UTR base; the intron 5' of
+    // it is the same 28-bp 3'UTR intron. Past-end via the "-" form.
+    assert!(
+        position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.*1-29del"
+        ),
+        "expected POSITION_PAST_END (W4004) for c.*1-29 on a 28-bp 3'UTR intron",
+    );
+}
+
+#[test]
+fn c_dot_3utr_intronic_within_intron_does_not_emit_w4004() {
+    // `c.*1-5del` is well within the 28-bp 3'UTR intron.
+    assert!(
+        !position_past_end_fires(
+            provider_with_utr_intronic_transcript(),
+            "NM_UTRINT.1:c.*1-5del"
+        ),
+        "unexpected POSITION_PAST_END for c.*1-5 (within 28-bp 3'UTR intron)",
+    );
+}
+
+// --- Minus-strand symmetry --------------------------------------------------
+
+#[test]
+fn minus_strand_c_dot_plus_offset_past_intron_end_emits_w4004() {
+    // Minus-strand fixture: intron 1 spans genomic 142..199 = 58 bp.
+    // `c.10+59` (59 > 58) is past-end. Pins that the intron-length
+    // computation works through the minus-strand `compute_introns`
+    // branch (`downstream.genomic_end + 1 .. upstream.genomic_start - 1`).
+    assert!(
+        position_past_end_fires(
+            provider_with_minus_strand_intronic_transcript(),
+            "NM_MINT.1:c.10+59del"
+        ),
+        "expected POSITION_PAST_END (W4004) for c.10+59 on a minus-strand 58-bp intron",
+    );
+}
+
+#[test]
+fn minus_strand_c_dot_plus_offset_within_intron_does_not_emit_w4004() {
+    // `c.10+5del` is well within the 58-bp minus-strand intron.
+    assert!(
+        !position_past_end_fires(
+            provider_with_minus_strand_intronic_transcript(),
+            "NM_MINT.1:c.10+5del"
+        ),
+        "unexpected POSITION_PAST_END for minus-strand c.10+5 (within 58-bp intron)",
     );
 }

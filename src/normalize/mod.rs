@@ -62,23 +62,31 @@ fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
 }
 
 /// Intron length (1-based inclusive base count) at the intron addressed by
-/// `tx_boundary` + `offset`, derived from `Transcript::find_intron_at_tx_boundary`
-/// plus the intron's genomic span. Returns `None` when no intron exists at
-/// that boundary OR the intron's genomic coordinates aren't populated —
-/// matching the existing W4004 conservative-skip contract for missing
-/// metadata.
+/// `tx_boundary` + `offset`. Returns `None` when:
+///
+/// - no intron exists at that boundary (e.g. `tx_boundary` is the last
+///   exon's end and `offset` is positive — no 3' intron exists), OR
+/// - the intron's genomic coordinates aren't populated (cdot data missing
+///   per-exon genomic alignment), OR
+/// - the intron's genomic span is inverted (`genomic_end < genomic_start`,
+///   a defensive guard inherited from `Intron::genomic_length`).
+///
+/// All three cases collapse to "conservative skip" per the existing W4004
+/// missing-metadata contract.
 fn intron_length_at_tx_boundary(
     transcript: &crate::reference::transcript::Transcript,
     tx_boundary: u64,
     offset: i64,
 ) -> Option<u64> {
-    let intron = transcript.find_intron_at_tx_boundary(tx_boundary, offset)?;
-    let g_start = intron.genomic_start?;
-    let g_end = intron.genomic_end?;
-    // Saturating arithmetic mirrors `find_intron_at_genomic` in
-    // `src/reference/transcript.rs:695`, which uses the same length
-    // formula on the same genomic span.
-    Some(g_end.saturating_sub(g_start).saturating_add(1))
+    // Delegate to `Intron::genomic_length` so the length formula stays in
+    // one place — the same source-of-truth `find_intron_at_genomic` uses
+    // at `src/reference/transcript.rs:695`. `genomic_length` rejects
+    // inverted spans by construction, removing the silent-zero footgun a
+    // manual `g_end.saturating_sub(g_start)` would produce on a
+    // misconstructed minus-strand fixture.
+    transcript
+        .find_intron_at_tx_boundary(tx_boundary, offset)?
+        .genomic_length()
 }
 
 /// Resolve a `CdsPos` to its transcript-frame position (1-based) ignoring
@@ -86,6 +94,14 @@ fn intron_length_at_tx_boundary(
 /// `Normalizer::cds_to_tx_pos`; kept as a free helper so
 /// `check_cds_pos_past_end` can compute the intronic-anchor `tx_boundary`
 /// without holding a `Normalizer` reference.
+///
+/// Note on the `base == 0` arm: `c.0` is rejected by the parser at
+/// `src/hgvs/parser/position.rs` (per #269), and the caller
+/// `check_cds_pos_past_end` short-circuits via `pos.is_unknown()` before
+/// this helper sees `CdsPos { base: 0, utr3: false }`. The arm is dead
+/// code in the W4004 path; kept here for parity with
+/// `Normalizer::cds_to_tx_pos` so this helper remains a drop-in
+/// replacement if a future caller needs it outside the bounds check.
 fn cds_pos_to_tx_boundary(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
@@ -102,8 +118,10 @@ fn cds_pos_to_tx_boundary(
         let signed = cds_start as i64 + pos.base;
         u64::try_from(signed).ok()
     } else if pos.base == 0 {
-        // c.0 isn't a valid HGVS position but historical inputs map it to
-        // the last 5'UTR base (= c.-1), matching `cds_to_tx_pos`.
+        // Defensive parity with `cds_to_tx_pos`; see helper-level doc
+        // note. Unreachable from `check_cds_pos_past_end` because the
+        // caller short-circuits on `pos.is_unknown()` (which keys off
+        // `CDS_BASE_UNKNOWN == 0`).
         Some(cds_start.saturating_sub(1))
     } else {
         // c.<N>: tx_boundary = cds_start + N - 1
@@ -253,39 +271,45 @@ fn check_tx_pos_past_end(
     pos: &TxPos,
     transcript: &crate::reference::transcript::Transcript,
 ) -> Option<NormalizationWarning> {
+    // `has_unknown_offset_tx` matches `OFFSET_UNKNOWN_*` sentinels (not a
+    // base-unknown predicate); there's no `TX_BASE_UNKNOWN` sibling of
+    // `CDS_BASE_UNKNOWN`, so the n.-axis variant skips only on offset.
+    // This is the intentional asymmetry with the c.-axis check above.
     if has_unknown_offset_tx(pos) || pos.is_downstream() {
         return None;
     }
     // Intronic-offset bound check (#392). The tx_boundary is `pos.base`
     // itself (n.-axis positions are direct transcript coordinates).
-    if let Some(offset) = pos.offset {
-        if offset == 0 {
-            // `n.<N>+0` is parser-degenerate (not really intronic); fall
-            // through to the plain `n.<N>` check below.
-        } else {
-            if pos.base < 1 {
-                // 5'-of-transcript intronic offsets are out of domain
-                // (no intron exists upstream of the first exon).
-                return None;
-            }
-            let tx_boundary = pos.base as u64;
-            let intron_length = intron_length_at_tx_boundary(transcript, tx_boundary, offset)?;
-            let abs_offset = offset.unsigned_abs();
-            if abs_offset > intron_length {
-                return Some(NormalizationWarning::PositionPastEnd {
-                    message: format!(
-                        "{}:n.{} lies past the intron-end (intron length {})",
-                        accession, pos, intron_length
-                    ),
-                    accession: accession.to_string(),
-                    coordinate_system: "n".to_string(),
-                    position: pos.to_string(),
-                    bound_kind: "intron-end".to_string(),
-                    bound_value: intron_length,
-                });
-            }
+    // `is_intronic()` is precisely `offset.is_some() && offset !=
+    // Some(0)`, so the parser-degenerate `n.<N>+0` shape falls through
+    // to the plain `n.<N>` check below — symmetric with the c.-axis
+    // dispatch above.
+    if pos.is_intronic() {
+        let offset = pos
+            .offset
+            .expect("is_intronic implies non-zero Some offset");
+        if pos.base < 1 {
+            // 5'-of-transcript intronic offsets are out of domain
+            // (no intron exists upstream of the first exon).
             return None;
         }
+        let tx_boundary = pos.base as u64;
+        let intron_length = intron_length_at_tx_boundary(transcript, tx_boundary, offset)?;
+        let abs_offset = offset.unsigned_abs();
+        if abs_offset > intron_length {
+            return Some(NormalizationWarning::PositionPastEnd {
+                message: format!(
+                    "{}:n.{} lies past the intron-end (intron length {})",
+                    accession, pos, intron_length
+                ),
+                accession: accession.to_string(),
+                coordinate_system: "n".to_string(),
+                position: pos.to_string(),
+                bound_kind: "intron-end".to_string(),
+                bound_value: intron_length,
+            });
+        }
+        return None;
     }
     if pos.base < 1 {
         return None;
