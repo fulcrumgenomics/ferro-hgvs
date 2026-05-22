@@ -539,6 +539,103 @@ impl PyNormalizer {
 
         Ok(normalized.to_string())
     }
+
+    /// Parse and normalize an HGVS string, surfacing any warnings.
+    ///
+    /// Closes #395 item 5: previously `NormalizationWarning` was Rust-only;
+    /// Python callers had no access to RefSeqMismatch, OverlapConflict,
+    /// PositionPastEnd, AxisClampApplied, or the other warning codes the
+    /// normalizer emits.
+    ///
+    /// Strict-mode rejections still raise `RuntimeError` (matching the
+    /// existing `normalize` method). Lenient/silent return a result
+    /// with the warnings vec, which may be empty.
+    fn normalize_with_warnings(
+        &self,
+        hgvs_string: &str,
+    ) -> PyResult<PyNormalizeResultWithWarnings> {
+        let variant = parse_hgvs(hgvs_string)
+            .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        let result = normalizer
+            .normalize_with_warnings(&variant)
+            .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+        Ok(PyNormalizeResultWithWarnings {
+            result: PyHgvsVariant {
+                inner: result.result,
+            },
+            warnings: result
+                .warnings
+                .iter()
+                .map(PyNormalizationWarning::from)
+                .collect(),
+        })
+    }
+}
+
+/// Warning emitted by the normalizer.
+///
+/// Mirrors `crate::normalize::NormalizationWarning` but flattened for
+/// Python: only the code, message, and a `String` representation of the
+/// variant-specific fields are surfaced. Callers can pattern-match on
+/// `code` for downstream branching (matches the convention used by the
+/// W4004/W5001/W5002/etc. SVA codes).
+#[pyclass(name = "NormalizationWarning", from_py_object)]
+#[derive(Clone)]
+pub struct PyNormalizationWarning {
+    /// SVA code, e.g. `"REFSEQ_MISMATCH"` / `"OVERLAP_CONFLICTING_EDITS"` /
+    /// `"POSITION_PAST_END"` / `"AXIS_CLAMP_APPLIED"` /
+    /// `"CROSS_AXIS_VARIANT_NOT_SHUFFLED"` /
+    /// `"CANONICAL_SPLIT_SKIPPED"`.
+    #[pyo3(get)]
+    pub code: String,
+    /// Human-readable message.
+    #[pyo3(get)]
+    pub message: String,
+}
+
+impl From<&crate::normalize::NormalizationWarning> for PyNormalizationWarning {
+    fn from(w: &crate::normalize::NormalizationWarning) -> Self {
+        Self {
+            code: w.code().to_string(),
+            message: w.message().to_string(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyNormalizationWarning {
+    fn __repr__(&self) -> String {
+        format!("NormalizationWarning({}: {})", self.code, self.message)
+    }
+}
+
+/// Result of `Normalizer.normalize_with_warnings`: the normalized
+/// variant plus the warnings emitted during normalization.
+#[pyclass(name = "NormalizeResultWithWarnings")]
+pub struct PyNormalizeResultWithWarnings {
+    /// The normalized variant.
+    #[pyo3(get)]
+    pub result: PyHgvsVariant,
+    /// Warnings emitted during normalization (may be empty).
+    #[pyo3(get)]
+    pub warnings: Vec<PyNormalizationWarning>,
+}
+
+#[pymethods]
+impl PyNormalizeResultWithWarnings {
+    /// Returns true if any warnings were emitted.
+    fn has_warnings(&self) -> bool {
+        !self.warnings.is_empty()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NormalizeResultWithWarnings({} warning{})",
+            self.warnings.len(),
+            if self.warnings.len() == 1 { "" } else { "s" },
+        )
+    }
 }
 
 // ============================================================================
@@ -2170,6 +2267,8 @@ pub enum PyErrorType {
     PositionPastEnd = 32,
     VariantExceedsReference = 33,
     NonSpecMosaicForm = 34,
+    // 35 is W5002 OverlapConflictingEdits (closes #395 item 6).
+    OverlapConflictingEdits = 35,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2209,6 +2308,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::NonSpecMosaicForm => PyErrorType::NonSpecMosaicForm,
             ErrorType::VariantExceedsReference => PyErrorType::VariantExceedsReference,
             ErrorType::PositionPastEnd => PyErrorType::PositionPastEnd,
+            ErrorType::OverlapConflictingEdits => PyErrorType::OverlapConflictingEdits,
         }
     }
 }
@@ -2250,6 +2350,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::NonSpecMosaicForm => ErrorType::NonSpecMosaicForm,
             PyErrorType::VariantExceedsReference => ErrorType::VariantExceedsReference,
             PyErrorType::PositionPastEnd => ErrorType::PositionPastEnd,
+            PyErrorType::OverlapConflictingEdits => ErrorType::OverlapConflictingEdits,
         }
     }
 }
@@ -3517,6 +3618,8 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCorrectionWarning>()?;
     m.add_class::<PyErrorConfig>()?;
     m.add_class::<PyParseResultWithWarnings>()?;
+    m.add_class::<PyNormalizationWarning>()?;
+    m.add_class::<PyNormalizeResultWithWarnings>()?;
 
     // Backtranslation classes
     m.add_class::<PyCodonChange>()?;
@@ -3549,4 +3652,55 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Closes #395 item 5 — verifies the `From<&NormalizationWarning>
+    /// for PyNormalizationWarning` converter at the Rust level.
+    /// Complements `tests/python/test_issue_395_normalization_warnings.py`
+    /// which exercises the Python-facing surface (under maturin develop).
+    #[test]
+    fn py_normalization_warning_carries_code_and_message() {
+        let cases: Vec<(crate::normalize::NormalizationWarning, &str)> = vec![
+            (
+                crate::normalize::NormalizationWarning::RefSeqMismatch {
+                    message: "stated A but reference is T".to_string(),
+                    stated_ref: "A".to_string(),
+                    actual_ref: "T".to_string(),
+                    position: "100".to_string(),
+                    corrected: true,
+                },
+                "REFSEQ_MISMATCH",
+            ),
+            (
+                crate::normalize::NormalizationWarning::OverlapConflict {
+                    message: "two coincident edits".to_string(),
+                    accession: "NC_000001.11".to_string(),
+                    coordinate_system: "g".to_string(),
+                    location: "100".to_string(),
+                    edit_kinds: vec!["sub".to_string(), "sub".to_string()],
+                },
+                "OVERLAP_CONFLICTING_EDITS",
+            ),
+            (
+                crate::normalize::NormalizationWarning::PositionPastEnd {
+                    message: "past cds-end".to_string(),
+                    accession: "NM_X.1".to_string(),
+                    coordinate_system: "c".to_string(),
+                    position: "946".to_string(),
+                    bound_kind: "cds-end".to_string(),
+                    bound_value: 945,
+                },
+                "POSITION_PAST_END",
+            ),
+        ];
+        for (w, expected_code) in cases {
+            let py: PyNormalizationWarning = (&w).into();
+            assert_eq!(py.code, expected_code, "code mismatch for {expected_code}");
+            assert_eq!(py.message, w.message(), "message round-trip mismatch");
+        }
+    }
 }

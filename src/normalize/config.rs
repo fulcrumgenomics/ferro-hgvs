@@ -216,6 +216,22 @@ impl NormalizeConfig {
     pub fn should_warn_position_past_end(&self) -> bool {
         self.position_past_end_action().should_warn()
     }
+
+    /// Get the resolved action for `OverlapConflictingEdits` (W5002).
+    pub fn overlap_conflict_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::OverlapConflictingEdits)
+    }
+
+    /// Returns true if cis-allele edits with coincident reference
+    /// bounds should be rejected (strict mode default). Closes #395
+    /// item 6 — previously the `overlap.rs:88` emit site unconditionally
+    /// pushed the warning, bypassing the registry's
+    /// `always_warn_if_not_rejected` policy table that declared
+    /// Strict→Reject.
+    pub fn should_reject_overlap_conflict(&self) -> bool {
+        self.overlap_conflict_action().should_reject()
+    }
 }
 
 #[cfg(test)]

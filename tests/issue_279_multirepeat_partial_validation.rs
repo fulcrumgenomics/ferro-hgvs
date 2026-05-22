@@ -20,12 +20,18 @@
 //!      against the reference; do NOT validate length or tail bases.
 //!      A mismatch in the prefix surfaces as `RefSeqMismatch` (strict
 //!      reject / lenient warn) using the same flow as PR #215.
-//!   3. First unit non-`Exact` — no validation at all (no known
-//!      prefix), identical to today's skip behavior.
-//!   4. Mismatch in the unvalidated tail bases does NOT fire — the
-//!      tail is genuinely ambiguous and the normalizer cannot tell a
-//!      "wrong" tail from a tail whose count happens to be at the
+//!   3. First AND last unit non-`Exact` — no validation at all (no
+//!      anchored end), identical to today's skip behavior.
+//!   4. Mismatch in the unvalidated middle bases does NOT fire — the
+//!      middle is genuinely ambiguous and the normalizer cannot tell a
+//!      "wrong" middle from one whose count happens to be at the
 //!      lower bound of the declared range.
+//!
+//! Issue #395 item 1 extended this contract: a trailing-`Exact`
+//! suffix is now also right-anchored validated. The
+//! "first-unit-non-Exact-but-last-is-Exact" case (previously skipped
+//! per (3)) is now covered by
+//! `tests/issue_395_multirepeat_interleaved_resumption.rs`.
 
 use ferro_hgvs::error::FerroError;
 use ferro_hgvs::normalize::NormalizationWarning;
@@ -277,34 +283,38 @@ mod exact_prefix_unknown_tail {
 mod first_unit_non_exact {
     use super::*;
 
-    /// First unit is `Range` — there is no known prefix to validate.
+    /// First AND last unit non-Exact — neither end is anchored.
     /// Validation must be skipped entirely. A genuinely WRONG-looking
-    /// reference must still be accepted in strict mode, consistent
-    /// with today's behavior.
+    /// reference must still be accepted in strict mode.
+    ///
+    /// (Pre-#395 this also held for `[Range, Exact]` shapes; #395
+    /// item 1 added right-anchored validation, so the trailing-Exact
+    /// variant is now covered by
+    /// `issue_395_multirepeat_interleaved_resumption`.)
     #[test]
-    fn first_unit_range_no_validation_strict() {
+    fn first_and_last_unit_range_no_validation_strict() {
         // Reference has CAG triplets — clearly not CTG repeated — but
-        // because the first unit's count is uncertain, no prefix
-        // exists to validate and the description is accepted.
+        // because neither end is anchored, no validation fires.
         let core = "CAGCAGCAGCAGCAG";
         let padded_seq = padded(core);
         let provider = g_provider("NC_000001.11", &padded_seq);
         let end = CORE_START + (core.len() as u64) - 1;
-        let input = format!("NC_000001.11:g.{}_{}CTG[(2_5)]TTG[2]", CORE_START, end);
-        let _ = normalize_strict(provider, &input)
-            .expect("first-unit-non-Exact must skip validation (no known prefix to check)");
+        let input = format!("NC_000001.11:g.{}_{}CTG[(2_5)]TTG[(1_3)]", CORE_START, end);
+        let _ = normalize_strict(provider, &input).expect(
+            "first-and-last-unit-non-Exact must skip validation (no anchored end to check)",
+        );
     }
 
-    /// First unit `Unknown` count — same skip.
+    /// Both ends `Unknown` count — same skip.
     #[test]
-    fn first_unit_unknown_no_validation_strict() {
+    fn first_and_last_unit_unknown_no_validation_strict() {
         let core = "CAGCAGCAGCAGCAG";
         let padded_seq = padded(core);
         let provider = g_provider("NC_000001.11", &padded_seq);
         let end = CORE_START + (core.len() as u64) - 1;
-        let input = format!("NC_000001.11:g.{}_{}CTG[?]TTG[2]", CORE_START, end);
-        let _ =
-            normalize_strict(provider, &input).expect("first-unit Unknown must skip validation");
+        let input = format!("NC_000001.11:g.{}_{}CTG[?]TTG[?]", CORE_START, end);
+        let _ = normalize_strict(provider, &input)
+            .expect("first-and-last-unit Unknown must skip validation (no anchored end to check)");
     }
 }
 

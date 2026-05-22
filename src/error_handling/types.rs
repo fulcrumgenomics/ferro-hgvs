@@ -311,6 +311,21 @@ pub enum ErrorType {
     /// variant; silent mode skips the check entirely. Intronic offsets
     /// remain out of scope (their bounds depend on intron size).
     PositionPastEnd,
+
+    /// Two or more cis-allele edits share identical reference bounds
+    /// (e.g. `g.[100A>C;100A>G]` — both substitutions at position 100).
+    /// The HGVS spec does not define a canonical form for this case;
+    /// ferro preserves the input verbatim and emits this warning.
+    /// Strict mode rejects with `FerroError::InvalidCoordinates`;
+    /// lenient and silent modes both accept and preserve the input,
+    /// with the warning still surfaced by `normalize_with_warnings`
+    /// (the emit site at `src/normalize/overlap.rs:88` is
+    /// unconditional — only strict-mode promotion is gated by mode).
+    /// Closes #395 item 6 — previously the warning was emitted but
+    /// strict mode did not reject, bypassing the registry's
+    /// `always_warn_if_not_rejected` policy table that declared
+    /// Strict→Reject.
+    OverlapConflictingEdits,
 }
 
 impl ErrorType {
@@ -350,6 +365,7 @@ impl ErrorType {
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::PositionPastEnd => "W4004",
             ErrorType::RefSeqMismatch => "W5001",
+            ErrorType::OverlapConflictingEdits => "W5002",
             ErrorType::VariantExceedsReference => "W5003",
         }
     }
@@ -396,6 +412,7 @@ impl ErrorType {
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
         ErrorType::RefSeqMismatch,
+        ErrorType::OverlapConflictingEdits,
         ErrorType::VariantExceedsReference,
     ];
 
@@ -470,6 +487,9 @@ impl ErrorType {
                 "variant position range exceeds reference sequence"
             }
             ErrorType::PositionPastEnd => "position lies past CDS-end or transcript-end",
+            ErrorType::OverlapConflictingEdits => {
+                "two or more cis-allele edits share identical reference bounds"
+            }
         }
     }
 
@@ -537,6 +557,9 @@ impl ErrorType {
             // Past-end positions cannot be auto-corrected — there's no safe
             // way to guess the intended canonical position.
             ErrorType::PositionPastEnd => false,
+            // Coincident-bounds cis-allele edits have no spec-defined
+            // canonical form; ferro preserves the input verbatim.
+            ErrorType::OverlapConflictingEdits => false,
         }
     }
 
@@ -601,6 +624,10 @@ impl ErrorType {
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
             ),
             ErrorType::PositionPastEnd => ("c.946G>C (CDS length 945)", "(no auto-correct)"),
+            ErrorType::OverlapConflictingEdits => (
+                "g.[100A>C;100A>G] (two cis edits at the same bound)",
+                "(no auto-correct)",
+            ),
         }
     }
 }
@@ -1000,6 +1027,7 @@ mod tests {
             ErrorType::SinglePositionRange,
             ErrorType::PositionPastEnd,
             ErrorType::RefSeqMismatch,
+            ErrorType::OverlapConflictingEdits,
             ErrorType::VariantExceedsReference,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1041,6 +1069,7 @@ mod tests {
                 | ErrorType::SinglePositionRange
                 | ErrorType::PositionPastEnd
                 | ErrorType::RefSeqMismatch
+                | ErrorType::OverlapConflictingEdits
                 | ErrorType::VariantExceedsReference => {}
             }
             assert!(
