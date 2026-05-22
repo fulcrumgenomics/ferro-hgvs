@@ -86,8 +86,26 @@ fn vcf_conversion_rejects_wraparound_mt_del() {
     let err = converter.convert(&v).unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("wraparound") || msg.contains("circular"),
-        "expected wraparound-rejection error, got: {msg}"
+        msg.contains("wraparound"),
+        "expected error mentioning 'wraparound', got: {msg}"
+    );
+}
+
+#[test]
+fn vcf_conversion_rejects_wraparound_circular_dup() {
+    // SVD-WG006's o.-axis example: J01749.1:o.4344_197dup wraps the origin
+    // on a 5386-bp plasmid. The Circular arm of the converter must reject
+    // it with the same shape of error as the Mt arm.
+    let v = parse_hgvs("J01749.1:o.4344_197dup").unwrap();
+    let tx = minimal_transcript();
+    let mut p = MockProvider::new();
+    p.add_genomic_sequence("J01749.1", "A".repeat(5386));
+    let converter = HgvsToVcfConverter::new(&tx, &p);
+    let err = converter.convert(&v).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("wraparound") && msg.contains("o."),
+        "expected error mentioning 'wraparound' and 'o.', got: {msg}"
     );
 }
 
