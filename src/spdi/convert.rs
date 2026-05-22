@@ -332,7 +332,7 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
 /// assert_eq!(spdi.to_string(), "NC_000001.11:99:ATG:");
 /// ```
-pub fn hgvs_to_spdi<P: ReferenceProvider>(
+pub fn hgvs_to_spdi<P: ReferenceProvider + ?Sized>(
     variant: &HgvsVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -496,7 +496,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 /// `NM_000088.3`), matching NCBI Variation Services' convention. Short-form
 /// `Deletion` / `Duplication` / `Delins` edits trigger a provider fetch on
 /// the transcript accession to populate SPDI's `del` field.
-fn cds_to_spdi_with_provider<P: ReferenceProvider>(
+fn cds_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &CdsVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -527,7 +527,7 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider>(
 /// Convert an `n.` variant with provider-backed reference fetch and
 /// transcript-aware position resolution (intronic offsets, downstream
 /// `*N`, non-positive base).
-fn tx_to_spdi_with_provider<P: ReferenceProvider>(
+fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &TxVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -564,7 +564,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider>(
 /// Convert an `r.` variant with provider-backed reference fetch. Same
 /// coordinate resolution as `n.`; alphabet conversion `u → T` is applied
 /// via [`AlphabetMode::Rna`].
-fn rna_to_spdi_with_provider<P: ReferenceProvider>(
+fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &RnaVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
@@ -748,7 +748,7 @@ fn rna_needs_provider(interval: &Interval<RnaPos>) -> bool {
 /// on the transcript accession without first projecting to genomic coords.
 /// That projection is intentionally out of scope for this entry point —
 /// callers needing it can use the genomic conversion path explicitly.
-fn resolve_cds_to_tx<P: ReferenceProvider>(
+fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &CdsPos,
     end: &CdsPos,
@@ -786,7 +786,7 @@ fn resolve_cds_to_tx<P: ReferenceProvider>(
 
 /// Resolve an `n.` (TxPos) pair to 1-based transcript positions, including
 /// intronic and downstream forms, using the provider.
-fn resolve_tx_to_provider_tx<P: ReferenceProvider>(
+fn resolve_tx_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &TxPos,
     end: &TxPos,
@@ -804,7 +804,7 @@ fn resolve_tx_to_provider_tx<P: ReferenceProvider>(
     Ok((s, e))
 }
 
-fn resolve_rna_to_provider_tx<P: ReferenceProvider>(
+fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &RnaPos,
     end: &RnaPos,
@@ -865,14 +865,38 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
             ),
         });
     }
-    let tx_len = transcript.sequence_length();
     if pos.utr3 {
+        // r.*N is the Nth base of the 3' UTR — anchored at `cds_end`
+        // (the last 1-based CDS position), so r.*1 sits at the base
+        // immediately after the stop codon (`cds_end + 1`), not at
+        // `tx_len + 1` (which is one past the end of the entire
+        // mRNA). For non-coding transcripts r.*N has no meaning;
+        // surface `MissingReferenceData` rather than fall back to
+        // `tx_len` (#390 item 2).
+        //
+        // TODO(#390-follow-up): the c.*N path goes through
+        // `CoordinateMapper::cds_to_tx` which is exon-aware and
+        // honors CIGAR insertions in the 3'UTR; this plain
+        // `cds_end + base` short-circuits the same arithmetic. For
+        // contiguous single-exon 3'UTRs the two agree, but
+        // multi-exon 3'UTRs with cdot tx-coordinate gaps will see
+        // r.*N and c.*N land at slightly different transcript
+        // positions. Route this through the same exon-aware helper.
         if pos.base < 1 {
             return Err(ConversionError::InvalidPosition {
                 description: format!("3' UTR position *{} must be >= 1", pos.base),
             });
         }
-        return Ok(tx_len.saturating_add(pos.base as u64));
+        let cds_end = transcript
+            .cds_end
+            .ok_or_else(|| ConversionError::MissingReferenceData {
+                description: format!(
+                    "r.*{} requires a CDS end on the transcript; non-coding \
+                     transcripts have no 3'UTR anchor",
+                    pos.base
+                ),
+            })?;
+        return Ok(cds_end.saturating_add(pos.base as u64));
     }
     ensure_positive_tx(pos.base, "r", pos)
 }
@@ -897,6 +921,20 @@ fn ensure_positive_tx<P: std::fmt::Display>(
 ///
 /// `start_one_based` and `end_one_based` are 1-based positions on the SPDI
 /// accession (genomic for `g.`/`m.`, transcript for `c.`/`n.`/`r.`).
+///
+/// # Position convention per edit
+///
+/// SPDI's `position` field is 0-based. For substitution / deletion /
+/// delins (edits that reference specific bases) the SPDI position
+/// equals `start_one_based - 1` (computed once at the top of the
+/// function as `spdi_pos`). For **insertion** and **duplication** the
+/// SPDI position is *interbase* — position N is the boundary AFTER
+/// 1-based base N — so the Insertion arm uses `start_one_based`
+/// directly and the Duplication arm uses `end_one_based` directly
+/// (#390 item 1). The top-of-function `spdi_pos` is unused in those
+/// two arms.
+///
+/// # Provider behavior
 ///
 /// When `provider` is `Some` and the edit is a short-form deletion,
 /// duplication, or delins (i.e. lacks an explicit deleted sequence), the
@@ -937,9 +975,15 @@ where
                     description: "insertion sequence is not a literal sequence".to_string(),
                 }
             })?;
+            // SPDI is 0-based interbase: position N is the boundary
+            // AFTER 1-based base N (equivalently between 1-based bases
+            // N and N+1). For HGVS `g.{start}_{start+1}ins{seq}` the
+            // matching SPDI position is `start_one_based` directly
+            // (NOT the -1 conversion used for substitution/deletion,
+            // which references a specific base). Closes #390 item 1.
             Ok(SpdiVariant::new(
                 sequence,
-                spdi_pos,
+                start_one_based,
                 "",
                 apply_alphabet(&ins_str, alphabet),
             ))
@@ -960,11 +1004,14 @@ where
                     }
                 },
             };
-            let end_pos_ob = OneBasedPos::new(end_one_based);
-            let spdi_end_zb = end_pos_ob.to_zero_based();
+            // SPDI encodes a duplication as an insertion immediately
+            // after the duplicated region. With the corrected
+            // interbase convention (see Insertion arm above), that
+            // position is the 1-based end of the duplicated region
+            // (`end_one_based`) directly. Closes #390 item 1.
             Ok(SpdiVariant::new(
                 sequence,
-                spdi_end_zb.value(),
+                end_one_based,
                 "",
                 apply_alphabet(&dup_str, alphabet),
             ))
@@ -1335,12 +1382,27 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
             },
         )
     } else if spdi.is_insertion() {
-        // Pure insertion
-        // SPDI position is where insertion happens (interbase)
-        // HGVS: g.pos_pos+1insX means insert between pos and pos+1
+        // Pure insertion. SPDI position N is the 0-based interbase
+        // boundary AFTER 1-based base N — i.e. an insertion at SPDI
+        // position N corresponds to HGVS `g.N_(N+1)ins{seq}`. Pre-#390
+        // this incorrectly used `hgvs_pos = spdi.position + 1`, shifting
+        // every emitted ins-form interval by one (`g.(N+1)_(N+2)ins…`).
+        // SPDI position 0 represents an insertion before the first
+        // base; HGVS has no notation for it, so reject up-front rather
+        // than silently emit `g.0_1ins…`.
+        if spdi.position == 0 {
+            return Err(ConversionError::InvalidPosition {
+                description: "SPDI position 0 represents an insertion before the \
+                    first base, which has no HGVS notation"
+                    .to_string(),
+            });
+        }
         let ins_seq = string_to_sequence(&spdi.insertion)?;
         (
-            Interval::new(GenomePos::new(hgvs_pos), GenomePos::new(hgvs_pos + 1)),
+            Interval::new(
+                GenomePos::new(spdi.position),
+                GenomePos::new(spdi.position + 1),
+            ),
             NaEdit::Insertion {
                 sequence: InsertedSequence::Literal(ins_seq),
             },
@@ -1515,17 +1577,12 @@ where
         return Ok(None);
     }
 
-    // Need `ins_len` bases of preceding reference. Under ferro's SPDI
-    // insertion convention, `spdi.position` is the 0-based offset of the
-    // 1-based base immediately 5' of the insertion point, so the
-    // 5'-flanking window is the 0-based half-open interval
-    // `[spdi.position + 1 - ins_len, spdi.position + 1)`.
-    let flank_end =
-        spdi.position
-            .checked_add(1)
-            .ok_or_else(|| ConversionError::InvalidPosition {
-                description: format!("SPDI position {} overflows on +1", spdi.position),
-            })?;
+    // Need `ins_len` bases of preceding reference. SPDI position N is
+    // the 0-based interbase boundary AFTER 1-based base N, so the
+    // 5'-flanking window is the `ins_len` bases ending at HGVS 1-based
+    // position `spdi.position`. In the 0-based half-open form used by
+    // `get_genomic_sequence` that's `[spdi.position - ins_len, spdi.position)`.
+    let flank_end = spdi.position;
     if flank_end < ins_len {
         // Not enough preceding bases (insertion is too close to contig 5' end).
         return Ok(None);
@@ -1560,9 +1617,13 @@ where
         return Ok(None);
     }
 
-    // Build the dup edit. 1-based interval: end = spdi.position + 1,
-    // start = end + 1 - ins_len.
-    let end_one_based = flank_end; // == spdi.position + 1
+    // Build the dup edit. The SPDI 0-based interbase position N and
+    // the HGVS 1-based base-N coordinate share the same numeric
+    // value (N), even though they describe different things —
+    // `spdi.position` (interbase) sits AFTER 1-based base
+    // `spdi.position`, which is also the 1-based end of the
+    // duplicated region.
+    let end_one_based = flank_end; // numerically equal to spdi.position
     let start_one_based = end_one_based + 1 - ins_len;
 
     let dup_seq = string_to_sequence(ins)?;
@@ -1633,7 +1694,9 @@ mod tests {
     fn test_hgvs_to_spdi_insertion() {
         let hgvs = parse_hgvs("NC_000001.11:g.100_101insATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        assert_eq!(spdi.position, 99); // 0-based, position before insertion
+        // SPDI 0-based interbase: position 100 is the boundary AFTER
+        // 1-based base 100, matching HGVS g.100_101ins (closes #390).
+        assert_eq!(spdi.position, 100);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
@@ -1682,8 +1745,9 @@ mod tests {
     fn test_hgvs_to_spdi_duplication_with_seq() {
         let hgvs = parse_hgvs("NC_000001.11:g.100_102dupATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        // Dup becomes insertion after the duplicated region
-        assert_eq!(spdi.position, 101); // end position, 0-based
+        // Dup becomes insertion after the duplicated region; SPDI
+        // interbase position 102 sits AFTER 1-based base 102 (#390).
+        assert_eq!(spdi.position, 102);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
@@ -1751,7 +1815,8 @@ mod tests {
     fn test_spdi_to_hgvs_insertion() {
         let spdi = SpdiVariant::insertion("NC_000001.11", 100, "ATG");
         let hgvs = spdi_to_hgvs(&spdi).unwrap();
-        assert_eq!(hgvs.to_string(), "NC_000001.11:g.101_102insATG");
+        // SPDI 100 = boundary AFTER 1-based 100 = HGVS g.100_101ins (#390).
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100_101insATG");
     }
 
     #[test]
@@ -1889,10 +1954,10 @@ mod tests {
         let hgvs = parse_hgvs("NC_000001.11:g.100_102dup").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         // Dup encodes as an SPDI insertion at the 3' end of the duplicated
-        // region. ferro's convention places the SPDI position at the
-        // 0-based index of the last base of the duplicated region:
-        // 1-based end (102) → 0-based SPDI position 101.
-        assert_eq!(spdi.position, 101);
+        // region. SPDI interbase: the position is the 1-based end of
+        // the dup region (102), which is the boundary AFTER base 102
+        // and matches the equivalent `g.102_103ins…` form (#390).
+        assert_eq!(spdi.position, 102);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
@@ -1902,7 +1967,8 @@ mod tests {
         let provider = make_test_genomic_provider();
         let hgvs = parse_hgvs("NC_000001.11:g.100dup").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
-        assert_eq!(spdi.position, 99);
+        // Single-base dup: end_one_based = 100, SPDI position = 100 (#390).
+        assert_eq!(spdi.position, 100);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "A");
     }
@@ -1944,7 +2010,8 @@ mod tests {
         let provider = crate::reference::mock::MockProvider::new();
         let hgvs = parse_hgvs("NC_000001.11:g.100_102dupATG").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
-        assert_eq!(spdi.position, 101);
+        // SPDI interbase position 102 = boundary AFTER 1-based 102 (#390).
+        assert_eq!(spdi.position, 102);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
@@ -1999,10 +2066,12 @@ mod tests {
         let provider = make_test_genomic_provider();
         let original = parse_hgvs("NC_000001.11:g.100_102dup").unwrap();
         let spdi = hgvs_to_spdi(&original, &provider).unwrap();
-        assert_eq!(spdi.position, 101);
+        // Post-#390: SPDI position = end_one_based (102), matching the
+        // equivalent `g.102_103ins` interbase boundary.
+        assert_eq!(spdi.position, 102);
         assert_eq!(spdi.insertion, "ATG");
         let recovered = spdi_to_hgvs(&spdi).unwrap();
-        // SPDI position 101 → 1-based 102 → insertion between 102 and 103.
+        // SPDI 102 = boundary AFTER 1-based 102 = HGVS g.102_103ins.
         assert_eq!(recovered.to_string(), "NC_000001.11:g.102_103insATG");
     }
 
@@ -2375,9 +2444,10 @@ mod tests {
         contig.push_str(&"N".repeat(50));
         let provider = provider_with_genomic(&contig);
 
-        // SPDI 101::ATG (the canonical SPDI form of g.100_102dupATG per ferro
-        // convention; verified by test_hgvs_to_spdi_duplication_with_seq).
-        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+        // SPDI 102::ATG is the canonical SPDI form of g.100_102dupATG
+        // under the interbase-correct convention (#390): the insertion
+        // sits at the boundary AFTER 1-based base 102.
+        let spdi = SpdiVariant::insertion("NC_000001.11", 102, "ATG");
 
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.100_102dupATG");
@@ -2385,14 +2455,17 @@ mod tests {
 
     #[test]
     fn spdi_to_hgvs_with_ref_recovers_single_base_dup() {
-        // 1-based base 100 = 'A' → SPDI insertion at 99::A is a single-base dup.
+        // 1-based base 100 = 'A' → SPDI insertion at 100::A is a single-base dup.
         let mut contig = "N".repeat(99);
         contig.push('A'); // 0-based 99 = 1-based 100
         contig.push_str(&"N".repeat(20));
         let provider = provider_with_genomic(&contig);
 
-        // g.100dupA → SPDI 99::A (5' base is 1-based 100 = 0-based 99).
-        let spdi = SpdiVariant::insertion("NC_000001.11", 99, "A");
+        // g.100dupA → SPDI 100::A under the interbase-correct
+        // convention (#390); SPDI position 100 sits AFTER 1-based 100,
+        // and the 5' flank base 1-based 100 = 'A' matches the
+        // inserted 'A'.
+        let spdi = SpdiVariant::insertion("NC_000001.11", 100, "A");
 
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.100dupA");
@@ -2400,33 +2473,39 @@ mod tests {
 
     #[test]
     fn spdi_to_hgvs_with_ref_keeps_ins_when_no_match() {
-        // 5' flank of length 3 ending at SPDI position 101 = 1-based bases
-        // 100..102 = "CCC" — does NOT equal the inserted "ATG".
+        // 5' flank of length 3 ending at SPDI position 102 (under the
+        // post-#390 interbase convention) = 1-based bases 100..102 =
+        // "CCC" — does NOT equal the inserted "ATG".
         let mut contig = "N".repeat(99);
         contig.push_str("CCC"); // 1-based 100..102 = "CCC"
         contig.push_str(&"N".repeat(20));
         let provider = provider_with_genomic(&contig);
 
-        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+        let spdi = SpdiVariant::insertion("NC_000001.11", 102, "ATG");
 
-        // Should fall through to ins-form. Existing spdi_to_hgvs renders an
-        // insertion as `g.{pos}_{pos+1}insATG` where pos = HGVS 1-based of
-        // SPDI position (102 here, since SPDI 101 → 1-based 102). The
-        // ins-form HGVS is therefore g.102_103insATG.
+        // Should fall through to ins-form. spdi_to_hgvs renders an
+        // insertion as `g.{pos}_{pos+1}insATG` where `pos` is the
+        // SPDI 0-based interbase position itself (#390): SPDI 102 →
+        // g.102_103insATG.
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.102_103insATG");
     }
 
     #[test]
-    fn spdi_to_hgvs_with_ref_keeps_ins_at_contig_start() {
-        // SPDI position 0 with a 3-base insertion: there are no preceding
-        // bases at all (flank_end=1, ins_len=3, flank_end < ins_len).
+    fn spdi_to_hgvs_with_ref_rejects_ins_at_contig_start() {
+        // SPDI position 0 with a 3-base insertion: there are no
+        // preceding bases at all, and HGVS has no standard notation
+        // for "insert before the first base" (#390). The conversion
+        // surfaces `InvalidPosition` rather than silently emitting
+        // `g.1_2insATG` (which mis-represents the actual insertion
+        // point).
         let provider = provider_with_genomic("ATGCATGCATGC");
 
         let spdi = SpdiVariant::insertion("NC_000001.11", 0, "ATG");
-        let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
-        // ins-form: SPDI 0 → 1-based 1 → g.1_2insATG
-        assert_eq!(hgvs.to_string(), "NC_000001.11:g.1_2insATG");
+        let err = spdi_to_hgvs_with_ref(&spdi, &provider).expect_err(
+            "SPDI position 0 (insertion before contig start) must surface InvalidPosition",
+        );
+        assert!(matches!(err, ConversionError::InvalidPosition { .. }));
     }
 
     #[test]
@@ -2556,7 +2635,8 @@ mod tests {
     fn test_hgvs_to_spdi_simple_mt_insertion() {
         let hgvs = parse_hgvs("NC_012920.1:m.100_101insATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        assert_eq!(spdi.position, 99);
+        // SPDI interbase 100 = boundary AFTER 1-based 100 (#390).
+        assert_eq!(spdi.position, 100);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATG");
     }
@@ -2590,11 +2670,11 @@ mod tests {
         contig.push_str(&"N".repeat(20));
         let provider = provider_with_genomic(&contig);
 
-        // Forward: HGVS dup → SPDI ins
+        // Forward: HGVS dup → SPDI ins (interbase position 102 #390)
         let original = "NC_000001.11:g.100_102dupATG";
         let hgvs = parse_hgvs(original).unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        assert_eq!(spdi.to_string(), "NC_000001.11:101::ATG");
+        assert_eq!(spdi.to_string(), "NC_000001.11:102::ATG");
 
         // Reverse with reference: SPDI ins → HGVS dup
         let recovered = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
@@ -2611,7 +2691,8 @@ mod tests {
         let original = "NC_000001.11:g.100dupA";
         let hgvs = parse_hgvs(original).unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        assert_eq!(spdi.to_string(), "NC_000001.11:99::A");
+        // SPDI interbase 100 (#390): boundary AFTER 1-based 100.
+        assert_eq!(spdi.to_string(), "NC_000001.11:100::A");
 
         let recovered = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
         assert_eq!(recovered.to_string(), original);
@@ -2642,11 +2723,12 @@ mod tests {
     fn audit_pin_no_ref_spdi_to_hgvs_renders_dup_shape_as_ins() {
         // Pins issue #119 documented behavior: without a reference,
         // spdi_to_hgvs cannot prove tandem dup, so the dup-shaped SPDI
-        // 101::ATG (which round-tripped from g.100_102dupATG) is rendered
-        // as g.102_103insATG. If a future change attempts to "fix" the
+        // 102::ATG (which round-tripped from g.100_102dupATG under the
+        // post-#390 interbase-correct convention) is rendered as
+        // g.102_103insATG. If a future change attempts to "fix" the
         // round-trip without a reference, this audit pin will fail and
         // demand explicit reconsideration.
-        let spdi = SpdiVariant::insertion("NC_000001.11", 101, "ATG");
+        let spdi = SpdiVariant::insertion("NC_000001.11", 102, "ATG");
         let hgvs = spdi_to_hgvs(&spdi).unwrap();
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.102_103insATG");
     }
@@ -2680,7 +2762,9 @@ mod tests {
         let mut provider = crate::reference::mock::MockProvider::new();
         provider.add_genomic_sequence("NC_012920.1", &contig);
 
-        let spdi = SpdiVariant::insertion("NC_012920.1", 101, "ATG");
+        // SPDI 102 (interbase, #390) sits AFTER 1-based 102; the
+        // 5' flank "ATG" matches the inserted "ATG" so dup recovers.
+        let spdi = SpdiVariant::insertion("NC_012920.1", 102, "ATG");
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
         // After #270, SPDI→HGVS preserves the m. coord system for known
         // mitochondrial accessions (NC_012920.*); dup recovery applies
@@ -2692,8 +2776,8 @@ mod tests {
     fn test_hgvs_to_spdi_simple_mt_dup_with_seq() {
         let hgvs = parse_hgvs("NC_012920.1:m.100_102dupATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        // Dup converts to insertion at the end of the duplicated region (0-based).
-        assert_eq!(spdi.position, 101);
+        // SPDI interbase 102 (#390): boundary AFTER 1-based 102.
+        assert_eq!(spdi.position, 102);
         assert_eq!(spdi.insertion, "ATG");
     }
 
@@ -2724,7 +2808,8 @@ mod tests {
         let hgvs = parse_hgvs("NR_046018.2:n.10_11insATG").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
         assert_eq!(spdi.sequence, "NR_046018.2");
-        assert_eq!(spdi.position, 9);
+        // SPDI interbase 10 (#390): boundary AFTER 1-based 10.
+        assert_eq!(spdi.position, 10);
         assert_eq!(spdi.insertion, "ATG");
     }
 
@@ -2822,7 +2907,8 @@ mod tests {
         // r.10_11insauug → SPDI insertion ATTG (a→A, u→T, u→T, g→G).
         let hgvs = parse_hgvs("NR_046018.2:r.10_11insauug").unwrap();
         let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
-        assert_eq!(spdi.position, 9);
+        // SPDI interbase 10 (#390): boundary AFTER 1-based 10.
+        assert_eq!(spdi.position, 10);
         assert_eq!(spdi.deletion, "");
         assert_eq!(spdi.insertion, "ATTG");
     }
@@ -2891,10 +2977,11 @@ mod tests {
     #[test]
     fn test_hgvs_to_spdi_with_provider_cds_insertion() {
         let provider = make_test_provider();
-        // c.1_2insATG: cds_start=6 → tx 6_7 → SPDI position 5 (interbase)
+        // c.1_2insATG: cds_start=6 → tx start_one_based 6 → SPDI
+        // interbase position 6 (boundary AFTER 1-based 6; #390).
         let hgvs = parse_hgvs("NM_TEST.1:c.1_2insATG").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
-        assert_eq!(spdi.position, 5);
+        assert_eq!(spdi.position, 6);
         assert_eq!(spdi.insertion, "ATG");
     }
 
@@ -2927,6 +3014,26 @@ mod tests {
         let hgvs = parse_hgvs("NM_TEST.1:c.*2A>G").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.position, 36);
+        assert_eq!(spdi.deletion, "A");
+        assert_eq!(spdi.insertion, "G");
+    }
+
+    /// r.*N anchors at `cds_end`, not `sequence_length()` — closes
+    /// #390 item 2. With the test fixture (cds_end=35, tx_len=40),
+    /// r.*2 must resolve to tx position 37 (SPDI 36), matching the
+    /// equivalent `c.*2` resolution.
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_3utr_anchors_at_cds_end() {
+        let provider = make_test_provider();
+        // For SPDI emission r. lowercase is normalized to upper / U→T
+        // by the conversion path; r.*2a>g exercises the 3'UTR anchor.
+        let hgvs = parse_hgvs("NM_TEST.1:r.*2a>g").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(
+            spdi.position, 36,
+            "r.*2 must anchor at cds_end (35) + 2 → tx 37 → SPDI 36; pre-#390 \
+             this anchored at sequence_length (40) + 2 → off-sequence SPDI 41"
+        );
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "G");
     }

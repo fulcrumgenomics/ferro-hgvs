@@ -126,10 +126,12 @@ mod skipped {
         assert_no_w3016("NC_000001.11:g.100A>G");
     }
 
-    /// Offset-bearing endpoints — provider needed to compute range
-    /// length on intronic offsets; detector bails.
+    /// Offset-bearing endpoints with no explicit ref sequence — the
+    /// scan now resolves same-base, same-sign offset spans (#390 item
+    /// 5) but still has nothing to compare against when `del` is bare
+    /// (no `delA…` ref payload). The detector skips.
     #[test]
-    fn offset_bearing_skipped() {
+    fn offset_bearing_no_refseq_skipped() {
         assert_no_w3016("NM_000088.3:c.100+5_100+10del");
     }
 
@@ -182,21 +184,23 @@ mod strict_rejects {
 }
 
 // =============================================================================
-// SECTION 5 — Compound bracket allele coverage gap
+// SECTION 5 — Compound bracket allele coverage
 // =============================================================================
 //
 // Inside `accession:g.[edit1;edit2]`, member edits inherit the coord
 // marker from the outer prefix; there's no per-member `g.` for the
-// detector to anchor on. The current implementation does not fire on
-// bracketed members. Pinned as a documented limitation.
+// detector to anchor on. Post-#390 item 4 the detector recognises a
+// digit immediately after `[` or `;` as the start of an inner-member
+// range and scans it for W3016 length mismatches.
 
-mod compound_bracket_gap {
+mod compound_bracket_member {
     use super::*;
 
     #[test]
-    fn cis_allele_member_mismatch_not_detected() {
-        // 11 positions, 10 bases on the first member — but the detector
-        // doesn't fire because the coord marker is outside the bracket.
-        assert_no_w3016("NC_000001.11:g.[100_110delAAAATTTGCC;200A>G]");
+    fn cis_allele_member_mismatch_detected() {
+        // 11 positions, 10 bases on the first inner member; post-#390
+        // the detector fires for both the first member (after `[`)
+        // and any subsequent members (after `;`).
+        assert_w3016("NC_000001.11:g.[100_110delAAAATTTGCC;200A>G]");
     }
 }

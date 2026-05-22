@@ -2503,22 +2503,38 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
 
     // Walk the input looking for any of the coord markers (`c.`, `g.`,
     // `n.`, `m.`, `o.`, `r.`) preceded by `:`, `[`, `(`, `;`, or start of
-    // string. Multiple ranges per input (compound alleles) are handled
-    // by continuing past each match.
+    // string. Compound-allele inner members (digits immediately after
+    // `[` or `;` — they inherit the outer coord axis, no second `c.`
+    // prefix appears) are also scanned so `c.[100A>G;200_205delAAAA]`
+    // catches the inner `200_205delAAAA` (#390 item 4). Multiple ranges
+    // per input are handled by continuing past each match.
     let mut i = 0usize;
     while i + 1 < bytes.len() {
         let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';');
         let is_coord =
             matches!(bytes[i], b'c' | b'g' | b'n' | b'm' | b'o' | b'r') && bytes[i + 1] == b'.';
-        if !(prev_ok && is_coord) {
-            i += 1;
+        if prev_ok && is_coord {
+            let start_idx = i + 2;
+            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
+                hits.push(hit);
+            }
+            i = start_idx;
             continue;
         }
-        let start_idx = i + 2;
-        if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
-            hits.push(hit);
+        // Compound-allele inner-member fast path: a digit right after
+        // `[` or `;` is the start of a range that inherits the outer
+        // axis. `try_detect_length_mismatch_at` returns `None` for
+        // anything that isn't a `<int>_<int><edit><refseq>` pattern,
+        // so over-triggering is safe. The `i > 0` guard prevents an
+        // underflow on the `bytes[i - 1]` index at the very first
+        // byte (where there's no preceding separator to consider).
+        let prev_is_compound_separator = i > 0 && matches!(bytes[i - 1], b'[' | b';');
+        if prev_is_compound_separator && bytes[i].is_ascii_digit() {
+            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, i) {
+                hits.push(hit);
+            }
         }
-        i = start_idx;
+        i += 1;
     }
 
     hits
@@ -2531,21 +2547,39 @@ fn try_detect_length_mismatch_at(
     input: &str,
     pos: usize,
 ) -> Option<DetectedCorrection> {
-    // Endpoint 1: bare integer (no `-` / `*` prefix, no `+`/`-` offset).
-    let (start_val, mut j) = parse_bare_int(bytes, pos)?;
+    // Endpoint 1: bare integer with optional `+offset` / `-offset`.
+    let (start_base, start_off, mut j) = parse_endpoint_with_offset(bytes, pos)?;
     // Underscore.
     if j >= bytes.len() || bytes[j] != b'_' {
         return None;
     }
     j += 1;
-    // Endpoint 2: bare integer.
-    let (end_val, mut k) = parse_bare_int(bytes, j)?;
+    // Endpoint 2: same shape.
+    let (end_base, end_off, mut k) = parse_endpoint_with_offset(bytes, j)?;
 
-    if end_val < start_val {
-        // Swapped ranges are W4001's job; don't double-flag.
-        return None;
-    }
-    let range_len = (end_val - start_val + 1) as usize;
+    // Compute the range length on the supported endpoint shapes:
+    //   (a) Both exonic (no offset on either side): `end - start + 1`.
+    //   (b) Both intronic with the same anchor base and same-sign
+    //       offsets (`c.100+5_100+10` or `c.100-5_100-2`): the span
+    //       is linear inside the intron, length = `|off2 - off1| + 1`.
+    // Anything else (one exonic + one intronic, mixed-sign offsets,
+    // different anchor bases) needs the intron length to resolve —
+    // the W3016 scan skips those cases rather than guess (#390 item 5).
+    let range_len = match (start_off, end_off) {
+        (0, 0) => {
+            if end_base < start_base {
+                return None; // W4001's job.
+            }
+            (end_base - start_base + 1) as usize
+        }
+        (so, eo) if start_base == end_base && so.signum() == eo.signum() => {
+            if eo < so {
+                return None; // W4001's job.
+            }
+            (eo - so + 1) as usize
+        }
+        _ => return None,
+    };
 
     // Identify the edit keyword. Order matters: `delins` is a prefix of
     // `del`, so check the longer first.
@@ -2609,9 +2643,11 @@ enum EditKind {
     Delins,
 }
 
-/// Parse a bare unsigned integer at `pos`. Returns `(value, end_idx)`.
-/// Refuses anything not starting with a digit (e.g. `-`, `*`, `+`).
-fn parse_bare_int(bytes: &[u8], pos: usize) -> Option<(i64, usize)> {
+/// Parse a coord endpoint at `pos` as `<base>[+<offset>|-<offset>]`,
+/// returning `(base, offset, end_idx)`. `offset` is `0` when no
+/// `+`/`-` suffix follows. Refuses inputs that start with `-`, `*`,
+/// `+`, or anything other than a digit (#390 item 5).
+fn parse_endpoint_with_offset(bytes: &[u8], pos: usize) -> Option<(i64, i64, usize)> {
     if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
         return None;
     }
@@ -2619,14 +2655,34 @@ fn parse_bare_int(bytes: &[u8], pos: usize) -> Option<(i64, usize)> {
     while j < bytes.len() && bytes[j].is_ascii_digit() {
         j += 1;
     }
-    let n: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
-    // Reject if followed by `+`/`-` (offset) or `_` and then `*` (3'UTR
-    // marker on the other endpoint) — we only handle simple integer
-    // ranges here.
-    if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+    let base: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
+    // HGVS positions are 1-based; reject `0` (invalid HGVS) so the
+    // W3016 scan doesn't compute a `0+N..0+M` range against an
+    // explicit ref seq when the input is malformed.
+    if base == 0 {
         return None;
     }
-    Some((n, j))
+    let mut offset: i64 = 0;
+    if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+        let sign: i64 = if bytes[j] == b'+' { 1 } else { -1 };
+        let off_start = j + 1;
+        let mut o = off_start;
+        while o < bytes.len() && bytes[o].is_ascii_digit() {
+            o += 1;
+        }
+        if o == off_start {
+            // `+` or `-` not followed by digits — not a valid offset
+            // shape; surface no detection rather than guess.
+            return None;
+        }
+        let mag: i64 = std::str::from_utf8(&bytes[off_start..o])
+            .ok()?
+            .parse()
+            .ok()?;
+        offset = sign * mag;
+        j = o;
+    }
+    Some((base, offset, j))
 }
 
 /// Consume an IUPAC nucleotide run at `pos`. Returns the substring; empty
@@ -4580,6 +4636,82 @@ mod tests {
         let hits = detect_length_mismatch("NR_001234.1:r.10_15dupacg");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+    }
+
+    /// Compound allele inner members inherit the outer coord-system
+    /// axis; the W3016 scan must walk them too. Pre-#390 only ranges
+    /// preceded by a literal coord marker (`c.`, `g.`, …) — or by `:`
+    /// at the variant-string start — triggered detection, so inner
+    /// members after `;`/`,` inside `c.[…]` were silently skipped.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_inner_member() {
+        // `200_205delAAAA`: 4-base ref vs 6-base range → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.[100A>G;200_205delAAAA]");
+        assert_eq!(
+            hits.len(),
+            1,
+            "inner member after ';' inside c.[…] should be scanned, got: {:?}",
+            hits.iter().map(|h| &h.original).collect::<Vec<_>>()
+        );
+        assert_eq!(hits[0].error_type, ErrorType::LengthMismatch);
+        assert_eq!(hits[0].original, "200_205delAAAA");
+    }
+
+    /// First member of a compound allele (right after `[`): no `c.`
+    /// prefix immediately precedes it, but it must still be scanned.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_first_member() {
+        // `100_103delAA`: 2-base ref vs 4-base range → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.[100_103delAA;200A>G]");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "100_103delAA");
+    }
+
+    /// Intronic / offset-bearing endpoints with explicit ref
+    /// sequences must be length-checked (#390 item 5). Pre-fix the
+    /// W3016 endpoint parser bailed on any endpoint followed by
+    /// `+` / `-`, so `c.100+5_100+10delAAAA` (intronic span of
+    /// 6 bases, 4-base ref) silently passed.
+    #[test]
+    fn test_detect_length_mismatch_intronic_same_base_positive_offsets() {
+        let hits = detect_length_mismatch("NM_x:c.100+5_100+10delAAAA");
+        assert_eq!(hits.len(), 1, "got: {:?}", hits);
+        assert_eq!(hits[0].original, "100+5_100+10delAAAA");
+    }
+
+    /// Same-base, negative-offset endpoints (`100-5_100-2`) — also
+    /// linear within the intron, span = `(-2) - (-5) + 1 = 4` bases.
+    #[test]
+    fn test_detect_length_mismatch_intronic_same_base_negative_offsets() {
+        // 4-base range, 2-base ref → mismatch.
+        let hits = detect_length_mismatch("NM_x:c.100-5_100-2delAA");
+        assert_eq!(hits.len(), 1, "got: {:?}", hits);
+        assert_eq!(hits[0].original, "100-5_100-2delAA");
+    }
+
+    /// Differing bases or mixed-sign offsets need the intron length
+    /// to compute the range, which requires a provider. The
+    /// length-mismatch scan must skip these (no false positives).
+    #[test]
+    fn test_detect_length_mismatch_intronic_mixed_endpoints_skipped() {
+        // Different anchor bases — span needs the intron length.
+        let hits = detect_length_mismatch("NM_x:c.100+5_101-3delAA");
+        assert!(
+            hits.is_empty(),
+            "mixed-anchor intronic ranges need a provider, got: {:?}",
+            hits
+        );
+    }
+
+    /// Multiple mismatches inside one compound allele are all
+    /// surfaced.
+    #[test]
+    fn test_detect_length_mismatch_compound_bracket_multiple() {
+        let hits = detect_length_mismatch("NM_x:c.[100_103delA;200_205delAAAA]");
+        assert_eq!(hits.len(), 2);
+        let originals: Vec<&str> = hits.iter().map(|h| h.original.as_str()).collect();
+        assert!(originals.contains(&"100_103delA"));
+        assert!(originals.contains(&"200_205delAAAA"));
     }
 
     // ----- Issue #115: retracted c.IVS notation (W3014) -----
