@@ -1432,7 +1432,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //     shared-affix trim is what pushed the residual past the
         //     boundary; suppressing it leaves the spec-canonical form
         //     (the input itself).
-        if matches!(start_axis, boundary::AxisRegion::Cds) && new_tx_start < cds_start {
+        //
+        // Spanning-dup exception (#401): when the canon output is a
+        // `Duplication` whose `new_tx_end >= cds_start`, the dup-source
+        // spans the c.-1/c.1 boundary (one endpoint in UTR, one in CDS).
+        // That IS the spec-canonical form (HGVS §general; edit-type
+        // priority `dup > ins`) — biocommons emits it on inputs whose
+        // alt equals `ref[c.-1] ++ ref[c.1]`. The clamp would
+        // incorrectly collapse the spanning dup to `c.1delins<…>`, so
+        // we skip the clamp in that case and keep the canon output.
+        // Entirely-UTR dups (`new_tx_end < cds_start`) still clamp
+        // unchanged.
+        let spanning_dup_exception =
+            matches!(new_edit, NaEdit::Duplication { .. }) && new_tx_end >= cds_start;
+        if matches!(start_axis, boundary::AxisRegion::Cds)
+            && new_tx_start < cds_start
+            && !spanning_dup_exception
+        {
             match edit {
                 NaEdit::Insertion {
                     sequence: InsertedSequence::Literal(in_lit),
