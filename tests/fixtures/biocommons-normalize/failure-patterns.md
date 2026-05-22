@@ -132,13 +132,13 @@ collapses gaps. The variant gets two upstream copies for the same input
 | Linked | Not directly tracked. |
 | Recommendation | New issue: *"normalize: panic on `ref_bytes length must match HGVS interval span` for delins spanning alignment gaps in NG_*"*. |
 
-## Pattern H — `issue_293` regression (`NG_029146.1:g.6494delG`) (1 case)
+## Pattern H — `issue_293` regression (`NG_029146.1:g.6494delG`) (1 case) — **RESOLVED in #418 (c)**
 
-| Disposition | `ferro-bug` candidate (depends on reference mismatch resolution) |
+| Disposition | Spec-correct ferro output documented as divergence-from-buggy-upstream |
 |---|---|
-| Spec verdict | Implementation-specific — biocommons' rejection in #293 was a Python attribute-assignment error, not a spec rule. Whether ferro should reject depends on whether position 6494 of NG_029146.1 is actually a G; if not, this is a RefSeqMismatch case (W3001). |
-| Linked | None. |
-| Recommendation | Investigate reference base at NG_029146.1:6494; if mismatch, expected behavior is W3001 (warn or reject depending on error_mode). |
+| Spec verdict | The reference base at NG_029146.1:g.6494 IS `G` (manifest-mode FASTA shows g.6490..6500 = "GCTGGGTAAG"). There is no RefSeqMismatch — biocommons' rejection in #293 was a Python attribute-assignment error inside their normalizer, not an HGVS spec rule. ferro's 3'-shuffle correctly walks the input through the GGG tract at g.6494..g.6496 and emits the spec-canonical `g.6496del`. |
+| Linked | biocommons hgvs#293 (upstream attribute-assignment bug). |
+| Resolution | `cases.json` updated in PR for #418 to expect `NG_029146.1:g.6496del` rather than an error; the `spec_citation_note` field on the case records why ferro intentionally diverges from biocommons. No code change in ferro. |
 
 ## Pattern I — 3'-rule shift miss (various accessions in FASTA bundle) (~14 cases)
 
@@ -184,7 +184,7 @@ the insertion form.
 | E — boundary-spanning del with cross=false | 1 | accepted-divergence (#253) |
 | F — ref-length mismatch | 1 | ferro-bug (in flight, PR #272) |
 | G — panic on large delins | 1 | ferro-bug (panic) |
-| H — issue #293 regression | 1 | needs investigation |
+| H — issue #293 regression | 1 | resolved (PR #418 (c)) — spec-correct ferro output documented as divergence-from-buggy-upstream |
 | I — 3'-rule shift miss (subgroups) | ~14 | ferro-bug (multi-issue) |
 | **Total** | **42–45** | (some inputs span multiple patterns) |
 
