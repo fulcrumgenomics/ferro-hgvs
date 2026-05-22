@@ -376,6 +376,12 @@ pub enum NormalizationWarning {
         /// declaration is part of the user's variant description, and
         /// the normalizer declines to second-guess it. (Issue #280.)
         corrected: bool,
+        /// Free-form context from the validation layer (e.g. a
+        /// per-edit-kind explanation of the mismatch). When present,
+        /// the `Display` impl appends it to the synthesized message so
+        /// downstream consumers retain the nuance that previously
+        /// lived in the dropped `message` field.
+        details: Option<String>,
     },
 
     /// Two or more cis-allele edits share identical reference bounds.
@@ -517,10 +523,17 @@ impl std::fmt::Display for NormalizationWarning {
                 actual_ref,
                 position,
                 corrected,
-            } => write!(
-                f,
-                "reference sequence mismatch at {position}: stated {stated_ref:?}, actual {actual_ref:?} (corrected={corrected})",
-            ),
+                details,
+            } => {
+                write!(
+                    f,
+                    "reference sequence mismatch at {position}: stated {stated_ref:?}, actual {actual_ref:?} (corrected={corrected})",
+                )?;
+                if let Some(detail) = details.as_deref().filter(|s| !s.is_empty()) {
+                    write!(f, ": {detail}")?;
+                }
+                Ok(())
+            }
             Self::OverlapConflict {
                 accession,
                 coordinate_system,
@@ -543,7 +556,7 @@ impl std::fmt::Display for NormalizationWarning {
                 actual_bytes,
             } => write!(
                 f,
-                "canonical split skipped at {accession}:{hgvs_start}_{hgvs_end}: expected {expected_span} bytes, got {actual_bytes}",
+                "canonical split skipped at {accession}:{hgvs_start}_{hgvs_end}: expected {expected_span} bytes, got {actual_bytes} (HGVS refseq \u{00A7}43)",
             ),
             Self::CrossAxisVariantNotShuffled {
                 accession,
@@ -647,7 +660,7 @@ impl std::fmt::Display for NormalizationInfo {
                 normalized_position,
             } => write!(
                 f,
-                "{accession}: {direction:?} shuffle relocated variant from {original_position} to {normalized_position}",
+                "{accession}: {direction} shuffle relocated variant from {original_position} to {normalized_position}",
             ),
         }
     }
@@ -3764,6 +3777,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 actual_ref: validation.actual_ref.unwrap_or_default(),
                 position: format!("{}-{}", start, end),
                 corrected,
+                details: validation.warning,
             });
         }
 

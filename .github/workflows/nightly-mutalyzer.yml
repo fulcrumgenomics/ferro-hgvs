@@ -76,7 +76,13 @@ jobs:
           # `benchmark-output/` directory holds the FASTAs / cdot
           # transcripts the manifest references.
           path: benchmark-output/
-          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**') }}
+          # Invalidation surface: lock file (downstream-dep changes),
+          # the `prepare` crate (manifest-output shape), and the CLI
+          # wiring at `src/bin/ferro.rs` (the `prepare` subcommand
+          # binding). If a future PR adds a `src/reference/**` dep
+          # that changes `ferro prepare` behavior, bump
+          # MANIFEST_CACHE_VERSION manually.
+          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs') }}
 
       - name: Build ferro (for prepare)
         run: cargo build --release --bin ferro

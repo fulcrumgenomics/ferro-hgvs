@@ -1,6 +1,12 @@
 # Pre-commit hooks for ferro-hgvs
 # Install: pip install pre-commit && pre-commit install
 # Run manually: pre-commit run --all-files
+#
+# `default_install_hook_types` makes the bare `pre-commit install`
+# wire up BOTH `pre-commit` (per-commit fast checks) and `pre-push`
+# (the spec-fixture drift guard, which requires a Rust build and
+# would be too slow per commit).
+default_install_hook_types: [pre-commit, pre-push]
 
 repos:
   # Rust formatting
@@ -14,11 +20,11 @@ repos:
         pass_filenames: false
 
       # Spec-fixture drift guard (#397 item 7). CI already runs this
-      # check at `ci.yml:113` (`generate_spec_fixture --check`), but a
-      # push that drifts the fixture wastes a full CI cycle to discover
-      # the drift. The pre-push stage runs once per `git push` rather
-      # than per commit, so the build cost is paid only when actually
-      # pushing.
+      # check (search for `generate_spec_fixture --check` in
+      # `.github/workflows/ci.yml`), but a push that drifts the
+      # fixture wastes a full CI cycle to discover the drift. The
+      # pre-push stage runs once per `git push` rather than per
+      # commit, so the build cost is paid only when actually pushing.
       - id: generate-spec-fixture-check
         name: generate_spec_fixture --check
         entry: cargo run --features dev --example generate_spec_fixture -- --check
