@@ -302,7 +302,35 @@ pub fn analyze_na_edit(
                 .unwrap_or(1);
             ("duplication", len % 3 != 0, len, len * 2)
         }
-        NaEdit::Inversion { .. } => ("inversion", true, 0, 0),
+        NaEdit::Inversion { sequence, length } => {
+            // Closes #438. Per
+            // `assets/hgvs-nomenclature/docs/recommendations/DNA/inversion.md`,
+            // an inversion reverse-complements its declared range in
+            // place. The DNA-level net length change is zero by
+            // construction (`alt_len == ref_len`), so the frameshift
+            // check `(alt_len - ref_len) % 3 != 0` is always false.
+            // The previous unconditional `is_frameshift = true`
+            // over-predicted frameshift on every inversion and fed
+            // the wrong signal into `predict_protein_consequence` /
+            // NMD logic. Inversion may still disrupt protein function
+            // (the inverted bases code for different amino acids),
+            // but that's a missense / in-frame change, not a frameshift.
+            //
+            // Fallback chain mirrors the post-#427 Deletion/Duplication
+            // arms: prefer explicit `sequence` (e.g. `c.100_102invATG`,
+            // 3 bp) over explicit `length` (`c.100_102inv3`) over the
+            // position-interval `span_len`. Conservative-skip
+            // (`ref_len = alt_len = 0`) when none of those is available.
+            let len_opt = sequence
+                .as_ref()
+                .map(|s| s.to_string().len())
+                .or(length.map(|l| l as usize))
+                .or(span_len);
+            match len_opt {
+                Some(len) => ("inversion", false, len, len),
+                None => ("inversion", false, 0, 0),
+            }
+        }
         NaEdit::Repeat { .. } => ("repeat", false, 0, 0),
         NaEdit::Identity { .. } => ("identity", false, 0, 0),
         NaEdit::Unknown { .. } => ("unknown", false, 0, 0),
