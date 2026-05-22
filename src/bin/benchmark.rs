@@ -39,7 +39,8 @@ use ferro_hgvs::benchmark::{
 };
 use ferro_hgvs::check::{check_reference, print_check_summary};
 use ferro_hgvs::prepare::{
-    detect_clinvar_from_ferro_reference, detect_patterns_from_ferro_reference,
+    detect_clinvar_from_ferro_reference, detect_patterns_from_ferro_reference, index_fasta,
+    ReferenceManifest,
 };
 use std::path::{Path, PathBuf};
 
@@ -1574,6 +1575,46 @@ fn run_prepare_tool(
                                 fetched,
                                 supplemental_fasta.display()
                             );
+                            // Index the file (samtools-compatible .fai) and
+                            // wire it into the manifest so
+                            // MultiFastaProvider::from_manifest loads the
+                            // supplemental directory at runtime. Without
+                            // these two steps the fetched bases are
+                            // on-disk but invisible to downstream
+                            // normalize / projector callers.
+                            if supplemental_fasta.exists() {
+                                if let Err(e) = index_fasta(&supplemental_fasta) {
+                                    eprintln!(
+                                        "  Warning: Failed to index {}: {}",
+                                        supplemental_fasta.display(),
+                                        e
+                                    );
+                                } else {
+                                    match ReferenceManifest::load_or_default(output_dir) {
+                                        Ok(mut manifest) => {
+                                            manifest.supplemental_fasta =
+                                                Some(supplemental_fasta.clone());
+                                            if let Err(e) = manifest.save() {
+                                                eprintln!(
+                                                    "  Warning: Failed to update manifest with supplemental_fasta: {}",
+                                                    e
+                                                );
+                                            } else {
+                                                println!(
+                                                    "  Wired supplemental_fasta into {}/manifest.json",
+                                                    output_dir.display()
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "  Warning: Failed to load manifest for supplemental_fasta wiring: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("  Warning: Failed to fetch some accessions: {}", e);
