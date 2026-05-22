@@ -103,8 +103,38 @@ fn predict_from_variant(
             // Determine if intronic
             let is_intronic = cds_pos.is_intronic();
 
+            // `analyze_na_edit` conservative-skips with `(0, 0, false)`
+            // for a deletion / duplication / insertion whose span is
+            // undecidable (no explicit sequence/length and no
+            // position-interval span — e.g. `c.?_123del`). For those,
+            // `is_frameshift = false` does NOT mean "in-frame"; the frame
+            // delta is simply unknown. Emitting `inframe_deletion` /
+            // `inframe_insertion` / `duplication` would assert an
+            // in-frame call we can't make, so surface a neutral
+            // `coding_sequence_variant` and skip the protein / NMD
+            // predictions that consume the (unreliable) frameshift signal.
+            //
+            // Scoped to del/dup/ins only: `delins` already reports the
+            // length-independent `indel`, and `inversion` is HIGH-impact
+            // regardless of span — neither makes an inframe claim, so
+            // neither needs the guard.
+            let coding = !is_intronic && !cds_pos.utr3 && cds_pos.base > 0;
+            let span_undecidable = matches!(edit_type, "deletion" | "duplication" | "insertion")
+                && ref_len == 0
+                && alt_len == 0;
+
             // Predict SO effect
-            let effect = predict_cds_effect(edit_type, is_intronic, is_frameshift, &cds_pos);
+            let effect = if coding && span_undecidable {
+                SequenceEffect {
+                    so_term: "SO:0001580".to_string(),
+                    name: "coding_sequence_variant".to_string(),
+                    description: "A coding-sequence change whose span/length is undecidable"
+                        .to_string(),
+                    impact: "MODERATE".to_string(),
+                }
+            } else {
+                predict_cds_effect(edit_type, is_intronic, is_frameshift, &cds_pos)
+            };
 
             // Try to get protein consequence if we have cdot data.
             // Pass `is_frameshift` through from `analyze_na_edit` rather
@@ -117,7 +147,7 @@ fn predict_from_variant(
             // cases. A naive recompute here would mis-flag those as
             // frameshift whenever `alt_len % 3 != 0` (e.g. an
             // unknown-span delins with a single-nt literal insert).
-            let protein_consequence = if !is_intronic && !cds_pos.utr3 && cds_pos.base > 0 {
+            let protein_consequence = if coding && !span_undecidable {
                 predict_protein_consequence(
                     state,
                     &accession,
@@ -131,8 +161,10 @@ fn predict_from_variant(
                 None
             };
 
-            // NMD prediction if requested
-            let nmd_prediction = if include_nmd {
+            // NMD prediction if requested. Skip when the span is
+            // undecidable — an NMD call rests on the frameshift signal,
+            // which is unknown for a conservative-skip del/dup/ins.
+            let nmd_prediction = if include_nmd && !span_undecidable {
                 predict_nmd_for_cds(state, &accession, &cds_pos, is_frameshift, edit_type)
             } else {
                 None
@@ -215,14 +247,29 @@ fn extract_cds_position(
 /// `span_len` parameter is the length of the position interval (`end -
 /// start + 1`) when computable from base coordinates; pass `None` when
 /// the interval has intronic offsets, decorated positions (pter/qter/
-/// cen), or unknown endpoints. Used by the `Delins` arm to derive
-/// `ref_len` and `is_frameshift = (alt_len - ref_len) % 3 != 0` per the
-/// HGVS frameshift spec (`recommendations/protein/frameshift.md`).
+/// cen), or unknown endpoints. Used by the `Delins`, `Deletion`, and
+/// `Duplication` arms to derive `ref_len` (and `is_frameshift` =
+/// `net_delta % 3 != 0`) per the HGVS frameshift spec
+/// (`recommendations/protein/frameshift.md`).
 ///
-/// When `span_len` is `None` for a delins, `is_frameshift` is
-/// conservatively reported as `false` — better than the previous
-/// always-`true` default which over-predicted frameshift on every
-/// non-trivial delins.
+/// **Conservative-skip contract:** when neither an explicit `sequence`
+/// / `length` nor a computable `span_len` is available, `is_frameshift`
+/// is reported as `false` and `ref_len` / `alt_len` are reported as
+/// `0`. This is **undecidable, not proven in-frame** — downstream
+/// callers must not treat `is_frameshift = false` as a positive
+/// declaration of in-frame status when the variant's lengths are
+/// genuinely unknown. The same contract applies to the `Insertion`
+/// arm when `InsertedSequence::len()` returns `None`. (`Substitution`
+/// is always 1↔1 by construction, so its `is_frameshift = false` IS a
+/// positive declaration.)
+///
+/// Per-arm `alt_len` semantics under the conservative-skip branch:
+/// - `Deletion`: `0` (semantically correct — nothing inserted).
+/// - `Duplication`: `0` (placeholder — a real duplication inserts at
+///   least one copy, so this `0` is a sentinel for "unknown",
+///   matching the `ref_len = 0` shape, NOT a claim that the alt is
+///   empty).
+/// - `Delins`: `0` if `InsertedSequence::len()` is also `None`.
 pub fn analyze_na_edit(
     edit: &crate::hgvs::edit::NaEdit,
     span_len: Option<usize>,
@@ -243,13 +290,25 @@ pub fn analyze_na_edit(
             ("substitution", false, 1, alternative.to_string().len())
         }
         NaEdit::Deletion { sequence, length } => {
-            let len = sequence
+            // Closes #427 (follow-up to #394 item 1). The previous
+            // `unwrap_or(1)` fallback over-predicted frameshift on the
+            // canonical short-form `c.100_102del` (where `sequence:
+            // None, length: None` is set by the parser and the actual
+            // span is 3 bp, in-frame). Mirror the Delins arm: prefer
+            // the explicit `sequence` / `length`, fall back to the
+            // position-interval `span_len`, and conservative-skip
+            // (`is_frameshift = false`, `ref_len = 0`) when none of
+            // those is available — better than emitting a frameshift
+            // on every short-form deletion.
+            let len_opt = sequence
                 .as_ref()
                 .map(|s| s.to_string().len())
                 .or(length.map(|l| l as usize))
-                .unwrap_or(1);
-            // Frameshift if length not divisible by 3
-            ("deletion", len % 3 != 0, len, 0)
+                .or(span_len);
+            match len_opt {
+                Some(len) => ("deletion", len % 3 != 0, len, 0),
+                None => ("deletion", false, 0, 0),
+            }
         }
         NaEdit::Insertion { sequence } => {
             // `InsertedSequence::len()` is the spec-aligned primitive:
@@ -295,12 +354,20 @@ pub fn analyze_na_edit(
         NaEdit::Duplication {
             sequence, length, ..
         } => {
-            let len = sequence
+            // Closes #427 (follow-up to #394 item 1). Same fallback
+            // chain as the Deletion arm above: `sequence` → `length` →
+            // `span_len` → conservative-skip. The `alt_len = len * 2`
+            // pattern (one copy of the ref bases is inserted before
+            // the duplicated span) is preserved.
+            let len_opt = sequence
                 .as_ref()
                 .map(|s| s.to_string().len())
                 .or(length.map(|l| l as usize))
-                .unwrap_or(1);
-            ("duplication", len % 3 != 0, len, len * 2)
+                .or(span_len);
+            match len_opt {
+                Some(len) => ("duplication", len % 3 != 0, len, len * 2),
+                None => ("duplication", false, 0, 0),
+            }
         }
         NaEdit::Inversion { sequence, length } => {
             // Closes #438. Per
@@ -801,10 +868,15 @@ mod tests {
 
     #[test]
     fn test_analyze_frameshift_deletion() {
+        // Updated for #427: pass `span_len` derived from the interval
+        // (mirrors the production caller in `analyze_variant_effect`).
+        // Single-position `c.350del` → span_len = 1 → 1 bp deletion =
+        // frameshift.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350del").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, None);
+                let span_len = span_len_from_cds_interval(&v.loc_edit.location);
+                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, span_len);
                 assert_eq!(edit_type, "deletion");
                 assert!(is_frameshift); // Single base deletion causes frameshift
             }
@@ -813,13 +885,18 @@ mod tests {
 
     #[test]
     fn test_analyze_inframe_deletion() {
+        // Closes the "TODO: calculate actual length" gap from the
+        // pre-#427 code. The 3-bp range deletion `c.350_352del` is now
+        // correctly identified as in-frame via `span_len = 3`.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350_352del").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, _is_frameshift, _, _) = analyze_na_edit(edit, None);
+                let span_len = span_len_from_cds_interval(&v.loc_edit.location);
+                let (edit_type, is_frameshift, ref_len, alt_len) = analyze_na_edit(edit, span_len);
                 assert_eq!(edit_type, "deletion");
-                // Note: For span deletions, we'd need to calculate the actual length
-                // This test shows the structure works
+                assert_eq!(ref_len, 3);
+                assert_eq!(alt_len, 0);
+                assert!(!is_frameshift, "3 bp deletion is in-frame");
             }
         }
     }
