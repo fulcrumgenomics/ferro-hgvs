@@ -265,9 +265,12 @@ fn test_verified_roundtrip(#[case] input: &str) {
     "NG_016862.1:g.4732_10560delins[AC010542.7:g.65062_65110]",
     "NG_016862.1:g.4732_10560delins[AC010542.7:g.65062_65110]"
 )]
+// Spec-canonical form drops brackets for single-payload inserted-sequence
+// (DNA/insertion.md:22, DNA/inversion.md:39). Input may include brackets;
+// Display normalizes to the unbracketed form.
 #[case(
     "NC_000016.9:g.78179358_78219143delins[78185355_78199419inv]",
-    "NC_000016.9:g.78179358_78219143delins[78185355_78199419inv]"
+    "NC_000016.9:g.78179358_78219143delins78185355_78199419inv"
 )]
 // Self-reference insertions (ferro preserves N[count], mutalyzer expands)
 #[case(

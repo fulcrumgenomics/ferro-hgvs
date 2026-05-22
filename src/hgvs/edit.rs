@@ -272,6 +272,24 @@ impl fmt::Display for InsertedPart {
     }
 }
 
+/// Render a `Complex` payload as `[a;b;c]`, joining each part via `fmt_part`.
+/// Always emits brackets — single-part wrapping is the caller's choice.
+fn join_complex_parts<F: Fn(&InsertedPart) -> String>(
+    parts: &[InsertedPart],
+    fmt_part: F,
+) -> String {
+    let mut s = String::with_capacity(parts.len() * 8 + 2);
+    s.push('[');
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            s.push(';');
+        }
+        s.push_str(&fmt_part(part));
+    }
+    s.push(']');
+    s
+}
+
 impl fmt::Display for InsertedSequence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -283,14 +301,15 @@ impl fmt::Display for InsertedSequence {
                 write!(f, "{}{}", sequence, count)
             }
             InsertedSequence::Complex(parts) => {
-                write!(f, "[")?;
-                for (i, part) in parts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ";")?;
-                    }
-                    write!(f, "{}", part)?;
+                // Per HGVS v21 (DNA/insertion.md:22, DNA/inversion.md:39),
+                // brackets are reserved for compositions with two or more
+                // parts. A single-part insertion (e.g. `ins123_234inv`,
+                // `ins858_895`, `insATG`) must not be bracketed.
+                if parts.len() == 1 {
+                    write!(f, "{}", parts[0])
+                } else {
+                    write!(f, "{}", join_complex_parts(parts, |p| format!("{}", p)))
                 }
-                write!(f, "]")
             }
             InsertedSequence::Named(name) => write!(f, "{}", name),
             InsertedSequence::Reference(reference) => write!(f, "[{}]", reference),
@@ -305,6 +324,20 @@ impl fmt::Display for InsertedSequence {
 }
 
 impl InsertedSequence {
+    /// Format as `Display` would, but always wrap a [`InsertedSequence::Complex`]
+    /// payload in `[...]` even for a single part. For non-`Complex` variants
+    /// the result is identical to `Display`.
+    ///
+    /// Used by callers (e.g. normalization warnings) that need to preserve
+    /// the bracketed input shape regardless of `Display`'s spec-canonical
+    /// single-payload unbracketing.
+    pub fn to_bracketed_string(&self) -> String {
+        match self {
+            InsertedSequence::Complex(parts) => join_complex_parts(parts, |p| format!("{}", p)),
+            other => format!("{}", other),
+        }
+    }
+
     /// Create a literal sequence insertion
     pub fn literal(seq: Sequence) -> Self {
         InsertedSequence::Literal(seq)
@@ -381,15 +414,12 @@ impl InsertedSequence {
                 format!("{}{}", sequence.to_lowercase_string(), count)
             }
             InsertedSequence::Complex(parts) => {
-                let mut s = String::from("[");
-                for (i, part) in parts.iter().enumerate() {
-                    if i > 0 {
-                        s.push(';');
-                    }
-                    s.push_str(&part.to_rna_string());
+                // Single-part insertion: no brackets, per HGVS v21 spec.
+                if parts.len() == 1 {
+                    parts[0].to_rna_string()
+                } else {
+                    join_complex_parts(parts, |p| p.to_rna_string())
                 }
-                s.push(']');
-                s
             }
             InsertedSequence::Named(name) => name.clone(),
             InsertedSequence::Reference(reference) => format!("[{}]", reference),

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(edit)* drop brackets on single-payload `InsertedSequence::Complex` `Display` so e.g. `delins[78185355_78199419inv]` round-trips as `delins78185355_78199419inv`, matching HGVS v21 (`DNA/insertion.md:22`, `DNA/inversion.md:39`).
 - *(normalize)* extend HGVS codon-frame exception beyond the two-`c.`-SNV case (closes #275, follow-up to #79 / #104): the spec's "two variants separated by one nucleotide, together affecting one amino acid" carve-out now also covers (1) `r.` coding regions, (2) chains of 3+ SNVs where a strict-adjacency merge leaves `prev_a` as a multi-base delins, and (3) `sub`+`del` and `del`+`sub` pairs separated by one unchanged nucleotide.
 
 ## [0.6.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.5.0...v0.6.0) - 2026-05-16

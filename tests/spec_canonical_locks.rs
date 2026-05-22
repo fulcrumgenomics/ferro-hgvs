@@ -102,30 +102,28 @@ fn large_inversion_round_trips() {
 // the inverted-copy and complex-rearrangement cases.
 
 /// Inverted-copy at 5' boundary of original. Source: dna-inversion:C-C1.
-/// Spec canonical: `ins123_234inv`. ferro currently wraps the inv payload
-/// in brackets on Display (`ins[123_234inv]`). Pin the current shape so
-/// the divergence is visible; both forms are semantically equivalent.
+/// Spec canonical: `ins123_234inv` without brackets (DNA/insertion.md:18,
+/// DNA/inversion.md:39). Locks the fix for the single-payload Display.
 #[test]
-fn ins_inverted_copy_5prime_boundary_pins_bracketed_display() {
+fn ins_inverted_copy_5prime_boundary_round_trips() {
     let input = "NC_000023.11:g.122_123ins123_234inv";
     let parsed = parse_hgvs(input).expect("must parse");
     assert_eq!(
         parsed.to_string(),
-        "NC_000023.11:g.122_123ins[123_234inv]",
-        "ferro currently brackets the inv payload; spec uses {input:?}"
+        input,
+        "single-payload ins<range>inv must not be bracketed (spec form)"
     );
 }
 
 /// Inverted-copy at 3' boundary of original. Source: dna-inversion:C-C2.
-/// Same brackets-added divergence as C-C1.
 #[test]
-fn ins_inverted_copy_3prime_boundary_pins_bracketed_display() {
+fn ins_inverted_copy_3prime_boundary_round_trips() {
     let input = "NC_000023.11:g.234_235ins123_234inv";
     let parsed = parse_hgvs(input).expect("must parse");
     assert_eq!(
         parsed.to_string(),
-        "NC_000023.11:g.234_235ins[123_234inv]",
-        "ferro currently brackets the inv payload; spec uses {input:?}"
+        input,
+        "single-payload ins<range>inv must not be bracketed (spec form)"
     );
 }
 

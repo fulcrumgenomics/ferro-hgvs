@@ -7034,13 +7034,16 @@ mod tests {
         assert!(matches!(variant, HgvsVariant::Genome(_)));
         assert_eq!(format!("{}", variant), "NC_000007.14:g.45043702_46521017delins[AGAAGGAAATTT;45310743_46521014;45043709_45310738inv]");
 
-        // Simple complex delins with just inversion
+        // Simple complex delins with just inversion. The spec-canonical
+        // form for a single-payload inv is unbracketed (DNA/insertion.md:22,
+        // DNA/inversion.md:39 — examples like `c.849_850ins850_900inv`);
+        // ferro now drops brackets on Display for single-element Complex.
         let variant =
             parse_variant("NC_000016.9:g.78179358_78219143delins[78185355_78199419inv]").unwrap();
         assert!(matches!(variant, HgvsVariant::Genome(_)));
         assert_eq!(
             format!("{}", variant),
-            "NC_000016.9:g.78179358_78219143delins[78185355_78199419inv]"
+            "NC_000016.9:g.78179358_78219143delins78185355_78199419inv"
         );
     }
 
