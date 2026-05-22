@@ -17,7 +17,7 @@
 //! wraparound.
 
 use ferro_hgvs::parse_hgvs;
-use ferro_hgvs::python_helpers::get_indel_length_with_provider;
+use ferro_hgvs::python_helpers::{get_indel_length_with_provider, is_frameshift_with_provider};
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::{GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::spdi::convert::{hgvs_to_spdi, hgvs_to_spdi_simple};
@@ -256,4 +256,44 @@ mod validate_response_tests {
             "expected wraps_origin=false on linear m. sub"
         );
     }
+}
+
+// =============================================================================
+// is_frameshift_with_provider: closes #412
+// =============================================================================
+// is_frameshift (no-provider) returns false for wraparound m./o. ranges
+// because get_indel_length returns None. is_frameshift_with_provider closes
+// the gap by routing through get_indel_length_with_provider.
+
+#[test]
+fn wraparound_del_is_frameshift_with_provider_returns_true() {
+    // 2-nt wraparound deletion: 2 % 3 != 0 → frameshift.
+    let v = parse_hgvs("NC_012920.1:m.16569_1del").unwrap();
+    let p = mt_provider();
+    assert!(is_frameshift_with_provider(&v, &p));
+}
+
+#[test]
+fn wraparound_3nt_del_is_frameshift_with_provider_returns_false() {
+    // 3-nt wraparound deletion (start=16569, end=2 → span=(16569-16569+1)+2=3):
+    // in-frame.
+    let v = parse_hgvs("NC_012920.1:m.16569_2del").unwrap();
+    let p = mt_provider();
+    assert!(!is_frameshift_with_provider(&v, &p));
+}
+
+#[test]
+fn wraparound_dup_is_frameshift_with_provider_returns_false_when_in_frame() {
+    // 15-nt wraparound dup: 15 % 3 == 0 → in-frame.
+    let v = parse_hgvs("NC_012920.1:m.16560_5dup").unwrap();
+    let p = mt_provider();
+    assert!(!is_frameshift_with_provider(&v, &p));
+}
+
+#[test]
+fn linear_substitution_is_frameshift_with_provider_returns_false() {
+    // Substitution has indel length 0 → not a frameshift.
+    let v = parse_hgvs("NC_012920.1:m.100A>G").unwrap();
+    let p = mt_provider();
+    assert!(!is_frameshift_with_provider(&v, &p));
 }
