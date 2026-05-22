@@ -333,7 +333,7 @@ pub enum ErrorType {
     /// ferro preserves the input verbatim and emits this warning.
     /// Strict mode rejects with `FerroError::InvalidCoordinates`;
     /// lenient and silent modes both accept and preserve the input,
-    /// with the warning still surfaced by `normalize_with_warnings`
+    /// with the warning still surfaced by `normalize_with_diagnostics`
     /// (the emit site at `src/normalize/overlap.rs:88` is
     /// unconditional — only strict-mode promotion is gated by mode).
     /// Closes #395 item 6 — previously the warning was emitted but

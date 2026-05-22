@@ -397,7 +397,7 @@ fn audit_mt_position_past_end_parses_but_normalize_fires_w4004() {
     p.add_genomic_sequence("NC_012920.1", "A".repeat(16569));
     let normalizer = Normalizer::with_config(p, ferro_hgvs::NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     assert!(
         result

@@ -293,7 +293,7 @@ impl FerroService {
                     let original_str = parse_result.result.to_string();
 
                     // Then normalize it
-                    match normalizer.normalize_with_warnings(&parse_result.result) {
+                    match normalizer.normalize_with_diagnostics(&parse_result.result) {
                         Ok(normalize_result) => {
                             let success = true;
                             let normalized_str = normalize_result.result.to_string();

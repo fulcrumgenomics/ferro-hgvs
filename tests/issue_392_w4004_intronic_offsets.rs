@@ -234,7 +234,7 @@ fn position_past_end_fires(provider: MockProvider, input: &str) -> bool {
     let normalizer = Normalizer::with_config(provider, config);
     let variant =
         parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {:?}: {:?}", input, e));
-    match normalizer.normalize_with_warnings(&variant) {
+    match normalizer.normalize_with_diagnostics(&variant) {
         Ok(result) => result
             .warnings
             .iter()
@@ -360,7 +360,7 @@ fn intronic_offset_check_skips_when_genomic_coords_missing() {
 
 #[test]
 fn strict_mode_promotes_intronic_past_end_to_error() {
-    // Strict mode calls `normalize` (not `normalize_with_warnings`), which
+    // Strict mode calls `normalize` (not `normalize_with_diagnostics`), which
     // promotes a `PositionPastEnd` warning to `FerroError::InvalidCoordinates`.
     let provider = provider_with_intronic_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());

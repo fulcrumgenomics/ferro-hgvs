@@ -1476,8 +1476,8 @@ fn run_ferro_normalize(
 
             match parse_hgvs_lenient(&preprocessed) {
                 Ok(parse_result) => {
-                    // Use normalize_with_warnings to capture reference mismatches
-                    match normalizer.normalize_with_warnings(&parse_result.result) {
+                    // Use normalize_with_diagnostics to capture reference mismatches
+                    match normalizer.normalize_with_diagnostics(&parse_result.result) {
                         Ok(norm_result) => {
                             // Check if there were reference mismatches
                             let ref_mismatch = norm_result.warnings.iter().find_map(|w| match w {
