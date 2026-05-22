@@ -961,9 +961,11 @@ class ErrorType(IntEnum):
     ClinVarProseMultiAllelic = 29
     RnaThymineCanonicalized = 30
     ProteinBracketedAaInsertion = 31
-    # Discriminant 32 is reserved for W4004 PositionPastEnd (issue #342).
+    PositionPastEnd = 32
     VariantExceedsReference = 33
     NonSpecMosaicForm = 34
+    OverlapConflictingEdits = 35
+    InitiatorMetCanonicalization = 36
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""
