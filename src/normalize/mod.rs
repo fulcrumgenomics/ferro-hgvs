@@ -200,6 +200,40 @@ fn has_unknown_offset_tx(pos: &TxPos) -> bool {
     )
 }
 
+/// If `pos.base` lies past the contig length on a mitochondrial accession,
+/// return a `PositionPastEnd` warning describing the violation; otherwise
+/// `None`. Closes #393.
+///
+/// Bounds: `m.<N>` must satisfy `1 <= N <= contig_length`. The contig
+/// length is sourced from [`ReferenceProvider::get_sequence_length`].
+/// Wraparound ranges (`m.<high>_<low>`, where `high > low` on a valid
+/// circular contig, per SVD-WG006) are NOT past-end if both endpoints
+/// fit in the contig — this check fires only when an endpoint itself
+/// exceeds the contig length.
+fn check_mt_pos_past_end(
+    accession: &str,
+    pos: &GenomePos,
+    contig_length: u64,
+) -> Option<NormalizationWarning> {
+    if pos.base < 1 {
+        return None;
+    }
+    if pos.base > contig_length {
+        return Some(NormalizationWarning::PositionPastEnd {
+            message: format!(
+                "{}:m.{} lies past the contig-end (contig length {})",
+                accession, pos.base, contig_length
+            ),
+            accession: accession.to_string(),
+            coordinate_system: "m".to_string(),
+            position: pos.base.to_string(),
+            bound_kind: "contig-end".to_string(),
+            bound_value: contig_length,
+        });
+    }
+    None
+}
+
 /// True if the edit is a `Deletion` or `Duplication` shape — the two
 /// edit kinds the HGVS exon-junction exception applies to (HGVS
 /// general.md: "deletions/duplications around exon/exon junctions using
@@ -2759,6 +2793,41 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(e) => e,
             None => return Ok((HV::Mt(variant.clone()), vec![])),
         };
+
+        // Past-end bounds check (#393, W4004). Fires when an m. position
+        // exceeds the contig length, e.g. `m.16570A>G` on the 16569-bp mtDNA.
+        // Wraparound ranges (start > end, valid per SVD-WG006) bypass this
+        // only when both endpoints fit in the contig.
+        // Conservative skip when the provider has no length data for this
+        // accession — mirrors the transcript-absent skip in normalize_cds.
+        let mt_accession_bounds = variant.accession.transcript_accession();
+        if self.config.should_reject_position_past_end()
+            || self.config.should_warn_position_past_end()
+        {
+            if let (Some(start_pos), Some(end_pos)) = (
+                variant.loc_edit.location.start.inner(),
+                variant.loc_edit.location.end.inner(),
+            ) {
+                if let Ok(contig_length) = self.provider.get_sequence_length(&mt_accession_bounds) {
+                    let mut bounds_warnings: Vec<NormalizationWarning> = Vec::new();
+                    if let Some(w) =
+                        check_mt_pos_past_end(&mt_accession_bounds, start_pos, contig_length)
+                    {
+                        bounds_warnings.push(w);
+                    }
+                    if end_pos.base != start_pos.base {
+                        if let Some(w) =
+                            check_mt_pos_past_end(&mt_accession_bounds, end_pos, contig_length)
+                        {
+                            bounds_warnings.push(w);
+                        }
+                    }
+                    if !bounds_warnings.is_empty() {
+                        return Ok((HV::Mt(variant.clone()), bounds_warnings));
+                    }
+                }
+            }
+        }
 
         // SVD-WG009: rewrite `con` to `delins` up front. Pure-syntax;
         // no reference data needed. Re-run on the rewritten variant so

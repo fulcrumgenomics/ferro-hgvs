@@ -368,23 +368,46 @@ fn audit_mt_wrapping_delins_indel_length_is_none_without_provider() {
 // Spec: numbering is 1..=L (L = 16569 for NC_012920.1); there is no
 // position 0 (`numbering.md` line 20 documents the convention for
 // coding sequences; the same 1-based no-zero rule applies to `m.`).
-// Ferro today rejects 0 and negative but **accepts** positions past
-// the contig end. F1 must decide whether to add length validation —
-// it will need contig length anyway for wraparound math.
+// Ferro rejects 0 and negative at parse time. Positions past the contig
+// end parse successfully (parse-time behaviour unchanged), but since
+// issue #393 / PR #393 ferro emits W4004 PositionPastEnd at normalize
+// time when a provider supplies the contig length — matching the c./n.
+// axis behaviour wired by PRs #342/#347.
 // -----------------------------------------------------------------------------
 
-/// `m.16570A>G` (one past the end of NC_012920.1) parses today; ferro
-/// has no contig-length validation.
+/// `m.16570A>G` (one past the end of NC_012920.1) still parses today
+/// (parse-time behaviour is unchanged by #393). At normalize time,
+/// however, ferro now fires W4004 PositionPastEnd when a provider can
+/// supply the contig length. Both behaviours are pinned here.
 #[test]
-fn audit_mt_position_past_end_silently_accepted_today() {
+fn audit_mt_position_past_end_parses_but_normalize_fires_w4004() {
+    // 1. Parse-time: must succeed (no change from before #393).
     let input = "NC_012920.1:m.16570A>G";
     let variant = parse_hgvs(input).unwrap_or_else(|e| {
         panic!(
-            "PINNED: ferro has no length validation for m. accessions; \
-             m.16570A>G parses today. Got Err({e})."
+            "PINNED: m.16570A>G must still parse successfully after #393 \
+             (W4004 fires at normalize time, not parse time). Got Err({e})."
         )
     });
     assert_eq!(format!("{}", variant), input);
+
+    // 2. Normalize-time (lenient mode): W4004 must fire when the provider
+    //    knows the contig length (16569 bp for NC_012920.1).
+    let mut p = MockProvider::new();
+    p.add_genomic_sequence("NC_012920.1", "A".repeat(16569));
+    let normalizer = Normalizer::with_config(p, ferro_hgvs::NormalizeConfig::lenient());
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("lenient mode must not error");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "POSITION_PAST_END"),
+        "PINNED: normalize(m.16570A>G) must emit W4004 (PositionPastEnd) \
+         when provider knows contig length; got: {:?}",
+        result.warnings,
+    );
 }
 
 /// `m.0A>G` is rejected today (1-based numbering, no zero).
