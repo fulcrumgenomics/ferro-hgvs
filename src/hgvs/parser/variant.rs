@@ -1154,16 +1154,6 @@ enum GenomeKind {
 }
 
 impl GenomeKind {
-    fn build_variant(
-        self,
-        accession: Accession,
-        gene_symbol: Option<String>,
-        interval: GenomeInterval,
-        edit: crate::hgvs::edit::NaEdit,
-    ) -> HgvsVariant {
-        self.build_variant_with_loc_edit(accession, gene_symbol, LocEdit::new(interval, edit))
-    }
-
     /// Build a variant from a pre-constructed `LocEdit` (allowing
     /// `Mu::Uncertain` for the predicted-wrapper form). #243.
     fn build_variant_with_loc_edit(
@@ -1193,12 +1183,53 @@ impl GenomeKind {
 }
 
 /// Parse a single bracket-member position+edit (genome / m. / o.),
-/// recognising the predicted-wrapper form. Mirrors
-/// `parse_cds_bracket_member`. #243.
+/// recognising whole-entity edits (`=`, `?`, `(=)`, `(?)`) and the
+/// predicted-wrapper form. Mirrors `parse_cds_bracket_member` and
+/// `parse_rna_bracket_member`. #243; whole-entity dispatch added by
+/// #423 (follow-up to #396 item 3).
 fn parse_genome_bracket_member(
     part: &str,
     kind: GenomeKind,
 ) -> IResult<&str, LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>> {
+    // Whole-entity genome edits have no positional content, so attach
+    // a dummy interval at position 1 (mirrors `parse_genome_variant`'s
+    // handling of `g.=` / `g.?` at the top level). These probes run
+    // BEFORE the position-based predicted wrapper / bare-position
+    // parsers so a bracket like `[(=)]` matches the whole-entity
+    // identity marker rather than being routed into the position
+    // parser. Same shape applies to `m.` and `o.` — whole-entity edits
+    // don't carry a coordinate so the circular-vs-linear distinction
+    // is moot for these probes. #423, follow-up to #396 item 3.
+    //
+    // Note: bare `[0]` / `[?]` in the trans-allele form are handled
+    // upstream by `parse_trans_allele_shorthand_generic`'s cross-coord
+    // short-circuits (→ `NullAllele` / `UnknownAllele`) and never
+    // reach this dispatcher. Only cis/unknown-flat paths and
+    // predicted forms (`[(?)]`, `[(=)]`) plus bare `=` / `?` inside a
+    // cis bracket flow through these probes.
+    fn dummy_genome_interval() -> GenomeInterval {
+        GenomeInterval::point(crate::hgvs::location::GenomePos::new(1))
+    }
+
+    if let Ok((remaining, mu_edit)) = parse_whole_genome_identity(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_genome_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_whole_genome_unknown(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_genome_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+
     let is_circular = matches!(kind, GenomeKind::Mt | GenomeKind::Circular);
     // For `m.`/`o.` the circular variant allows the spec-authorised
     // reversed `<high>_<low>` forms; post-parse we still run
@@ -1608,25 +1639,26 @@ fn parse_genome_position_unknown_phase(
             )));
         }
 
-        let is_circular = matches!(kind, GenomeKind::Mt | GenomeKind::Circular);
-        let (edit_remaining, interval) = if is_circular {
-            parse_genome_interval_for_circular(part)?
-        } else {
-            parse_genome_interval(part)?
-        };
-        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
-
+        // Delegate to the bracket-member dispatcher so the same set of
+        // shapes (whole-entity `=`/`?`/`(=)`/`(?)`, predicted-wrapper
+        // `(<pos><edit>)`, bare position) is admitted here. This keeps
+        // the bracket form `g.[X(;)Y]` and the bracketless form
+        // `g.X(;)Y` symmetric — Display canonicalises one into the
+        // other, so accepting an asymmetric set on the parse side
+        // breaks round-trip. #423.
+        let (final_remaining, loc_edit) = parse_genome_bracket_member(part, kind)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
                 nom::error::ErrorKind::Tag,
             )));
         }
-        if is_circular {
-            check_circular_reversed_range(&interval, &edit, part)?;
-        }
 
-        variants.push(kind.build_variant(accession.clone(), gene_symbol.clone(), interval, edit));
+        variants.push(kind.build_variant_with_loc_edit(
+            accession.clone(),
+            gene_symbol.clone(),
+            loc_edit,
+        ));
     }
 
     if variants.len() < 2 {
@@ -2019,9 +2051,11 @@ fn parse_cds_position_unknown_phase(
             )));
         }
 
-        // Parse interval + edit
-        let (edit_remaining, interval) = parse_cds_interval(part)?;
-        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+        // Delegate to the bracket-member dispatcher so the same set of
+        // shapes is admitted here as in the bracketed cis/trans forms
+        // — keeps `c.[X(;)Y]` / `c.X(;)Y` round-trip-symmetric across
+        // Display's bracket-vs-bracketless canonicalisation. #423.
+        let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
 
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
@@ -2033,7 +2067,7 @@ fn parse_cds_position_unknown_phase(
         variants.push(HgvsVariant::Cds(CdsVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
+            loc_edit,
         }));
     }
 
@@ -2051,13 +2085,65 @@ fn parse_cds_position_unknown_phase(
 }
 
 /// Parse CDS allele shorthand: [145C>T;147C>G], [145C>T(;)147C>G], or [76A>C];[0]
-/// Parse a single bracket-member position+edit (CDS), recognising the
-/// predicted-wrapper form `(<pos><edit>)` and returning a `LocEdit`
-/// with `Mu::Uncertain` in that case. Falls back to `<pos>[<edit>]`
-/// (edit optional, defaults to identity). #243 follow-up to #241.
+/// Parse a single bracket-member position+edit (CDS), recognising
+/// whole-entity edits (`=`, `?`, `(=)`, `(?)`), the predicted-wrapper
+/// form `(<pos><edit>)`, and bare `<pos>[<edit>]` (edit optional,
+/// defaults to identity). #243 follow-up to #241; whole-entity dispatch
+/// added by #423 (follow-up to #396 item 3).
+///
+/// Note the intentional asymmetry with `parse_tx_bracket_member`: CDS
+/// does NOT probe `parse_rna_no_product`. `c.0` is not a CDS whole-entity
+/// form — bare `[0]` in trans-allele context is cross-coord-short-
+/// circuited to `NullAllele` upstream (see
+/// `parse_trans_allele_shorthand_generic`), and the spec does not
+/// define a `c.0` / `c.(0)` "no protein" form on the c. axis (that's
+/// what `p.0` / `p.(0)` are for). Non-coding transcripts `n.` DO use
+/// `parse_rna_no_product` because `n.0` is a valid spec form ("no
+/// transcript produced"), mirroring `r.0`.
 fn parse_cds_bracket_member(
     part: &str,
 ) -> IResult<&str, LocEdit<CdsInterval, crate::hgvs::edit::NaEdit>> {
+    // Whole-CDS edits have no positional content, so attach a dummy
+    // interval at position 1 (mirrors `parse_cds_variant`'s handling
+    // of `c.=` / `c.?` at the top level). These probes run BEFORE the
+    // position-based predicted wrapper / bare-position parsers so a
+    // bracket like `[(=)]` matches the whole-entity identity marker
+    // rather than being routed into `parse_cds_interval`. #423,
+    // follow-up to #396 item 3.
+    //
+    // Note: bare `[0]` / `[?]` in the trans-allele form are handled
+    // upstream by `parse_trans_allele_shorthand_generic`'s cross-coord
+    // short-circuits (→ `NullAllele` / `UnknownAllele`) and never
+    // reach this dispatcher. Only cis/unknown-flat paths and
+    // predicted forms (`[(?)]`, `[(=)]`) plus bare `=` / `?` inside a
+    // cis bracket flow through these probes.
+    fn dummy_cds_interval() -> CdsInterval {
+        CdsInterval::point(crate::hgvs::location::CdsPos {
+            base: 1,
+            offset: None,
+            utr3: false,
+        })
+    }
+
+    if let Ok((remaining, mu_edit)) = parse_whole_cds_identity(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_cds_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_whole_cds_unknown(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_cds_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+
     // Try predicted wrapper first
     if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
         if let Ok((remaining, (interval, edit))) =
@@ -2303,13 +2389,70 @@ fn parse_tx_variant(
 }
 
 /// Parse a single bracket-member position+edit (non-coding transcript /
-/// `n.`), recognising the predicted-wrapper form `(<pos><edit>)` and
-/// returning a `LocEdit` with `Mu::Uncertain` in that case. Falls back
-/// to `<pos>[<edit>]` (edit optional, defaults to identity). Mirrors
-/// `parse_cds_bracket_member`. #287 follow-up to #243 / PR #244.
+/// `n.`), recognising whole-entity edits (`=`, `?`, `(=)`, `(?)`, `0`,
+/// `(0)`), the predicted-wrapper form `(<pos><edit>)`, and bare
+/// `<pos>[<edit>]` (edit optional, defaults to identity). Mirrors
+/// `parse_cds_bracket_member` and `parse_rna_bracket_member`. #287
+/// follow-up to #243 / PR #244; whole-entity dispatch added by #423
+/// (follow-up to #396 item 3).
+///
+/// Whole-entity probes here reuse the RNA-named parsers
+/// (`parse_whole_rna_identity`, `parse_whole_rna_unknown`,
+/// `parse_rna_no_product`) — these are pure tag-only and don't depend
+/// on the coord system, so `parse_tx_variant` already shares them at
+/// the top level. The name is historical; functionally these are the
+/// shared NA whole-entity tag parsers for `n.` / `r.`.
 fn parse_tx_bracket_member(
     part: &str,
 ) -> IResult<&str, LocEdit<TxInterval, crate::hgvs::edit::NaEdit>> {
+    // Whole-tx edits have no positional content, so attach a dummy
+    // interval at position 1 (mirrors `parse_tx_variant`'s handling of
+    // `n.=` / `n.?` / `n.0` at the top level — which reuses the RNA
+    // whole-entity parsers because they're pure tag-only and don't
+    // depend on the coord system). These probes run BEFORE the
+    // position-based predicted wrapper / bare-position parsers so a
+    // bracket like `[(0)]` matches the no-product marker rather than
+    // being routed into `parse_tx_interval`. #423, follow-up to #396
+    // item 3.
+    //
+    // Note: bare `[0]` / `[?]` in the trans-allele form are handled
+    // upstream by `parse_trans_allele_shorthand_generic`'s cross-coord
+    // short-circuits (→ `NullAllele` / `UnknownAllele`) and never
+    // reach this dispatcher. Only cis/unknown-flat paths and
+    // predicted forms (`[(0)]`, `[(?)]`, `[(=)]`) plus bare `=` / `?`
+    // / `0` inside a cis bracket flow through these probes.
+    fn dummy_tx_interval() -> TxInterval {
+        TxInterval::point(crate::hgvs::location::TxPos::new(1))
+    }
+
+    if let Ok((remaining, mu_edit)) = parse_whole_rna_identity(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_tx_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_whole_rna_unknown(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_tx_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+    if let Ok((remaining, mu_edit)) = parse_rna_no_product(part) {
+        return Ok((
+            remaining,
+            LocEdit {
+                location: dummy_tx_interval(),
+                edit: mu_edit,
+            },
+        ));
+    }
+
     // Try predicted wrapper first
     if part.starts_with('(') && !part.starts_with("(?") && !part.starts_with("(=)") {
         if let Ok((remaining, (interval, edit))) =
@@ -2450,8 +2593,10 @@ fn parse_tx_position_unknown_phase(
                 nom::error::ErrorKind::Verify,
             )));
         }
-        let (edit_remaining, interval) = parse_tx_interval(part)?;
-        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+        // Delegate to the bracket-member dispatcher so the same set of
+        // shapes is admitted here as in the bracketed cis/trans forms
+        // — keeps `n.[X(;)Y]` / `n.X(;)Y` round-trip-symmetric. #423.
+        let (final_remaining, loc_edit) = parse_tx_bracket_member(part)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
@@ -2461,7 +2606,7 @@ fn parse_tx_position_unknown_phase(
         variants.push(HgvsVariant::Tx(TxVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
+            loc_edit,
         }));
     }
 
@@ -3547,8 +3692,14 @@ fn parse_rna_position_unknown_phase(
             )));
         }
 
-        let (edit_remaining, interval) = parse_rna_interval(part)?;
-        let (final_remaining, edit) = parse_na_edit(edit_remaining)?;
+        // Delegate to the bracket-member dispatcher so whole-entity
+        // RNA forms (`=`, `?`, `0`, `spl`, `spl?`, `(=)`, `(?)`, `(0)`,
+        // `(spl)`, `(spl?)`) added in #396 item 3 are also admitted in
+        // the bracketless `r.X(;)Y` form. Keeps `r.[X(;)Y]` and
+        // `r.X(;)Y` round-trip-symmetric (Display canonicalises one
+        // into the other for unknown-phase). #423 sibling fix to #396
+        // item 3.
+        let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
 
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
@@ -3560,7 +3711,7 @@ fn parse_rna_position_unknown_phase(
         variants.push(HgvsVariant::Rna(RnaVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
+            loc_edit,
         }));
     }
 
