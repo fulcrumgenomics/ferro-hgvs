@@ -2525,7 +2525,9 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
         // `[` or `;` is the start of a range that inherits the outer
         // axis. `try_detect_length_mismatch_at` returns `None` for
         // anything that isn't a `<int>_<int><edit><refseq>` pattern,
-        // so over-triggering is safe.
+        // so over-triggering is safe. The `i > 0` guard prevents an
+        // underflow on the `bytes[i - 1]` index at the very first
+        // byte (where there's no preceding separator to consider).
         let prev_is_compound_separator = i > 0 && matches!(bytes[i - 1], b'[' | b';');
         if prev_is_compound_separator && bytes[i].is_ascii_digit() {
             if let Some(hit) = try_detect_length_mismatch_at(bytes, input, i) {
@@ -2654,6 +2656,12 @@ fn parse_endpoint_with_offset(bytes: &[u8], pos: usize) -> Option<(i64, i64, usi
         j += 1;
     }
     let base: i64 = std::str::from_utf8(&bytes[pos..j]).ok()?.parse().ok()?;
+    // HGVS positions are 1-based; reject `0` (invalid HGVS) so the
+    // W3016 scan doesn't compute a `0+N..0+M` range against an
+    // explicit ref seq when the input is malformed.
+    if base == 0 {
+        return None;
+    }
     let mut offset: i64 = 0;
     if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
         let sign: i64 = if bytes[j] == b'+' { 1 } else { -1 };
@@ -4660,10 +4668,10 @@ mod tests {
     }
 
     /// Intronic / offset-bearing endpoints with explicit ref
-    /// sequences must be length-checked (#390 item 5). Pre-fix
-    /// `parse_bare_int` bailed on any endpoint followed by `+` / `-`,
-    /// so `c.100+5_100+10delAAAA` (intronic span of 6 bases, 4-base
-    /// ref) silently passed.
+    /// sequences must be length-checked (#390 item 5). Pre-fix the
+    /// W3016 endpoint parser bailed on any endpoint followed by
+    /// `+` / `-`, so `c.100+5_100+10delAAAA` (intronic span of
+    /// 6 bases, 4-base ref) silently passed.
     #[test]
     fn test_detect_length_mismatch_intronic_same_base_positive_offsets() {
         let hits = detect_length_mismatch("NM_x:c.100+5_100+10delAAAA");

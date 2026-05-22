@@ -873,6 +873,15 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
         // mRNA). For non-coding transcripts r.*N has no meaning;
         // surface `MissingReferenceData` rather than fall back to
         // `tx_len` (#390 item 2).
+        //
+        // TODO(#390-follow-up): the c.*N path goes through
+        // `CoordinateMapper::cds_to_tx` which is exon-aware and
+        // honors CIGAR insertions in the 3'UTR; this plain
+        // `cds_end + base` short-circuits the same arithmetic. For
+        // contiguous single-exon 3'UTRs the two agree, but
+        // multi-exon 3'UTRs with cdot tx-coordinate gaps will see
+        // r.*N and c.*N land at slightly different transcript
+        // positions. Route this through the same exon-aware helper.
         if pos.base < 1 {
             return Err(ConversionError::InvalidPosition {
                 description: format!("3' UTR position *{} must be >= 1", pos.base),
@@ -912,6 +921,20 @@ fn ensure_positive_tx<P: std::fmt::Display>(
 ///
 /// `start_one_based` and `end_one_based` are 1-based positions on the SPDI
 /// accession (genomic for `g.`/`m.`, transcript for `c.`/`n.`/`r.`).
+///
+/// # Position convention per edit
+///
+/// SPDI's `position` field is 0-based. For substitution / deletion /
+/// delins (edits that reference specific bases) the SPDI position
+/// equals `start_one_based - 1` (computed once at the top of the
+/// function as `spdi_pos`). For **insertion** and **duplication** the
+/// SPDI position is *interbase* — position N is the boundary AFTER
+/// 1-based base N — so the Insertion arm uses `start_one_based`
+/// directly and the Duplication arm uses `end_one_based` directly
+/// (#390 item 1). The top-of-function `spdi_pos` is unused in those
+/// two arms.
+///
+/// # Provider behavior
 ///
 /// When `provider` is `Some` and the edit is a short-form deletion,
 /// duplication, or delins (i.e. lacks an explicit deleted sequence), the
@@ -1369,8 +1392,8 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
         // than silently emit `g.0_1ins…`.
         if spdi.position == 0 {
             return Err(ConversionError::InvalidPosition {
-                description: "SPDI position 0 (insertion before the first base) \
-                    has no HGVS ins-form representation"
+                description: "SPDI position 0 represents an insertion before the \
+                    first base, which has no HGVS notation"
                     .to_string(),
             });
         }
@@ -1594,9 +1617,13 @@ where
         return Ok(None);
     }
 
-    // Build the dup edit. 1-based interval: end = spdi.position,
-    // start = end + 1 - ins_len.
-    let end_one_based = flank_end; // == spdi.position
+    // Build the dup edit. The SPDI 0-based interbase position N and
+    // the HGVS 1-based base-N coordinate share the same numeric
+    // value (N), even though they describe different things —
+    // `spdi.position` (interbase) sits AFTER 1-based base
+    // `spdi.position`, which is also the 1-based end of the
+    // duplicated region.
+    let end_one_based = flank_end; // numerically equal to spdi.position
     let start_one_based = end_one_based + 1 - ins_len;
 
     let dup_seq = string_to_sequence(ins)?;
