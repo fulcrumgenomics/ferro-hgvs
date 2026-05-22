@@ -1642,21 +1642,20 @@ fn parse_genome_position_unknown_phase(
     ))
 }
 
-/// Parse a genomic trans-allele compact-prefix shorthand: `[edit1];[edit2]`
-/// (with the `g.` already consumed by the caller). Each bracketed group holds
-/// a single sub-variant rendered with this allele's accession. Mirrors
-/// `parse_cds_trans_allele_shorthand` and `parse_rna_trans_allele_shorthand`.
 /// Generic trans-allele shorthand parser shared by 6 of 7 axes (g., c., n.,
 /// m., r., o.). Owns the bracketed-member loop, the `[0]`/`[?]`
 /// cross-coordinate special-cases, the bracket-balance check, the
 /// `len < 2` guard, and the final `AlleleVariant::new(.., Trans)` wrap.
+/// Always emits `AllelePhase::Trans` — cis and unknown-phase shapes
+/// route through `parse_*_allele_shorthand` / `parse_*_compound_allele`
+/// upstream and never reach this function.
 ///
 /// Each axis-specific shim provides `parse_member`, a closure that
 /// consumes the bracket content and constructs the per-axis
-/// `HgvsVariant::<Axis>` (or returns a parse error). The closure also
-/// owns the post-parse "content fully consumed" check so axes are free
-/// to use their own bracket-member primitives without recomputing the
-/// remainder.
+/// `HgvsVariant::<Axis>` (or returns a parse error). The closure
+/// returns its own remainder so each axis is free to use its own
+/// bracket-member primitives; the generic checks the remainder is
+/// fully consumed.
 ///
 /// Protein keeps its own bespoke helper because it overrides the
 /// special-marker arm (`[0]`/`[0?]`/`[(0)]` → `ProteinEdit::NoProtein`
@@ -3594,6 +3593,13 @@ fn parse_rna_bracket_member(
     // parsers so a bracket like `[(spl?)]` matches the predicted-splice
     // marker rather than being routed into `parse_rna_interval`. #396
     // item 3.
+    //
+    // Note: bare `[0]` / `[?]` in the trans-allele form are handled
+    // upstream by `parse_trans_allele_shorthand_generic`'s cross-coord
+    // short-circuits (→ `NullAllele` / `UnknownAllele`) and never reach
+    // this dispatcher. Only the cis/unknown-flat paths and predicted
+    // forms (`[(0)]`, `[(?)]`, `[(spl?)]`) plus splice markers
+    // (`[spl]`, `[spl?]`) flow through these probes.
     fn dummy_rna_interval() -> RnaInterval {
         RnaInterval::point(crate::hgvs::location::RnaPos {
             base: 1,
@@ -6482,7 +6488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand_rejected() {
+    fn test_parse_mixed_phase_cds_allele_shorthand_rejected() {
         // Mixed `;`/`(;)` inside one bracket pair (e.g. `[A;B(;)C]`) has
         // no spec-defined HGVS shape: there is no way to express "A and
         // B are cis to each other, but unknown phase to C" in a single
@@ -6494,7 +6500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand_complex_rejected() {
+    fn test_parse_mixed_phase_cds_allele_shorthand_complex_rejected() {
         // More complex mixed shape `[A;B;C(;)D;E]` rejects too.
         assert!(parse_variant("NM_000088.3:c.[100A>G;200C>T;300G>A(;)400del;500dup]").is_err());
     }
