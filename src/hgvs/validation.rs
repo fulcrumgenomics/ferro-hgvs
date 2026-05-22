@@ -312,6 +312,23 @@ pub mod rules {
                     "Deletion-insertion must have at least one inserted base",
                 ));
             }
+            // Closes #394 item 2. The `Delins` variant doc-comment at
+            // `src/hgvs/edit.rs:472-474` states "At most one of `deleted`
+            // / `deleted_length` is `Some`"; promote that invariant from a
+            // docs-only convention to a runtime check. The parser does
+            // not emit this shape — only direct struct construction
+            // produces it — so this guard catches programmatic misuse.
+            NaEdit::Delins {
+                deleted: Some(_),
+                deleted_length: Some(_),
+                ..
+            } => {
+                result = result.with_error(ValidationError::new(
+                    "E004",
+                    "Deletion-insertion has both `deleted` sequence and `deleted_length`; \
+                     at most one may be set (see `NaEdit::Delins` doc invariant)",
+                ));
+            }
             _ => {}
         }
 
