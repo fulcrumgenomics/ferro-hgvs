@@ -658,15 +658,20 @@ impl MultiFastaProvider {
     ///
     /// `tx.strand` is honored; metadata fields are projected onto the returned
     /// `Transcript` using the same conventions as the FASTA-backed path so
-    /// downstream consumers see one shape regardless of which path served them.
-    /// `genome_build` is currently hardcoded to `GRCh38` to match the FASTA
-    /// path; pre-existing inconsistency, see TODO below.
+    /// downstream consumers see one shape regardless of which path served
+    /// them. `genome_build` is derived from `build_hint` when the caller
+    /// supplied one; otherwise from the attached [`CdotMapper`]'s primary
+    /// build (this entry point is only reachable through that mapper, so
+    /// the cdot-less branch of
+    /// [`genome_build_from_hint`](Self::genome_build_from_hint) cannot
+    /// fire here). See [#389].
     fn synthesize_transcript_from_cdot(
         &self,
         id: &str,
         tx: &crate::data::cdot::CdotTranscript,
+        build_hint: Option<&str>,
     ) -> Result<Transcript, FerroError> {
-        use crate::reference::transcript::{Exon as TxExon, GenomeBuild, ManeStatus, Strand};
+        use crate::reference::transcript::{Exon as TxExon, ManeStatus, Strand};
         use std::sync::OnceLock;
 
         if tx.exons.is_empty() {
@@ -737,9 +742,6 @@ impl MultiFastaProvider {
             (min_start, max_end)
         };
 
-        // TODO(#331-follow-up): `genome_build` is hardcoded GRCh38 here AND in
-        // the FASTA path (line ~828). For multi-build cdot loads this would
-        // mis-tag GRCh37 transcripts; resolve in a separate PR.
         Ok(Transcript {
             id: id.to_string(),
             gene_symbol: tx.gene_name.clone(),
@@ -751,7 +753,7 @@ impl MultiFastaProvider {
             chromosome: Some(tx.contig.clone()),
             genomic_start,
             genomic_end,
-            genome_build: GenomeBuild::GRCh38,
+            genome_build: self.genome_build_from_hint(build_hint),
             mane_status: ManeStatus::default(),
             refseq_match: None,
             ensembl_match: None,
@@ -796,7 +798,7 @@ impl MultiFastaProvider {
         id: &str,
         build_hint: Option<&str>,
     ) -> Result<Transcript, FerroError> {
-        use crate::reference::transcript::{Exon as TxExon, GenomeBuild, ManeStatus};
+        use crate::reference::transcript::{Exon as TxExon, ManeStatus};
         use std::sync::OnceLock;
 
         if let Some(resolved) = self.resolve_name(id) {
@@ -899,11 +901,7 @@ impl MultiFastaProvider {
                     chromosome: meta.chromosome,
                     genomic_start: meta.genomic_start,
                     genomic_end: meta.genomic_end,
-                    genome_build: match build_hint {
-                        Some("GRCh37") => GenomeBuild::GRCh37,
-                        Some("GRCh38") | None => GenomeBuild::GRCh38,
-                        _ => GenomeBuild::Unknown,
-                    },
+                    genome_build: self.genome_build_from_hint(build_hint),
                     mane_status: ManeStatus::default(),
                     refseq_match: None,
                     ensembl_match: None,
@@ -919,8 +917,17 @@ impl MultiFastaProvider {
         // does carry the exon alignment, synthesize transcript bases by
         // walking the alignment against the genome FASTA. Strand-aware.
         // Closes #331.
+        //
+        // When `build_hint` is `Some`, restrict the cdot lookup to that
+        // genome build so the synthesized exon coordinates and `contig`
+        // come from the same alignment the caller asked for; otherwise
+        // fall back to the primary-build view. See #389.
         if let Some(ref cdot) = self.cdot_mapper {
-            if let Some(tx) = cdot.get_transcript(id) {
+            let cdot_tx = match build_hint {
+                Some(b) => cdot.get_transcript_on_build(id, b),
+                None => cdot.get_transcript(id),
+            };
+            if let Some(tx) = cdot_tx {
                 // cdot.get_transcript does its own version-strip fallback
                 // (NM_FOO.1 -> NM_FOO.2 if only .2 is loaded). If that fired,
                 // the bases we synthesize will come from a *different* cdot
@@ -942,42 +949,73 @@ impl MultiFastaProvider {
                         id
                     );
                 }
-                return self.synthesize_transcript_from_cdot(id, tx);
+                return self.synthesize_transcript_from_cdot(id, tx, build_hint);
             }
         }
 
         Err(FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
-    /// Infer the genome build for an `NC_*` parent accession by checking
-    /// `ContigAliases::default_human()` for membership under each build.
-    /// Returns `None` for `NG_*` parents (build-agnostic) and for any NC
-    /// accession not in the human alias table.
-    fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
-        use crate::liftover::aliases::ContigAliases;
+    /// Resolve `build_hint` to a [`GenomeBuild`] for a returned [`Transcript`].
+    ///
+    /// Precedence:
+    ///   1. Explicit `build_hint` is consulted first. Recognized values
+    ///      `"GRCh37"` / `"GRCh38"` map to the matching enum variant;
+    ///      anything else — including the empty string, non-canonical
+    ///      casing (`"grch38"`, `"hg19"`), or an unknown build name — maps
+    ///      to [`GenomeBuild::Unknown`]. The cdot primary build is *not*
+    ///      consulted as a fallback when a hint is supplied; callers
+    ///      wanting that behavior must pass `None`.
+    ///   2. With `None`, the attached [`CdotMapper`]'s primary build is
+    ///      used when known (matched against the same canonical names).
+    ///      An attached cdot whose `primary_build()` is `None` (e.g. a
+    ///      bincode snapshot that pre-dates build tracking) surfaces as
+    ///      [`GenomeBuild::Unknown`] rather than fabricating a default —
+    ///      see #389 follow-up: the prior behavior of silently stamping
+    ///      `GRCh38` re-introduced the mis-tag this PR removes.
+    ///   3. With `None` and no cdot mapper attached, default to GRCh38
+    ///      (preserves the historical FASTA-only behavior).
+    ///
+    /// Strict canonical-casing matches the format produced by
+    /// [`infer_build_from_parent`](Self::infer_build_from_parent), which
+    /// is the only in-tree caller that synthesizes hints; foreign hint
+    /// sources should normalize before calling.
+    ///
+    /// Centralizing this here keeps the main FASTA-backed path and the
+    /// cdot synthesize fallback in agreement (#389).
+    fn genome_build_from_hint(
+        &self,
+        build_hint: Option<&str>,
+    ) -> crate::reference::transcript::GenomeBuild {
         use crate::reference::transcript::GenomeBuild;
-        // Only `NC_*` carries a build-distinguishing version; `NG_*` is
-        // build-agnostic, return None so the caller probes multiple builds.
-        if &*parent.prefix != "NC" {
-            return None;
+        // 1. Explicit hint wins.
+        if let Some(h) = build_hint {
+            return match h {
+                "GRCh37" => GenomeBuild::GRCh37,
+                "GRCh38" => GenomeBuild::GRCh38,
+                _ => GenomeBuild::Unknown,
+            };
         }
-        let aliases = ContigAliases::default_human();
-        // `Accession::full()` re-renders `NC_000017.11` etc. and avoids a
-        // separate format!() here.
-        let parent_str = parent.full();
-        if aliases
-            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh38)
-            .is_some()
-        {
-            return Some("GRCh38");
+        // 2/3. Consult the attached cdot (if any). An unknown primary
+        // build is surfaced as `Unknown` so callers don't get a wrong
+        // canonical stamp on a snapshot that lacks build provenance.
+        match self.cdot_mapper.as_ref().and_then(|c| c.primary_build()) {
+            Some("GRCh37") => GenomeBuild::GRCh37,
+            Some("GRCh38") => GenomeBuild::GRCh38,
+            Some(_) => GenomeBuild::Unknown,
+            None if self.cdot_mapper.is_some() => GenomeBuild::Unknown,
+            None => GenomeBuild::GRCh38,
         }
-        if aliases
-            .resolve_to_refseq(&parent_str, GenomeBuild::GRCh37)
-            .is_some()
-        {
-            return Some("GRCh37");
-        }
-        None
+    }
+
+    /// Infer the genome build for an `NC_*` parent accession.
+    ///
+    /// Thin wrapper around the shared
+    /// [`crate::liftover::aliases::infer_genome_build_from_accession`] —
+    /// kept on the impl so existing call sites and tests stay terse;
+    /// see the free function for the canonical contract.
+    fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
+        crate::liftover::aliases::infer_genome_build_from_accession(parent)
     }
 }
 
@@ -1670,6 +1708,238 @@ mod tests {
             matches!(err, FerroError::InvalidCoordinates { .. }),
             "expected InvalidCoordinates, got {err:?}"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // genome_build propagation (closes #389 item 1)
+    //
+    // Pre-fix, `synthesize_transcript_from_cdot` hardcoded
+    // `genome_build: GenomeBuild::GRCh38` and the main-path return mapped
+    // `None` to GRCh38 as well. For a `CdotMapper` whose primary build is
+    // GRCh37, both paths mis-tagged transcripts as GRCh38. These tests pin
+    // build propagation through the cdot fallback (synthesize) and the
+    // main FASTA-backed path, and exercise the centralized
+    // `genome_build_from_hint` helper that both paths share.
+    // ----------------------------------------------------------------------
+
+    /// `cdot.primary_build == "GRCh37"`, transcript not in the transcript
+    /// FASTA index → synthesize fallback runs. With no caller-supplied
+    /// `build_hint`, the synthesized `Transcript` must inherit the cdot
+    /// primary build, not the historical hardcoded GRCh38.
+    #[test]
+    fn test_synthesize_falls_back_to_cdot_primary_build_grch37() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::transcript::{GenomeBuild, Strand};
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts_with_build(
+            std::iter::once(&tx),
+            "GRCh37",
+        ));
+
+        let synthesized = provider
+            .get_transcript("NM_TEST.1")
+            .expect("cdot exon-alignment fallback should fetch transcript");
+        assert_eq!(
+            synthesized.genome_build,
+            GenomeBuild::GRCh37,
+            "synthesized transcript must inherit cdot primary build, not default to GRCh38"
+        );
+    }
+
+    /// Explicit `build_hint` is threaded through the synthesize fallback so
+    /// the resulting `Transcript.genome_build` reflects the hint. Here the
+    /// hint matches the cdot primary build (GRCh37 ↔ GRCh37) — exercises
+    /// that the parameter is plumbed through, not merely inferred from
+    /// the primary build.
+    #[test]
+    fn test_synthesize_honors_explicit_build_hint_grch37() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::transcript::{GenomeBuild, Strand};
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts_with_build(
+            std::iter::once(&tx),
+            "GRCh37",
+        ));
+
+        let synthesized = provider
+            .get_transcript_on_build("NM_TEST.1", Some("GRCh37"))
+            .expect("cdot exon-alignment fallback should fetch transcript");
+        assert_eq!(
+            synthesized.genome_build,
+            GenomeBuild::GRCh37,
+            "explicit build_hint must reach Transcript.genome_build"
+        );
+    }
+
+    /// When the caller asks for a build that cdot did NOT load, the
+    /// synthesize fallback must surface `ReferenceNotFound` rather than
+    /// quietly synthesizing from the primary-build alignment and
+    /// mis-tagging the result. Pre-#389 the fallback used the
+    /// build-agnostic `cdot.get_transcript` which would silently succeed.
+    #[test]
+    fn test_synthesize_rejects_when_cdot_lacks_requested_build() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts_with_build(
+            std::iter::once(&tx),
+            "GRCh37",
+        ));
+
+        let err = provider
+            .get_transcript_on_build("NM_TEST.1", Some("GRCh38"))
+            .expect_err("cdot has no GRCh38 alignment; synthesize must fail honestly");
+        assert!(
+            matches!(err, FerroError::ReferenceNotFound { .. }),
+            "expected ReferenceNotFound, got {err:?}"
+        );
+    }
+
+    /// Main FASTA-backed path (NM_TEST.1 *is* in the transcript FASTA),
+    /// cdot primary = GRCh37, no caller build hint → resulting
+    /// `Transcript.genome_build` must be GRCh37, not the historical default.
+    #[test]
+    fn test_main_path_falls_back_to_cdot_primary_build_grch37() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::transcript::{GenomeBuild, Strand};
+
+        let (mut provider, _kept) = build_provider_with_genome_and_named_tx("NM_TEST.1");
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts_with_build(
+            std::iter::once(&tx),
+            "GRCh37",
+        ));
+
+        let loaded = provider
+            .get_transcript("NM_TEST.1")
+            .expect("main path should fetch transcript from FASTA + cdot metadata");
+        assert_eq!(
+            loaded.genome_build,
+            GenomeBuild::GRCh37,
+            "main path must inherit cdot primary build when no caller hint is given"
+        );
+    }
+
+    /// Main path with no cdot mapper at all → fall back to the historical
+    /// default (GRCh38). Documents the unchanged behavior for FASTA-only
+    /// providers.
+    #[test]
+    fn test_main_path_no_cdot_defaults_to_grch38() {
+        use crate::reference::transcript::GenomeBuild;
+
+        let (provider, _kept) = build_provider_with_genome_and_named_tx("NM_TEST.1");
+        let loaded = provider
+            .get_transcript("NM_TEST.1")
+            .expect("main path should fetch transcript from FASTA (no cdot needed)");
+        assert_eq!(
+            loaded.genome_build,
+            GenomeBuild::GRCh38,
+            "FASTA-only provider with no cdot must preserve historical GRCh38 default"
+        );
+    }
+
+    /// Main FASTA-backed path with an explicit `build_hint = Some("GRCh38")`
+    /// against a cdot whose primary build is GRCh37 → the hint must win
+    /// over the cdot primary on the main path. Sibling to
+    /// `test_main_path_falls_back_to_cdot_primary_build_grch37` which
+    /// covers the `None` arm; together they pin both arms of the helper.
+    #[test]
+    fn test_main_path_explicit_hint_overrides_cdot_primary() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::transcript::{GenomeBuild, Strand};
+
+        let (mut provider, _kept) = build_provider_with_genome_and_named_tx("NM_TEST.1");
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts_with_build(
+            std::iter::once(&tx),
+            "GRCh37",
+        ));
+
+        let loaded = provider
+            .get_transcript_on_build("NM_TEST.1", Some("GRCh38"))
+            .expect("main path should fetch transcript from FASTA + cdot metadata");
+        assert_eq!(
+            loaded.genome_build,
+            GenomeBuild::GRCh38,
+            "explicit build_hint must override the cdot primary build on the main path"
+        );
+    }
+
+    /// Direct unit coverage of `genome_build_from_hint` for the
+    /// unrecognized-hint, casing, and empty-string arms — pre-#389 these
+    /// were inline `match` legs; centralizing made them shared, so test
+    /// them in one place.
+    #[test]
+    fn test_genome_build_from_hint_edge_cases() {
+        use crate::reference::transcript::GenomeBuild;
+
+        // No cdot mapper: None falls through to the historical GRCh38 default.
+        let (provider, _kept) = build_provider_with_test_genome();
+        assert_eq!(
+            provider.genome_build_from_hint(None),
+            GenomeBuild::GRCh38,
+            "None with no cdot must default to GRCh38"
+        );
+        // Recognized hints map to their enum variant regardless of cdot.
+        assert_eq!(
+            provider.genome_build_from_hint(Some("GRCh37")),
+            GenomeBuild::GRCh37
+        );
+        assert_eq!(
+            provider.genome_build_from_hint(Some("GRCh38")),
+            GenomeBuild::GRCh38
+        );
+        // Non-canonical hints — empty string, lowercase, UCSC-style — all
+        // map to Unknown rather than silently coercing to GRCh38.
+        for hint in &["", "grch38", "GRCH38", "hg19", "hg38", "GRCh99"] {
+            assert_eq!(
+                provider.genome_build_from_hint(Some(hint)),
+                GenomeBuild::Unknown,
+                "non-canonical hint {:?} must map to Unknown",
+                hint
+            );
+        }
+    }
+
+    /// Build a provider whose FASTA index contains both `NC_TEST.1`
+    /// (genome) and the requested transcript accession (so the main path
+    /// is taken, not the cdot synthesize fallback).
+    fn build_provider_with_genome_and_named_tx(
+        tx_id: &str,
+    ) -> (MultiFastaProvider, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+        let tx_fasta_path = dir.path().join("tx.fna");
+        let tx_fai_path = dir.path().join("tx.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_TEST.1").unwrap();
+            writeln!(f, "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC").unwrap();
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "NC_TEST.1\t40\t11\t40\t41").unwrap();
+        }
+        {
+            let mut f = File::create(&tx_fasta_path).unwrap();
+            writeln!(f, ">{}", tx_id).unwrap();
+            writeln!(f, "AAAACCCCGGGGTTTTAAAA").unwrap();
+        }
+        {
+            let mut f = File::create(&tx_fai_path).unwrap();
+            // Header ">NM_TEST.1\n" -> header byte length = len(tx_id) + 2.
+            let header_len = tx_id.len() as u64 + 2;
+            writeln!(f, "{}\t20\t{}\t20\t21", tx_id, header_len).unwrap();
+        }
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        (provider, dir)
     }
 
     #[test]

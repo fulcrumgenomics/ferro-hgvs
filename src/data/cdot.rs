@@ -711,6 +711,15 @@ pub struct CdotFile {
 
 /// Bincode-friendly snapshot of CdotMapper data, without custom JSON deserializers.
 /// Used for deserialization only; serialization uses [`CdotMapperSnapshotRef`].
+///
+/// **Format note (#389 follow-up).** `primary_build` was added after the
+/// initial snapshot layout. bincode (1.x) is positional and does not honor
+/// `#[serde(default)]` for trailing fields, so snapshots produced by older
+/// builds will fail to deserialize against this struct. That failure is
+/// non-fatal: [`CdotMapper::load`] catches it and falls back to JSON, which
+/// regenerates the `.bin` with the new layout. Callers that pass a `.bin`
+/// path directly (no JSON fallback available) must regenerate via
+/// `ferro prepare`.
 #[derive(Deserialize)]
 struct CdotMapperSnapshot {
     transcripts: HashMap<String, CdotTranscriptSnapshot>,
@@ -718,6 +727,11 @@ struct CdotMapperSnapshot {
     contig_alias_to_canonical: HashMap<String, String>,
     base_to_versioned: HashMap<String, String>,
     lrg_to_refseq: HashMap<String, String>,
+    /// Genome build the snapshot was produced under, or `None` if the
+    /// snapshot pre-dates the build-tracking format (only reachable via a
+    /// hand-rolled deserializer skipping this field — bincode itself will
+    /// error on a truncated stream and the loader falls back to JSON).
+    primary_build: Option<String>,
 }
 
 /// Borrowed view of CdotMapper for zero-copy serialization to bincode.
@@ -728,6 +742,7 @@ struct CdotMapperSnapshotRef<'a> {
     contig_alias_to_canonical: &'a HashMap<String, String>,
     base_to_versioned: &'a HashMap<String, String>,
     lrg_to_refseq: &'a HashMap<String, String>,
+    primary_build: Option<&'a str>,
 }
 
 /// Bincode-friendly snapshot of CdotTranscript, using standard Strand serde.
@@ -819,10 +834,14 @@ pub struct CdotMapper {
     /// NOT duplicated here. [`get_transcript_on_build`](Self::get_transcript_on_build)
     /// dispatches between the two maps.
     alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscript>>,
-    /// The genome-build name corresponding to entries in [`Self::transcripts`].
-    /// Used by [`get_transcript_on_build`](Self::get_transcript_on_build) to
-    /// short-circuit when the caller asks for the primary build.
-    primary_build: String,
+    /// The genome-build name corresponding to entries in [`Self::transcripts`],
+    /// or `None` if the build is unknown (e.g. a bincode snapshot produced
+    /// by an older build that did not persist this field). Used by
+    /// [`get_transcript_on_build`](Self::get_transcript_on_build) to
+    /// short-circuit when the caller asks for the primary build, and by
+    /// [`primary_build`](Self::primary_build) so downstream callers can
+    /// honor uncertainty rather than assume a default (#389 follow-up).
+    primary_build: Option<String>,
     /// Lazily-built per-contig SuperIntervals index for stabbing queries.
     ///
     /// Built on the first call to `transcripts_at_position` from the contents of
@@ -856,7 +875,7 @@ impl CdotMapper {
             base_to_versioned: HashMap::new(),
             lrg_to_refseq: HashMap::new(),
             alt_build_transcripts: HashMap::new(),
-            primary_build: "GRCh38".to_string(),
+            primary_build: Some("GRCh38".to_string()),
             contig_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         }
@@ -901,7 +920,7 @@ impl CdotMapper {
         I: IntoIterator<Item = &'a crate::reference::transcript::Transcript>,
     {
         let mut mapper = Self::new();
-        mapper.primary_build = genome_build.to_string();
+        mapper.primary_build = Some(genome_build.to_string());
         for tx in transcripts {
             let Some(contig) = tx.chromosome.clone() else {
                 log::warn!("Skipping transcript {}: missing chromosome", tx.id);
@@ -1010,10 +1029,9 @@ impl CdotMapper {
             base_to_versioned: snapshot.base_to_versioned,
             lrg_to_refseq: snapshot.lrg_to_refseq,
             // Bincode snapshots are produced for a specific genome build; alt-
-            // build data is not part of the serialized format. `primary_build`
-            // is unknown here — default to GRCh38 to match the prior contract.
-            // Callers that need multi-build access (e.g. NG/NC-parent-aware
-            // transcript lookup per #332) should load from JSON.
+            // build data is not part of the serialized format. Callers that
+            // need multi-build access (e.g. NG/NC-parent-aware transcript
+            // lookup per #332) should load from JSON.
             alt_build_transcripts: {
                 log::warn!(
                     "cdot bincode load: alt-build data unavailable; NG/NC-parent build \
@@ -1021,7 +1039,10 @@ impl CdotMapper {
                 );
                 HashMap::new()
             },
-            primary_build: "GRCh38".to_string(),
+            // Honor the snapshot's recorded primary build; older snapshots
+            // that pre-date this field surface as `None` rather than
+            // claiming a fabricated GRCh38 (#389 follow-up).
+            primary_build: snapshot.primary_build,
             contig_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         })
@@ -1039,6 +1060,7 @@ impl CdotMapper {
             contig_alias_to_canonical: &self.contig_alias_to_canonical,
             base_to_versioned: &self.base_to_versioned,
             lrg_to_refseq: &self.lrg_to_refseq,
+            primary_build: self.primary_build.as_deref(),
         };
         let file = File::create(path.as_ref()).map_err(|e| FerroError::Io {
             msg: format!("Failed to create cdot bincode file: {}", e),
@@ -1120,7 +1142,7 @@ impl CdotMapper {
     /// build are simply absent from that build's map.
     fn from_raw_cdot_file(raw_file: RawCdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
-        mapper.primary_build = genome_build.to_string();
+        mapper.primary_build = Some(genome_build.to_string());
 
         for (accession, raw_transcript) in raw_file.transcripts {
             // Stash any non-primary build views first so a missing primary-
@@ -1158,7 +1180,7 @@ impl CdotMapper {
     /// Create from a parsed CdotFile with a specific genome build for contig aliases.
     pub fn from_cdot_file_with_build(cdot_file: CdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
-        mapper.primary_build = genome_build.to_string();
+        mapper.primary_build = Some(genome_build.to_string());
 
         for (accession, transcript) in cdot_file.transcripts {
             mapper.add_transcript(accession, transcript);
@@ -1318,6 +1340,23 @@ impl CdotMapper {
         self.transcripts.contains_key(accession)
     }
 
+    /// Name of the genome build whose data populates [`Self::transcripts`],
+    /// or `None` if the build is unknown.
+    ///
+    /// This is the "primary" build set at load time
+    /// (e.g. via [`from_transcripts_with_build`](Self::from_transcripts_with_build)
+    /// or [`from_cdot_file_with_build`](Self::from_cdot_file_with_build));
+    /// any other builds live in [`Self::alt_build_transcripts`] and are
+    /// reachable only through [`get_transcript_on_build`](Self::get_transcript_on_build).
+    ///
+    /// Returns `None` when the mapper was loaded from a bincode snapshot
+    /// produced before the build field was persisted — downstream callers
+    /// must surface that uncertainty rather than substituting a default
+    /// (#389 follow-up).
+    pub fn primary_build(&self) -> Option<&str> {
+        self.primary_build.as_deref()
+    }
+
     /// RefSeq transcript if an LRG mapping has been loaded.
     ///
     /// Supports version fallback: if "NM_000088.2" is not found but "NM_000088.3"
@@ -1373,19 +1412,57 @@ impl CdotMapper {
     /// asks for that build's view of the NM, so the resulting transcript
     /// carries the correct chromosome alignment.
     pub fn get_transcript_on_build(&self, accession: &str, build: &str) -> Option<&CdotTranscript> {
-        if build == self.primary_build {
+        // Treat unknown primary build (bincode snapshots without the field)
+        // as a match: `alt_build_transcripts` is empty for those mappers so
+        // the only data available lives in `transcripts`, and probing that
+        // map is strictly better than returning `None` (#389 follow-up).
+        let primary_matches = match self.primary_build.as_deref() {
+            Some(pb) => pb == build,
+            None => true,
+        };
+        if primary_matches {
             return self.get_transcript(accession);
         }
+        // Alt-build path: resolve LRG → RefSeq before consulting the alt
+        // map so build-specific lookups honor the same LRG fallback as
+        // [`get_transcript`] (#389 follow-up). Without this, a non-primary
+        // LRG lookup would return `None` even when the mapped RefSeq
+        // transcript exists in the alt build.
+        let resolved: &str = if accession.starts_with("LRG_") {
+            self.lrg_to_refseq
+                .get(accession)
+                .map(String::as_str)
+                .unwrap_or(accession)
+        } else {
+            accession
+        };
         let alt = self.alt_build_transcripts.get(build)?;
-        if let Some(tx) = alt.get(accession) {
+        if let Some(tx) = alt.get(resolved) {
             return Some(tx);
         }
-        // Version fallback within the alt-build map.
-        if let Some(base) = accession.split('.').next() {
+        // Version fallback within the alt-build map. Deterministically pick
+        // the highest numeric version among siblings sharing the base, rather
+        // than the first HashMap iteration hit — alt-build maps occasionally
+        // hold more than one version of the same base accession, and
+        // returning whichever the hasher landed on first was nondeterministic
+        // across runs (#389 follow-up).
+        if let Some(base) = resolved.split('.').next() {
+            let mut best: Option<(u32, &CdotTranscript)> = None;
             for (k, v) in alt {
-                if k.starts_with(base) && k[base.len()..].starts_with('.') {
-                    return Some(v);
+                if !(k.starts_with(base) && k[base.len()..].starts_with('.')) {
+                    continue;
                 }
+                let ver = k[base.len() + 1..]
+                    .split('.')
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                if best.is_none_or(|(cur, _)| ver > cur) {
+                    best = Some((ver, v));
+                }
+            }
+            if let Some((_, tx)) = best {
+                return Some(tx);
             }
         }
         None
@@ -1398,8 +1475,14 @@ impl CdotMapper {
     /// order (e.g. GRCh38-then-GRCh37) should sort externally.
     pub fn available_builds_for(&self, accession: &str) -> Vec<String> {
         let mut builds = Vec::new();
-        if self.get_transcript(accession).is_some() {
-            builds.push(self.primary_build.clone());
+        // Only claim the primary build when we actually know what it is —
+        // a bincode snapshot loaded without a recorded build returns
+        // `None` here and we omit it rather than fabricate one
+        // (#389 follow-up).
+        if let Some(primary) = self.primary_build.clone() {
+            if self.get_transcript(accession).is_some() {
+                builds.push(primary);
+            }
         }
         for (build, alt) in &self.alt_build_transcripts {
             // Direct hit, or versioned-base fallback.
@@ -1456,9 +1539,9 @@ impl CdotMapper {
             .collect()
     }
 
-    /// Genomic extent `(min_exon_start, max_exon_end)` of a transcript, taken
-    /// from a cached side-table that's built lazily on first call alongside
-    /// the contig stab-query index.
+    /// Genomic extent `(min_exon_start, max_exon_end)` of a transcript on
+    /// the mapper's primary build, taken from a cached side-table that's
+    /// built lazily on first call alongside the contig stab-query index.
     ///
     /// Used by `VariantProjector::project_single_inner` instead of folding
     /// `tx.exons.iter().map(|e| e[0]).min()/max()` per call — the inputs are
@@ -1469,6 +1552,40 @@ impl CdotMapper {
             .transcript_genome_spans
             .get_or_init(|| self.build_transcript_genome_spans());
         spans.get(transcript_id).copied()
+    }
+
+    /// Build-aware variant of [`transcript_genome_span`]: when `build`
+    /// matches the primary build the cached side-table is used; otherwise
+    /// the span is computed on demand from the alt-build view returned by
+    /// [`get_transcript_on_build`]. Returns `None` if cdot has no
+    /// alignment for the requested build (or the alignment has no exons).
+    ///
+    /// The alt-build branch folds the exon table on every call rather
+    /// than caching like the primary side-table. This is an acceptable
+    /// trade-off until profiling shows otherwise; for callers that
+    /// routinely project alt-build inputs against a multi-build cdot it
+    /// becomes a per-call O(exons) cost worth caching parallel to
+    /// [`Self::transcript_genome_spans`].
+    pub fn transcript_genome_span_on_build(
+        &self,
+        transcript_id: &str,
+        build: &str,
+    ) -> Option<(u64, u64)> {
+        // Mirror the primary-vs-alt routing in `get_transcript_on_build`:
+        // unknown primary build (bincode snapshot without the field) means
+        // we only have `transcripts` to work with, so use the cached
+        // primary-side span (#389 follow-up).
+        let primary_matches = match self.primary_build.as_deref() {
+            Some(pb) => pb == build,
+            None => true,
+        };
+        if primary_matches {
+            return self.transcript_genome_span(transcript_id);
+        }
+        let tx = self.get_transcript_on_build(transcript_id, build)?;
+        let min = tx.exons.iter().map(|e| e[0]).min()?;
+        let max = tx.exons.iter().map(|e| e[1]).max()?;
+        Some((min, max))
     }
 
     /// Build the per-transcript span side-table. Same single-pass shape as
@@ -2677,6 +2794,143 @@ mod tests {
         let tx37 = mapper
             .get_transcript_on_build("NM_000088.4", "GRCh37")
             .expect("version fallback inside alt-build map");
+        assert_eq!(tx37.contig, "NC_000017.10");
+    }
+
+    #[test]
+    fn test_get_transcript_on_build_alt_version_fallback_picks_highest() {
+        // When the alt-build map holds multiple versions of the same base
+        // (e.g. NM_000088.3 and NM_000088.4), the version fallback must
+        // deterministically prefer the highest numeric version. Pre-fix this
+        // iterated the HashMap and returned whichever versioned key the hasher
+        // landed on first.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "+",
+                            "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                        },
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                },
+                "NM_000088.4": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "+",
+                            "exons": [[48263025, 48263198, 1, 0, 173, "M173"]]
+                        },
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184269, 1, 0, 173, "M173"]]
+                        }
+                    },
+                    "start_codon": 20,
+                    "stop_codon": 160
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        // Primary build = GRCh38, so the GRCh37 alt map holds both .3 and .4.
+        // Querying with .2 (absent) forces the version fallback.
+        let tx = mapper
+            .get_transcript_on_build("NM_000088.2", "GRCh37")
+            .expect("version fallback must find a sibling");
+        assert_eq!(
+            tx.cds_start,
+            Some(20),
+            "alt-build fallback must deterministically pick the highest version (.4 over .3)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // #389 follow-up: primary_build() returns Option, and bincode loads that
+    // pre-date the primary_build field must surface as None rather than
+    // fabricating "GRCh38" (which mis-stamps GRCh37 snapshots).
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_primary_build_known_after_explicit_build_load() {
+        let mapper =
+            CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh37")
+                .unwrap();
+        assert_eq!(mapper.primary_build(), Some("GRCh37"));
+    }
+
+    #[test]
+    fn test_bincode_roundtrip_preserves_primary_build_grch37() {
+        // Persist a GRCh37-primary mapper to bincode and read it back; the
+        // build name must survive the round-trip so downstream callers
+        // don't mis-stamp transcripts as GRCh38.
+        let mapper =
+            CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh37")
+                .unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("roundtrip.bin");
+        mapper.to_bincode_file(&path).expect("write bincode");
+        let reloaded = CdotMapper::from_bincode_file(&path).expect("read bincode");
+        assert_eq!(
+            reloaded.primary_build(),
+            Some("GRCh37"),
+            "primary_build must survive bincode round-trip; pre-fix this returned \"GRCh38\""
+        );
+    }
+
+    #[test]
+    fn test_bincode_roundtrip_preserves_primary_build_grch38() {
+        // Symmetric to the GRCh37 case — verifies the field is persisted
+        // (rather than constant-defaulted) by exercising the non-default
+        // value above and the default value here.
+        let mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("roundtrip.bin");
+        mapper.to_bincode_file(&path).expect("write bincode");
+        let reloaded = CdotMapper::from_bincode_file(&path).expect("read bincode");
+        assert_eq!(reloaded.primary_build(), Some("GRCh38"));
+    }
+
+    // -------------------------------------------------------------------------
+    // #389 follow-up: build-specific lookups carry the LRG fallback.
+    // Pre-fix, asking for an LRG transcript on a non-primary build returned
+    // None even when the mapped RefSeq transcript existed in the alt-build
+    // map; `get_transcript_on_build` short-circuited before LRG resolution.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_transcript_on_build_resolves_lrg_to_refseq_on_alt_build() {
+        // Build a multi-build mapper and register an LRG → RefSeq mapping.
+        let mut mapper =
+            CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh38")
+                .unwrap();
+        mapper
+            .lrg_to_refseq
+            .insert("LRG_1t1".to_string(), "NM_000088.3".to_string());
+
+        // Primary build: LRG lookup works via the get_transcript LRG path.
+        let tx38 = mapper
+            .get_transcript_on_build("LRG_1t1", "GRCh38")
+            .expect("LRG → RefSeq on primary build");
+        assert_eq!(tx38.contig, "NC_000017.11");
+
+        // Alt build (the regression): LRG lookup must resolve to the
+        // RefSeq accession before consulting alt_build_transcripts.
+        let tx37 = mapper
+            .get_transcript_on_build("LRG_1t1", "GRCh37")
+            .expect("LRG → RefSeq must work on alt build too (pre-fix this returned None)");
         assert_eq!(tx37.contig, "NC_000017.10");
     }
 }
