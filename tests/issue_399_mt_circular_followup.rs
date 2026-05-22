@@ -55,6 +55,16 @@ fn wraparound_delins_indel_length_is_spec_correct_with_provider() {
     assert_eq!(get_indel_length_with_provider(&v, &p), Some(-1));
 }
 
+#[test]
+fn wraparound_indel_length_returns_none_when_start_exceeds_contig_length() {
+    // Provider reports L = 16569. A wraparound interval whose `start` is past
+    // L is structurally invalid; the helper must bail out with None instead of
+    // computing a zero/negative span from `(L − start + 1) + end`.
+    let v = parse_hgvs("NC_012920.1:m.16600_5del").unwrap();
+    let p = mt_provider();
+    assert_eq!(get_indel_length_with_provider(&v, &p), None);
+}
+
 // =============================================================================
 // VCF conversion: wraparound m./o. variants must be rejected at the boundary
 // =============================================================================
@@ -218,12 +228,11 @@ fn spdi_conversion_rejects_wraparound_circular() {
 
 #[cfg(feature = "web-service")]
 mod validate_response_tests {
-    use super::*;
     use ferro_hgvs::service::handlers::validate::validate_hgvs;
 
     #[test]
     fn validate_response_wraps_origin_true_for_wraparound_mt() {
-        let response = validate_hgvs("NC_012920.1:m.16569_1del", &mt_provider());
+        let response = validate_hgvs("NC_012920.1:m.16569_1del");
         assert!(
             response.wraps_origin,
             "expected wraps_origin=true on wraparound m. del"
@@ -232,9 +241,7 @@ mod validate_response_tests {
 
     #[test]
     fn validate_response_wraps_origin_true_for_wraparound_circular() {
-        let mut p = MockProvider::new();
-        p.add_genomic_sequence("J01749.1", "A".repeat(5386));
-        let response = validate_hgvs("J01749.1:o.4344_197dup", &p);
+        let response = validate_hgvs("J01749.1:o.4344_197dup");
         assert!(
             response.wraps_origin,
             "expected wraps_origin=true on wraparound o. dup"
@@ -243,7 +250,7 @@ mod validate_response_tests {
 
     #[test]
     fn validate_response_wraps_origin_false_for_linear_mt() {
-        let response = validate_hgvs("NC_012920.1:m.100A>G", &mt_provider());
+        let response = validate_hgvs("NC_012920.1:m.100A>G");
         assert!(
             !response.wraps_origin,
             "expected wraps_origin=false on linear m. sub"
