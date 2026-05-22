@@ -215,14 +215,19 @@ fn validate_repeat_tract(
 /// - **All units `Exact`** — full validation. The expanded
 ///   concatenation has a deterministic length; we check both the
 ///   span-vs-sum length invariant and the base-by-base content match.
-/// - **Leading `Exact` prefix followed by a non-`Exact` unit (Range /
-///   MinUncertain / MaxUncertain / Unknown)** — *partial validation*
-///   (issue #279). The prefix bases at `[start, start + prefix_len)`
-///   are known; we validate just those against the reference and
-///   skip the length check and the ambiguous tail. A prefix mismatch
-///   surfaces as `RefSeqMismatch`.
-/// - **First unit non-`Exact`** — no validation. There is no known
-///   prefix to check; the description is accepted unchanged.
+/// - **Mixed Exact / non-Exact** — *anchored partial validation*
+///   (issue #279 + #395 item 1). The leading-`Exact` prefix and the
+///   trailing-`Exact` suffix are deterministic (left-anchored and
+///   right-anchored respectively); we validate both against the
+///   reference and skip the ambiguous middle. If `prefix_len +
+///   suffix_len > span_len`, that's a content/length mismatch — the
+///   suffix would overlap the prefix or run off the start of the
+///   tract, which is incompatible with any combination of middle-unit
+///   counts.
+/// - **First AND last unit non-`Exact`** — no validation. Neither end
+///   is anchored.
+///
+/// Mismatches surface as `RefSeqMismatch`.
 ///
 /// Missing reference data (out-of-range span, inverted range) is
 /// handled defensively: those cases short-circuit to `ok()` so other
@@ -241,14 +246,13 @@ fn validate_multirepeat_tract(
 
     // Walk units left-to-right, building the deterministic prefix from
     // the leading `Exact` runs. Stop at the first non-`Exact` unit;
-    // everything from there on is the ambiguous tail and is skipped.
+    // everything from there to the right anchor is the ambiguous middle.
     let mut prefix_bytes: Vec<u8> = Vec::new();
     let mut prefix_str = String::new();
     let mut prefix_units = 0usize;
     for u in units {
         let n = match u.count {
             RepeatCount::Exact(n) => n,
-            // First non-Exact ends the validated prefix.
             _ => break,
         };
         let unit_bytes: Vec<u8> = u.sequence.bases().iter().map(|b| b.to_u8()).collect();
@@ -260,13 +264,48 @@ fn validate_multirepeat_tract(
         prefix_units += 1;
     }
 
-    // First-unit-non-Exact case: no known prefix → no validation.
-    // Preserves the pre-#279 behavior for these descriptions.
-    if prefix_units == 0 {
-        return ValidationResult::ok();
+    let all_exact = prefix_units == units.len();
+
+    // Walk units right-to-left for the trailing-`Exact` suffix
+    // (closes #395 item 1). Only meaningful when the left walk did not
+    // consume every unit; otherwise the whole tract is the prefix and
+    // there is no separate suffix to validate.
+    let mut suffix_bytes: Vec<u8> = Vec::new();
+    let mut suffix_str = String::new();
+    let mut suffix_units = 0usize;
+    if !all_exact {
+        // Bound the right walk so prefix and suffix never overlap on
+        // the same `Exact` units (would happen if the units in between
+        // were all `Exact` too, but we've already established at least
+        // one non-`Exact` unit exists in `[prefix_units, units.len())`).
+        for u in units[prefix_units..].iter().rev() {
+            let n = match u.count {
+                RepeatCount::Exact(n) => n,
+                _ => break,
+            };
+            let unit_bytes: Vec<u8> = u.sequence.bases().iter().map(|b| b.to_u8()).collect();
+            let unit_str: String = u.sequence.bases().iter().map(|b| b.to_char()).collect();
+            // Build suffix_str in left-to-right order so the diagnostic
+            // reads naturally despite the right-to-left walk.
+            suffix_str.insert_str(0, &format!("{}[{}]", unit_str, n));
+            // Prepend bytes for the same reason — earlier units in the
+            // tract appear earlier in the byte vector.
+            let mut new_bytes =
+                Vec::with_capacity(suffix_bytes.len() + unit_bytes.len() * n as usize);
+            for _ in 0..n {
+                new_bytes.extend_from_slice(&unit_bytes);
+            }
+            new_bytes.extend_from_slice(&suffix_bytes);
+            suffix_bytes = new_bytes;
+            suffix_units += 1;
+        }
     }
 
-    let all_exact = prefix_units == units.len();
+    // No anchored units on either side → no validation. Preserves the
+    // pre-#279 behavior for these descriptions.
+    if prefix_units == 0 && suffix_units == 0 {
+        return ValidationResult::ok();
+    }
 
     let start_idx = hgvs_pos_to_index(start);
     let end_idx = end as usize;
@@ -309,52 +348,87 @@ fn validate_multirepeat_tract(
         );
     }
 
-    // Partial validation (issue #279): only the known Exact prefix is
-    // checked. The ambiguous tail starts at `prefix_bytes.len()` in
-    // `actual_bytes` and is skipped entirely.
-    //
-    // If the reference span is shorter than the Exact prefix the
-    // description claims, that itself is a content/length mismatch —
-    // surface it. (Without this the slice below would silently truncate
-    // the comparison.)
-    if actual_bytes.len() < prefix_bytes.len() {
+    // Anchored partial validation: check prefix and/or suffix; skip
+    // the ambiguous middle.
+
+    // If prefix + suffix together exceed the actual span, the suffix
+    // can't fit at the right edge without overlapping the prefix.
+    // That's a length mismatch incompatible with any middle-count
+    // assignment.
+    if prefix_bytes.len() + suffix_bytes.len() > actual_bytes.len() {
+        let combined_str = if prefix_units == 0 {
+            suffix_str.clone()
+        } else if suffix_units == 0 {
+            prefix_str.clone()
+        } else {
+            format!("{}…{}", prefix_str, suffix_str)
+        };
         let actual_str: String = actual_bytes
             .iter()
             .map(|&b| (b as char).to_ascii_uppercase())
             .collect();
         return ValidationResult::mismatch(
             format!(
-                "{} ({} bp from declared Exact prefix)",
-                prefix_str,
-                prefix_bytes.len()
+                "{} ({} bp from declared anchored units)",
+                combined_str,
+                prefix_bytes.len() + suffix_bytes.len()
             ),
             format!(
-                "{} ({} bp; reference span too short for prefix)",
+                "{} ({} bp; reference span too short for prefix+suffix)",
                 actual_str,
                 actual_bytes.len()
             ),
         );
     }
-    let prefix_actual = &actual_bytes[..prefix_bytes.len()];
-    let matches = prefix_bytes
-        .iter()
-        .zip(prefix_actual.iter())
-        .all(|(a, b)| a.eq_ignore_ascii_case(b));
-    if matches {
-        return ValidationResult::ok();
+
+    // Left-anchored prefix check (no-op when prefix_units == 0).
+    if !prefix_bytes.is_empty() {
+        let prefix_actual = &actual_bytes[..prefix_bytes.len()];
+        let matches = prefix_bytes
+            .iter()
+            .zip(prefix_actual.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if !matches {
+            let expected_bases_str: String = prefix_bytes
+                .iter()
+                .map(|&b| (b as char).to_ascii_uppercase())
+                .collect();
+            let prefix_actual_str: String = prefix_actual
+                .iter()
+                .map(|&b| (b as char).to_ascii_uppercase())
+                .collect();
+            return ValidationResult::mismatch(
+                format!("{} ({})", prefix_str, expected_bases_str),
+                prefix_actual_str,
+            );
+        }
     }
-    let expected_bases_str: String = prefix_bytes
-        .iter()
-        .map(|&b| (b as char).to_ascii_uppercase())
-        .collect();
-    let prefix_actual_str: String = prefix_actual
-        .iter()
-        .map(|&b| (b as char).to_ascii_uppercase())
-        .collect();
-    ValidationResult::mismatch(
-        format!("{} ({})", prefix_str, expected_bases_str),
-        prefix_actual_str,
-    )
+
+    // Right-anchored suffix check (no-op when suffix_units == 0).
+    if !suffix_bytes.is_empty() {
+        let suffix_start = actual_bytes.len() - suffix_bytes.len();
+        let suffix_actual = &actual_bytes[suffix_start..];
+        let matches = suffix_bytes
+            .iter()
+            .zip(suffix_actual.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if !matches {
+            let expected_bases_str: String = suffix_bytes
+                .iter()
+                .map(|&b| (b as char).to_ascii_uppercase())
+                .collect();
+            let suffix_actual_str: String = suffix_actual
+                .iter()
+                .map(|&b| (b as char).to_ascii_uppercase())
+                .collect();
+            return ValidationResult::mismatch(
+                format!("{} ({})", suffix_str, expected_bases_str),
+                suffix_actual_str,
+            );
+        }
+    }
+
+    ValidationResult::ok()
 }
 
 /// Validate a single base against the reference
