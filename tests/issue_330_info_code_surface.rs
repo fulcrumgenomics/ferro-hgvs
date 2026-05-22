@@ -218,6 +218,41 @@ fn normalize_without_warnings_discards_infos_by_design() {
     assert_eq!(detailed.infos.len(), 1);
 }
 
+/// Canonical-split (`delins → sub` via the same-base interior collapse
+/// at `apply_canonical_split`) moves the variant's position but is NOT a
+/// 3'-rule shuffle. Pin that the diagnostics surface no longer
+/// mislabels it: `c.12_13delinsAA` reduces to `c.13C>A` (the leading
+/// `A` matches c.12 and splits out, leaving a single-base substitution
+/// at c.13) and `infos` must stay empty.
+///
+/// Regression for PR #426 CR finding on `detect_shuffle_infos`: a
+/// post-hoc position-only compare emitted `SHUFFLE_APPLIED` whenever
+/// the position changed, mislabeling the canonical-split rewrite as a
+/// shuffle.
+#[test]
+fn canonical_split_delins_to_sub_does_not_emit_shuffle_info() {
+    let normalizer = Normalizer::new(provider_with_polya());
+    let variant = parse_hgvs("NM_POLYA.1:c.12_13delinsAA").expect("parse delins");
+
+    let result = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("normalize delins");
+
+    let display = format!("{}", result.result);
+    assert!(
+        display.ends_with(":c.13C>A"),
+        "expected canonical-split to land on c.13C>A; got {display:?}",
+    );
+    // The output kind changed (Delins → Substitution) and the position
+    // moved; this is canonicalization, not shuffle. `infos` must be
+    // empty.
+    assert!(
+        result.infos.is_empty(),
+        "canonical-split must not emit SHUFFLE_APPLIED; got {:?}",
+        result.infos.iter().map(|i| i.code()).collect::<Vec<_>>(),
+    );
+}
+
 /// `NormalizationInfo::code()` returns a stable identifier suitable for
 /// programmatic dispatch. Pin the spelling so downstream callers can match
 /// on it without depending on `Debug` repr.

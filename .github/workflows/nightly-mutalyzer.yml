@@ -76,7 +76,13 @@ jobs:
           # `benchmark-output/` directory holds the FASTAs / cdot
           # transcripts the manifest references.
           path: benchmark-output/
-          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**') }}
+          # Invalidation surface: lock file (downstream-dep changes),
+          # the `prepare` crate (manifest-output shape), and the CLI
+          # wiring at `src/bin/ferro.rs` (the `prepare` subcommand
+          # binding). If a future PR adds a `src/reference/**` dep
+          # that changes `ferro prepare` behavior, bump
+          # MANIFEST_CACHE_VERSION manually.
+          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs') }}
 
       - name: Build ferro (for prepare)
         run: cargo build --release --bin ferro
@@ -95,17 +101,19 @@ jobs:
           echo "manifest size: $(stat -c%s benchmark-output/manifest.json) bytes"
 
       - name: Run reference-aware tests
+        # Failures are NOT propagated to the workflow conclusion — the
+        # purpose of the nightly is to surface drift in the xfail report,
+        # not to gate PRs. (PR CI's strict-mode test job already covers
+        # manifest-free correctness.) Use step-level continue-on-error
+        # rather than `|| true` so the step's failure outcome remains
+        # visible in the GitHub Actions UI (steps.<id>.outcome stays
+        # `failure`), while the workflow conclusion stays `success`.
+        continue-on-error: true
         env:
           FERRO_MANIFEST: ${{ github.workspace }}/benchmark-output/manifest.json
-        # Filter to the suites that require a manifest. Failures are
-        # NOT propagated to the step exit code via `|| true` — the
-        # purpose of the nightly is to surface drift in the xfail
-        # report, not to gate PRs. (PR CI's strict-mode test job
-        # already covers manifest-free correctness.)
         run: |
           cargo nextest run --features dev \
-            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/)' \
-            || true
+            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/)'
 
       - name: Upload xfail reports
         if: always()

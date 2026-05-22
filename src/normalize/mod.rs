@@ -411,6 +411,12 @@ pub enum NormalizationWarning {
         /// declaration is part of the user's variant description, and
         /// the normalizer declines to second-guess it. (Issue #280.)
         corrected: bool,
+        /// Free-form context from the validation layer (e.g. a
+        /// per-edit-kind explanation of the mismatch). When present,
+        /// the `Display` impl appends it to the synthesized message so
+        /// downstream consumers retain the nuance that previously
+        /// lived in the dropped `message` field.
+        details: Option<String>,
     },
 
     /// Two or more cis-allele edits share identical reference bounds.
@@ -568,10 +574,17 @@ impl std::fmt::Display for NormalizationWarning {
                 actual_ref,
                 position,
                 corrected,
-            } => write!(
-                f,
-                "reference sequence mismatch at {position}: stated {stated_ref:?}, actual {actual_ref:?} (corrected={corrected})",
-            ),
+                details,
+            } => {
+                write!(
+                    f,
+                    "reference sequence mismatch at {position}: stated {stated_ref:?}, actual {actual_ref:?} (corrected={corrected})",
+                )?;
+                if let Some(detail) = details.as_deref().filter(|s| !s.is_empty()) {
+                    write!(f, ": {detail}")?;
+                }
+                Ok(())
+            }
             Self::OverlapConflict {
                 accession,
                 coordinate_system,
@@ -594,7 +607,7 @@ impl std::fmt::Display for NormalizationWarning {
                 actual_bytes,
             } => write!(
                 f,
-                "canonical split skipped at {accession}:{hgvs_start}_{hgvs_end}: expected {expected_span} bytes, got {actual_bytes}",
+                "canonical split skipped at {accession}:{hgvs_start}_{hgvs_end}: expected {expected_span} bytes, got {actual_bytes} (HGVS refseq \u{00A7}43)",
             ),
             Self::CrossAxisVariantNotShuffled {
                 accession,
@@ -705,7 +718,7 @@ impl std::fmt::Display for NormalizationInfo {
                 normalized_position,
             } => write!(
                 f,
-                "{accession}: {direction:?} shuffle relocated variant from {original_position} to {normalized_position}",
+                "{accession}: {direction} shuffle relocated variant from {original_position} to {normalized_position}",
             ),
         }
     }
@@ -4167,6 +4180,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 actual_ref: validation.actual_ref.unwrap_or_default(),
                 position: format!("{}-{}", start, end),
                 corrected,
+                details: validation.warning,
             });
         }
 
@@ -5481,6 +5495,60 @@ fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
     }
 }
 
+/// Returns the underlying `NaEdit` for a shuffle-eligible variant so the
+/// shift detector can constrain `SHUFFLE_APPLIED` emission to genuine
+/// shuffle transitions (companion to `position_text_if_shuffleable`).
+/// `Mu::Uncertain` is unwrapped to the inner edit because shuffleability
+/// is determined by edit shape, not by the uncertainty wrapper.
+fn na_edit_if_shuffleable(variant: &HgvsVariant) -> Option<&NaEdit> {
+    let mu = match variant {
+        HV::Genome(v) => &v.loc_edit.edit,
+        HV::Cds(v) => &v.loc_edit.edit,
+        HV::Tx(v) => &v.loc_edit.edit,
+        HV::Rna(v) => &v.loc_edit.edit,
+        HV::Mt(v) => &v.loc_edit.edit,
+        HV::Circular(v) => &v.loc_edit.edit,
+        HV::Protein(_) | HV::Allele(_) | HV::RnaFusion(_) | HV::NullAllele | HV::UnknownAllele => {
+            return None
+        }
+    };
+    match mu {
+        crate::hgvs::Mu::Certain(e) | crate::hgvs::Mu::Uncertain(e) => Some(e),
+        // `Mu::Unknown` (Display: `?`) carries no edit — there is nothing
+        // for shuffle to act on, so the kind-compatibility gate skips it.
+        crate::hgvs::Mu::Unknown => None,
+    }
+}
+
+/// True if the (input, output) edit-kind transition is one the shuffle
+/// layer can produce. The shuffle algorithm rotates a deletion / insertion
+/// / duplication / delins span along its reference window and may
+/// canonicalize a single-base or homopolymer insertion into a duplication
+/// or repeat — every other kind transition (e.g. `delins → sub` from
+/// canonical-split, `delins → inv` from inversion decomposition,
+/// `delins → =` from identity rewrite, `ins → delins`) is a
+/// *canonicalization* and must not surface as `SHUFFLE_APPLIED`.
+///
+/// Closes the false-positive flagged on PR #426: `c.1_3delinsACG → c.2T>C`
+/// is canonical-split, not shuffle, and the original position-only
+/// post-hoc compare mislabeled it.
+fn shuffle_kind_compatible(input: &NaEdit, output: &NaEdit) -> bool {
+    use NaEdit::*;
+    matches!(
+        (input, output),
+        (Deletion { .. }, Deletion { .. })
+            | (Duplication { .. }, Duplication { .. })
+            | (Delins { .. }, Delins { .. })
+            | (Inversion { .. }, Inversion { .. })
+            | (
+                Insertion { .. },
+                Insertion { .. } | Duplication { .. } | Repeat { .. } | MultiRepeat { .. },
+            )
+            | (Repeat { .. }, Repeat { .. } | MultiRepeat { .. })
+            | (MultiRepeat { .. }, MultiRepeat { .. })
+    )
+}
+
 /// Detect shuffle infos by comparing the input variant to the normalized
 /// result.
 ///
@@ -5531,7 +5599,11 @@ fn detect_shuffle_infos(
 }
 
 /// Single-variant shift detector. Returns `Some(info)` iff the position
-/// text differs between input and output for a shuffle-eligible axis.
+/// text differs between input and output for a shuffle-eligible axis AND
+/// the (input, output) edit-kind transition is one the shuffle layer can
+/// produce (see [`shuffle_kind_compatible`]). The edit-kind gate excludes
+/// canonicalization that also moves positions — e.g. `delins → sub`,
+/// `delins → =`, `delins → inv` — from masquerading as shuffle.
 fn single_variant_shift_info(
     input: &HgvsVariant,
     output: &HgvsVariant,
@@ -5540,6 +5612,11 @@ fn single_variant_shift_info(
     let original_position = position_text_if_shuffleable(input)?;
     let normalized_position = position_text_if_shuffleable(output)?;
     if original_position == normalized_position {
+        return None;
+    }
+    let input_edit = na_edit_if_shuffleable(input)?;
+    let output_edit = na_edit_if_shuffleable(output)?;
+    if !shuffle_kind_compatible(input_edit, output_edit) {
         return None;
     }
     let accession = input

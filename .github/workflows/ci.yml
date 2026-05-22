@@ -28,6 +28,11 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
+      - name: Install packaging
+        # `packaging.specifiers.SpecifierSet` parses compound specs
+        # (`">=3.10,<4"`, `">=3.10rc1"`, etc.) per PEP 440/621 — more
+        # robust than regex matching the literal string form.
+        run: python -m pip install --no-cache-dir 'packaging>=24'
       - name: Assert Cargo.toml abi3-pyXY matches pyproject.toml requires-python
         # Cargo.toml's `abi3-pyXY` pyo3 feature sets the minimum Python
         # version the abi3 wheel can run on; pyproject.toml's
@@ -43,6 +48,8 @@ jobs:
           import re
           import sys
           from pathlib import Path
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
 
           cargo = Path("Cargo.toml").read_text()
           m = re.search(r'"abi3-py(\d+)"', cargo)
@@ -52,22 +59,35 @@ jobs:
           if not abi3_digits.startswith("3"):
               sys.exit(f"Unexpected abi3 minor in 'abi3-py{abi3_digits}'")
           # abi3-py310 → minor='10', abi3-py37 → minor='7'.
-          abi3_floor = f"3.{abi3_digits[1:]}"
+          abi3_floor = Version(f"3.{abi3_digits[1:]}")
 
           pyproject = Path("pyproject.toml").read_text()
-          m = re.search(r'requires-python\s*=\s*"\s*>=\s*([0-9.]+)\s*"', pyproject)
+          m = re.search(r'requires-python\s*=\s*"([^"]+)"', pyproject)
           if not m:
               sys.exit("Could not find requires-python in pyproject.toml")
-          requires_python = m.group(1)
+          spec_str = m.group(1)
+          spec = SpecifierSet(spec_str)
 
-          if abi3_floor != requires_python:
+          # The abi3 floor is correct iff the wheel's minimum CPython
+          # version is the lowest version the spec accepts. We test
+          # this by asserting (a) abi3_floor itself satisfies the spec
+          # and (b) the immediately-lower minor (3.{N-1}) does not.
+          minor = abi3_floor.minor
+          if not spec.contains(abi3_floor, prereleases=True):
               sys.exit(
-                  f"abi3 floor / requires-python drift:\n"
-                  f"  Cargo.toml `abi3-py{abi3_digits}` implies Python floor {abi3_floor}\n"
-                  f"  pyproject.toml `requires-python` is {requires_python!r}\n"
-                  f"Bump both together, or pin them in tandem here."
+                  f"abi3 floor / requires-python drift: Cargo.toml "
+                  f"`abi3-py{abi3_digits}` ({abi3_floor}) does not satisfy "
+                  f"pyproject.toml `requires-python = {spec_str!r}`."
               )
-          print(f"OK: abi3-py{abi3_digits} ↔ requires-python = >={requires_python}")
+          one_below = Version(f"3.{minor - 1}") if minor > 0 else None
+          if one_below is not None and spec.contains(one_below, prereleases=True):
+              sys.exit(
+                  f"abi3 floor / requires-python drift: pyproject.toml "
+                  f"`requires-python = {spec_str!r}` would accept Python "
+                  f"{one_below}, but the abi3 wheel from "
+                  f"`abi3-py{abi3_digits}` requires Python >= {abi3_floor}."
+              )
+          print(f"OK: abi3-py{abi3_digits} ({abi3_floor}) ↔ requires-python = {spec_str!r}")
           PY
 
   format:
