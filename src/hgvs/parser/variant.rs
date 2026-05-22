@@ -1382,6 +1382,109 @@ pub(crate) fn split_top_level_slashes(input: &str, want_double: bool) -> Vec<&st
     chunks
 }
 
+/// Result of `scan_allele_separators`: top-level depth-0 allele-separator
+/// flags plus the depth-aware members.
+#[derive(Debug)]
+pub(crate) struct AlleleSeparatorScan<'a> {
+    /// True iff `content` contains at least one top-level `(;)` (unknown phase).
+    pub has_unknown_phase: bool,
+    /// True iff `content` contains at least one top-level standalone `;`
+    /// that is not part of a `(;)`.
+    pub has_cis_separator: bool,
+    /// `content` split at whichever separator is present. If only `(;)` is
+    /// present, splits at top-level `(;)`. If only `;` is present, splits
+    /// at top-level `;`. If neither is present, returns `[content]`.
+    /// If both are present (mixed phase), splits at top-level `(;)` —
+    /// callers reject mixed-phase before consuming this field, so the
+    /// exact split for the mixed shape is not meaningful.
+    pub members: Vec<&'a str>,
+}
+
+/// Scan `content` — the inside of an outer `[...]` allele bracket pair,
+/// with the surrounding `[`/`]` already stripped — for top-level
+/// (depth-0) allele-phase separators and split into members at the same
+/// depth.
+///
+/// "Top level" means bracket depth 0 with respect to nested `[...]`
+/// inside an edit (`delins[A;T]`, `delins[ACC:g.x_y]`, `TG[14]`, ...).
+/// `(;)` and `;` inside such nested brackets are part of the edit, not
+/// allele separators, and must not be counted here.
+///
+/// The pair of `parens` characters `(` / `)` is also tracked so that a
+/// member written as a predicted-wrapper form like `(100A>G;200del)`
+/// is treated as a single member (the inner `;` is at parens-depth 1,
+/// not at the allele top level). Without this, a single predicted
+/// member could be mis-split into multiple bogus members.
+///
+/// Used by every `parse_*_compound_allele` / `parse_*_allele_shorthand`
+/// that drives the in-bracket cis (`;`) vs. unknown-phase (`(;)`)
+/// distinction so the mixed-phase reject path and the member split both
+/// scan only at the outer allele level.
+pub(crate) fn scan_allele_separators(content: &str) -> AlleleSeparatorScan<'_> {
+    let bytes = content.as_bytes();
+    let mut bracket_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
+    // Positions and lengths of top-level (depth-0 for both brackets and
+    // parens) separators. `len` is 3 for `(;)` and 1 for `;`.
+    let mut seps: Vec<(usize, usize)> = Vec::new();
+    let mut has_unknown_phase = false;
+    let mut has_cis_separator = false;
+
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'[' => bracket_depth += 1,
+            b']' if bracket_depth > 0 => bracket_depth -= 1,
+            b'(' if bracket_depth == 0 => {
+                // Check for a `(;)` separator at allele top level — only
+                // when we are not already inside any other parens or
+                // brackets.
+                if paren_depth == 0
+                    && i + 2 < bytes.len()
+                    && bytes[i + 1] == b';'
+                    && bytes[i + 2] == b')'
+                {
+                    has_unknown_phase = true;
+                    seps.push((i, 3));
+                    i += 3;
+                    continue;
+                }
+                paren_depth += 1;
+            }
+            b')' if bracket_depth == 0 && paren_depth > 0 => paren_depth -= 1,
+            b';' if bracket_depth == 0 && paren_depth == 0 => {
+                has_cis_separator = true;
+                seps.push((i, 1));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // Build the member slices. If both unknown and cis separators are
+    // present (mixed phase), prefer the `(;)` split — callers reject
+    // before consuming `members`, so the exact split is moot.
+    let split_kind_len = if has_unknown_phase { 3 } else { 1 };
+    let mut members: Vec<&str> = Vec::new();
+    let mut start = 0;
+    for (pos, len) in &seps {
+        if *len != split_kind_len {
+            // Skip the "other" separator kind in the mixed case.
+            continue;
+        }
+        members.push(&content[start..*pos]);
+        start = *pos + *len;
+    }
+    members.push(&content[start..]);
+
+    AlleleSeparatorScan {
+        has_unknown_phase,
+        has_cis_separator,
+        members,
+    }
+}
+
 /// Parse a compound allele with genomic variants:
 ///   `[pos1edit1;pos2edit2;...]`   (cis)
 ///   `[pos1edit1(;)pos2edit2;...]` (unknown phase)
@@ -1419,36 +1522,33 @@ fn parse_genome_kind_compound_allele(
     let content = &input[1..close_bracket];
     let remaining = &input[close_bracket + 1..];
 
-    // Distinguish unknown phase from cis based on `(;)` presence.
-    let has_unknown_phase = content.contains("(;)");
-    let has_cis_separator = {
-        // Any `;` that isn't part of `(;)`.
-        let temp = content.replace("(;)", "\x00");
-        temp.contains(';')
-    };
+    // Scan for top-level (depth-0) allele separators. Any `(;)` / `;`
+    // inside a nested edit bracket (`delins[A;T]`) or a predicted-wrapper
+    // member (`(100A>G;200del)`) is part of the edit, not an allele
+    // separator. See `scan_allele_separators` for the depth rules.
+    let scan = scan_allele_separators(content);
 
     // Mixed `;` and `(;)` inside a single bracket pair is not spec-valid
     // (HGVS `recommendations/{DNA,protein}/alleles.md` only mixes `;`/`(;)` at
     // the top level via `[a;b];[c](;)d`, not inside one `[...]`). Reject
     // rather than silently flatten the cis subgroup boundary into a single
     // `phase: Unknown` allele.
-    if has_unknown_phase && has_cis_separator {
+    if scan.has_unknown_phase && scan.has_cis_separator {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Verify,
         )));
     }
 
-    let phase = if has_unknown_phase {
+    let phase = if scan.has_unknown_phase {
         AllelePhase::Unknown
     } else {
         AllelePhase::Cis
     };
 
-    let separator = if has_unknown_phase { "(;)" } else { ";" };
     let mut variants = Vec::with_capacity(4);
 
-    for part in content.split(separator) {
+    for part in scan.members {
         let part = part.trim();
         if part.is_empty() {
             // Empty parts (e.g. `[a;;b]`, `[a(;)(;)b]`, or trailing `[a(;)]`)
@@ -2010,85 +2110,58 @@ fn parse_cds_allele_shorthand(
     let content = &input[1..close_bracket];
     let remaining = &input[close_bracket + 1..];
 
-    // Check for mixed phase: contains both ; and (;)
-    // We need to check for ; that's NOT part of (;)
-    let has_unknown_phase = content.contains("(;)");
-    let has_cis_separator = {
-        // Replace (;) temporarily to check for standalone ;
-        let temp = content.replace("(;)", "\x00");
-        temp.contains(';')
-    };
+    // Scan for top-level (depth-0) allele separators. Inner `;` / `(;)`
+    // belonging to a nested edit (`delins[A;T]`) or a predicted-wrapper
+    // member must NOT drive phase detection or member splitting. See
+    // `scan_allele_separators`.
+    let scan = scan_allele_separators(content);
 
-    // Determine phase and parsing strategy
-    let phase = if has_unknown_phase {
-        // If there's any unknown phase, the overall phase is unknown
+    // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — HGVS
+    // does not provide a way to express "subgroup A;B is cis to each
+    // other but unknown phase to C" inside a single bracket. Reject
+    // rather than silently flattening to AllelePhase::Unknown (#396
+    // item 2). Mirrors `parse_protein_allele_shorthand`.
+    if scan.has_unknown_phase && scan.has_cis_separator {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    let phase = if scan.has_unknown_phase {
         AllelePhase::Unknown
     } else {
         AllelePhase::Cis
     };
 
-    // Parse variants - handle mixed separators
     // Pre-allocate with estimated capacity (most alleles have 2-4 variants)
     let mut variants = Vec::with_capacity(4);
 
-    if has_unknown_phase && has_cis_separator {
-        // Mixed phase: split on (;) first, then on ;
-        for unknown_group in content.split("(;)") {
-            for part in unknown_group.split(';') {
-                let part = part.trim();
-                if part.is_empty() {
-                    return Err(nom::Err::Error(nom::error::Error::new(
-                        input,
-                        nom::error::ErrorKind::Verify,
-                    )));
-                }
-
-                let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
-
-                if !final_remaining.trim().is_empty() {
-                    return Err(nom::Err::Error(nom::error::Error::new(
-                        final_remaining,
-                        nom::error::ErrorKind::Tag,
-                    )));
-                }
-
-                variants.push(HgvsVariant::Cds(CdsVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit,
-                }));
-            }
+    for part in scan.members {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
         }
-    } else {
-        // Single separator type
-        let separator = if has_unknown_phase { "(;)" } else { ";" };
 
-        for part in content.split(separator) {
-            let part = part.trim();
-            if part.is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Verify,
-                )));
-            }
+        // Parse interval + edit (e.g., "145C>T" or "100_200del" or
+        // predicted "(145C>T)").
+        let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
 
-            // Parse interval + edit (e.g., "145C>T" or "100_200del" or
-            // predicted "(145C>T)").
-            let (final_remaining, loc_edit) = parse_cds_bracket_member(part)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
-            variants.push(HgvsVariant::Cds(CdsVariant {
-                accession: accession.clone(),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit,
-            }));
+        if !final_remaining.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                final_remaining,
+                nom::error::ErrorKind::Tag,
+            )));
         }
+
+        variants.push(HgvsVariant::Cds(CdsVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit,
+        }));
     }
 
     if variants.is_empty() {
@@ -2306,31 +2379,28 @@ fn parse_tx_compound_allele(
     let content = &input[1..close_bracket];
     let remaining = &input[close_bracket + 1..];
 
-    let has_unknown_phase = content.contains("(;)");
-    let has_cis_separator = {
-        let temp = content.replace("(;)", "\x00");
-        temp.contains(';')
-    };
+    // Scan for top-level (depth-0) allele separators. See
+    // `scan_allele_separators` for the depth rules; inner `;` / `(;)`
+    // from a nested edit must not drive phase detection or splitting.
+    let scan = scan_allele_separators(content);
 
     // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — see
     // `parse_genome_kind_compound_allele` for the spec citation.
-    if has_unknown_phase && has_cis_separator {
+    if scan.has_unknown_phase && scan.has_cis_separator {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Verify,
         )));
     }
 
-    let phase = if has_unknown_phase {
+    let phase = if scan.has_unknown_phase {
         AllelePhase::Unknown
     } else {
         AllelePhase::Cis
     };
 
-    let separator = if has_unknown_phase { "(;)" } else { ";" };
-
     let mut variants = Vec::with_capacity(4);
-    for part in content.split(separator) {
+    for part in scan.members {
         let part = part.trim();
         if part.is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
@@ -2620,16 +2690,15 @@ fn parse_protein_allele_shorthand(
     let content = &input[1..close_bracket];
     let after_bracket = &input[close_bracket + 1..];
 
-    let has_unknown_phase = content.contains("(;)");
+    // Scan for top-level (depth-0) allele separators. See
+    // `scan_allele_separators` for the depth rules; inner `;` / `(;)`
+    // from a nested edit must not drive phase detection or splitting.
+    let scan = scan_allele_separators(content);
 
-    if has_unknown_phase {
-        let has_cis_separator = {
-            let temp = content.replace("(;)", "\x00");
-            temp.contains(';')
-        };
+    if scan.has_unknown_phase {
         // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — see
         // `parse_genome_kind_compound_allele` for the spec citation.
-        if has_cis_separator {
+        if scan.has_cis_separator {
             return Err(nom::Err::Error(nom::error::Error::new(
                 input,
                 nom::error::ErrorKind::Verify,
@@ -2637,7 +2706,7 @@ fn parse_protein_allele_shorthand(
         }
 
         let mut variants = Vec::with_capacity(4);
-        for part in content.split("(;)") {
+        for part in scan.members {
             let part = part.trim();
             if part.is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3567,14 +3636,24 @@ fn parse_rna_allele_shorthand(
     let content = &input[1..close_bracket];
     let remaining = &input[close_bracket + 1..];
 
-    // Check for mixed phase: contains both ; and (;)
-    let has_unknown_phase = content.contains("(;)");
-    let has_cis_separator = {
-        let temp = content.replace("(;)", "\x00");
-        temp.contains(';')
-    };
+    // Scan for top-level (depth-0) allele separators. Inner `;` / `(;)`
+    // from a nested edit (`delins[a;u]`) or predicted-wrapper member
+    // must not drive phase detection or splitting. See
+    // `scan_allele_separators`.
+    let scan = scan_allele_separators(content);
 
-    let phase = if has_unknown_phase {
+    // Mixed `;`/`(;)` inside one bracket pair is not spec-valid (#396
+    // item 2; mirrors `parse_protein_allele_shorthand` and the new
+    // cds-axis reject path). Reject rather than silently flattening to
+    // AllelePhase::Unknown.
+    if scan.has_unknown_phase && scan.has_cis_separator {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    let phase = if scan.has_unknown_phase {
         AllelePhase::Unknown
     } else {
         AllelePhase::Cis
@@ -3582,60 +3661,29 @@ fn parse_rna_allele_shorthand(
 
     let mut variants = Vec::with_capacity(4);
 
-    if has_unknown_phase && has_cis_separator {
-        for unknown_group in content.split("(;)") {
-            for part in unknown_group.split(';') {
-                let part = part.trim();
-                if part.is_empty() {
-                    return Err(nom::Err::Error(nom::error::Error::new(
-                        input,
-                        nom::error::ErrorKind::Verify,
-                    )));
-                }
-
-                let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
-
-                if !final_remaining.trim().is_empty() {
-                    return Err(nom::Err::Error(nom::error::Error::new(
-                        final_remaining,
-                        nom::error::ErrorKind::Tag,
-                    )));
-                }
-
-                variants.push(HgvsVariant::Rna(RnaVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit,
-                }));
-            }
+    for part in scan.members {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
         }
-    } else {
-        let separator = if has_unknown_phase { "(;)" } else { ";" };
 
-        for part in content.split(separator) {
-            let part = part.trim();
-            if part.is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Verify,
-                )));
-            }
+        let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
 
-            let (final_remaining, loc_edit) = parse_rna_bracket_member(part)?;
-
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
-
-            variants.push(HgvsVariant::Rna(RnaVariant {
-                accession: accession.clone(),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit,
-            }));
+        if !final_remaining.trim().is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                final_remaining,
+                nom::error::ErrorKind::Tag,
+            )));
         }
+
+        variants.push(HgvsVariant::Rna(RnaVariant {
+            accession: accession.clone(),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit,
+        }));
     }
 
     if variants.is_empty() {
@@ -6378,28 +6426,21 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand() {
-        // Mixed phase allele: some cis (;) and some unknown ((;))
-        // Pattern: [123A>G;456C>T(;)789G>A] means 123 and 456 are cis, unknown phase with 789
-        let variant = parse_variant("NM_000088.3:c.[123A>G;456C>T(;)789G>A]").unwrap();
-        assert!(matches!(variant, HgvsVariant::Allele(_)));
-        if let HgvsVariant::Allele(allele) = &variant {
-            // Overall phase is Unknown when there's any unknown phase
-            assert_eq!(allele.phase, AllelePhase::Unknown);
-            assert_eq!(allele.variants.len(), 3);
-        }
+    fn test_parse_mixed_phase_allele_shorthand_rejected() {
+        // Mixed `;`/`(;)` inside one bracket pair (e.g. `[A;B(;)C]`) has
+        // no spec-defined HGVS shape: there is no way to express "A and
+        // B are cis to each other, but unknown phase to C" in a single
+        // bracket. Item 2 of #396 replaced the previous silent-flatten
+        // (which used to produce a flat `AllelePhase::Unknown` over all
+        // members) with an explicit reject. Mirrors
+        // `parse_protein_allele_shorthand`.
+        assert!(parse_variant("NM_000088.3:c.[123A>G;456C>T(;)789G>A]").is_err());
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand_complex() {
-        // More complex mixed phase: [A;B;C(;)D;E]
-        let variant =
-            parse_variant("NM_000088.3:c.[100A>G;200C>T;300G>A(;)400del;500dup]").unwrap();
-        assert!(matches!(variant, HgvsVariant::Allele(_)));
-        if let HgvsVariant::Allele(allele) = &variant {
-            assert_eq!(allele.phase, AllelePhase::Unknown);
-            assert_eq!(allele.variants.len(), 5);
-        }
+    fn test_parse_mixed_phase_allele_shorthand_complex_rejected() {
+        // More complex mixed shape `[A;B;C(;)D;E]` rejects too.
+        assert!(parse_variant("NM_000088.3:c.[100A>G;200C>T;300G>A(;)400del;500dup]").is_err());
     }
 
     #[test]

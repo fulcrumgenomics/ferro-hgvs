@@ -153,10 +153,6 @@
       "category": "rejected_by_design",
       "reason": "`[ins<coords>;<seq>]` \u2014 compound brackets used to combine insertion-with-coords and a literal sequence. Not a current-spec form."
     },
-    "[complex_ins_inside_compound]": {
-      "category": "spec_not_yet_supported",
-      "reason": "Three-allele cis compound `[a;b;c]` whose middle allele uses complex-insertion payload `ins[<seq>;<refrange>]` (multi-segment insertion concatenation per recommendations/DNA/insertion.md). Each form is spec-valid; the combined nested structure is not yet parsed."
-    },
     "[redundant_g_prefix_inside_compound]": {
       "category": "rejected_by_design",
       "reason": "Redundant `g.` prefix on second allele inside compound bracket."
@@ -331,7 +327,6 @@
     "LRG_311t1:c.-(903_882)dup": "[malformed_5utr_paren_reversed_no_minus]",
     "LRG_485:g.4900_4911CCCCGCCCCGCG(2_3)": "[deprecated_repeat_paren_no_brackets]",
     "LRG_486:g.37978T(27_30)": "[deprecated_repeat_paren_no_brackets]",
-    "LRG_501:g.[83418_83419insN;83419_83420ins[TAGCTTTGCTAGGTGTTAAATAGTAATGTAATTATATTTCCTATAATACAGCAATATA;84466_84575];83423_83424insAT]": "[complex_ins_inside_compound]",
     "LRG_555:g.70398_70399insL170382_70398dup": "[ins_with_LINE1_coords_then_dup]",
     "LRG_555t1:c.3065_3066insL13054_3065dup": "[ins_with_LINE1_coords_then_dup]",
     "LRG_556t1:.c.(391+1_392-1)insN[?]": "[leading_dot_before_prefix]",
