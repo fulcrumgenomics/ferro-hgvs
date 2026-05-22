@@ -172,6 +172,10 @@ fn u_to_t_base(b: Base) -> Base {
 }
 
 fn u_to_t_sequence(s: &Sequence) -> Sequence {
+    // `Base::to_char()` emits uppercase, so `s.to_string()` is always
+    // uppercase. The lowercase `'u'` arm is defensive only — kept in
+    // case a future `Sequence::from_str` accepts lowercase input
+    // without normalizing.
     let translated: String = s
         .to_string()
         .chars()
@@ -204,7 +208,10 @@ mod tests {
     }
 
     #[test]
-    fn substitution_plus_strand_unchanged() {
+    fn substitution_plus_strand_non_u_unchanged() {
+        // A>G has no U, so plus-strand pass-through is bit-identical.
+        // (With U the plus-strand path translates U→T — covered by
+        // `tests/issue_395_rna_u_to_t_plus_strand.rs`.)
         let edit = NaEdit::Substitution {
             reference: Base::A,
             alternative: Base::G,

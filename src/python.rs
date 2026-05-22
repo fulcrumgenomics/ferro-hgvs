@@ -3653,3 +3653,54 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Closes #395 item 5 — verifies the `From<&NormalizationWarning>
+    /// for PyNormalizationWarning` converter at the Rust level.
+    /// Complements `tests/python/test_issue_395_normalization_warnings.py`
+    /// which exercises the Python-facing surface (under maturin develop).
+    #[test]
+    fn py_normalization_warning_carries_code_and_message() {
+        let cases: Vec<(crate::normalize::NormalizationWarning, &str)> = vec![
+            (
+                crate::normalize::NormalizationWarning::RefSeqMismatch {
+                    message: "stated A but reference is T".to_string(),
+                    stated_ref: "A".to_string(),
+                    actual_ref: "T".to_string(),
+                    position: "100".to_string(),
+                    corrected: true,
+                },
+                "REFSEQ_MISMATCH",
+            ),
+            (
+                crate::normalize::NormalizationWarning::OverlapConflict {
+                    message: "two coincident edits".to_string(),
+                    accession: "NC_000001.11".to_string(),
+                    coordinate_system: "g".to_string(),
+                    location: "100".to_string(),
+                    edit_kinds: vec!["sub".to_string(), "sub".to_string()],
+                },
+                "OVERLAP_CONFLICTING_EDITS",
+            ),
+            (
+                crate::normalize::NormalizationWarning::PositionPastEnd {
+                    message: "past cds-end".to_string(),
+                    accession: "NM_X.1".to_string(),
+                    coordinate_system: "c".to_string(),
+                    position: "946".to_string(),
+                    bound_kind: "cds-end".to_string(),
+                    bound_value: 945,
+                },
+                "POSITION_PAST_END",
+            ),
+        ];
+        for (w, expected_code) in cases {
+            let py: PyNormalizationWarning = (&w).into();
+            assert_eq!(py.code, expected_code, "code mismatch for {expected_code}");
+            assert_eq!(py.message, w.message(), "message round-trip mismatch");
+        }
+    }
+}

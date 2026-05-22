@@ -141,7 +141,7 @@ fn trailing_exact_suffix_mismatch_warns_lenient() {
 #[test]
 fn prefix_plus_suffix_overflow_span_rejected_strict() {
     // Declare CTG[2] (6 bp prefix) + TTG[1_3] (skip) + ACG[3] (9 bp
-    // suffix) but actual span is only 13 bp — prefix + suffix = 15 bp
+    // suffix) but actual span is only 14 bp — prefix + suffix = 15 bp
     // exceeds the available span (no room for ANY ambiguous middle).
     let core = "CTGCTGTTGGGGGG"; // 14 bp
     assert_eq!(core.len(), 14);

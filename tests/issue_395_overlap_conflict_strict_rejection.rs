@@ -12,7 +12,12 @@
 //!   - Strict mode rejects W5002 with `FerroError::InvalidCoordinates`
 //!     citing `OverlapConflictingEdits / W5002`.
 //!   - Lenient mode preserves the input and emits the warning.
-//!   - Silent mode skips the warning entirely (matches PositionPastEnd/W4004).
+//!   - Silent mode still emits the warning (the emit site at
+//!     `overlap.rs:88` is unconditional); only strict-mode promotion
+//!     to error was the gap. Callers using `normalize_with_warnings`
+//!     get the warning in any mode, while `normalize` only differs
+//!     for strict (Err) vs lenient/silent (Ok with warning attached
+//!     to the dropped vec).
 //!
 //! # Spec basis
 //!
@@ -67,6 +72,15 @@ fn lenient_mode_emits_w5002_warning_and_preserves_input() {
         "lenient mode must emit OverlapConflict (W5002) warning; got: {:?}",
         result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
     );
+    // "Preserves input" contract: the normalized variant equals the
+    // parsed input verbatim. Per the registry text and the
+    // `OverlapConflictingEdits` docstring, ferro does NOT canonicalize
+    // coincident-bounds cis edits — the input is returned unchanged.
+    assert_eq!(
+        result.result, variant,
+        "lenient mode must preserve the parsed input verbatim; got: {}",
+        result.result,
+    );
 }
 
 #[test]
@@ -77,5 +91,38 @@ fn strict_mode_accepts_non_coincident_cis_edits() {
     let variant = parse_hgvs("NC_000001.11:g.[100A>C;101A>G]").expect("parse");
     normalizer.normalize(&variant).expect(
         "strict mode must accept non-coincident cis edits; the W5002 trigger is coincident-bounds only",
+    );
+}
+
+#[test]
+fn silent_mode_still_emits_w5002_warning() {
+    // The emit site at `src/normalize/overlap.rs:88` is unconditional —
+    // silent mode does not suppress the warning, only changes
+    // strict-mode behavior from Reject to WarnAccept. Callers using
+    // `normalize_with_warnings` get the warning regardless of mode;
+    // `normalize` only differs by whether the warning is promoted
+    // (strict → Err) or accepted (lenient/silent → Ok).
+    let normalizer = Normalizer::with_config(provider(), NormalizeConfig::silent());
+    let variant = parse_hgvs("NC_000001.11:g.[100A>C;100A>G]").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("silent mode must accept coincident-bounds cis edits");
+    let has_warning = result
+        .warnings
+        .iter()
+        .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
+    assert!(
+        has_warning,
+        "silent mode still emits the OverlapConflict warning at the detection site; \
+         only strict-mode promotion is gated by mode. Got: {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
+    );
+    // "Preserves input" contract: silent mode, like lenient, returns
+    // the parsed input verbatim — ferro does NOT canonicalize
+    // coincident-bounds cis edits in any non-strict mode.
+    assert_eq!(
+        result.result, variant,
+        "silent mode must preserve the parsed input verbatim; got: {}",
+        result.result,
     );
 }

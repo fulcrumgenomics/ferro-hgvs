@@ -352,9 +352,21 @@ fn validate_multirepeat_tract(
     // the ambiguous middle.
 
     // If prefix + suffix together exceed the actual span, the suffix
-    // can't fit at the right edge without overlapping the prefix.
-    // That's a length mismatch incompatible with any middle-count
-    // assignment.
+    // can't fit at the right edge without overlapping the prefix —
+    // length mismatch incompatible with any middle-count assignment.
+    //
+    // Note: the `==` case (prefix + suffix exactly equal to span) is
+    // intentionally accepted here. The middle would need 0 copies of
+    // each non-Exact unit, which is only possible for non-Exact
+    // counts that admit a 0-count interpretation (`Unknown`,
+    // `MaxUncertain`, `UncertainRange(0, _)`). A tighter check that
+    // computes the minimum middle length from each non-Exact unit's
+    // count would reject `==` for inputs like `[Exact(2), Range(1,3),
+    // Exact(2)]` over a 12-bp span; that's left as a future
+    // tightening pass and pinned by `interleaved_prefix_and_trailing_
+    // exact_consistent_accepted_strict` (which uses a 15-bp span =
+    // prefix(6) + middle(3) + suffix(6)) as the lax-acceptance
+    // contract.
     if prefix_bytes.len() + suffix_bytes.len() > actual_bytes.len() {
         let combined_str = if prefix_units == 0 {
             suffix_str.clone()
