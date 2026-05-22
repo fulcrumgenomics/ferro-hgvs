@@ -75,7 +75,8 @@ use crate::hgvs::interval::Interval;
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::accession::parse_accession;
 use crate::hgvs::variant::{
-    Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
+    Accession, CdsVariant, CircularVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant,
+    RnaVariant, TxVariant,
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
@@ -254,6 +255,7 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
     match variant {
         HgvsVariant::Genome(g) => genome_to_spdi_simple(g),
         HgvsVariant::Mt(m) => mt_to_spdi_simple(m),
+        HgvsVariant::Circular(o) => circular_to_spdi_simple(o),
         HgvsVariant::Tx(n) => tx_to_spdi_simple(n),
         HgvsVariant::Rna(r) => rna_to_spdi_simple(r),
         HgvsVariant::Cds(_) => Err(ConversionError::ProviderRequired {
@@ -339,6 +341,7 @@ pub fn hgvs_to_spdi<P: ReferenceProvider>(
     match variant {
         HgvsVariant::Genome(g) => genome_to_spdi_with_provider(g, provider),
         HgvsVariant::Mt(m) => mt_to_spdi_with_provider(m, provider),
+        HgvsVariant::Circular(o) => circular_to_spdi_with_provider(o, provider),
         HgvsVariant::Tx(n) => tx_to_spdi_with_provider(n, provider),
         HgvsVariant::Rna(r) => rna_to_spdi_with_provider(r, provider),
         HgvsVariant::Cds(c) => cds_to_spdi_with_provider(c, provider),
@@ -380,7 +383,25 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
 /// Mitochondrial accessions (e.g. `NC_012920.1`) are themselves genomic
 /// accessions, so the conversion is identical to the `g.` path with a
 /// different coordinate prefix on the HGVS side.
+///
+/// Wraparound variants (start > end, per SVD-WG006) are rejected: SPDI is a
+/// single-edit format with no native representation for circular-contig
+/// wraparound.
 fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError> {
+    if let (Some(s), Some(e)) = (
+        get_start_pos(&variant.loc_edit.location),
+        get_end_pos(&variant.loc_edit.location),
+    ) {
+        if s > e {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "Cannot convert wraparound m. variant to SPDI: SPDI is a single edit and \
+                     has no representation for circular-contig wraparound. Variant accession: {}",
+                    variant.accession
+                ),
+            });
+        }
+    }
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
@@ -468,10 +489,111 @@ fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 ///
 /// The mito accession is genomic, so the path mirrors
 /// [`genome_to_spdi_with_provider`].
+///
+/// Wraparound variants (start > end, per SVD-WG006) are rejected: SPDI is a
+/// single-edit format with no native representation for circular-contig
+/// wraparound.
 fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &MtVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
+    if let (Some(s), Some(e)) = (
+        get_start_pos(&variant.loc_edit.location),
+        get_end_pos(&variant.loc_edit.location),
+    ) {
+        if s > e {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "Cannot convert wraparound m. variant to SPDI: SPDI is a single edit and \
+                     has no representation for circular-contig wraparound. Variant accession: {}",
+                    variant.accession
+                ),
+            });
+        }
+    }
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+        Some(provider),
+    )
+}
+
+/// Convert a circular (`o.`) variant to SPDI (simple conversion).
+///
+/// Circular accessions follow the same coordinate layout as genomic accessions,
+/// so the conversion mirrors the `g.`/`m.` path.
+///
+/// Wraparound variants (start > end, per SVD-WG006) are rejected: SPDI is a
+/// single-edit format with no native representation for circular-contig
+/// wraparound.
+fn circular_to_spdi_simple(variant: &CircularVariant) -> Result<SpdiVariant, ConversionError> {
+    if let (Some(s), Some(e)) = (
+        get_start_pos(&variant.loc_edit.location),
+        get_end_pos(&variant.loc_edit.location),
+    ) {
+        if s > e {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "Cannot convert wraparound o. variant to SPDI: SPDI is a single edit and \
+                     has no representation for circular-contig wraparound. Variant accession: {}",
+                    variant.accession
+                ),
+            });
+        }
+    }
+    let edit = unwrap_edit(&variant.loc_edit.edit)?;
+    let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
+        ConversionError::InvalidPosition {
+            description: "cannot convert variant with unknown start position".to_string(),
+        }
+    })?;
+    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    emit_spdi_for_edit(
+        variant.accession.to_string(),
+        start_pos,
+        end_pos,
+        edit,
+        AlphabetMode::Dna,
+        None::<&dyn ReferenceProvider>,
+    )
+}
+
+/// Convert a circular (`o.`) variant to SPDI with provider-backed reference fetch.
+///
+/// The circular accession is genomic, so the path mirrors
+/// [`genome_to_spdi_with_provider`].
+///
+/// Wraparound variants (start > end, per SVD-WG006) are rejected: SPDI is a
+/// single-edit format with no native representation for circular-contig
+/// wraparound.
+fn circular_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
+    variant: &CircularVariant,
+    provider: &P,
+) -> Result<SpdiVariant, ConversionError> {
+    if let (Some(s), Some(e)) = (
+        get_start_pos(&variant.loc_edit.location),
+        get_end_pos(&variant.loc_edit.location),
+    ) {
+        if s > e {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "Cannot convert wraparound o. variant to SPDI: SPDI is a single edit and \
+                     has no representation for circular-contig wraparound. Variant accession: {}",
+                    variant.accession
+                ),
+            });
+        }
+    }
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
