@@ -1036,32 +1036,41 @@ fn parse_genome_variant(
     move |input: &str| {
         let (input, _) = tag("g.").parse(input)?;
 
-        // First try whole-genome identity (g.= or g.(=)) - no position
+        // First try whole-genome identity (g.= or g.(=)) - no position.
+        // Reject the probe when the remainder starts with `(;)` so that a
+        // bracketless unknown-phase compound (`g.=(;)123A>G`) reaches the
+        // `(;)` dispatcher below rather than getting silently consumed as
+        // a `g.=` whose trailing `(;)...` then fails far from the cause.
         if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Genome(GenomeVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Genome(GenomeVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
-        // Try whole-genome unknown (g.? or g.(?)) - no position
+        // Try whole-genome unknown (g.? or g.(?)) - no position. Same
+        // `(;)` guard as the identity probe above.
         if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Genome(GenomeVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Genome(GenomeVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Try trans-allele compact-prefix shorthand: g.[edit1];[edit2]
@@ -1642,21 +1651,20 @@ fn parse_genome_position_unknown_phase(
     ))
 }
 
-/// Parse a genomic trans-allele compact-prefix shorthand: `[edit1];[edit2]`
-/// (with the `g.` already consumed by the caller). Each bracketed group holds
-/// a single sub-variant rendered with this allele's accession. Mirrors
-/// `parse_cds_trans_allele_shorthand` and `parse_rna_trans_allele_shorthand`.
 /// Generic trans-allele shorthand parser shared by 6 of 7 axes (g., c., n.,
 /// m., r., o.). Owns the bracketed-member loop, the `[0]`/`[?]`
 /// cross-coordinate special-cases, the bracket-balance check, the
 /// `len < 2` guard, and the final `AlleleVariant::new(.., Trans)` wrap.
+/// Always emits `AllelePhase::Trans` — cis and unknown-phase shapes
+/// route through `parse_*_allele_shorthand` / `parse_*_compound_allele`
+/// upstream and never reach this function.
 ///
 /// Each axis-specific shim provides `parse_member`, a closure that
 /// consumes the bracket content and constructs the per-axis
-/// `HgvsVariant::<Axis>` (or returns a parse error). The closure also
-/// owns the post-parse "content fully consumed" check so axes are free
-/// to use their own bracket-member primitives without recomputing the
-/// remainder.
+/// `HgvsVariant::<Axis>` (or returns a parse error). The closure
+/// returns its own remainder so each axis is free to use its own
+/// bracket-member primitives; the generic checks the remainder is
+/// fully consumed.
 ///
 /// Protein keeps its own bespoke helper because it overrides the
 /// special-marker arm (`[0]`/`[0?]`/`[(0)]` → `ProteinEdit::NoProtein`
@@ -1703,8 +1711,24 @@ where
         variants.push(variant);
         remaining = &remaining[close_bracket + 1..];
 
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
+        // Enforce strict `[...];[...]` shape. A `;` is only valid if it
+        // separates the bracket we just consumed from another bracket; a
+        // dangling trailing `;` (e.g. `[A];[B];`) and a missing separator
+        // (e.g. `[A];[B][C]`) must both reject rather than silently
+        // build an extra-member or short AlleleVariant.
+        if let Some(after_semi) = remaining.strip_prefix(';') {
+            if !after_semi.starts_with('[') {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    after_semi,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+            remaining = after_semi;
+        } else if remaining.starts_with('[') {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                remaining,
+                nom::error::ErrorKind::Tag,
+            )));
         }
     }
 
@@ -2207,45 +2231,54 @@ fn parse_tx_variant(
         // First try whole-tx identity (n.= or n.(=)) - no position. #288.
         // Non-coding transcripts reuse the RNA whole-entity parsers
         // (`parse_whole_rna_*`, `parse_rna_no_product`) — those are pure
-        // tag-only parsers and don't depend on the coord system.
+        // tag-only parsers and don't depend on the coord system. Reject
+        // the probe when the remainder starts with `(;)` so a bracketless
+        // unknown-phase compound (`n.=(;)100A>G`) falls through to the
+        // `(;)` dispatcher rather than being silently consumed as `n.=`.
         if let Ok((remaining, edit)) = parse_whole_rna_identity(input) {
-            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
-            return Ok((
-                remaining,
-                HgvsVariant::Tx(TxVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+                return Ok((
+                    remaining,
+                    HgvsVariant::Tx(TxVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Try whole-tx unknown (n.? or n.(?)) - no position. #288.
         if let Ok((remaining, edit)) = parse_whole_rna_unknown(input) {
-            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
-            return Ok((
-                remaining,
-                HgvsVariant::Tx(TxVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+                return Ok((
+                    remaining,
+                    HgvsVariant::Tx(TxVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Try tx-specific no product pattern (n.0 or predicted n.(0)). #288.
         // `0` is a valid spec form for non-coding transcripts — they can
-        // fail to produce a transcript, exactly like `r.0`.
+        // fail to produce a transcript, exactly like `r.0`. Same `(;)` guard.
         if let Ok((remaining, edit)) = parse_rna_no_product(input) {
-            let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
-            return Ok((
-                remaining,
-                HgvsVariant::Tx(TxVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_interval = TxInterval::point(crate::hgvs::location::TxPos::new(1));
+                return Ok((
+                    remaining,
+                    HgvsVariant::Tx(TxVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Compact-prefix trans-allele shorthand: n.[a];[b]. Mirrors
@@ -2489,32 +2522,37 @@ fn parse_mt_variant(
 
         // First try whole-mtDNA identity (m.= or m.(=)) - no position. #288.
         // Mitochondrial DNA reuses the genome whole-entity parser because
-        // both share `GenomeInterval`.
+        // both share `GenomeInterval`. Reject when the remainder starts
+        // with `(;)` so `m.=(;)100A>G` reaches the unknown-phase dispatch.
         if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Mt(MtVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Mt(MtVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Try whole-mtDNA unknown (m.? or m.(?)) - no position. #288.
         if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Mt(MtVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Mt(MtVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Compact-prefix trans-allele shorthand: m.[a];[b]. Mirrors
@@ -2906,8 +2944,22 @@ fn parse_protein_trans_allele_shorthand(
         variants.push(variant);
         remaining = &remaining[close_bracket + 1..];
 
-        if remaining.starts_with(';') {
-            remaining = &remaining[1..];
+        // Mirrors `parse_trans_allele_shorthand_generic`: enforce strict
+        // `[...];[...]` shape — reject both dangling trailing `;` and a
+        // missing separator between adjacent brackets.
+        if let Some(after_semi) = remaining.strip_prefix(';') {
+            if !after_semi.starts_with('[') {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    after_semi,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+            remaining = after_semi;
+        } else if remaining.starts_with('[') {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                remaining,
+                nom::error::ErrorKind::Tag,
+            )));
         }
     }
 
@@ -3605,6 +3657,13 @@ fn parse_rna_bracket_member(
     // parsers so a bracket like `[(spl?)]` matches the predicted-splice
     // marker rather than being routed into `parse_rna_interval`. #396
     // item 3.
+    //
+    // Note: bare `[0]` / `[?]` in the trans-allele form are handled
+    // upstream by `parse_trans_allele_shorthand_generic`'s cross-coord
+    // short-circuits (→ `NullAllele` / `UnknownAllele`) and never reach
+    // this dispatcher. Only the cis/unknown-flat paths and predicted
+    // forms (`[(0)]`, `[(?)]`, `[(spl?)]`) plus splice markers
+    // (`[spl]`, `[spl?]`) flow through these probes.
     fn dummy_rna_interval() -> RnaInterval {
         RnaInterval::point(crate::hgvs::location::RnaPos {
             base: 1,
@@ -3796,31 +3855,37 @@ fn parse_circular_variant(
         // First try whole-circular identity (o.= or o.(=)) - no position. #288.
         // Circular DNA reuses the genome whole-entity parser because both
         // share `GenomeInterval`; SVD-WG006 inherits the DNA grammar.
+        // Reject when the remainder starts with `(;)` so `o.=(;)100A>G`
+        // reaches the unknown-phase dispatch below.
         if let Ok((remaining, edit)) = parse_whole_genome_identity(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Circular(CircularVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Circular(CircularVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Try whole-circular unknown (o.? or o.(?)) - no position. #288.
         if let Ok((remaining, edit)) = parse_whole_genome_unknown(input) {
-            let dummy_pos = crate::hgvs::location::GenomePos::new(1);
-            let dummy_interval = GenomeInterval::point(dummy_pos);
-            return Ok((
-                remaining,
-                HgvsVariant::Circular(CircularVariant {
-                    accession: accession.clone(),
-                    gene_symbol: gene_symbol.clone(),
-                    loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
-                }),
-            ));
+            if !remaining.starts_with("(;)") {
+                let dummy_pos = crate::hgvs::location::GenomePos::new(1);
+                let dummy_interval = GenomeInterval::point(dummy_pos);
+                return Ok((
+                    remaining,
+                    HgvsVariant::Circular(CircularVariant {
+                        accession: accession.clone(),
+                        gene_symbol: gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(dummy_interval, edit),
+                    }),
+                ));
+            }
         }
 
         // Compact-prefix trans-allele shorthand: o.[a];[b]. Mirrors
@@ -6558,7 +6623,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand_rejected() {
+    fn test_parse_mixed_phase_cds_allele_shorthand_rejected() {
         // Mixed `;`/`(;)` inside one bracket pair (e.g. `[A;B(;)C]`) has
         // no spec-defined HGVS shape: there is no way to express "A and
         // B are cis to each other, but unknown phase to C" in a single
@@ -6570,7 +6635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mixed_phase_allele_shorthand_complex_rejected() {
+    fn test_parse_mixed_phase_cds_allele_shorthand_complex_rejected() {
         // More complex mixed shape `[A;B;C(;)D;E]` rejects too.
         assert!(parse_variant("NM_000088.3:c.[100A>G;200C>T;300G>A(;)400del;500dup]").is_err());
     }

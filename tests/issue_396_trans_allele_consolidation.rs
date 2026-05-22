@@ -226,3 +226,42 @@ fn trans_truncated_bracket_rejected() {
         let _ = parse_err(input);
     }
 }
+
+#[test]
+fn trans_missing_separator_between_brackets_rejected() {
+    // `[A];[B][C]` (no `;` between the second and third brackets) is not a
+    // spec-defined trans-allele shape: each member must be separated by a
+    // single `;`. The parser must reject this rather than silently building
+    // a 3-element AlleleVariant.
+    for input in [
+        "NC_000001.11:g.[100A>G];[200T>C][300A>G]",
+        "NM_000088.3:c.[1A>G];[2T>C][3A>G]",
+        "NR_000001.1:n.[1A>G];[2T>C][3A>G]",
+        "NC_012920.1:m.[100A>G];[200T>C][300A>G]",
+        "NM_004006.2:r.[100a>g];[200u>c][300a>g]",
+        "NC_011083.1:o.[100A>G];[200T>C][300A>G]",
+        "NP_000079.2:p.[Ala1Val];[Ser2Thr][Cys3Trp]",
+    ] {
+        parse_err(input);
+    }
+}
+
+#[test]
+fn trans_dangling_trailing_semicolon_rejected() {
+    // `[A];[B];` (trailing `;` with no following bracket) is not a
+    // spec-defined trans-allele shape. The parser must reject rather than
+    // silently stripping the dangling `;`. Mirrors the single-bracket
+    // rejection (`[A];`) but covers the post-second-bracket case where the
+    // `variants.len() < 2` guard does not catch it.
+    for input in [
+        "NC_000001.11:g.[100A>G];[200T>C];",
+        "NM_000088.3:c.[1A>G];[2T>C];",
+        "NR_000001.1:n.[1A>G];[2T>C];",
+        "NC_012920.1:m.[100A>G];[200T>C];",
+        "NM_004006.2:r.[100a>g];[200u>c];",
+        "NC_011083.1:o.[100A>G];[200T>C];",
+        "NP_000079.2:p.[Ala1Val];[Ser2Thr];",
+    ] {
+        parse_err(input);
+    }
+}

@@ -242,7 +242,7 @@ fn rna_spl_question_mark_not_equal_to_rna_unknown() {
 /// `r.[spl?];[spl]` must round-trip after #396 item 3. Replaces the older
 /// "currently rejected" pin.
 #[test]
-fn rna_spl_allele_compound_roundtrip() {
+fn rna_spl_allele_compound_round_trip() {
     let variant = parse_hgvs("NM_004006.2:r.[spl?];[spl]")
         .expect("r.[spl?];[spl] must parse after #396 item 3");
     // Exact-string equality so a regression that drops the `?` (yielding
