@@ -23,7 +23,22 @@ use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, TxVariant};
 use crate::reference::transcript::{GenomeBuild, Transcript};
 use crate::reference::ReferenceProvider;
 
+use crate::hgvs::interval::GenomeInterval;
+
 use super::record::VcfRecord;
+
+/// Return `true` when a `GenomeInterval` wraps around a circular contig,
+/// i.e., the start base is numerically greater than the end base.
+///
+/// Both endpoints must be known (non-uncertain, non-unknown); if either is
+/// absent the function conservatively returns `false` so that the normal
+/// conversion path can surface whatever error it would produce.
+fn interval_is_wraparound(loc: &GenomeInterval) -> bool {
+    match (loc.start.inner(), loc.end.inner()) {
+        (Some(start), Some(end)) => start.base > end.base,
+        _ => false,
+    }
+}
 
 /// Result of converting an HGVS variant to VCF
 #[derive(Debug, Clone)]
@@ -77,6 +92,16 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                     .to_string(),
             }),
             HgvsVariant::Mt(mt) => {
+                if interval_is_wraparound(&mt.loc_edit.location) {
+                    return Err(FerroError::ConversionError {
+                        msg: format!(
+                            "Cannot convert wraparound m. variant to VCF: \
+                             VCF has no representation for circular-contig records. \
+                             Variant: {}",
+                            HgvsVariant::Mt(mt.clone())
+                        ),
+                    });
+                }
                 // Mitochondrial variants use the same format as genomic
                 let genome = GenomeVariant {
                     accession: mt.accession.clone(),
@@ -116,6 +141,16 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 msg: "Unknown allele marker [?] cannot be converted to VCF".to_string(),
             }),
             HgvsVariant::Circular(circular) => {
+                if interval_is_wraparound(&circular.loc_edit.location) {
+                    return Err(FerroError::ConversionError {
+                        msg: format!(
+                            "Cannot convert wraparound o. variant to VCF: \
+                             VCF has no representation for circular-contig records. \
+                             Variant: {}",
+                            HgvsVariant::Circular(circular.clone())
+                        ),
+                    });
+                }
                 // Circular variants use the same format as genomic, convert to linear coordinates
                 let genome = GenomeVariant {
                     accession: circular.accession.clone(),
