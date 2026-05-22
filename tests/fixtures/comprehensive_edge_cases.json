@@ -582,9 +582,9 @@
     "tests": [
       {
         "input": "NM_000088.3:c.483ins10",
-        "valid": true,
+        "valid": false,
         "type": "CdsVariant",
-        "description": "Insert 10 unknown bases",
+        "description": "Insert 10 unknown bases — single-position insertion is invalid per DNA/insertion.md:95-101 (anchor MUST be a two-position range; canonical: c.483_484ins10). Closes #446.",
         "source": "PLAN_100_PERCENT.md"
       },
       {
