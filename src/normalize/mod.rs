@@ -4345,11 +4345,60 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         // Position: for c.X_(X+1)ins that duplicates preceding sequence,
                         // the result is c.(X-len+1)_Xdup
                         let dup_len = rotated_seq.len() as u64;
+                        // `insertion_is_duplication` returns true if EITHER the
+                        // preceding ref tract (BEFORE: `ref[pos-L..pos]`) OR the
+                        // following one (AFTER: `ref[pos..pos+L]`) equals the
+                        // (possibly rotated) alt. Which side matched determines
+                        // where the duplicated region sits in HGVS coordinates:
+                        //
+                        //   BEFORE-match (`ref[pos-L..pos] == alt`): the alt
+                        //   duplicates the immediately-preceding tract, so the
+                        //   dup region is `c.{new_start-L+1}..c.{new_start}`. This
+                        //   is the natural 3'-shuffle stopping shape — at the
+                        //   3'-most equivalent position, the alt phase aligns
+                        //   with the tract just behind the insertion.
+                        //
+                        //   AFTER-match (`ref[pos..pos+L] == alt`): the alt
+                        //   duplicates the immediately-following tract, so the
+                        //   dup region is `c.{new_start+1}..c.{new_start+L}`.
+                        //   This is the natural 5'-shuffle stopping shape — at
+                        //   the 5'-most equivalent position the alt aligns with
+                        //   the tract just AHEAD of the insertion (the one the
+                        //   shuffle walked through). Issue #418 (b): without
+                        //   this branch, ferro emitted `c.{X-L+1}_{X}dup` —
+                        //   bases preceding the 5'-shuffled stopping point —
+                        //   which is a *different haplotype* (since the
+                        //   preceding bases don't equal the alt). The
+                        //   off-by-(2 in NM_001166478.1:c.36_37insTC) error
+                        //   comes from emitting a dup of the WRONG tract.
+                        let pos = result.start as usize;
+                        let rseq = rotated_seq.as_slice();
+                        let before_matches =
+                            pos >= rseq.len() && &ref_seq[pos - rseq.len()..pos] == rseq;
                         let (dup_start, dup_end) = if dup_len == 1 {
-                            (new_start, new_start) // Single position for single-base dup
-                        } else {
-                            // Multi-base dup: the duplicated region is BEFORE the insertion point
+                            // Single-base dup still has to choose which
+                            // flanking position the alt actually
+                            // duplicates: BEFORE → `new_start`, AFTER →
+                            // `new_start + 1`. The original "single
+                            // position for single-base dup" shortcut
+                            // ignored `before_matches` and always
+                            // anchored at `new_start`, emitting the
+                            // wrong haplotype on AFTER-only single-copy
+                            // matches (e.g. `...CT[insT]` adjacent to
+                            // an isolated `T` — buggy `c.40dup` (= C)
+                            // vs correct `c.41dup` (= T)).
+                            if before_matches {
+                                (new_start, new_start)
+                            } else {
+                                (new_start + 1, new_start + 1)
+                            }
+                        } else if before_matches {
                             (new_start - dup_len + 1, new_start)
+                        } else {
+                            // AFTER-branch must match (since
+                            // `insertion_is_duplication` returned true and
+                            // BEFORE doesn't).
+                            (new_start + 1, new_start + dup_len)
                         };
                         (
                             dup_start,
