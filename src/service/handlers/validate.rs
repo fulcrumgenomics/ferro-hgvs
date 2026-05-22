@@ -4,7 +4,6 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use std::time::Instant;
 
 use crate::hgvs::interval::interval_is_wraparound;
-use crate::reference::ReferenceProvider;
 use crate::service::{
     server::AppState,
     types::{ErrorResponse, ParsedVariantDetails, PositionDetails, ServiceError, ValidateResponse},
@@ -39,15 +38,32 @@ pub async fn validate_single(
         ));
     }
 
-    // Parse using ferro's lenient parser
+    // Parse using ferro's lenient parser; fold the strict parse for
+    // wraps_origin into the same blocking task so neither parse runs on
+    // the async runtime thread.
     let hgvs_str = request.hgvs.clone();
-    let parse_result =
-        tokio::task::spawn_blocking(move || crate::hgvs::parser::parse_hgvs_lenient(&hgvs_str))
-            .await
-            .map_err(|e| {
-                let error = ServiceError::InternalError(format!("Task error: {}", e));
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(error.to_response()))
-            })?;
+    let (parse_result, wraps_origin_for_ok) = tokio::task::spawn_blocking(move || {
+        let lenient = crate::hgvs::parser::parse_hgvs_lenient(&hgvs_str);
+        // TODO(#399): the secondary strict parse is needed because W4001
+        // SwappedPositions auto-correction in parse_hgvs_lenient swaps reversed
+        // ranges before grammar parsing, destroying the wraparound signal. A
+        // cleaner fix would be to make detect_swapped_positions in
+        // src/error_handling/corrections.rs axis-aware (skip m./o.). Tracked
+        // as a follow-up; opening a dedicated issue is also fine.
+        let wraps = crate::hgvs::parser::parse_hgvs(&hgvs_str)
+            .map(|v| variant_wraps_origin(&v))
+            // Falls back to false if strict parse fails (e.g. on a secondary
+            // preprocessor-correctable error like an en-dash). In that case the
+            // lenient path would also yield wraparound=false after correction, so
+            // the two paths agree on the observable output.
+            .unwrap_or(false);
+        (lenient, wraps)
+    })
+    .await
+    .map_err(|e| {
+        let error = ServiceError::InternalError(format!("Task error: {}", e));
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(error.to_response()))
+    })?;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -55,12 +71,7 @@ pub async fn validate_single(
         Ok(result) => {
             // Extract component details
             let components = extract_variant_details(&result.result);
-            // Use the strict parser (no preprocessor) for wraps_origin — see
-            // validate_hgvs() for why the lenient result cannot be used here.
-            let hgvs_str_for_wrap = request.hgvs.clone();
-            let wraps_origin = crate::hgvs::parser::parse_hgvs(&hgvs_str_for_wrap)
-                .map(|v| variant_wraps_origin(&v))
-                .unwrap_or(false);
+            let wraps_origin = wraps_origin_for_ok;
 
             // Collect any warnings as potential issues
             let errors = if result.warnings.is_empty() {
@@ -105,26 +116,27 @@ fn variant_wraps_origin(variant: &crate::hgvs::variant::HgvsVariant) -> bool {
 /// breakdown and the `wraps_origin` flag.
 ///
 /// Unlike the async `validate_single` axum handler, this function is
-/// synchronous and takes an arbitrary [`ReferenceProvider`], making it
-/// suitable for unit tests and non-HTTP callers.  The `provider` parameter
-/// is accepted for API symmetry with other public helpers in this crate;
-/// the current implementation does not perform provider lookups (the
-/// wraparound check is purely positional).
+/// synchronous and suitable for unit tests and non-HTTP callers.
 ///
 /// `wraps_origin` is derived from the strict (no-preprocessor) parse so
 /// that the preprocessor's position-swap correction does not mask the
 /// reversed `<high>_<low>` form that marks a circular-contig wraparound.
-pub fn validate_hgvs<P: ReferenceProvider>(hgvs: &str, _provider: &P) -> ValidateResponse {
+pub fn validate_hgvs(hgvs: &str) -> ValidateResponse {
     match crate::hgvs::parser::parse_hgvs_lenient(hgvs) {
         Ok(result) => {
             let components = extract_variant_details(&result.result);
-            // Use the strict parser (no preprocessor) to detect wraparound:
-            // parse_hgvs_lenient's position-swap correction normalises
-            // <high>_<low> to <low>_<high> before the grammar sees it,
-            // which would make interval_is_wraparound always return false on
-            // the lenient-parsed result.
+            // TODO(#399): the secondary strict parse is needed because W4001
+            // SwappedPositions auto-correction in parse_hgvs_lenient swaps reversed
+            // ranges before grammar parsing, destroying the wraparound signal. A
+            // cleaner fix would be to make detect_swapped_positions in
+            // src/error_handling/corrections.rs axis-aware (skip m./o.). Tracked
+            // as a follow-up; opening a dedicated issue is also fine.
             let wraps_origin = crate::hgvs::parser::parse_hgvs(hgvs)
                 .map(|v| variant_wraps_origin(&v))
+                // Falls back to false if strict parse fails (e.g. on a secondary
+                // preprocessor-correctable error like an en-dash). In that case the
+                // lenient path would also yield wraparound=false after correction, so
+                // the two paths agree on the observable output.
                 .unwrap_or(false);
             let errors = if result.warnings.is_empty() {
                 None

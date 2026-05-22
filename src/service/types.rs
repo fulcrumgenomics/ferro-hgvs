@@ -278,8 +278,9 @@ pub struct ValidateResponse {
     pub processing_time_ms: u64,
     /// True if the input is a wraparound range on a circular reference
     /// (`m.` or `o.`), where the start position is greater than the
-    /// end position per SVD-WG006. Always false for linear axes.
-    #[serde(default)]
+    /// end position per SVD-WG006. Omitted from the JSON payload for
+    /// linear axes.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub wraps_origin: bool,
 }
 
