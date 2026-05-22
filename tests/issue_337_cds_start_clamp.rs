@@ -365,3 +365,228 @@ fn five_prime_shuffles_intra_cds_homopolymer_all_the_way_to_c1() {
         "5'-shuffle through an intra-CDS A-tract must reach c.1del, not stop at c.2del",
     );
 }
+
+// =============================================================================
+// PR #343 deferred follow-ups (issue #391 item 2)
+//
+// PR #343 (CDS↔UTR axis clamp for the 3'-rule shuffle) deferred two
+// symmetry tests in its body:
+//
+//   - "5'-direction `c.*N` clamp at `c.*1` symmetry test"
+//   - "minus-strand sanity test"
+//
+// Both pin behavior that ALREADY works on the existing clamp logic —
+// they were called out as gaps in the test matrix, not as missing
+// fixes. This block lands them so a future axis-clamp refactor cannot
+// regress the 3'UTR / minus-strand sides of the matrix.
+// =============================================================================
+
+/// Mirror fixture of `provider_with_utr_padded_transcript` for the 3'UTR
+/// side: a homopolymer that straddles the CDS↔3'UTR axis boundary so a
+/// 5'-direction shuffle of `c.*N` would (without the axis clamp) shift
+/// across into the CDS and re-classify as `c.<N>`.
+///
+/// Transcript layout:
+///   tx 1-3   : 5'UTR `CCC`             (c.-3 .. c.-1)
+///   tx 4-12  : CDS   `ATGCGCAAA`       (c.1 .. c.9; ends with AAA at c.7..c.9)
+///   tx 13-20 : 3'UTR `AAAACCCC`        (c.*1 .. c.*8; starts with AAAA)
+///
+/// The combined A-tract runs tx 10-16 (c.7 .. c.*4) — 7 contiguous A's
+/// straddling the CDS↔3'UTR boundary at tx 12/13 (c.9 / c.*1). Without
+/// the clamp, a 5'-shuffle of `c.*1del` walks back through `AAAA` in the
+/// 3'UTR and the `AAA` of the CDS, landing at `c.7del`. The clamp must
+/// pin the 5'-direction shuffle at `c.*1` — the leftmost reachable
+/// position on the 3'UTR axis.
+fn provider_with_cds_utr3_homopolymer_transcript() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let sequence = "CCCATGCGCAAAAAAACCCC".to_string();
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NM_UTR3.1".to_string(),
+        Some("UTR3".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(4),
+        Some(12),
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+fn normalize_utr3_with(direction: ShuffleDirection, cross: bool, input: &str) -> String {
+    let mut config = NormalizeConfig::default().with_direction(direction);
+    if cross {
+        config = config.allow_crossing_boundaries();
+    }
+    let normalizer =
+        Normalizer::with_config(provider_with_cds_utr3_homopolymer_transcript(), config);
+    let variant = parse_hgvs(input).expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    format!("{}", normalized)
+}
+
+#[test]
+fn five_prime_no_cross_does_not_shift_c_star_1_del_into_cds() {
+    // 3'UTR mirror of `five_prime_no_cross_does_not_shift_c1_del_into_5utr`.
+    // `c.*1del` under 5prime + cross_boundaries=false must stay at c.*1del
+    // — the 5'-direction shuffle clamps at the CDS↔3'UTR boundary even
+    // though the A-tract continues 3 bases into the CDS.
+    assert_eq!(
+        normalize_utr3_with(ShuffleDirection::FivePrime, false, "NM_UTR3.1:c.*1del"),
+        "NM_UTR3.1:c.*1del",
+    );
+}
+
+#[test]
+fn five_prime_cross_does_not_shift_c_star_1_del_into_cds() {
+    // Companion of `five_prime_cross_does_not_shift_c1_del_into_5utr`.
+    // `cross_boundaries=true` authorizes crossing exon-intron junctions,
+    // NOT the CDS↔3'UTR sub-axis boundary. The 3'UTR axis clamp fires
+    // in both cross modes.
+    assert_eq!(
+        normalize_utr3_with(ShuffleDirection::FivePrime, true, "NM_UTR3.1:c.*1del"),
+        "NM_UTR3.1:c.*1del",
+    );
+}
+
+#[test]
+fn five_prime_no_cross_does_not_shift_c_star_1_dup_into_cds() {
+    // 3'UTR dup mirror of `five_prime_no_cross_does_not_shift_c1_dup_into_5utr`.
+    // `c.*1dup` under 5prime + cross=false must stay at c.*1dup.
+    assert_eq!(
+        normalize_utr3_with(ShuffleDirection::FivePrime, false, "NM_UTR3.1:c.*1dup"),
+        "NM_UTR3.1:c.*1dup",
+    );
+}
+
+#[test]
+fn five_prime_cross_does_not_shift_c_star_1_dup_into_cds() {
+    // 3'UTR dup × cross=true cell.
+    assert_eq!(
+        normalize_utr3_with(ShuffleDirection::FivePrime, true, "NM_UTR3.1:c.*1dup"),
+        "NM_UTR3.1:c.*1dup",
+    );
+}
+
+#[test]
+fn five_prime_inside_utr3_walks_to_c_star_1() {
+    // `c.*4del` inside the 3'UTR's AAAA tract. 5'-direction shuffle
+    // should walk through the 3'UTR A's and stop at `c.*1` — within
+    // the 3'UTR axis, not crossing into CDS. Sanity check that the
+    // clamp doesn't over-restrict (i.e. doesn't pin the variant at
+    // its input position when the shuffle is entirely within-axis).
+    assert_eq!(
+        normalize_utr3_with(ShuffleDirection::FivePrime, false, "NM_UTR3.1:c.*4del"),
+        "NM_UTR3.1:c.*1del",
+    );
+}
+
+#[test]
+fn axis_clamp_emits_warning_when_constraining_5prime_c_star_1_shuffle() {
+    // 3'UTR mirror of `axis_clamp_emits_warning_when_constraining_5prime_shuffle`.
+    // Without the axis clamp `c.*1del` under 5prime would shift back
+    // into the CDS A-tract (per fixture: CDS ends with `AAA`, 3'UTR
+    // starts with `AAAA`). The clamp holds the result at c.*1del; the
+    // clamp firing must emit `AxisClampApplied` so callers can flag.
+    let normalizer = Normalizer::with_config(
+        provider_with_cds_utr3_homopolymer_transcript(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+    );
+    let variant = parse_hgvs("NM_UTR3.1:c.*1del").expect("parse");
+    let result = normalizer
+        .normalize_with_warnings(&variant)
+        .expect("normalize");
+    assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.*1del");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "AXIS_CLAMP_APPLIED"),
+        "expected AXIS_CLAMP_APPLIED warning on 3'UTR 5'-shuffle that the \
+         clamp held; got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
+    );
+}
+
+/// Minus-strand sanity fixture: identical tx-frame layout to
+/// `provider_with_utr_padded_transcript` but on `Strand::Minus`. The
+/// CDS↔UTR axis clamp operates on tx-frame positions
+/// (`src/normalize/boundary.rs:get_cds_boundaries_with_axis_info`), so
+/// the strand should be a no-op for the clamp itself. This pins that
+/// strand-invariance contract so a future refactor cannot accidentally
+/// branch the clamp by strand.
+fn provider_with_minus_strand_utr_padded_transcript() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let sequence = "AAAATGAAATAGCCCCCCCC".to_string();
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NM_MTEST.1".to_string(),
+        Some("MTEST".to_string()),
+        Strand::Minus,
+        sequence,
+        Some(4),
+        Some(12),
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+fn normalize_minus_with(direction: ShuffleDirection, cross: bool, input: &str) -> String {
+    let mut config = NormalizeConfig::default().with_direction(direction);
+    if cross {
+        config = config.allow_crossing_boundaries();
+    }
+    let normalizer =
+        Normalizer::with_config(provider_with_minus_strand_utr_padded_transcript(), config);
+    let variant = parse_hgvs(input).expect("parse");
+    let normalized = normalizer.normalize(&variant).expect("normalize");
+    format!("{}", normalized)
+}
+
+#[test]
+fn minus_strand_five_prime_no_cross_does_not_shift_c1_del_into_5utr() {
+    // Minus-strand mirror of `five_prime_no_cross_does_not_shift_c1_del_into_5utr`.
+    // The clamp must fire identically regardless of strand because it
+    // operates on tx-frame positions.
+    assert_eq!(
+        normalize_minus_with(ShuffleDirection::FivePrime, false, "NM_MTEST.1:c.1del"),
+        "NM_MTEST.1:c.1del",
+    );
+}
+
+#[test]
+fn minus_strand_five_prime_cross_does_not_shift_c1_del_into_5utr() {
+    // Minus-strand × cross=true. Same strand-invariance contract.
+    assert_eq!(
+        normalize_minus_with(ShuffleDirection::FivePrime, true, "NM_MTEST.1:c.1del"),
+        "NM_MTEST.1:c.1del",
+    );
+}
+
+#[test]
+fn minus_strand_three_prime_shift_inside_cds_still_shuffles() {
+    // Negative control: ensure the minus-strand path didn't accidentally
+    // disable in-axis shuffling. `c.4del` (start of the CDS-internal
+    // AAA tract) under 3'-direction must reach c.6del — the rightmost
+    // CDS-internal A. Mirror of `three_prime_shift_inside_cds_still_shuffles`.
+    assert_eq!(
+        normalize_minus_with(ShuffleDirection::ThreePrime, false, "NM_MTEST.1:c.4del"),
+        "NM_MTEST.1:c.6del",
+    );
+}
