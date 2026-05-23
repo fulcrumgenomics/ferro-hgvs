@@ -516,6 +516,23 @@ pub enum NormalizationWarning {
         clamp_kind: String,
     },
 
+    /// Canonicalization (e.g. `p.ins → p.dup` or `p.delins → p.dup`)
+    /// produced a `Duplication` whose interval includes p.1 — the
+    /// initiator methionine. The duplication form is spec-permitted
+    /// (Prioritization rule is unconditional; spec uses Met1-inclusive
+    /// ranges in deletion.md:63-65), but consumers may also wish to
+    /// describe the protein-level consequence per the substitution
+    /// rule for start-codon variants (substitution.md:45-65).
+    /// Closes-after: #92. Code: `INITIATOR_MET_CANONICALIZATION`.
+    InitiatorMetCanonicalization {
+        /// Human-readable description.
+        message: String,
+        /// Accession of the reference sequence.
+        accession: String,
+        /// Final dup interval text, e.g. "Met1" or "Met1_Lys2".
+        location: String,
+    },
+
     /// Bracketed / reference-range `ins[...]` payload was expanded to a
     /// flat literal sequence. Emitted alongside the canonical rewrite for
     /// observability — callers can audit which inputs were canonicalized
@@ -572,6 +589,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
+            Self::InitiatorMetCanonicalization { .. } => "INITIATOR_MET_CANONICALIZATION",
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
         }
@@ -585,6 +603,7 @@ impl NormalizationWarning {
             Self::CanonicalSplitSkipped { message, .. } => message,
             Self::CrossAxisVariantNotShuffled { message, .. } => message,
             Self::AxisClampApplied { message, .. } => message,
+            Self::InitiatorMetCanonicalization { message, .. } => message,
             Self::InsertedSequenceExpanded { message, .. } => message,
             Self::PositionPastEnd { message, .. } => message,
         }
@@ -2168,6 +2187,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ProteinEdit::Insertion { sequence } => self
                 .try_protein_ins_to_dup(variant, sequence)
                 .unwrap_or_else(|| (edit.clone(), variant.loc_edit.location.clone())),
+            // HGVS Prioritization: delins is the last-resort form. A
+            // delins whose inserted residues share an affix with the
+            // deleted residues must be re-described (delins.md:53-56);
+            // after affix-trim the residual is routed through the
+            // higher-priority canonicalization helpers. (#92)
+            ProteinEdit::Delins { sequence } => self
+                .try_protein_delins_canonicalize(variant, sequence)
+                .unwrap_or_else(|| (edit.clone(), variant.loc_edit.location.clone())),
             // Other edits pass through unchanged
             _ => (edit.clone(), variant.loc_edit.location.clone()),
         };
@@ -2219,22 +2246,53 @@ impl<P: ReferenceProvider> Normalizer<P> {
             _ => normalized_edit.clone(),
         };
 
-        // Only create a new variant if the edit changed or the interval moved
+        // Build the post-canonical variant; if no rewrite applied,
+        // fall back to the input.
         let edit_changed = &output_edit != edit;
         let interval_changed = post_canon_interval != variant.loc_edit.location;
-        if edit_changed || interval_changed || shuffled {
-            let new_variant = ProteinVariant {
+        let final_variant = if edit_changed || interval_changed || shuffled {
+            ProteinVariant {
                 accession: variant.accession.clone(),
                 gene_symbol: variant.gene_symbol.clone(),
                 loc_edit: LocEdit::with_uncertainty(
                     new_interval,
-                    variant.loc_edit.edit.map_ref(|_| output_edit),
+                    variant.loc_edit.edit.map_ref(|_| output_edit.clone()),
                 ),
-            };
-            Ok((HV::Protein(new_variant), vec![]))
+            }
         } else {
-            Ok((HV::Protein(variant.clone()), vec![]))
+            variant.clone()
+        };
+
+        // Met1 soft-warning: emit when the final edit is a dup whose
+        // interval includes position 1. (#92 sub-item 3)
+        let mut warnings: Vec<NormalizationWarning> = Vec::new();
+        if matches!(output_edit, ProteinEdit::Duplication) {
+            if let (Some(s), Some(e)) = (
+                final_variant.loc_edit.location.start.inner(),
+                final_variant.loc_edit.location.end.inner(),
+            ) {
+                if s.number <= 1 && e.number >= 1 {
+                    let location = if s.number == e.number {
+                        format!("{}{}", s.aa, s.number)
+                    } else {
+                        format!("{}{}_{}{}", s.aa, s.number, e.aa, e.number)
+                    };
+                    warnings.push(NormalizationWarning::InitiatorMetCanonicalization {
+                        message: format!(
+                            "canonical form `p.{}dup` includes the initiator \
+                             methionine; the predicted protein consequence may \
+                             also be described as `p.0?` or `p.(Met1?)` per HGVS \
+                             Substitution recommendations",
+                            location
+                        ),
+                        accession: final_variant.accession.transcript_accession().to_string(),
+                        location,
+                    });
+                }
+            }
         }
+
+        Ok((HV::Protein(final_variant), warnings))
     }
 
     /// Apply the HGVS 3' rule to a protein deletion or duplication.
@@ -2392,6 +2450,198 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_start = ProtPos::new(new_start_aa, new_start_num);
         let new_end = ProtPos::new(new_end_aa, new_end_num);
         Some((Interval::new(new_start, new_end), true))
+    }
+
+    /// Affix-trim a protein delins and route the residual through the
+    /// existing canonicalization helpers.
+    ///
+    /// Returns `Some((edit, interval))` when the rewrite applied;
+    /// `None` to fall back to the input delins (used for genuine
+    /// delins with no shared affix, uncertain endpoints, or
+    /// missing provider data).
+    ///
+    /// Branches (per HGVS Prioritization `general.md:56-57`):
+    /// - residual empty + del empty → identity `p.<X>_<Y>=`
+    /// - residual empty, del non-empty → pure `del`
+    /// - residual single AA, del single AA → substitution
+    /// - residual non-empty, del empty → route through
+    ///   `try_protein_ins_to_dup` (anchored at the flanking
+    ///   positions of the trimmed range)
+    /// - otherwise → smaller delins (caller falls back; the helper
+    ///   returns `None` for the no-progress case)
+    fn try_protein_delins_canonicalize(
+        &self,
+        variant: &crate::hgvs::variant::ProteinVariant,
+        seq: &crate::hgvs::edit::AminoAcidSeq,
+    ) -> Option<(ProteinEdit, ProtInterval)> {
+        use crate::hgvs::edit::AminoAcidSeq;
+
+        // Reject uncertain endpoints — same rationale as
+        // `try_protein_ins_to_dup`.
+        let start_mu = variant.loc_edit.location.start.as_single()?;
+        let end_mu = variant.loc_edit.location.end.as_single()?;
+        let start_pos = match start_mu {
+            Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        let end_pos = match end_mu {
+            Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        if end_pos.number < start_pos.number {
+            return None;
+        }
+        if start_pos.number == 0 {
+            return None;
+        }
+        if !self.provider.has_protein_data() {
+            return None;
+        }
+
+        let accession = variant.accession.transcript_accession();
+        let expected_len = (end_pos.number - start_pos.number + 1) as usize;
+        let ref_aas =
+            self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
+        if ref_aas.len() != expected_len {
+            return None;
+        }
+
+        // Affix-trim: longest common prefix then longest common suffix.
+        let mut lcp = 0usize;
+        let max_pref = ref_aas.len().min(seq.0.len());
+        while lcp < max_pref && ref_aas[lcp] == seq.0[lcp] {
+            lcp += 1;
+        }
+        let ref_tail = &ref_aas[lcp..];
+        let seq_tail = &seq.0[lcp..];
+        let mut lcs = 0usize;
+        let max_suf = ref_tail.len().min(seq_tail.len());
+        while lcs < max_suf
+            && ref_tail[ref_tail.len() - 1 - lcs] == seq_tail[seq_tail.len() - 1 - lcs]
+        {
+            lcs += 1;
+        }
+
+        // Trimmed positions (1-based inclusive). When lcp consumes
+        // the entire deleted window we collapse to a zero-width range
+        // anchored at `start + lcp`.
+        let new_start = start_pos.number + lcp as u64;
+        let new_end = end_pos.number - lcs as u64;
+        let residual_seq = AminoAcidSeq(seq.0[lcp..seq.0.len() - lcs].to_vec());
+        let residual_del = if new_start <= new_end {
+            ref_aas[lcp..ref_aas.len() - lcs].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        // No progress — caller falls back to the unchanged delins.
+        // Do NOT route through an ins→dup search here: the deleted
+        // window is still non-empty, so any tandem-match rewrite
+        // would emit a bare `dup` that silently drops the deletion
+        // side of the edit and returns a non-equivalent variant.
+        if lcp == 0 && lcs == 0 {
+            return None;
+        }
+
+        // Build the canonical residual form.
+        if residual_del.is_empty() && residual_seq.0.is_empty() {
+            // Identity: preserve the input range so Display emits
+            // `p.<X>_<Y>=`. The `predicted` flag is propagated by the
+            // caller via the `Mu` wrapper on the edit; here we mirror
+            // the certain form. `whole_protein: false` because the
+            // identity is position-specific, not whole-protein.
+            return Some((
+                ProteinEdit::Identity {
+                    predicted: false,
+                    whole_protein: false,
+                },
+                variant.loc_edit.location.clone(),
+            ));
+        }
+        if residual_seq.0.is_empty() {
+            // Pure deletion at the trimmed range.
+            let dstart = ProtPos::new(residual_del[0], new_start);
+            let dend = ProtPos::new(*residual_del.last()?, new_end);
+            return Some((
+                ProteinEdit::Deletion {
+                    sequence: None,
+                    count: None,
+                },
+                Interval::new(dstart, dend),
+            ));
+        }
+        if residual_del.is_empty() {
+            // Zero-width del + non-empty ins → route through the
+            // existing ins→dup helper anchored at the flanking
+            // positions of the trimmed range.
+            let flank_start = new_start.saturating_sub(1);
+            let flank_end = new_start;
+            if flank_start >= 1 {
+                let flank_start_aa =
+                    self.fetch_protein_window(&accession, flank_start - 1, flank_start)?[0];
+                let flank_end_aa =
+                    self.fetch_protein_window(&accession, flank_end - 1, flank_end)?[0];
+                let synth_start = ProtPos::new(flank_start_aa, flank_start);
+                let synth_end = ProtPos::new(flank_end_aa, flank_end);
+                let synth_variant = crate::hgvs::variant::ProteinVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: crate::hgvs::variant::LocEdit::with_uncertainty(
+                        Interval::new(synth_start, synth_end),
+                        variant.loc_edit.edit.map_ref(|_| ProteinEdit::Insertion {
+                            sequence: residual_seq.clone(),
+                        }),
+                    ),
+                };
+                if let Some((edit, interval)) =
+                    self.try_protein_ins_to_dup(&synth_variant, &residual_seq)
+                {
+                    return Some((edit, interval));
+                }
+            }
+            // Fall back to the trimmed insertion. Fetch both flanking
+            // residues in one provider call covering 1-based
+            // [new_start - 1, new_start] (0-based half-open
+            // [new_start - 2, new_start)). new_start <= 1 cannot
+            // anchor a left flank in 1-based HGVS coordinates, so
+            // bail out — the caller keeps the input delins.
+            if new_start <= 1 {
+                return None;
+            }
+            let flank_aas = self.fetch_protein_window(&accession, new_start - 2, new_start)?;
+            if flank_aas.len() != 2 {
+                return None;
+            }
+            let ins_start = ProtPos::new(flank_aas[0], new_start - 1);
+            let ins_end = ProtPos::new(flank_aas[1], new_start);
+            return Some((
+                ProteinEdit::Insertion {
+                    sequence: residual_seq,
+                },
+                Interval::new(ins_start, ins_end),
+            ));
+        }
+        if residual_del.len() == 1 && residual_seq.0.len() == 1 {
+            // Sub > delins.
+            let pos = ProtPos::new(residual_del[0], new_start);
+            return Some((
+                ProteinEdit::Substitution {
+                    reference: residual_del[0],
+                    alternative: residual_seq.0[0],
+                },
+                Interval::new(pos, pos),
+            ));
+        }
+
+        // Genuine smaller delins.
+        let dstart = ProtPos::new(residual_del[0], new_start);
+        let dend = ProtPos::new(*residual_del.last()?, new_end);
+        Some((
+            ProteinEdit::Delins {
+                sequence: residual_seq,
+            },
+            Interval::new(dstart, dend),
+        ))
     }
 
     /// HGVS Prioritization: if a protein insertion is equivalent to a

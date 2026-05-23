@@ -406,6 +406,14 @@
       "spec_section_notes": "Cannot be auto-rewritten because mixing 1-letter and 3-letter codes inside [...] is ambiguous. Strict / lenient / silent all reject with E1004 InvalidEdit + hint naming the canonical insAlaPro shape. detect_protein_bracketed_aa_insertion runs as InputPreprocessor Phase 17, and reject_protein_bracketed_aa_insertion runs as a pre-parse check inside parse_variant so the bare parse_hgvs path produces the same diagnostic. Closes #290 (follow-up to #248)."
     },
     {
+      "code": "W3022",
+      "description": "InitiatorMetCanonicalization — a protein insertion (or affix-trimmed delins) whose canonical duplication form includes position 1 (the initiator methionine). The dup form is emitted with this advisory warning.",
+      "spec_section": "recommendations/general.md §3 (prioritization: dup preferred over ins); recommendations/protein/variant/deletion.md §63-65 (Met1-inclusive deletion); recommendations/protein/variant/substitution.md §45-65 (start-codon substitution rule p.0/p.0?/p.(Met1?))",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced",
+      "spec_section_notes": "Emitted by try_protein_ins_to_dup / try_protein_delins_canonicalize in src/normalize/mod.rs when the resulting dup interval includes position 1. mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient/silent) — the warning is purely informational (consumers should consider the p.0/p.0? substitution-rule interpretation); the runtime does not attempt to auto-correct the input to an alternative form. Closes #92."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",

@@ -282,6 +282,21 @@ pub enum ErrorType {
     /// pointing at the canonical `insAlaPro` form.
     ProteinBracketedAaInsertion,
 
+    /// The canonical `p.dup` form produced by ins→dup or delins→dup
+    /// canonicalization includes the initiator methionine (position 1).
+    ///
+    /// HGVS Prioritization (`general.md §3`) requires `dup` to be preferred
+    /// over `ins` when both describe the same change; the rule is
+    /// unconditional, so ferro rewrites to `dup` even when the interval
+    /// includes p.1. The spec uses Met1-inclusive ranges elsewhere
+    /// (`deletion.md §63-65`: `p.(Met1_Leu46del)`), so the form is
+    /// permitted. However, the predicted protein-level consequence may
+    /// also be described per the substitution rule for start-codon variants
+    /// (`substitution.md §45-65`: `p.0`, `p.0?`, or `p.(Met1?)`). This
+    /// warning fires so downstream consumers can apply that policy.
+    /// Closes-after: #92. Code: `W3022`.
+    InitiatorMetCanonicalization,
+
     /// Variant position range exceeds the reference sequence the
     /// provider returned (`fetch_ref_for_canonical_split` got fewer
     /// bytes than the HGVS interval span).
@@ -361,6 +376,7 @@ impl ErrorType {
             ErrorType::NonSpecMosaicForm => "W3019",
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
+            ErrorType::InitiatorMetCanonicalization => "W3022",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::PositionPastEnd => "W4004",
@@ -408,6 +424,7 @@ impl ErrorType {
         ErrorType::NonSpecMosaicForm,
         ErrorType::RnaThymineCanonicalized,
         ErrorType::ProteinBracketedAaInsertion,
+        ErrorType::InitiatorMetCanonicalization,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -483,6 +500,9 @@ impl ErrorType {
             ErrorType::ProteinBracketedAaInsertion => {
                 "bracketed amino-acid list inside protein insertion edit"
             }
+            ErrorType::InitiatorMetCanonicalization => {
+                "canonical form `p.Met1dup` (or analogous) includes the initiator methionine"
+            }
             ErrorType::VariantExceedsReference => {
                 "variant position range exceeds reference sequence"
             }
@@ -550,6 +570,10 @@ impl ErrorType {
             // rewrite: mixing 3-letter and 1-letter inside `[...]` is
             // ambiguous, so all modes reject with a hint.
             ErrorType::ProteinBracketedAaInsertion => false,
+            // The dup form is correct per HGVS Prioritization; the warning
+            // is purely informational. We do not rewrite the canonical output
+            // back to ins or to p.0?/p.(Met1?) — that is the consumer's call.
+            ErrorType::InitiatorMetCanonicalization => false,
             // Variant exceeds reference: no safe auto-correction — the
             // variant references positions past the provider's window
             // and we cannot conjure missing bases.
@@ -619,6 +643,7 @@ impl ErrorType {
             ErrorType::ProteinBracketedAaInsertion => {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
+            ErrorType::InitiatorMetCanonicalization => ("p.Met1_Lys2insMet", "p.Met1dup"),
             ErrorType::VariantExceedsReference => (
                 "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
@@ -846,6 +871,8 @@ mod tests {
         assert_eq!(ErrorType::LengthMismatch.code(), "W3016");
         assert_eq!(ErrorType::NonSpecMosaicForm.code(), "W3019");
         assert_eq!(ErrorType::RnaThymineCanonicalized.code(), "W3020");
+        assert_eq!(ErrorType::ProteinBracketedAaInsertion.code(), "W3021");
+        assert_eq!(ErrorType::InitiatorMetCanonicalization.code(), "W3022");
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
         assert_eq!(ErrorType::PositionPastEnd.code(), "W4004");
@@ -867,6 +894,9 @@ mod tests {
         assert!(!ErrorType::PositionPastEnd.is_correctable());
         // Variants exceeding the reference bounds have no safe correction.
         assert!(!ErrorType::VariantExceedsReference.is_correctable());
+        // InitiatorMetCanonicalization is informational only — the dup
+        // form is kept; no rewrite back to ins or to p.0?/p.(Met1?).
+        assert!(!ErrorType::InitiatorMetCanonicalization.is_correctable());
     }
 
     // ErrorOverride tests
@@ -1023,6 +1053,7 @@ mod tests {
             ErrorType::NonSpecMosaicForm,
             ErrorType::RnaThymineCanonicalized,
             ErrorType::ProteinBracketedAaInsertion,
+            ErrorType::InitiatorMetCanonicalization,
             ErrorType::SwappedPositions,
             ErrorType::SinglePositionRange,
             ErrorType::PositionPastEnd,
@@ -1065,6 +1096,7 @@ mod tests {
                 | ErrorType::NonSpecMosaicForm
                 | ErrorType::RnaThymineCanonicalized
                 | ErrorType::ProteinBracketedAaInsertion
+                | ErrorType::InitiatorMetCanonicalization
                 | ErrorType::SwappedPositions
                 | ErrorType::SinglePositionRange
                 | ErrorType::PositionPastEnd
@@ -1113,6 +1145,7 @@ mod tests {
             ("W3018", ErrorType::ClinVarProseMultiAllelic),
             ("W3020", ErrorType::RnaThymineCanonicalized),
             ("W3021", ErrorType::ProteinBracketedAaInsertion),
+            ("W3022", ErrorType::InitiatorMetCanonicalization),
             ("W4003", ErrorType::SinglePositionRange),
         ];
         for (code, expected) in cases {

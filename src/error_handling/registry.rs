@@ -1094,6 +1094,32 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3022",
+        CodeInfo {
+            code: "W3022",
+            name: "InitiatorMetCanonicalization",
+            summary: "Canonical p.dup form includes the initiator methionine (p.Met1).",
+            explanation: "HGVS Prioritization (general.md §3) requires duplications to be \
+                preferred over insertions when both can describe the same change. \
+                When ferro canonicalizes a protein insertion (or affix-trimmed \
+                delins) into a duplication whose interval includes position 1, \
+                the result touches the initiator methionine. The spec uses \
+                Met1-inclusive ranges elsewhere (deletion.md §63-65: \
+                p.(Met1_Leu46del)), so the duplication form is permitted; however \
+                the predicted protein consequence may also be described per the \
+                substitution rule for start-codon variants (substitution.md §45-65: \
+                p.0, p.0?, or p.(Met1?)). Consumers should consider both \
+                interpretations.",
+            category: CodeCategory::Format,
+            bad_examples: &["NP_000088.3:p.Met1_Lys2insMet"],
+            good_examples: &["NP_000088.3:p.Met1dup"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["W3021"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
