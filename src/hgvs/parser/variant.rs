@@ -5624,7 +5624,65 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // (HGVS recommendations/general.md line 47, tracked under issue #115).
     validate_no_self_cancelling(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject `dupins` mash-up
+    // (HGVS DNA/duplication.md:92 — "a format not used in HGVS
+    // nomenclature"; #445).
+    validate_no_dupins(&variant)?;
+
     Ok(variant)
+}
+
+/// Reject `dupins` edits per `DNA/duplication.md:92`:
+///
+/// > "the variant is not described using `dupins`, a format not used in
+/// > HGVS nomenclature."
+///
+/// `<code class="invalid">` markup in the spec — the strongest
+/// prohibition register. ferro previously parsed `dupins<seq>` into the
+/// `NaEdit::DupIns` variant and round-tripped it; this validation
+/// rejects at parse time with a diagnostic pointing the user at the
+/// canonical alternatives (`del` followed by `ins`, or `delins`).
+///
+/// The `NaEdit::DupIns` variant is kept in the data model for now (no
+/// data-type refactor) — this check just ensures it is never produced
+/// by the parser's user-facing entry point. Internal code that
+/// constructs `DupIns` for normalization intermediates is unaffected.
+fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::uncertainty::Mu;
+
+    fn is_dupins(edit: &Mu<NaEdit>) -> bool {
+        matches!(edit.inner(), Some(NaEdit::DupIns { .. }))
+    }
+    fn make_error() -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        // Carry a structured `InvalidEdit` code so the semantic rejection
+        // survives slash-form fallback paths that would otherwise mask an
+        // unstructured parse error and lose the `dupins` guidance.
+        FerroError::parse_with_diagnostic(
+            0,
+            "the `dupins<seq>` form is not used in HGVS nomenclature \
+             (DNA/duplication.md:92). Describe as `del` followed by \
+             `ins`, or as `delins` if the edit is contiguous.",
+            Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+        )
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Cds(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Tx(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Rna(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Mt(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Circular(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_dupins(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Pre-parse rejection for `p.…ins[Ala;Pro]` — W3021

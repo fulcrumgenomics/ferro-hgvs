@@ -320,6 +320,10 @@
     "[non_canonical_paren_around_single_count]": {
       "category": "rejected_by_design",
       "reason": "`[(3)]` paren around single count is non-canonical; spec form is `[3]` for fixed and `[(N_M)]` for ranges."
+    },
+    "[dupins_mash_up]": {
+      "category": "rejected_by_design",
+      "reason": "The `dupins<seq>` form is not used in HGVS nomenclature per DNA/duplication.md:92 (closes #445)."
     }
   },
   "expected_failures": {
@@ -519,6 +523,9 @@
     "NP_009225.1:p.Phe1036_Lys1037delinsPheTerArgfs": "[trailing_fs_after_delins]",
     "NP_612422.2:p.Ala278Alabutlastnucleotideofexon.": "[malformed_clinical_comment_text]",
     "NR_002717.2:n.894CTA[(3)]CTG[(317_330)]": "[non_canonical_paren_around_single_count]",
-    "NW_019805500.1:g.472169CCG[(100-833)]": "[deprecated_dash_range_inside_brackets]"
+    "NW_019805500.1:g.472169CCG[(100-833)]": "[deprecated_dash_range_inside_brackets]",
+    "NC_000023.11:g.140662902_139977334dupinsCTCA": "[dupins_mash_up]",
+    "NG_007111.1:g.21410_26335dupinsTAT": "[dupins_mash_up]",
+    "NG_007159.3:g.173054_173069dupinsAluYa5": "[dupins_mash_up]"
   }
 }

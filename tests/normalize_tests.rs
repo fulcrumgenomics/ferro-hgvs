@@ -5288,10 +5288,19 @@ mod ins_bracketed_expansion {
     // -------------------------------------------------------------------
     // 11. The same canonicalization applies to a `dupins` payload.
     // -------------------------------------------------------------------
+    /// `dupins<seq>` is rejected at parse time per
+    /// `DNA/duplication.md:92` (#445). The normalize-time expansion of
+    /// the bracketed `dupins[ATC]` payload never fires because the
+    /// parser refuses the form. Pin the rejection diagnostic.
     #[test]
-    fn dupins_bracketed_payload_expands() {
-        let result = normalize_ok(MockProvider::new(), "NC_000001.11:g.5207_5208dupins[ATC]");
-        assert_eq!(result, "NC_000001.11:g.5207_5208dupinsATC");
+    fn dupins_bracketed_payload_rejected_at_parse() {
+        let result = parse_hgvs("NC_000001.11:g.5207_5208dupins[ATC]");
+        let err = result.expect_err("dupins should be rejected at parse");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("dupins") && msg.contains("DNA/duplication.md"),
+            "expected dupins-rejection diagnostic, got: {msg}"
+        );
     }
 
     // -------------------------------------------------------------------

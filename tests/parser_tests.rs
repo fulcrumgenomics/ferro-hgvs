@@ -953,6 +953,11 @@ fn test_reference_insertions(#[case] input: &str, #[case] _description: &str) {
 
 // =============================================================================
 // Dupins (combined duplication + insertion)
+//
+// HGVS v21 (`DNA/duplication.md:92`) rejects this form: "a format not
+// used in HGVS nomenclature." ferro now rejects at parse time per #445.
+// The test was previously asserting acceptance; flipped to assert
+// rejection with the canonical alternatives in the diagnostic.
 // =============================================================================
 
 #[rstest]
@@ -961,11 +966,16 @@ fn test_reference_insertions(#[case] input: &str, #[case] _description: &str) {
 fn test_dupins(#[case] input: &str, #[case] _description: &str) {
     let result = parse_hgvs(input);
     assert!(
-        result.is_ok(),
-        "Failed to parse {} ({}): {:?}",
+        result.is_err(),
+        "expected ferro to reject `dupins` form {} ({}); got: {:?}",
         input,
         _description,
-        result.err()
+        result.map(|v| v.to_string())
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("dupins") && msg.contains("DNA/duplication.md"),
+        "diagnostic must cite the spec and the form: {msg}"
     );
 }
 
