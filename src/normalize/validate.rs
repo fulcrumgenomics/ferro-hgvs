@@ -351,23 +351,75 @@ fn validate_multirepeat_tract(
     // Anchored partial validation: check prefix and/or suffix; skip
     // the ambiguous middle.
 
-    // If prefix + suffix together exceed the actual span, the suffix
-    // can't fit at the right edge without overlapping the prefix —
-    // length mismatch incompatible with any middle-count assignment.
+    // Compute the minimum bp the middle units MUST occupy, given each
+    // non-`Exact` unit's count semantics. Adding this to the prefix
+    // and suffix lengths gives the tightest lower-bound length the
+    // declared tract demands; any span shorter than that is incompatible
+    // with EVERY count assignment and must reject. #428 (follow-up to
+    // #395 item 1's `>` slack).
     //
-    // Note: the `==` case (prefix + suffix exactly equal to span) is
-    // intentionally accepted here. The middle would need 0 copies of
-    // each non-Exact unit, which is only possible for non-Exact
-    // counts that admit a 0-count interpretation (`Unknown`,
-    // `MaxUncertain`, `UncertainRange(0, _)`). A tighter check that
-    // computes the minimum middle length from each non-Exact unit's
-    // count would reject `==` for inputs like `[Exact(2), Range(1,3),
-    // Exact(2)]` over a 12-bp span; that's left as a future
-    // tightening pass and pinned by `interleaved_prefix_and_trailing_
-    // exact_consistent_accepted_strict` (which uses a 15-bp span =
-    // prefix(6) + middle(3) + suffix(6)) as the lax-acceptance
-    // contract.
-    if prefix_bytes.len() + suffix_bytes.len() > actual_bytes.len() {
+    // Caveat: the HGVS spec
+    // (`assets/hgvs-nomenclature/docs/recommendations/DNA/repeated.md`,
+    // `syntax.yaml` `dna.rpt`) only formally defines `[n]` and
+    // `[(lo_hi)]` for DNA repeat counts. ferro's parser additionally
+    // accepts `[lo_hi]` (`Range`), `[lo_?]` (`MinUncertain`), `[?_hi]`
+    // (`MaxUncertain`), and `[?]` (`Unknown`) as lenient extensions.
+    // The per-variant minimums below are ferro's internal interpretation
+    // of these out-of-spec uncertainty forms, not spec-mandated
+    // semantics. Spec-defined forms (`Exact(n)`, `Range(lo, hi)`-style
+    // explicit ranges visible in `[(lo_hi)]`) drive the tightening; the
+    // lenient extensions are handled conservatively (Unknown /
+    // MaxUncertain admit a 0-count interpretation; MinUncertain treats
+    // `lo` as a hard floor).
+    //
+    // Per-variant minimum copy counts:
+    //   - `Exact(n)`               → `n` (interior Exact units, sandwiched
+    //                                 between non-Exact ones, contribute
+    //                                 their exact bp).
+    //   - `Range(lo, _)`           → `lo` (explicit fixed range; spec
+    //                                 form `[lo_hi]`).
+    //   - `UncertainRange(lo, _)`  → `lo` (uncertain-paren range
+    //                                 `[(lo_hi)]`; `lo == 0` admits a
+    //                                 0-count interpretation cleanly).
+    //   - `MinUncertain(lo)`       → `lo` (`[lo_?]` — ferro convention:
+    //                                 lower bound is a hard minimum).
+    //   - `MaxUncertain(_)`        → `0` (`[?_hi]` — ferro convention:
+    //                                 admits 0 copies).
+    //   - `Unknown`                → `0` (`[?]` — ferro convention:
+    //                                 admits 0 copies).
+    debug_assert!(
+        prefix_units + suffix_units <= units.len(),
+        "prefix+suffix overlap invariant violated: prefix_units={} \
+         suffix_units={} units.len()={}",
+        prefix_units,
+        suffix_units,
+        units.len(),
+    );
+    let middle_units = &units[prefix_units..units.len() - suffix_units];
+    let mut middle_min_bp: usize = 0;
+    for u in middle_units {
+        let min_copies = match u.count {
+            RepeatCount::Exact(n) => n as usize,
+            RepeatCount::Range(lo, _) => lo as usize,
+            RepeatCount::UncertainRange(lo, _) => lo as usize,
+            RepeatCount::MinUncertain(lo) => lo as usize,
+            RepeatCount::MaxUncertain(_) | RepeatCount::Unknown => 0,
+        };
+        middle_min_bp = middle_min_bp.saturating_add(min_copies * u.sequence.bases().len());
+    }
+
+    // If prefix + middle_min + suffix together exceed the actual span,
+    // the declared tract cannot fit at any middle-count assignment.
+    // The previous `>` check (#395 item 1) accepted the `prefix +
+    // suffix == span` boundary unconditionally; #428 tightens it by
+    // requiring the middle's minimum bp to fit as well.
+    //
+    // The pin `interleaved_prefix_and_trailing_exact_consistent_accepted_strict`
+    // (15-bp span = prefix(6) + middle_min(3, from `Range(1,3)`) + suffix(6))
+    // continues to pass under the tightened check, because middle_min
+    // exactly fills the gap.
+    let declared_min_bp = prefix_bytes.len() + middle_min_bp + suffix_bytes.len();
+    if declared_min_bp > actual_bytes.len() {
         let combined_str = if prefix_units == 0 {
             suffix_str.clone()
         } else if suffix_units == 0 {
@@ -379,17 +431,32 @@ fn validate_multirepeat_tract(
             .iter()
             .map(|&b| (b as char).to_ascii_uppercase())
             .collect();
+        // When middle_min_bp == 0 the overflow is purely prefix+suffix;
+        // the "middle requires" note is vacuously true and confusing.
+        // Mirror the conditional on both sides.
+        let (declared_note, actual_note) = if middle_min_bp > 0 {
+            (
+                format!(
+                    " (>= {} bp from declared anchored units; middle requires >= {} bp)",
+                    declared_min_bp, middle_min_bp,
+                ),
+                format!(
+                    " ({} bp; reference span too short for prefix+middle_min+suffix)",
+                    actual_bytes.len()
+                ),
+            )
+        } else {
+            (
+                format!(" ({} bp from declared anchored units)", declared_min_bp),
+                format!(
+                    " ({} bp; reference span too short for prefix+suffix)",
+                    actual_bytes.len()
+                ),
+            )
+        };
         return ValidationResult::mismatch(
-            format!(
-                "{} ({} bp from declared anchored units)",
-                combined_str,
-                prefix_bytes.len() + suffix_bytes.len()
-            ),
-            format!(
-                "{} ({} bp; reference span too short for prefix+suffix)",
-                actual_str,
-                actual_bytes.len()
-            ),
+            format!("{}{}", combined_str, declared_note),
+            format!("{}{}", actual_str, actual_note),
         );
     }
 
