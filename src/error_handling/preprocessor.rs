@@ -10,7 +10,7 @@ use super::corrections::{
     correct_old_substitution_syntax, correct_protein_arrow, correct_quote_characters,
     correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix, detect_length_mismatch,
     detect_length_mismatch_with_provider, detect_missing_versions, detect_position_zero,
     detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
 };
@@ -925,6 +925,44 @@ impl InputPreprocessor {
                 }
                 ResolvedAction::WarnCorrect => {
                     for c in &length_mismatch_hits {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                }
+                ResolvedAction::SilentCorrect | ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 13b: Flag duplications described with a size-count suffix
+        // (W3023). `warn_accept` semantics: lenient warns without rewriting
+        // (the position is ambiguous between `<pos>_<pos+N-1>` and
+        // `<pos-N+1>_<pos>` per duplication.md:140-143); silent accepts;
+        // strict rejects.
+        let dup_size_hits = detect_dup_size_suffix(&current);
+        if !dup_size_hits.is_empty() {
+            let action = self.action_for(ErrorType::DupSizeSuffix);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &dup_size_hits[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Duplication '{}' uses size-count suffix; canonical form names both endpoints",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(
+                                    "Write `g.<start>_<end>dup` instead of `g.<start>dup<size>`",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &dup_size_hits {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
                 }

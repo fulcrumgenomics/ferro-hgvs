@@ -1318,6 +1318,60 @@ mod w3011_del_size_suffix_emission {
     }
 }
 
+mod w3023_dup_size_suffix_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_without_rewrite() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_21dup2").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DupSizeSuffix)
+                .count(),
+            1
+        );
+        // warn_accept: input is unchanged.
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_21dup2");
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NM_004006.2:c.20_21dup2", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_accepts_without_warning() {
+        let result = parse_hgvs_silent("NM_004006.2:c.20_21dup2").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupSizeSuffix));
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_21dup2");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_21dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupSizeSuffix));
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NM_004006.2:c.20_21dup2").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r1.preprocessed_input, r2.preprocessed_input);
+        assert!(r2.has_warnings());
+    }
+}
+
 mod w4003_single_position_range_emission {
     use super::*;
     use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
