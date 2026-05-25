@@ -297,6 +297,36 @@ pub enum ErrorType {
     /// Closes-after: #92. Code: `W3022`.
     InitiatorMetCanonicalization,
 
+    /// Duplication described with a size-count suffix instead of a position
+    /// range (e.g. `g.123dup6` instead of `g.123_128dup`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/duplication.md:140-143` Q&A):
+    /// "a duplication of more than one nucleotide should give the position
+    /// of the first and last nucleotide duplicated, separated using the
+    /// range symbol (`_`, underscore), e.g., `g.123_128dup`." Position
+    /// ambiguity ("at" vs "after") prevents safe rewrite.
+    DupSizeSuffix,
+
+    /// Duplication described with an explicit duplicated sequence (e.g.
+    /// `c.20_23dupTAGA` instead of `c.20_23dup`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/duplication.md:35-36, 50-51`):
+    /// "the recommendation is not to describe the variant as
+    /// `c.20_23dupTAGA`. This description is longer, it contains redundant
+    /// information, and chances to make an error increases." Sequence is
+    /// safely droppable since the position range fully determines it.
+    DupExplicitSeq,
+
+    /// Deletion described with an explicit deleted sequence (e.g.
+    /// `g.33344590_33344592delGAT` instead of `g.33344590_33344592del`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/deletion.md:30-31, 45-46`):
+    /// "the recommendation is not to describe the variant as
+    /// `NC_000023.11:g.33344590_33344592delGAT`. This description is
+    /// longer, it contains redundant information, and chances to make an
+    /// error increases." Sequence is safely droppable.
+    DelExplicitSeq,
+
     /// Variant position range exceeds the reference sequence the
     /// provider returned (`fetch_ref_for_canonical_split` got fewer
     /// bytes than the HGVS interval span).
@@ -377,6 +407,9 @@ impl ErrorType {
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::InitiatorMetCanonicalization => "W3022",
+            ErrorType::DupSizeSuffix => "W3023",
+            ErrorType::DupExplicitSeq => "W3024",
+            ErrorType::DelExplicitSeq => "W3025",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::PositionPastEnd => "W4004",
@@ -425,6 +458,9 @@ impl ErrorType {
         ErrorType::RnaThymineCanonicalized,
         ErrorType::ProteinBracketedAaInsertion,
         ErrorType::InitiatorMetCanonicalization,
+        ErrorType::DupSizeSuffix,
+        ErrorType::DupExplicitSeq,
+        ErrorType::DelExplicitSeq,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
