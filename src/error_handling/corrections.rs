@@ -2462,6 +2462,45 @@ fn has_non_protein_description(bytes: &[u8]) -> bool {
     false
 }
 
+/// Returns true if byte index `pos` in `input` is inside a nucleic-acid
+/// coordinate segment (`g.`, `c.`, `n.`, `r.`, or `m.`), as opposed to a
+/// protein (`p.`) segment.
+///
+/// Lookback walks from `pos` toward the start of input, returning the
+/// boundary-most-recent coordinate prefix. The walk stops at the previous
+/// top-level boundary (`:` from a sequence-id boundary, `[` opening a
+/// bracket allele, `;` separating cis variants, or start-of-input).
+///
+/// Used to scope `del<seq>` / `dup<seq>` / `dup<N>` detection to nucleic
+/// acid contexts so we don't false-positive on protein descriptors where
+/// `del` / `dup` carry different semantics (amino-acid level edits).
+fn in_nucleic_acid_segment(input: &str, pos: usize) -> bool {
+    let bytes = input.as_bytes();
+    let end = pos.min(bytes.len());
+    // Walk backwards from `pos` looking for a `<coord>.` prefix preceded by
+    // a boundary character. The most-recent such prefix wins.
+    let mut i = end;
+    while i > 1 {
+        i -= 1;
+        if bytes[i] != b'.' {
+            continue;
+        }
+        let coord = bytes[i - 1];
+        let is_na = matches!(coord, b'g' | b'c' | b'n' | b'r' | b'm');
+        let is_protein = coord == b'p';
+        if !is_na && !is_protein {
+            continue;
+        }
+        // The byte before `coord` must be a top-level boundary, or the coord
+        // must be at the start of input.
+        let prev_ok = i == 1 || matches!(bytes[i - 2], b':' | b'(' | b'[' | b';');
+        if prev_ok {
+            return is_na;
+        }
+    }
+    false
+}
+
 /// Returns the byte index immediately after the UTF-8 character starting at
 /// `i` in `bytes`. Falls back to `i + 1` for malformed input.
 #[inline]
@@ -4415,6 +4454,22 @@ mod tests {
         // (DNA/deletion) does not apply; protein has its own L2 track.
         let hits = detect_del_size_suffix("NP_000079.2:p.Lys100del32");
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_in_nucleic_acid_segment() {
+        // Lookback finds g./c./n./r./m. at top-level boundaries.
+        assert!(in_nucleic_acid_segment("NC_000001.11:g.123del", 16));
+        assert!(in_nucleic_acid_segment("NM_004006.2:c.20_23dup", 14));
+        assert!(in_nucleic_acid_segment("NR_002196.2:n.123del", 14));
+        assert!(in_nucleic_acid_segment("NM_004006.2:r.6_8del", 14));
+        assert!(in_nucleic_acid_segment("NC_012920.1:m.3243del", 15));
+        // Protein segment returns false.
+        assert!(!in_nucleic_acid_segment("NP_000079.2:p.Arg97fs", 16));
+        // Inside a bracket-allele, the most-recent boundary determines context.
+        assert!(in_nucleic_acid_segment("NM_004006.2:c.[20del;30dup]", 18,));
+        // No coord-prefix at all → false.
+        assert!(!in_nucleic_acid_segment("just a string", 5));
     }
 
     // --- W3012 EmptyDelinsInsert ---
