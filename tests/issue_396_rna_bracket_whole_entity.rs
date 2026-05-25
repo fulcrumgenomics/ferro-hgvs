@@ -41,7 +41,10 @@ fn rna_trans_spl_question_then_spl_roundtrip() {
     // The exact case pinned by `rna_spl_marker.rs:246`.
     let s = parse_ok("NM_004006.2:r.[spl?];[spl]");
     assert!(s.contains("spl?"), "expected 'spl?' in {s}");
-    assert!(s.contains("spl"), "expected 'spl' in {s}");
+    // Assert the exact `[spl]` member token, not a bare `contains("spl")`
+    // which `spl?` already satisfies and would hide a regression in the
+    // second bracket member.
+    assert!(s.contains("[spl]"), "expected '[spl]' member in {s}");
     assert!(s.contains("];["), "expected trans-form display, got {s}");
 }
 

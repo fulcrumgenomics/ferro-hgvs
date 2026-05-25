@@ -13,8 +13,8 @@
       "diverges": 135,
       "false-acceptance": 83,
       "needs-reference": 31,
-      "parse-error": 338,
-      "preserved": 643
+      "parse-error": 334,
+      "preserved": 647
     },
     "by_coordinate_system": {
       "c": 464,
@@ -867,18 +867,6 @@
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.2376G>C(;)(2376G>C)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(2376G>C)\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.2376G>C(;)(2376G>C)",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2782,19 +2770,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "c.[2376G>C];[=]",
-      "input_prefixed": "NM_004006.2:c.[2376G>C];[=]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"=\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.[2376G>C];[=]",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "class=\"invalid\">NM_000109.3:c.-401C>T</code>",
       "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"class=\\\"invalid\\\">NM_000109.3:c.-401C>T<\", code: Alpha })",
       "spec_expected": "class=\"invalid\">NM_000109.3:c.-401C>T</code>",
@@ -3853,6 +3828,17 @@
       "source_paths": [
         "docs/recommendations/DNA/duplication.md",
         "tests/hgvs_spec_compliance_tests.rs (legacy)"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "current": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "spec_expected": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
       ]
     },
     {
@@ -5720,6 +5706,18 @@
       "working_group": "SVD-WG010"
     },
     {
+      "input": "c.[2376G>C];[=]",
+      "input_prefixed": "NM_004006.2:c.[2376G>C];[=]",
+      "current": "NM_004006.2:c.[2376G>C];[=]",
+      "spec_expected": "NM_004006.2:c.[2376G>C];[=]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
+      ]
+    },
+    {
       "input": "c.[2376_2377insGT];[2376_2377=]",
       "input_prefixed": "NM_004006.2:c.[2376_2377insGT];[2376_2377=]",
       "current": "NM_004006.2:c.[2376_2377insGT];[2376_2377=]",
@@ -7395,7 +7393,7 @@
     },
     {
       "input": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.35788169_35788352] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000022.10:35788168-35788352",
       "spec_expected": "NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7421,7 +7419,7 @@
     },
     {
       "input": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.35788169_35788352] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000022.10:35788168-35788352",
       "spec_expected": "NC_000002.11:g.?_?ins[NC_000022.10:g.35788169_35788352]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7433,7 +7431,7 @@
     },
     {
       "input": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.108111987_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.108111987_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000002.12:g.17450009_qterdelins[NC_000011.10:g.108111987_qter]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7445,7 +7443,7 @@
     },
     {
       "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825266] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825266] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7458,7 +7456,7 @@
     },
     {
       "input": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825272] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000011.10:g.pter_15825272] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825272]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7470,7 +7468,7 @@
     },
     {
       "input": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000008.11:g.(128534000_128546000)_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000008.11:g.(128534000_128546000)_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000003.12:g.158573187_qterdelins[NC_000008.11:g.(128534000_128546000)_qter]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7482,7 +7480,7 @@
     },
     {
       "input": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000014.9:g.29745314_qterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000014.9:g.29745314_qterinv] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000003.12:g.pter_36969141delins[CATTTGTTCAAATTTAGTTCAAATGA;NC_000014.9:g.29745314_qterinv]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7494,7 +7492,7 @@
     },
     {
       "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000023.11:g.89555676_100352080] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000023.11:89555675-100352080",
       "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7506,7 +7504,7 @@
     },
     {
       "input": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000023.11:g.89555676_100352080inv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000023.11:g.89555676_100352080inv] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000004.12:g.134850793_134850794ins[NC_000023.11:g.89555676_100352080inv]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7518,7 +7516,7 @@
     },
     {
       "input": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000010.11:g.67539995_qterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000010.11:g.67539995_qterinv] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000005.10:g.29658442delins[NC_000010.11:g.67539995_qterinv]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7530,7 +7528,7 @@
     },
     {
       "input": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000004.11:g.106370094_106370420;A[26]] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000004.11:g.106370094_106370420;A[26]] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000006.11:g.10791926_10791927ins[NC_000004.11:g.106370094_106370420;A[26]]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7542,7 +7540,7 @@
     },
     {
       "input": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.17450009_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.17450009_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000011.10:g.108111982_qterdelins[NC_000002.12:g.17450009_qter]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7554,7 +7552,7 @@
     },
     {
       "input": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.pter_8247756] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000002.12:g.pter_8247756] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000011.10:g.pter_5825272delins[NC_000002.12:g.pter_8247756]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7566,7 +7564,7 @@
     },
     {
       "input": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000022.10:g.17179029_17179091] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000022.10:17179028-17179091",
       "spec_expected": "NC_000012.11:g.6128892_6128954delins[NC_000022.10:g.17179029_17179091]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7578,7 +7576,7 @@
     },
     {
       "input": "NC_000012.12:g.6128479_6128749con[NC_000022.11:g.17178616_17178886]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000022.11:g.17178616_17178886] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000022.11:17178615-17178886",
       "spec_expected": null,
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7592,7 +7590,7 @@
     },
     {
       "input": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000022.11:g.17178616_17178886] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Genomic reference not available for NC_000022.11:17178615-17178886",
       "spec_expected": "NC_000012.12:g.6128479_6128749delins[NC_000022.11:g.17178616_17178886]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -7605,7 +7603,7 @@
     },
     {
       "input": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
-      "current": "normalize error: Unsupported variant type: ins[NC_000003.12:g.36969141_pterinv] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
+      "current": "normalize error: Unsupported variant type: ins[NC_000003.12:g.36969141_pterinv] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations",
       "spec_expected": "NC_000014.9:g.29745314_qterdelins[NC_000003.12:g.36969141_pterinv]",
       "status": "needs-reference",
       "coordinate_system": "g",
@@ -13212,18 +13210,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199t1:r.76a>u(;)(76a>u)",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(76a>u)\", code: Digit })",
-      "spec_expected": "LRG_199t1:r.76a>u(;)(76a>u)",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:r.=/6_8del",
       "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '6_8'",
       "spec_expected": "LRG_199t1:r.=/6_8del",
@@ -14339,19 +14325,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "r.[76a>u];[=]",
-      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"=\", code: Digit })",
-      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "r.[83g>u,73_93del]",
       "input_prefixed": "NM_004006.3:r.[83g>u,73_93del]",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \",73_93del\", code: Tag })",
@@ -14428,6 +14401,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/insertion.md"
+      ]
+    },
+    {
+      "input": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "current": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "spec_expected": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
       ]
     },
     {
@@ -15726,6 +15710,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/delins.md"
+      ]
+    },
+    {
+      "input": "r.[76a>u];[=]",
+      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
+      "current": "NM_004006.3:r.[76a>u];[=]",
+      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
       ]
     },
     {
