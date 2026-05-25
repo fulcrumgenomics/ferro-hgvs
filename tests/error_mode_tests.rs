@@ -318,8 +318,10 @@ mod w2003_extra_whitespace {
 
     #[test]
     fn test_lenient_strips_whitespace_inside_uncertain_position() {
+        // Use `dup` (no explicit sequence) so W3025 (DelExplicitSeq) does not
+        // interfere with the whitespace-stripping assertion.
         use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
-        let result = parse_hgvs_lenient("NM_000088.3:c.( 123 _ 127 )delA");
+        let result = parse_hgvs_lenient("NM_000088.3:c.( 123 _ 127 )dup");
         assert!(
             result.is_ok(),
             "lenient parse should accept whitespace inside uncertain position: {:?}",
@@ -327,7 +329,19 @@ mod w2003_extra_whitespace {
         );
         let parsed = result.unwrap();
         assert!(parsed.has_warnings());
-        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.(123_127)delA");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.error_type == ErrorType::ExtraWhitespace),
+            "expected ExtraWhitespace warning; got {:?}",
+            parsed
+                .warnings
+                .iter()
+                .map(|w| w.error_type.code())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.(123_127)dup");
     }
 
     #[test]

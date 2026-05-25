@@ -547,7 +547,9 @@ fn test_vcf_extract_alleles_substitution() {
 fn test_vcf_extract_alleles_deletion_with_sequence() {
     use ferro_hgvs::hgvs::edit::NaEdit;
 
-    // Test allele extraction for deletion with explicit sequence
+    // W3025 (DelExplicitSeq) strips the explicit sequence in lenient mode,
+    // so the parsed NaEdit::Deletion has sequence=None after preprocessing.
+    // The test verifies the edit type is Deletion and that sequence is None.
     let input = "NC_000007.14:g.117559593delG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
@@ -555,9 +557,8 @@ fn test_vcf_extract_alleles_deletion_with_sequence() {
         if let Some(edit) = v.loc_edit.edit.inner() {
             match edit {
                 NaEdit::Deletion { sequence, .. } => {
-                    // Deletion should have the deleted sequence
-                    assert!(sequence.is_some());
-                    assert_eq!(sequence.as_ref().unwrap().to_string(), "G");
+                    // After W3025 preprocessing the explicit sequence is stripped.
+                    assert!(sequence.is_none());
                 }
                 _ => panic!("Expected deletion"),
             }
@@ -589,7 +590,9 @@ fn test_vcf_extract_alleles_insertion() {
 fn test_vcf_extract_alleles_duplication() {
     use ferro_hgvs::hgvs::edit::NaEdit;
 
-    // Test allele extraction for duplication
+    // W3024 (DupExplicitSeq) strips the explicit sequence in lenient mode,
+    // so the parsed NaEdit::Duplication has sequence=None after preprocessing.
+    // The test verifies the edit type is Duplication and that sequence is None.
     let input = "NC_000007.14:g.117559593_117559595dupATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
@@ -597,9 +600,8 @@ fn test_vcf_extract_alleles_duplication() {
         if let Some(edit) = v.loc_edit.edit.inner() {
             match edit {
                 NaEdit::Duplication { sequence, .. } => {
-                    // Dup should provide the duplicated sequence
-                    assert!(sequence.is_some());
-                    assert_eq!(sequence.as_ref().unwrap().to_string(), "ATG");
+                    // After W3024 preprocessing the explicit sequence is stripped.
+                    assert!(sequence.is_none());
                 }
                 _ => panic!("Expected duplication"),
             }

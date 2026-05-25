@@ -81,6 +81,43 @@ fn assert_strict_rejects_with_w3019(input: &str) {
     );
 }
 
+/// Parse with lenient mode; assert success, the given warning code fired, and
+/// the rewritten `Display` output equals `expected` (pins the seq-strip rewrite).
+#[track_caller]
+fn assert_lenient_strips_to(input: &str, code: &str, expected: &str) {
+    let parsed = parse_hgvs_with_config(input, ErrorConfig::lenient())
+        .unwrap_or_else(|e| panic!("lenient parse {input:?} failed: {e}"));
+    let warnings = &parsed.warnings;
+    assert!(
+        warnings.iter().any(|w| w.error_type.code() == code),
+        "expected {code} on {input:?}, got warnings: {:?}",
+        warnings
+            .iter()
+            .map(|w| w.error_type.code())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        format!("{}", parsed.result),
+        expected,
+        "rewrite mismatch for {input:?}"
+    );
+}
+
+/// Strict mode must reject; the error display must mention the given code or keyword.
+#[track_caller]
+fn assert_strict_rejects_with_code(input: &str, code: &str, keyword: &str) {
+    let result = parse_hgvs_with_config(input, ErrorConfig::strict());
+    let err = match result {
+        Ok(_) => panic!("strict parse {input:?} succeeded, expected rejection"),
+        Err(e) => e,
+    };
+    let msg = format!("{err}");
+    assert!(
+        msg.contains(code) || msg.to_lowercase().contains(keyword),
+        "strict rejection for {input:?} did not surface {code} / {keyword}: {msg}"
+    );
+}
+
 // =============================================================================
 // SECTION 1 — Substitution (sub)
 // =============================================================================
@@ -127,28 +164,45 @@ mod deletion {
 
     #[test]
     fn stated_ref_with_t_canonicalizes_to_u_with_w3019() {
-        assert_canonicalizes_with_w3019(
+        // W3025 (DelExplicitSeq) fires before W3020 (RnaThymineCanonicalized):
+        // the explicit sequence is stripped in Phase 13d before the thymine
+        // check in Phase 13e can see the `t` bytes. W3025 supersedes W3020.
+        // Pin the rewritten output too: the explicit seq is dropped entirely.
+        assert_lenient_strips_to(
             &format!("{ACC}:r.123_125delaut"),
-            &format!("{ACC}:r.123_125delauu"),
+            "W3025",
+            &format!("{ACC}:r.123_125del"),
         );
     }
 
     #[test]
     fn uppercase_stated_ref_with_t_canonicalizes() {
-        assert_canonicalizes_with_w3019(
+        // Same ordering as above: W3025 strips the seq (after case-folding),
+        // so W3020 (thymine) never fires. The surfacing warning is W3025.
+        assert_lenient_strips_to(
             &format!("{ACC}:r.123_125delAUT"),
-            &format!("{ACC}:r.123_125delauu"),
+            "W3025",
+            &format!("{ACC}:r.123_125del"),
         );
     }
 
     #[test]
-    fn lowercase_canonical_aug_no_warning() {
+    // The explicit-sequence form fires W3025 (DelExplicitSeq), but this test
+    // specifically validates that canonical RNA bases (`u`, not `t`) do not
+    // trigger the thymine warning W3020.
+    fn lowercase_canonical_aug_no_thymine_warning() {
         assert_no_w3019(&format!("{ACC}:r.123_125delaug"));
     }
 
     #[test]
     fn strict_mode_rejects_t_in_del_ref() {
-        assert_strict_rejects_with_w3019(&format!("{ACC}:r.123_125delaut"));
+        // Strict mode rejects with W3025 (DelExplicitSeq) because the explicit
+        // sequence check in Phase 13d fires before the thymine check (Phase 13e).
+        assert_strict_rejects_with_code(
+            &format!("{ACC}:r.123_125delaut"),
+            "W3025",
+            "explicit sequence",
+        );
     }
 }
 
@@ -190,17 +244,25 @@ mod duplication {
 
     #[test]
     fn stated_ref_with_t_canonicalizes_to_u_with_w3019() {
-        assert_canonicalizes_with_w3019(
+        // W3024 (DupExplicitSeq) fires before W3020 (RnaThymineCanonicalized):
+        // the explicit sequence is stripped in Phase 13c before the thymine
+        // check can see the `t` bytes. W3024 supersedes W3020.
+        // Pin the rewritten output too: the explicit seq is dropped entirely.
+        assert_lenient_strips_to(
             &format!("{ACC}:r.123_125dupaut"),
-            &format!("{ACC}:r.123_125dupauu"),
+            "W3024",
+            &format!("{ACC}:r.123_125dup"),
         );
     }
 
     #[test]
     fn uppercase_dup_t_canonicalizes() {
-        assert_canonicalizes_with_w3019(
+        // Same ordering: W3024 strips the seq (after case-folding),
+        // so W3020 (thymine) never fires. The surfacing warning is W3024.
+        assert_lenient_strips_to(
             &format!("{ACC}:r.123_125dupAUT"),
-            &format!("{ACC}:r.123_125dupauu"),
+            "W3024",
+            &format!("{ACC}:r.123_125dup"),
         );
     }
 }
