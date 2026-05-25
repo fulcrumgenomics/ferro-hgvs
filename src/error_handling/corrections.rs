@@ -3032,6 +3032,77 @@ pub fn detect_dup_size_suffix(input: &str) -> Vec<DetectedCorrection> {
     hits
 }
 
+/// Detect and correct duplications with an explicit duplicated sequence (W3024).
+///
+/// Matches `dup` followed by one or more ASCII nucleotide letters in
+/// `[ACGTUNacgtun]` (DNA upper-case + RNA lower-case; `U`/`u` for RNA),
+/// terminated by a top-level boundary, inside a nucleic-acid coordinate
+/// segment. Drops the trailing sequence in the rewritten output, emits one
+/// `DetectedCorrection` per occurrence with `original = "<seq>"` and
+/// `corrected = ""`.
+///
+/// Per HGVS spec (`recommendations/DNA/duplication.md:35-36`): the seq is
+/// redundant given the position range, and including it increases the
+/// chance of a typing error (`dupG` vs `dupT`). Safe to drop.
+pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"dup" {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        let seq_start = i + 3;
+        let mut j = seq_start;
+        while j < bytes.len()
+            && matches!(
+                bytes[j],
+                b'A' | b'C' | b'G' | b'T' | b'U' | b'N' | b'a' | b'c' | b'g' | b't' | b'u' | b'n'
+            )
+        {
+            j += 1;
+        }
+        if j == seq_start {
+            out.push_str("dup");
+            i = seq_start;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        out.push_str("dup");
+        hits.push(DetectedCorrection::new(
+            ErrorType::DupExplicitSeq,
+            &input[seq_start..j],
+            String::new(),
+            seq_start,
+            j,
+        ));
+        i = j;
+    }
+    if i < bytes.len() {
+        out.push_str(&input[i..]);
+    }
+    (out, hits)
+}
+
 /// Detect and correct deletion-insertions whose inserted sequence is empty
 /// (W3012, SVA-010).
 ///
@@ -5237,6 +5308,58 @@ mod tests {
         let input = "r.[1a>t;2t>g]";
         let (out, hits) = correct_rna_thymine(input);
         assert_eq!(out, "r.[1a>u;2u>g]");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_basic() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20_23dupTAGA");
+        assert_eq!(rewritten, "NM_004006.2:c.20_23dup");
+        assert_eq!(hits.len(), 1);
+        let h = &hits[0];
+        assert_eq!(h.error_type, ErrorType::DupExplicitSeq);
+        assert_eq!(h.original, "TAGA");
+        assert_eq!(h.corrected, "");
+        assert_eq!(
+            &("NM_004006.2:c.20_23dupTAGA".as_bytes())[h.start..h.end],
+            b"TAGA"
+        );
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_single_letter() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20dupT");
+        assert_eq!(rewritten, "NM_004006.2:c.20dup");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "T");
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_rna_lowercase() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:r.6_8dupugc");
+        assert_eq!(rewritten, "NM_004006.2:r.6_8dup");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "ugc");
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_canonical_no_hit() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20_23dup");
+        assert_eq!(rewritten, "NM_004006.2:c.20_23dup");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_skips_protein() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NP_000079.2:p.Val7_Lys23dup");
+        assert_eq!(rewritten, "NP_000079.2:p.Val7_Lys23dup");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_bracket_allele() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.[20_23dupTAGA;30_31dupGT]");
+        assert_eq!(rewritten, "NM_004006.2:c.[20_23dup;30_31dup]");
         assert_eq!(hits.len(), 2);
     }
 }
