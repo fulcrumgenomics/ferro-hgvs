@@ -5,14 +5,14 @@
 
 use super::corrections::{
     correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
-    correct_deprecated_con, correct_deprecated_protein_forms, correct_dup_explicit_seq,
-    correct_edit_type_case_full, correct_empty_delins, correct_missing_coordinate_prefix,
-    correct_old_allele_format, correct_old_substitution_syntax, correct_protein_arrow,
-    correct_quote_characters, correct_redundant_repeat_label, correct_rna_thymine,
-    correct_single_letter_aa_in_protein, correct_single_position_range, correct_swapped_positions,
-    correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix,
-    detect_length_mismatch, detect_length_mismatch_with_provider, detect_missing_versions,
-    detect_position_zero,
+    correct_del_explicit_seq, correct_deprecated_con, correct_deprecated_protein_forms,
+    correct_dup_explicit_seq, correct_edit_type_case_full, correct_empty_delins,
+    correct_missing_coordinate_prefix, correct_old_allele_format, correct_old_substitution_syntax,
+    correct_protein_arrow, correct_quote_characters, correct_redundant_repeat_label,
+    correct_rna_thymine, correct_single_letter_aa_in_protein, correct_single_position_range,
+    correct_swapped_positions, correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs,
+    detect_dup_size_suffix, detect_length_mismatch, detect_length_mismatch_with_provider,
+    detect_missing_versions, detect_position_zero,
     detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
@@ -1009,6 +1009,47 @@ impl InputPreprocessor {
                 }
                 ResolvedAction::SilentCorrect => {
                     current = rewritten_dup_seq;
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 13d: Detect and rewrite deletions with explicit sequence
+        // (W3025). `standard_correctable` semantics — same shape as 13c.
+        // Excludes the `delins` keyword (its trailing seq is canonical).
+        let (rewritten_del_seq, del_seq_hits) = correct_del_explicit_seq(&current);
+        if !del_seq_hits.is_empty() {
+            let action = self.action_for(ErrorType::DelExplicitSeq);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &del_seq_hits[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Deletion includes explicit sequence '{}'; the position range already determines it",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(rewritten_del_seq.clone())
+                                .with_hint(
+                                    "Drop the redundant sequence; write `g.<start>_<end>del` instead of `g.<start>_<end>del<seq>`",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &del_seq_hits {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = rewritten_del_seq;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = rewritten_del_seq;
                 }
                 ResolvedAction::Accept => {}
             }

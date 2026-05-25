@@ -1431,6 +1431,82 @@ mod w3024_dup_explicit_seq_emission {
     }
 }
 
+mod w3025_del_explicit_seq_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_corrects_drops_seq() {
+        let result = parse_hgvs_lenient("NC_000023.11:g.33344590_33344592delGAT").unwrap();
+        assert_eq!(
+            result.preprocessed_input,
+            "NC_000023.11:g.33344590_33344592del"
+        );
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DelExplicitSeq)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config(
+            "NC_000023.11:g.33344590_33344592delGAT",
+            ErrorConfig::strict(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NC_000023.11:g.33344591delA").unwrap();
+        assert_eq!(result.preprocessed_input, "NC_000023.11:g.33344591del");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn delins_unaffected() {
+        // delins<seq> is canonical for delins; W3025 must NOT fire.
+        let result = parse_hgvs_lenient("NC_000001.11:g.123delinsATG").unwrap();
+        assert_eq!(result.preprocessed_input, "NC_000001.11:g.123delinsATG");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn rna_lowercase_corrected() {
+        let result = parse_hgvs_lenient("NM_004006.2:r.6_8deluug").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:r.6_8del");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NC_000023.11:g.33344591del").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn protein_del_unaffected() {
+        let result = parse_hgvs_lenient("NP_003997.2:p.Val7del").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+}
+
 mod w4003_single_position_range_emission {
     use super::*;
     use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
