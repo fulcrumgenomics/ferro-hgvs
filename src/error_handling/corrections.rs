@@ -3103,6 +3103,81 @@ pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>
     (out, hits)
 }
 
+/// Detect and correct deletions with an explicit deleted sequence (W3025).
+///
+/// Matches `del` followed by one or more ASCII nucleotide letters in
+/// `[ACGTUNacgtun]`, terminated by a top-level boundary, inside a
+/// nucleic-acid coordinate segment. EXCLUDES the `delins` keyword (the
+/// trailing seq there is canonical for the insertion).
+///
+/// Per HGVS spec (`recommendations/DNA/deletion.md:30-31`): the seq is
+/// redundant; including it increases the chance of a typing error
+/// (`delG` vs `delA`). Safe to drop.
+pub fn correct_del_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"del" {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        // Skip the `delins` keyword — that trailing seq is canonical.
+        if i + 6 <= bytes.len() && &bytes[i + 3..i + 6] == b"ins" {
+            out.push_str(&input[i..i + 6]);
+            i += 6;
+            continue;
+        }
+        let seq_start = i + 3;
+        let mut j = seq_start;
+        while j < bytes.len()
+            && matches!(
+                bytes[j],
+                b'A' | b'C' | b'G' | b'T' | b'U' | b'N' | b'a' | b'c' | b'g' | b't' | b'u' | b'n'
+            )
+        {
+            j += 1;
+        }
+        if j == seq_start {
+            out.push_str("del");
+            i = seq_start;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        out.push_str("del");
+        hits.push(DetectedCorrection::new(
+            ErrorType::DelExplicitSeq,
+            &input[seq_start..j],
+            String::new(),
+            seq_start,
+            j,
+        ));
+        i = j;
+    }
+    if i < bytes.len() {
+        out.push_str(&input[i..]);
+    }
+    (out, hits)
+}
+
 /// Detect and correct deletion-insertions whose inserted sequence is empty
 /// (W3012, SVA-010).
 ///
@@ -5361,5 +5436,52 @@ mod tests {
         let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.[20_23dupTAGA;30_31dupGT]");
         assert_eq!(rewritten, "NM_004006.2:c.[20_23dup;30_31dup]");
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_basic() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344590_33344592delGAT");
+        assert_eq!(rewritten, "NC_000023.11:g.33344590_33344592del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::DelExplicitSeq);
+        assert_eq!(hits[0].original, "GAT");
+        assert_eq!(hits[0].corrected, "");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_single_letter() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344591delA");
+        assert_eq!(rewritten, "NC_000023.11:g.33344591del");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_excludes_delins() {
+        // `delinsATG` is canonical; must NOT be matched.
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000001.11:g.123delinsATG");
+        assert_eq!(rewritten, "NC_000001.11:g.123delinsATG");
+        assert!(hits.is_empty(), "delins must not fire W3025");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_rna_lowercase() {
+        let (rewritten, hits) = correct_del_explicit_seq("NM_004006.2:r.6_8deluug");
+        assert_eq!(rewritten, "NM_004006.2:r.6_8del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "uug");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_canonical_no_hit() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344591del");
+        assert_eq!(rewritten, "NC_000023.11:g.33344591del");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_skips_protein() {
+        let (rewritten, hits) = correct_del_explicit_seq("NP_000079.2:p.Val7del");
+        assert_eq!(rewritten, "NP_000079.2:p.Val7del");
+        assert!(hits.is_empty());
     }
 }
