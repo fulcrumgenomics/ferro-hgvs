@@ -1372,6 +1372,65 @@ mod w3023_dup_size_suffix_emission {
     }
 }
 
+mod w3024_dup_explicit_seq_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_corrects_drops_seq() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_23dupTAGA").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_23dup");
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DupExplicitSeq)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NM_004006.2:c.20_23dupTAGA", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NM_004006.2:c.20_23dupTAGA").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_23dup");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+
+    #[test]
+    fn rna_lowercase_corrected() {
+        let result = parse_hgvs_lenient("NM_004006.2:r.6_8dupugc").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:r.6_8dup");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_23dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+
+    #[test]
+    fn protein_dup_unaffected() {
+        let result = parse_hgvs_lenient("NP_003997.2:p.Val7dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+}
+
 mod w4003_single_position_range_emission {
     use super::*;
     use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};

@@ -5,13 +5,14 @@
 
 use super::corrections::{
     correct_accession_prefix_case, correct_amino_acid_case_in_protein, correct_dash_characters,
-    correct_deprecated_con, correct_deprecated_protein_forms, correct_edit_type_case_full,
-    correct_empty_delins, correct_missing_coordinate_prefix, correct_old_allele_format,
-    correct_old_substitution_syntax, correct_protein_arrow, correct_quote_characters,
-    correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
-    correct_single_position_range, correct_swapped_positions, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix, detect_length_mismatch,
-    detect_length_mismatch_with_provider, detect_missing_versions, detect_position_zero,
+    correct_deprecated_con, correct_deprecated_protein_forms, correct_dup_explicit_seq,
+    correct_edit_type_case_full, correct_empty_delins, correct_missing_coordinate_prefix,
+    correct_old_allele_format, correct_old_substitution_syntax, correct_protein_arrow,
+    correct_quote_characters, correct_redundant_repeat_label, correct_rna_thymine,
+    correct_single_letter_aa_in_protein, correct_single_position_range, correct_swapped_positions,
+    correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix,
+    detect_length_mismatch, detect_length_mismatch_with_provider, detect_missing_versions,
+    detect_position_zero,
     detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
@@ -967,6 +968,49 @@ impl InputPreprocessor {
                     }
                 }
                 ResolvedAction::SilentCorrect | ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 13c: Detect and rewrite duplications with explicit sequence
+        // (W3024). `standard_correctable` semantics: strict rejects, lenient
+        // warns + drops the seq, silent drops silently. Mirrors Phase 6b
+        // (W3007-W3010 deprecated protein forms) per-correction dispatch
+        // because action_for resolves per ErrorType (here only one).
+        let (rewritten_dup_seq, dup_seq_hits) = correct_dup_explicit_seq(&current);
+        if !dup_seq_hits.is_empty() {
+            let action = self.action_for(ErrorType::DupExplicitSeq);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &dup_seq_hits[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Duplication includes explicit sequence '{}'; the position range already determines it",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(rewritten_dup_seq.clone())
+                                .with_hint(
+                                    "Drop the redundant sequence; write `g.<start>_<end>dup` instead of `g.<start>_<end>dup<seq>`",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &dup_seq_hits {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = rewritten_dup_seq;
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = rewritten_dup_seq;
+                }
+                ResolvedAction::Accept => {}
             }
         }
 
