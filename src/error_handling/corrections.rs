@@ -2612,23 +2612,62 @@ fn try_detect_length_mismatch_at(
             return None;
         }
     };
-    if ref_seq.is_empty() {
-        // No explicit ref seq → nothing to compare.
+    if !ref_seq.is_empty() {
+        let end_of_seq = k + ref_seq.len();
+        if range_len == ref_seq.len() {
+            return None;
+        }
+        // Mismatch: emit a detection covering the position range + edit
+        // keyword + ref seq.
+        let span_text = &input[pos..end_of_seq];
+        return Some(DetectedCorrection::new(
+            ErrorType::LengthMismatch,
+            span_text,
+            String::new(),
+            pos,
+            end_of_seq,
+        ));
+    }
+
+    // No alphabetic ref seq run — check for a numeric length suffix
+    // (e.g. `c.100_102del3`, `c.100_101dup3`, `c.100_104inv3`). #439
+    // (follow-up to #427): when the explicit `length` field is
+    // populated by the parser but disagrees with the position-interval
+    // span, surface W3016 just like a disagreeing explicit ref-seq
+    // would. The pre-#439 detector silently let these through because
+    // `take_ref_seq_run` (alphabetic-only) returned empty.
+    //
+    // Scoped to `del`/`dup`/`inv` here; `delins` is handled in #394
+    // item 2 by the validator that rejects `delins` with both
+    // `deleted` and `deleted_length` set. `detect_del_size_suffix`
+    // (W3011) only flags the deprecated-syntax aspect of `del<N>`
+    // (not `dup<N>` / `inv<N>` — see `detect_del_size_suffix`'s
+    // `b"del"`-only match); the W3016 numeric-suffix length check
+    // here applies uniformly across all three.
+    let digits_start = k;
+    let mut digits_end = digits_start;
+    while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
+        digits_end += 1;
+    }
+    if digits_end == digits_start {
+        // Neither alphabetic ref seq nor numeric length — nothing to
+        // compare against `range_len`.
         return None;
     }
-    let end_of_seq = k + ref_seq.len();
-    if range_len == ref_seq.len() {
+    let declared_len: usize = std::str::from_utf8(&bytes[digits_start..digits_end])
+        .ok()?
+        .parse()
+        .ok()?;
+    if range_len == declared_len {
         return None;
     }
-    // Mismatch: emit a detection covering the position range + edit
-    // keyword + ref seq.
-    let span_text = &input[pos..end_of_seq];
+    let span_text = &input[pos..digits_end];
     Some(DetectedCorrection::new(
         ErrorType::LengthMismatch,
         span_text,
         String::new(),
         pos,
-        end_of_seq,
+        digits_end,
     ))
 }
 
