@@ -316,3 +316,64 @@ fn p_paren_zero_in_trans_allele_parses_and_displays() {
         "Display is a fixed point on the canonical trans form"
     );
 }
+
+/// Regression for issue #424: the canonical spec form `p.[0?];[X]` must route
+/// to `ProteinEdit::NoProtein { predicted: true }`. This is the first-arm
+/// path through `parse_protein_trans_allele_shorthand` (the arm that handles
+/// both `[0]` and `[0?]`, distinguishing them by `predicted`). The
+/// `[(0)]` form is covered by `p_paren_zero_in_trans_allele_parses_and_displays`
+/// above and routes through the third arm.
+///
+/// Pinning both arms as separate tests guards against a future refactor that
+/// collapses them and loses one of the input shapes — the third arm used to
+/// carry a dead `|| content == "0?"` clause that masked exactly this kind of
+/// loss.
+#[test]
+fn p_zero_question_in_trans_allele_parses_and_displays() {
+    use ferro_hgvs::hgvs::variant::AllelePhase;
+
+    let parsed = parse_hgvs("NP_000088.3:p.[0?];[Arg97Trp]")
+        .expect("NP_000088.3:p.[0?];[Arg97Trp] must parse — issue #424 first-arm regression");
+
+    let allele = match &parsed {
+        HgvsVariant::Allele(a) => a,
+        other => panic!("expected Allele, got {:?}", other),
+    };
+    assert_eq!(allele.phase, AllelePhase::Trans);
+    assert_eq!(allele.variants.len(), 2);
+
+    match protein_edit(&allele.variants[0]) {
+        ProteinEdit::NoProtein { predicted } => assert!(
+            *predicted,
+            "trans-allele [0?] arm must carry predicted=true"
+        ),
+        other => panic!(
+            "trans-allele [0?] arm did not route to NoProtein; got {:?}",
+            other
+        ),
+    }
+
+    // Spec form Displays back to itself byte-for-byte.
+    assert_eq!(format!("{}", parsed), "NP_000088.3:p.[0?];[Arg97Trp]");
+}
+
+/// Negative guard for issue #424: with the third arm now tightened to
+/// `content == "(0)"` (exact match), the double-marked shape `p.[(0?)];[X]`
+/// must reject — `(0?)` matches neither the first arm (exact `0` / `0?`),
+/// the second arm (`?`), nor the third arm (`(0)`), and falls through to
+/// the generic `parse_prot_interval` path which rejects the parens. The
+/// bare-form `p.(0?)` rejection is already pinned at
+/// `double_marked_p_paren_zero_question_rejects` above; this is the
+/// trans-allele bracket sibling.
+#[test]
+fn p_paren_zero_question_in_trans_allele_rejects() {
+    for bad in &[
+        "NP_000088.3:p.[(0?)];[Arg97Trp]",
+        "NP_000088.3:p.[Arg97Trp];[(0?)]",
+    ] {
+        assert!(
+            parse_hgvs(bad).is_err(),
+            "{bad:?} must reject (double-marked predicted in trans-allele bracket is not a spec form)"
+        );
+    }
+}
