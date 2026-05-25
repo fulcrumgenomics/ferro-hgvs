@@ -1120,6 +1120,85 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3023",
+        CodeInfo {
+            code: "W3023",
+            name: "DupSizeSuffix",
+            summary: "Duplication described with a size-count suffix instead of a position range.",
+            explanation:
+                "HGVS recommends naming both endpoints of a multi-residue duplication. The legacy \
+                form `g.123dup6` (size 6 starting at position 123) is non-canonical; the canonical \
+                form lists the first and last residue duplicated, e.g. `g.123_128dup`. ferro cannot \
+                auto-synthesize the end position safely (`g.123dup6` is ambiguous between `g.123_128dup` \
+                and `g.124_129dup` per the spec Q&A), so this warning is emitted but not auto-corrected.",
+            category: CodeCategory::Format,
+            bad_examples: &["NM_004006.2:c.20_21dup2", "NC_000023.11:g.123dup6"],
+            good_examples: &["NM_004006.2:c.20_21dup", "NC_000023.11:g.123_124dup"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
+            ),
+            related_codes: &["W3011", "W3016", "W3024"],
+        },
+    );
+
+    map.insert(
+        "W3024",
+        CodeInfo {
+            code: "W3024",
+            name: "DupExplicitSeq",
+            summary: "Duplication described with the explicit duplicated nucleotide sequence.",
+            explanation:
+                "Per HGVS recommendations (`DNA/duplication.md`), the duplicated sequence should \
+                NOT be appended after `dup` because (1) the description is longer, (2) it contains \
+                redundant information already implied by the position range, and (3) the chances \
+                to make an error increase (e.g. writing `dupG` when the reference is `T`). The \
+                canonical form is `c.20_23dup`, not `c.20_23dupTAGA`. ferro rewrites the explicit \
+                form to the canonical form in lenient and silent modes; strict mode rejects.",
+            category: CodeCategory::Format,
+            bad_examples: &["NM_004006.2:c.20_23dupTAGA", "NM_004006.2:c.20dupT"],
+            good_examples: &["NM_004006.2:c.20_23dup", "NM_004006.2:c.20dup"],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
+            ),
+            related_codes: &["W3011", "W3016", "W3023", "W3025"],
+        },
+    );
+
+    map.insert(
+        "W3025",
+        CodeInfo {
+            code: "W3025",
+            name: "DelExplicitSeq",
+            summary: "Deletion described with the explicit deleted nucleotide sequence.",
+            explanation:
+                "Per HGVS recommendations (`DNA/deletion.md`), the deleted sequence should NOT \
+                be appended after `del` because (1) the description is longer, (2) it contains \
+                redundant information already implied by the position range, and (3) the chances \
+                to make an error increase (e.g. writing `delG` when the reference is `A`). The \
+                canonical form is `g.33344590_33344592del`, not `g.33344590_33344592delGAT`. \
+                ferro rewrites the explicit form to the canonical form in lenient and silent \
+                modes; strict mode rejects. This warning applies only to pure deletions; \
+                deletion-insertions (`delins`) are excluded from this check.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NC_000023.11:g.33344590_33344592delGAT",
+                "NC_000023.11:g.33344591delA",
+            ],
+            good_examples: &[
+                "NC_000023.11:g.33344590_33344592del",
+                "NC_000023.11:g.33344591del",
+            ],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+            ),
+            related_codes: &["W3011", "W3016", "W3023", "W3024"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
