@@ -539,6 +539,9 @@ impl ErrorType {
             ErrorType::InitiatorMetCanonicalization => {
                 "canonical form `p.Met1dup` (or analogous) includes the initiator methionine"
             }
+            ErrorType::DupSizeSuffix => "duplication described with a size-count suffix",
+            ErrorType::DupExplicitSeq => "duplication with explicit duplicated sequence",
+            ErrorType::DelExplicitSeq => "deletion with explicit deleted sequence",
             ErrorType::VariantExceedsReference => {
                 "variant position range exceeds reference sequence"
             }
@@ -610,6 +613,13 @@ impl ErrorType {
             // is purely informational. We do not rewrite the canonical output
             // back to ins or to p.0?/p.(Met1?) — that is the consumer's call.
             ErrorType::InitiatorMetCanonicalization => false,
+            // Lenient mode warns without rewriting (warn_accept); strict rejects.
+            // Position ambiguity ("at" vs "after") prevents safe synthesis.
+            ErrorType::DupSizeSuffix => false,
+            // Sequence is redundant given the position range; lenient mode
+            // drops it (standard_correctable).
+            ErrorType::DupExplicitSeq => true,
+            ErrorType::DelExplicitSeq => true,
             // Variant exceeds reference: no safe auto-correction — the
             // variant references positions past the provider's window
             // and we cannot conjure missing bases.
@@ -680,6 +690,9 @@ impl ErrorType {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
             ErrorType::InitiatorMetCanonicalization => ("p.Met1_Lys2insMet", "p.Met1dup"),
+            ErrorType::DupSizeSuffix => ("g.123dup6", "g.123_128dup"),
+            ErrorType::DupExplicitSeq => ("c.20_23dupTAGA", "c.20_23dup"),
+            ErrorType::DelExplicitSeq => ("g.33344590_33344592delGAT", "g.33344590_33344592del"),
             ErrorType::VariantExceedsReference => (
                 "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
@@ -1090,6 +1103,9 @@ mod tests {
             ErrorType::RnaThymineCanonicalized,
             ErrorType::ProteinBracketedAaInsertion,
             ErrorType::InitiatorMetCanonicalization,
+            ErrorType::DupSizeSuffix,
+            ErrorType::DupExplicitSeq,
+            ErrorType::DelExplicitSeq,
             ErrorType::SwappedPositions,
             ErrorType::SinglePositionRange,
             ErrorType::PositionPastEnd,
@@ -1133,6 +1149,9 @@ mod tests {
                 | ErrorType::RnaThymineCanonicalized
                 | ErrorType::ProteinBracketedAaInsertion
                 | ErrorType::InitiatorMetCanonicalization
+                | ErrorType::DupSizeSuffix
+                | ErrorType::DupExplicitSeq
+                | ErrorType::DelExplicitSeq
                 | ErrorType::SwappedPositions
                 | ErrorType::SinglePositionRange
                 | ErrorType::PositionPastEnd
