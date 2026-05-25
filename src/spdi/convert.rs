@@ -1171,9 +1171,17 @@ where
             deleted,
             deleted_length: _,
         } => {
+            // Closes #394 item 3. Non-literal delins inserted sequences
+            // (any `InsertedSequence` variant other than `Literal`) are
+            // a shape SPDI cannot encode, not a missing-reference
+            // problem. Matches the sibling arms for Repeat / Inversion /
+            // Conversion which already use `UnsupportedEditType` for the
+            // same category.
             let ins_str = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
-                ConversionError::MissingReferenceData {
-                    description: "delins inserted sequence is not a literal sequence".to_string(),
+                ConversionError::UnsupportedEditType {
+                    description: "delins inserted sequence is not a literal sequence; \
+                                  non-literal inserts cannot be encoded as SPDI"
+                        .to_string(),
                 }
             })?;
             let del_str = match deleted {
