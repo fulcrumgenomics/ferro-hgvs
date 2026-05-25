@@ -2979,6 +2979,59 @@ pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
     hits
 }
 
+/// Detect duplications described with a size-count suffix (W3023).
+///
+/// Matches `dup` followed by one or more ASCII digits, terminated by a
+/// top-level boundary (`)`, `;`, `]`, whitespace, or end-of-input), inside
+/// a nucleic-acid coordinate segment. Per HGVS spec
+/// (`recommendations/DNA/duplication.md:140-143`), the canonical form names
+/// both endpoints, not a size; this detector is warn-only (mirrors W3011
+/// DelSizeSuffix; the position ambiguity prevents safe rewrite).
+pub fn detect_dup_size_suffix(input: &str) -> Vec<DetectedCorrection> {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return hits;
+    }
+
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"dup" {
+            i += 1;
+            continue;
+        }
+        let digit_start = i + 3;
+        let mut j = digit_start;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digit_start {
+            i += 3;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            i = j;
+            continue;
+        }
+        hits.push(DetectedCorrection::new(
+            ErrorType::DupSizeSuffix,
+            &input[i..j],
+            String::new(),
+            i,
+            j,
+        ));
+        i = j;
+    }
+    hits
+}
+
 /// Detect and correct deletion-insertions whose inserted sequence is empty
 /// (W3012, SVA-010).
 ///
@@ -4454,6 +4507,47 @@ mod tests {
         // (DNA/deletion) does not apply; protein has its own L2 track.
         let hits = detect_del_size_suffix("NP_000079.2:p.Lys100del32");
         assert!(hits.is_empty());
+    }
+
+    // --- W3023 DupSizeSuffix ---
+
+    #[test]
+    fn test_detect_dup_size_suffix_basic() {
+        let hits = detect_dup_size_suffix("NM_004006.2:c.20_21dup2");
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one W3023 hit, got {hits:?}"
+        );
+        let h = &hits[0];
+        assert_eq!(h.error_type, ErrorType::DupSizeSuffix);
+        assert_eq!(h.original, "dup2");
+        assert_eq!(h.corrected, "");
+        assert_eq!(
+            &("NM_004006.2:c.20_21dup2".as_bytes())[h.start..h.end],
+            b"dup2"
+        );
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_canonical_no_hit() {
+        let hits = detect_dup_size_suffix("NM_004006.2:c.20_21dup");
+        assert!(hits.is_empty(), "canonical dup must not fire W3023");
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_skips_protein() {
+        let hits = detect_dup_size_suffix("NP_000079.2:p.Val7dup");
+        assert!(hits.is_empty(), "protein dup must not fire W3023");
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_multiple() {
+        // Bracket allele with two dup<N> tokens.
+        let hits = detect_dup_size_suffix("NM_004006.2:c.[20dup2;30dup4]");
+        assert_eq!(hits.len(), 2, "expected two W3023 hits in bracket allele");
+        assert_eq!(hits[0].original, "dup2");
+        assert_eq!(hits[1].original, "dup4");
     }
 
     #[test]
