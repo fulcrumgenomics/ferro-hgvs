@@ -12,8 +12,8 @@ use super::corrections::{
     correct_rna_thymine, correct_single_letter_aa_in_protein, correct_single_position_range,
     correct_swapped_positions, correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs,
     detect_dup_size_suffix, detect_length_mismatch, detect_length_mismatch_with_provider,
-    detect_missing_versions, detect_position_zero,
-    detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
+    detect_missing_versions, detect_position_zero, detect_protein_bracketed_aa_insertion,
+    strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;

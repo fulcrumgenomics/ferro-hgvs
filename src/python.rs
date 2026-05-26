@@ -2270,6 +2270,11 @@ pub enum PyErrorType {
     NonSpecMosaicForm = 34,
     OverlapConflictingEdits = 35,
     InitiatorMetCanonicalization = 36,
+    // 37 is W3023 DupSizeSuffix, 38 is W3024 DupExplicitSeq, 39 is W3025
+    // DelExplicitSeq — soft-prohibition warnings for dup<N>/dup<seq>/del<seq>.
+    DupSizeSuffix = 37,
+    DupExplicitSeq = 38,
+    DelExplicitSeq = 39,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2311,6 +2316,9 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::PositionPastEnd => PyErrorType::PositionPastEnd,
             ErrorType::OverlapConflictingEdits => PyErrorType::OverlapConflictingEdits,
             ErrorType::InitiatorMetCanonicalization => PyErrorType::InitiatorMetCanonicalization,
+            ErrorType::DupSizeSuffix => PyErrorType::DupSizeSuffix,
+            ErrorType::DupExplicitSeq => PyErrorType::DupExplicitSeq,
+            ErrorType::DelExplicitSeq => PyErrorType::DelExplicitSeq,
         }
     }
 }
@@ -2354,6 +2362,9 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::PositionPastEnd => ErrorType::PositionPastEnd,
             PyErrorType::OverlapConflictingEdits => ErrorType::OverlapConflictingEdits,
             PyErrorType::InitiatorMetCanonicalization => ErrorType::InitiatorMetCanonicalization,
+            PyErrorType::DupSizeSuffix => ErrorType::DupSizeSuffix,
+            PyErrorType::DupExplicitSeq => ErrorType::DupExplicitSeq,
+            PyErrorType::DelExplicitSeq => ErrorType::DelExplicitSeq,
         }
     }
 }

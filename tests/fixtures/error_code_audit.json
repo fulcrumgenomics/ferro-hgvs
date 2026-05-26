@@ -419,7 +419,7 @@
       "spec_section": "recommendations/DNA/duplication.md (position range recommended; size-suffix form is legacy non-canonical)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
       "status": "enforced",
-      "spec_section_notes": "Detected by validate_dup_size_suffix in src/error_handling/mod.rs. ferro cannot auto-synthesize the end position safely because g.123dup6 is ambiguous (could be g.123_128dup or g.124_129dup per spec Q&A). mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient/silent) — warning is emitted but the input is not auto-corrected."
+      "spec_section_notes": "Detected by detect_dup_size_suffix in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13b. ferro cannot auto-synthesize the end position safely because g.123dup6 is ambiguous (could be g.123_128dup or g.124_129dup per spec Q&A). mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient, Accept in silent) — a warning is emitted in lenient mode only (silent mode accepts without warning), and the input is not auto-corrected."
     },
     {
       "code": "W3024",
@@ -427,7 +427,7 @@
       "spec_section": "recommendations/DNA/duplication.md (explicit sequence not recommended: longer, redundant, error-prone)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
       "status": "enforced",
-      "spec_section_notes": "Detected by validate_dup_explicit_seq in src/error_handling/mod.rs. Wired as InputPreprocessor in Phase 16 via rewrite_dup_explicit_seq. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
+      "spec_section_notes": "Detected and rewritten by correct_dup_explicit_seq in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13c. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
     },
     {
       "code": "W3025",
@@ -435,7 +435,7 @@
       "spec_section": "recommendations/DNA/deletion.md (explicit sequence not recommended: longer, redundant, error-prone)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
       "status": "enforced",
-      "spec_section_notes": "Detected by validate_del_explicit_seq in src/error_handling/mod.rs. Wired as InputPreprocessor in Phase 16 via rewrite_del_explicit_seq. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
+      "spec_section_notes": "Detected and rewritten by correct_del_explicit_seq in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13d. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
     },
     {
       "code": "W4001",

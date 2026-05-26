@@ -91,6 +91,22 @@ fn lenient_warns_but_preserves_dup_size_suffix() {
     assert_eq!(result.result.to_string(), "NM_004006.2:c.20_21dup2");
 }
 
+#[test]
+fn silent_accepts_dup_size_suffix_without_warning() {
+    use ferro_hgvs::hgvs::parser::parse_hgvs_silent;
+    let result = parse_hgvs_silent("NM_004006.2:c.20_21dup2").expect("silent must accept");
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupSizeSuffix),
+        "silent mode must not emit W3023; got: {:?}",
+        result.warnings,
+    );
+    // Display preserves the legacy form (silent accepts, no rewrite).
+    assert_eq!(result.result.to_string(), "NM_004006.2:c.20_21dup2");
+}
+
 // =====================================================================
 // W3024 DupExplicitSeq — standard_correctable (rewrite drops seq)
 // =====================================================================
@@ -237,4 +253,30 @@ fn lenient_with_dup_explicit_seq_override_rejects() {
         "override should reject {:?}",
         result.map(|r| r.result.to_string())
     );
+}
+
+// =====================================================================
+// Axis coverage: m. (mito) and n. (non-coding transcript)
+// =====================================================================
+
+#[test]
+fn strict_rejects_dup_explicit_seq_mito() {
+    assert_strict_rejects("NC_012920.1:m.3243_3245dupAGC", "explicit sequence");
+}
+
+#[test]
+fn strict_rejects_del_explicit_seq_noncoding() {
+    assert_strict_rejects("NR_002196.2:n.123_125delTAA", "explicit sequence");
+}
+
+#[test]
+fn lenient_rewrites_dup_size_suffix_noncoding_preserved() {
+    // warn_accept on n. axis: Display preserves the legacy form.
+    let result = parse_hgvs_with_config("NR_002196.2:n.20_21dup2", lenient())
+        .expect("lenient must accept dup<N>");
+    assert!(result
+        .warnings
+        .iter()
+        .any(|w| w.error_type == ErrorType::DupSizeSuffix));
+    assert_eq!(result.result.to_string(), "NR_002196.2:n.20_21dup2");
 }

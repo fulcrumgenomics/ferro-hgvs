@@ -946,6 +946,13 @@ mod tests {
         // InitiatorMetCanonicalization is informational only — the dup
         // form is kept; no rewrite back to ins or to p.0?/p.(Met1?).
         assert!(!ErrorType::InitiatorMetCanonicalization.is_correctable());
+        // DupSizeSuffix (W3023) uses warn_accept — the input is preserved as-is,
+        // so there is no rewrite to apply.
+        assert!(!ErrorType::DupSizeSuffix.is_correctable());
+        // DupExplicitSeq (W3024) and DelExplicitSeq (W3025) use
+        // standard_correctable — the redundant sequence suffix is stripped.
+        assert!(ErrorType::DupExplicitSeq.is_correctable());
+        assert!(ErrorType::DelExplicitSeq.is_correctable());
     }
 
     // ErrorOverride tests
