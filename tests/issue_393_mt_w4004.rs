@@ -60,7 +60,7 @@ fn lenient_mode_warns_on_m_position_past_contig_end() {
     let variant = parse_hgvs("NC_012920.1:m.16570A>G").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error on past-end positions");
     assert!(
         result
@@ -77,7 +77,7 @@ fn silent_mode_accepts_m_position_past_contig_end_without_warning() {
     let variant = parse_hgvs("NC_012920.1:m.16570A>G").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::silent());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("silent mode must not error");
     assert!(
         !result
@@ -102,7 +102,7 @@ fn strict_mode_accepts_m_position_at_contig_end() {
     // match), so we use lenient mode here to isolate the bounds gate.
     let normalizer_lenient = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer_lenient
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("m.16569 must not error in lenient mode");
     assert!(
         !result
@@ -141,7 +141,7 @@ fn lenient_mode_no_w4004_on_wraparound_range_with_both_endpoints_in_bounds() {
     let variant = parse_hgvs("NC_012920.1:m.16569_1del").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("wraparound del must not error in lenient mode");
     assert!(
         !result
@@ -166,7 +166,7 @@ fn lenient_mode_warns_on_partial_wraparound_with_start_past_contig() {
     let variant = parse_hgvs("NC_012920.1:m.16570_5del").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     assert!(
         result
@@ -193,7 +193,7 @@ fn lenient_mode_w4004_when_only_offset_endpoint_distinguishes_positions() {
     let variant = parse_hgvs("NC_012920.1:m.16570+1_16570del").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error");
     assert!(
         result
@@ -251,7 +251,7 @@ fn lenient_mode_canonicalizes_con_to_delins_even_when_past_contig_end() {
     let variant = parse_hgvs("NC_012920.1:m.16570conT").expect("parse must succeed");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not error on past-end con");
     assert!(
         result

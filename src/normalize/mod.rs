@@ -173,10 +173,6 @@ fn check_cds_pos_past_end(
         let abs_offset = offset.unsigned_abs();
         if abs_offset > intron_length {
             return Some(NormalizationWarning::PositionPastEnd {
-                message: format!(
-                    "{}:c.{} lies past the intron-end (intron length {})",
-                    accession, pos, intron_length
-                ),
                 accession: accession.to_string(),
                 coordinate_system: "c".to_string(),
                 position: pos.to_string(),
@@ -196,10 +192,6 @@ fn check_cds_pos_past_end(
         let utr3_len = transcript.utr3_length()?;
         if pos.base > 0 && (pos.base as u64) > utr3_len {
             return Some(NormalizationWarning::PositionPastEnd {
-                message: format!(
-                    "{}:c.*{} lies past the transcript-end (3'UTR length {})",
-                    accession, pos.base, utr3_len
-                ),
                 accession: accession.to_string(),
                 coordinate_system: "c".to_string(),
                 position: format!("*{}", pos.base),
@@ -216,10 +208,6 @@ fn check_cds_pos_past_end(
         let abs_n = pos.base.unsigned_abs();
         if abs_n > utr5_len {
             return Some(NormalizationWarning::PositionPastEnd {
-                message: format!(
-                    "{}:c.{} lies past the 5'UTR start (5'UTR length {})",
-                    accession, pos.base, utr5_len
-                ),
                 accession: accession.to_string(),
                 coordinate_system: "c".to_string(),
                 position: pos.base.to_string(),
@@ -233,10 +221,6 @@ fn check_cds_pos_past_end(
     let cds_len = transcript.cds_length()?;
     if (pos.base as u64) > cds_len {
         return Some(NormalizationWarning::PositionPastEnd {
-            message: format!(
-                "{}:c.{} lies past the CDS-end (CDS length {})",
-                accession, pos.base, cds_len
-            ),
             accession: accession.to_string(),
             coordinate_system: "c".to_string(),
             position: pos.base.to_string(),
@@ -298,10 +282,6 @@ fn check_tx_pos_past_end(
         let abs_offset = offset.unsigned_abs();
         if abs_offset > intron_length {
             return Some(NormalizationWarning::PositionPastEnd {
-                message: format!(
-                    "{}:n.{} lies past the intron-end (intron length {})",
-                    accession, pos, intron_length
-                ),
                 accession: accession.to_string(),
                 coordinate_system: "n".to_string(),
                 position: pos.to_string(),
@@ -317,10 +297,6 @@ fn check_tx_pos_past_end(
     let seq_len = transcript.sequence_length();
     if (pos.base as u64) > seq_len {
         return Some(NormalizationWarning::PositionPastEnd {
-            message: format!(
-                "{}:n.{} lies past the transcript-end (transcript length {})",
-                accession, pos.base, seq_len
-            ),
             accession: accession.to_string(),
             coordinate_system: "n".to_string(),
             position: pos.base.to_string(),
@@ -364,10 +340,6 @@ fn check_mt_pos_past_end(
     }
     if pos.base > contig_length {
         return Some(NormalizationWarning::PositionPastEnd {
-            message: format!(
-                "{}:m.{} lies past the contig-end (contig length {})",
-                accession, pos.base, contig_length
-            ),
             accession: accession.to_string(),
             coordinate_system: "m".to_string(),
             position: pos.base.to_string(),
@@ -412,15 +384,13 @@ fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
 /// sites. Marked `#[non_exhaustive]` so downstream callers must include a
 /// wildcard arm when matching — adding a new variant is therefore not a
 /// breaking change. Mirrors the same attribute on
-/// [`NormalizationInfo`] / [`NormalizeResultWithWarnings`].
+/// [`NormalizationInfo`] / [`NormalizeResult`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum NormalizationWarning {
     /// Reference sequence mismatch. Stated ref bases in the HGVS expression
     /// do not match the actual reference sequence. Code: `REFSEQ_MISMATCH`.
     RefSeqMismatch {
-        /// Human-readable description
-        message: String,
         /// What the input claimed as reference
         stated_ref: String,
         /// What the actual reference sequence has
@@ -441,6 +411,12 @@ pub enum NormalizationWarning {
         /// declaration is part of the user's variant description, and
         /// the normalizer declines to second-guess it. (Issue #280.)
         corrected: bool,
+        /// Free-form context from the validation layer (e.g. a
+        /// per-edit-kind explanation of the mismatch). When present,
+        /// the `Display` impl appends it to the synthesized message so
+        /// downstream consumers retain the nuance that previously
+        /// lived in the dropped `message` field.
+        details: Option<String>,
     },
 
     /// Two or more cis-allele edits share identical reference bounds.
@@ -448,8 +424,6 @@ pub enum NormalizationWarning {
     /// ferro preserves the input verbatim and emits this warning.
     /// Code: `OVERLAP_CONFLICTING_EDITS`.
     OverlapConflict {
-        /// Human-readable description
-        message: String,
         /// Accession of the reference sequence
         accession: String,
         /// Coordinate system: "g" | "c" | "n" | "r" | "m"
@@ -470,8 +444,6 @@ pub enum NormalizationWarning {
     /// unchanged in lenient/silent modes.
     /// Closes-after: #354, #355. Code: `CANONICAL_SPLIT_SKIPPED`.
     CanonicalSplitSkipped {
-        /// Human-readable description
-        message: String,
         /// Accession of the reference sequence
         accession: String,
         /// HGVS span start (1-based inclusive). Carried so strict-mode
@@ -492,8 +464,6 @@ pub enum NormalizationWarning {
     /// preserves the canonical input position and emits this warning.
     /// Closes-after: #350. Code: `CROSS_AXIS_VARIANT_NOT_SHUFFLED`.
     CrossAxisVariantNotShuffled {
-        /// Human-readable description
-        message: String,
         /// Accession of the reference sequence
         accession: String,
         /// Axis of the start position: "5utr" | "cds" | "3utr"
@@ -506,8 +476,6 @@ pub enum NormalizationWarning {
     /// boundary, but the axis clamp constrained the result to the
     /// boundary. Closes-after: #349. Code: `AXIS_CLAMP_APPLIED`.
     AxisClampApplied {
-        /// Human-readable description
-        message: String,
         /// Accession of the reference sequence
         accession: String,
         /// Shuffle direction that was clamped: "5prime" | "3prime"
@@ -525,8 +493,6 @@ pub enum NormalizationWarning {
     /// rule for start-codon variants (substitution.md:45-65).
     /// Closes-after: #92. Code: `INITIATOR_MET_CANONICALIZATION`.
     InitiatorMetCanonicalization {
-        /// Human-readable description.
-        message: String,
         /// Accession of the reference sequence.
         accession: String,
         /// Final dup interval text, e.g. "Met1" or "Met1_Lys2".
@@ -538,8 +504,6 @@ pub enum NormalizationWarning {
     /// observability — callers can audit which inputs were canonicalized
     /// vs. preserved verbatim. Code: `INSERTED_SEQUENCE_EXPANDED`.
     InsertedSequenceExpanded {
-        /// Human-readable description
-        message: String,
         /// Accession of the outer variant
         accession: String,
         /// Original `ins[...]` payload as written (e.g. `[ATC]` or
@@ -560,8 +524,6 @@ pub enum NormalizationWarning {
     /// remain out of scope (they depend on intron-size alignment data
     /// this check does not consult).
     PositionPastEnd {
-        /// Human-readable description.
-        message: String,
         /// Transcript accession (e.g. `NM_001001656.1`).
         accession: String,
         /// Coordinate system: `"c"` for c. (cds-end / transcript-end /
@@ -595,17 +557,99 @@ impl NormalizationWarning {
         }
     }
 
-    /// Human-readable message for the warning.
-    pub fn message(&self) -> &str {
+    /// Human-readable message synthesized from the warning's structural
+    /// fields. Equivalent to `format!("{self}")` — preserved as a method
+    /// for ergonomics and back-compat with `.message()` call sites
+    /// (#397 item 3 dropped the per-variant `message: String` field).
+    pub fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl std::fmt::Display for NormalizationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RefSeqMismatch { message, .. } => message,
-            Self::OverlapConflict { message, .. } => message,
-            Self::CanonicalSplitSkipped { message, .. } => message,
-            Self::CrossAxisVariantNotShuffled { message, .. } => message,
-            Self::AxisClampApplied { message, .. } => message,
-            Self::InitiatorMetCanonicalization { message, .. } => message,
-            Self::InsertedSequenceExpanded { message, .. } => message,
-            Self::PositionPastEnd { message, .. } => message,
+            Self::RefSeqMismatch {
+                stated_ref,
+                actual_ref,
+                position,
+                corrected,
+                details,
+            } => {
+                write!(
+                    f,
+                    "reference sequence mismatch at {position}: stated {stated_ref:?}, actual {actual_ref:?} (corrected={corrected})",
+                )?;
+                if let Some(detail) = details.as_deref().filter(|s| !s.is_empty()) {
+                    write!(f, ": {detail}")?;
+                }
+                Ok(())
+            }
+            Self::OverlapConflict {
+                accession,
+                coordinate_system,
+                location,
+                edit_kinds,
+            } => write!(
+                f,
+                "{} cis edits share identical bounds at {}:{}.{}: {}",
+                edit_kinds.len(),
+                accession,
+                coordinate_system,
+                location,
+                edit_kinds.join(", "),
+            ),
+            Self::CanonicalSplitSkipped {
+                accession,
+                hgvs_start,
+                hgvs_end,
+                expected_span,
+                actual_bytes,
+            } => write!(
+                f,
+                "canonical split skipped at {accession}:{hgvs_start}_{hgvs_end}: expected {expected_span} bytes, got {actual_bytes} (HGVS refseq \u{00A7}43)",
+            ),
+            Self::CrossAxisVariantNotShuffled {
+                accession,
+                start_axis,
+                end_axis,
+            } => write!(
+                f,
+                "{accession}: variant spans {start_axis} \u{2194} {end_axis} sub-axes; 3'-rule shuffle skipped",
+            ),
+            Self::AxisClampApplied {
+                accession,
+                direction,
+                clamp_kind,
+            } => write!(
+                f,
+                "{accession}: {direction} shuffle clamped at {clamp_kind} boundary",
+            ),
+            Self::InitiatorMetCanonicalization {
+                accession,
+                location,
+            } => write!(
+                f,
+                "{accession}: canonical form `p.{location}dup` includes the initiator methionine; the predicted protein consequence may also be described as `p.0?` or `p.(Met1?)` per HGVS Substitution recommendations",
+            ),
+            Self::InsertedSequenceExpanded {
+                accession,
+                original_payload,
+                expanded_literal,
+            } => write!(
+                f,
+                "{accession}: ins payload {original_payload} expanded to literal {expanded_literal}",
+            ),
+            Self::PositionPastEnd {
+                accession,
+                coordinate_system,
+                position,
+                bound_kind,
+                bound_value,
+            } => write!(
+                f,
+                "{accession}:{coordinate_system}.{position} lies past the {bound_kind} (bound {bound_value})",
+            ),
         }
     }
 }
@@ -635,8 +679,6 @@ pub enum NormalizationInfo {
     /// signal correctly. Code: `SHUFFLE_APPLIED`. Mutalyzer-equivalent:
     /// `ICORRECTEDPOINT` (mutalyzer only emits 3').
     ShuffleApplied {
-        /// Human-readable description of the shift.
-        message: String,
         /// Accession of the reference sequence.
         accession: String,
         /// Direction in which the shuffle ran for this normalization.
@@ -658,10 +700,26 @@ impl NormalizationInfo {
         }
     }
 
-    /// Human-readable message for the info.
-    pub fn message(&self) -> &str {
+    /// Human-readable message synthesized from the info's structural
+    /// fields. Equivalent to `format!("{self}")` (#397 item 3 dropped
+    /// the per-variant `message: String` field).
+    pub fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl std::fmt::Display for NormalizationInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ShuffleApplied { message, .. } => message,
+            Self::ShuffleApplied {
+                accession,
+                direction,
+                original_position,
+                normalized_position,
+            } => write!(
+                f,
+                "{accession}: {direction} shuffle relocated variant from {original_position} to {normalized_position}",
+            ),
         }
     }
 }
@@ -673,7 +731,7 @@ impl NormalizationInfo {
 /// via struct literals.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub struct NormalizeResultWithWarnings {
+pub struct NormalizeResult {
     /// The normalized variant
     pub result: HgvsVariant,
     /// Warnings generated during normalization
@@ -684,7 +742,7 @@ pub struct NormalizeResultWithWarnings {
     pub infos: Vec<NormalizationInfo>,
 }
 
-impl NormalizeResultWithWarnings {
+impl NormalizeResult {
     /// Create a new result without warnings or infos
     pub fn new(result: HgvsVariant) -> Self {
         Self {
@@ -772,9 +830,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Normalize a variant
     ///
     /// In strict mode (default), rejects variants with reference mismatches.
-    /// Use `normalize_with_warnings` for lenient mode that corrects mismatches.
+    /// Use `normalize_with_diagnostics` for lenient mode that corrects mismatches.
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
-        let result = self.normalize_with_warnings(variant)?;
+        let result = self.normalize_with_diagnostics(variant)?;
 
         // In strict mode, reject if there were reference mismatches.
         if self.config.should_reject_ref_mismatch() {
@@ -891,10 +949,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Returns the normalized variant along with any warnings generated during
     /// normalization (e.g., reference sequence mismatches that were auto-corrected).
     /// Use this method when you want to track what corrections were made.
-    pub fn normalize_with_warnings(
+    pub fn normalize_with_diagnostics(
         &self,
         variant: &HgvsVariant,
-    ) -> Result<NormalizeResultWithWarnings, FerroError> {
+    ) -> Result<NormalizeResult, FerroError> {
         let (result, warnings) = match variant {
             HV::Genome(v) => self.normalize_genome(v)?,
             HV::Cds(v) => self.normalize_cds(v)?,
@@ -920,9 +978,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
-        Ok(NormalizeResultWithWarnings::with_diagnostics(
-            result, warnings, infos,
-        ))
+        Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }
 
     /// Normalize an allele (compound) variant
@@ -976,7 +1032,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // variant and goes through the same pipeline as any direct input.
         let mut normalized: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
         for v in merged_split {
-            let r = self.normalize_with_warnings(&v)?;
+            let r = self.normalize_with_diagnostics(&v)?;
             all_warnings.extend(r.warnings);
             normalized.push(r.result);
         }
@@ -1042,7 +1098,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
             _ => return Ok(None),
         };
         let original_payload = format!("{}", original_inserted);
-        let original_edit_display = format!("{}", edit);
 
         let new_edit = match canonicalize_insertion_expand(edit, accession, kind, &self.provider)? {
             Some(e) => e,
@@ -1058,10 +1113,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // display keeps the field non-empty if invariants change.
             _ => {
                 let warning = NormalizationWarning::InsertedSequenceExpanded {
-                    message: format!(
-                        "ins[...] payload canonicalized to flat literal: {} -> {}",
-                        original_edit_display, new_edit
-                    ),
                     accession: accession.to_string(),
                     original_payload,
                     expanded_literal: format!("{}", new_edit),
@@ -1072,10 +1123,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let expanded_literal = format!("{}", new_inserted);
 
         let warning = NormalizationWarning::InsertedSequenceExpanded {
-            message: format!(
-                "ins[...] payload canonicalized to flat literal: {} -> {}",
-                original_edit_display, new_edit
-            ),
             accession: accession.to_string(),
             original_payload,
             expanded_literal,
@@ -1525,15 +1572,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         {
             let acc = variant.accession.transcript_accession();
             let warning = NormalizationWarning::CrossAxisVariantNotShuffled {
-                message: format!(
-                    "{}:c.{}: range straddles {} and {} axes; \
-                     3'-rule shuffle is undefined across a CDS\u{2194}UTR \
-                     boundary, returning input unchanged",
-                    acc,
-                    variant.loc_edit.location,
-                    start_axis.label(),
-                    end_axis.label(),
-                ),
                 accession: acc,
                 start_axis: start_axis.label().to_string(),
                 end_axis: end_axis.label().to_string(),
@@ -1629,11 +1667,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
             if !direction_str.is_empty() {
                 let acc = variant.accession.transcript_accession();
                 warnings.push(NormalizationWarning::AxisClampApplied {
-                    message: format!(
-                        "{}:c.{}: {}-rule shuffle clamped at {} axis boundary; \
-                         canonical position was constrained by the CDS\u{2194}UTR sub-axis",
-                        acc, variant.loc_edit.location, direction_str, clamp_kind,
-                    ),
                     accession: acc,
                     direction: direction_str.to_string(),
                     clamp_kind: clamp_kind.to_string(),
@@ -2291,13 +2324,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         format!("{}{}_{}{}", s.aa, s.number, e.aa, e.number)
                     };
                     warnings.push(NormalizationWarning::InitiatorMetCanonicalization {
-                        message: format!(
-                            "canonical form `p.{}dup` includes the initiator \
-                             methionine; the predicted protein consequence may \
-                             also be described as `p.0?` or `p.(Met1?)` per HGVS \
-                             Substitution recommendations",
-                            location
-                        ),
                         accession: final_variant.accession.transcript_accession().to_string(),
                         location,
                     });
@@ -2343,7 +2369,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Both entrypoints — `Normalizer::normalize` (the strict API,
     /// which rejects reference mismatches) and
-    /// `Normalizer::normalize_with_warnings` (the lenient API, which
+    /// `Normalizer::normalize_with_diagnostics` (the lenient API, which
     /// records mismatches as warnings) — share this shuffler via
     /// `normalize_protein`. They both treat `None` as "no shift" and
     /// return the input interval unchanged.
@@ -4150,11 +4176,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Delins.
             let corrected = !matches!(edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. });
             warnings.push(NormalizationWarning::RefSeqMismatch {
-                message: validation.warning.unwrap_or_default(),
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),
                 position: format!("{}-{}", start, end),
                 corrected,
+                details: validation.warning,
             });
         }
 
@@ -5232,12 +5258,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if n != expected_span {
             let accession = variant_accession_string(&variant);
             let warning = NormalizationWarning::CanonicalSplitSkipped {
-                message: format!(
-                    "{}: variant span {}..{} ({} bp) exceeds provider's reference window \
-                     ({} bp). Per HGVS spec refseq.md \u{00A7}43, the variant must be \
-                     entirely encompassed by the reference. Strict mode rejects.",
-                    accession, hgvs_start, hgvs_end, expected_span, n,
-                ),
                 accession,
                 hgvs_start,
                 hgvs_end,
@@ -5434,7 +5454,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if extract_simple_delins(&v).is_none() {
             return vec![v];
         }
-        match self.normalize_with_warnings(&v) {
+        match self.normalize_with_diagnostics(&v) {
             Ok(r) => match r.result {
                 HgvsVariant::Allele(a) => a.variants,
                 other => vec![other],
@@ -5473,6 +5493,60 @@ fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
             None
         }
     }
+}
+
+/// Returns the underlying `NaEdit` for a shuffle-eligible variant so the
+/// shift detector can constrain `SHUFFLE_APPLIED` emission to genuine
+/// shuffle transitions (companion to `position_text_if_shuffleable`).
+/// `Mu::Uncertain` is unwrapped to the inner edit because shuffleability
+/// is determined by edit shape, not by the uncertainty wrapper.
+fn na_edit_if_shuffleable(variant: &HgvsVariant) -> Option<&NaEdit> {
+    let mu = match variant {
+        HV::Genome(v) => &v.loc_edit.edit,
+        HV::Cds(v) => &v.loc_edit.edit,
+        HV::Tx(v) => &v.loc_edit.edit,
+        HV::Rna(v) => &v.loc_edit.edit,
+        HV::Mt(v) => &v.loc_edit.edit,
+        HV::Circular(v) => &v.loc_edit.edit,
+        HV::Protein(_) | HV::Allele(_) | HV::RnaFusion(_) | HV::NullAllele | HV::UnknownAllele => {
+            return None
+        }
+    };
+    match mu {
+        crate::hgvs::Mu::Certain(e) | crate::hgvs::Mu::Uncertain(e) => Some(e),
+        // `Mu::Unknown` (Display: `?`) carries no edit — there is nothing
+        // for shuffle to act on, so the kind-compatibility gate skips it.
+        crate::hgvs::Mu::Unknown => None,
+    }
+}
+
+/// True if the (input, output) edit-kind transition is one the shuffle
+/// layer can produce. The shuffle algorithm rotates a deletion / insertion
+/// / duplication / delins span along its reference window and may
+/// canonicalize a single-base or homopolymer insertion into a duplication
+/// or repeat — every other kind transition (e.g. `delins → sub` from
+/// canonical-split, `delins → inv` from inversion decomposition,
+/// `delins → =` from identity rewrite, `ins → delins`) is a
+/// *canonicalization* and must not surface as `SHUFFLE_APPLIED`.
+///
+/// Closes the false-positive flagged on PR #426: `c.1_3delinsACG → c.2T>C`
+/// is canonical-split, not shuffle, and the original position-only
+/// post-hoc compare mislabeled it.
+fn shuffle_kind_compatible(input: &NaEdit, output: &NaEdit) -> bool {
+    use NaEdit::*;
+    matches!(
+        (input, output),
+        (Deletion { .. }, Deletion { .. })
+            | (Duplication { .. }, Duplication { .. })
+            | (Delins { .. }, Delins { .. })
+            | (Inversion { .. }, Inversion { .. })
+            | (
+                Insertion { .. },
+                Insertion { .. } | Duplication { .. } | Repeat { .. } | MultiRepeat { .. },
+            )
+            | (Repeat { .. }, Repeat { .. } | MultiRepeat { .. })
+            | (MultiRepeat { .. }, MultiRepeat { .. })
+    )
 }
 
 /// Detect shuffle infos by comparing the input variant to the normalized
@@ -5525,7 +5599,11 @@ fn detect_shuffle_infos(
 }
 
 /// Single-variant shift detector. Returns `Some(info)` iff the position
-/// text differs between input and output for a shuffle-eligible axis.
+/// text differs between input and output for a shuffle-eligible axis AND
+/// the (input, output) edit-kind transition is one the shuffle layer can
+/// produce (see [`shuffle_kind_compatible`]). The edit-kind gate excludes
+/// canonicalization that also moves positions — e.g. `delins → sub`,
+/// `delins → =`, `delins → inv` — from masquerading as shuffle.
 fn single_variant_shift_info(
     input: &HgvsVariant,
     output: &HgvsVariant,
@@ -5536,15 +5614,16 @@ fn single_variant_shift_info(
     if original_position == normalized_position {
         return None;
     }
+    let input_edit = na_edit_if_shuffleable(input)?;
+    let output_edit = na_edit_if_shuffleable(output)?;
+    if !shuffle_kind_compatible(input_edit, output_edit) {
+        return None;
+    }
     let accession = input
         .accession()
         .map(|a| format!("{}", a))
         .unwrap_or_default();
-    let message = format!(
-        "shuffle ({direction}) relocated variant from {original_position} to {normalized_position} on {accession}",
-    );
     Some(NormalizationInfo::ShuffleApplied {
-        message,
         accession,
         direction,
         original_position,

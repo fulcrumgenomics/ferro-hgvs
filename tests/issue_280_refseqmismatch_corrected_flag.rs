@@ -122,7 +122,7 @@ mod del_mismatched_stated_ref {
         let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
         let v = parse_hgvs("NM_TEST.1:c.5delG").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             corrected_flag(&r.warnings),
@@ -150,7 +150,7 @@ mod dup_mismatched_stated_ref {
         let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
         let v = parse_hgvs("NM_TEST.1:c.10dupA").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             corrected_flag(&r.warnings),
@@ -178,7 +178,7 @@ mod inv_mismatched_stated_ref {
         let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
         let v = parse_hgvs("NM_TEST.1:c.20_22invAAA").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             corrected_flag(&r.warnings),
@@ -213,7 +213,7 @@ mod repeat_single_consistency_mismatch {
         let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
         let v = parse_hgvs("NC_000001.11:g.257_263AC[3]").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             !corrected_flag(&r.warnings),
@@ -239,7 +239,7 @@ mod repeat_single_consistency_mismatch {
         let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
         let v = parse_hgvs("NC_000001.11:g.257_262AC[3]").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             !corrected_flag(&r.warnings),
@@ -260,7 +260,7 @@ mod repeat_single_consistency_mismatch {
         let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
         let v = parse_hgvs("NC_000001.11:g.257_260A[4]").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             !corrected_flag(&r.warnings),
@@ -295,7 +295,7 @@ mod multirepeat_consistency_mismatch {
         let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
         let v = parse_hgvs("NC_000001.11:g.257_280CTG[2]TTG[1]CTG[11]").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             !corrected_flag(&r.warnings),
@@ -319,7 +319,7 @@ mod multirepeat_consistency_mismatch {
         let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
         let v = parse_hgvs("NC_000001.11:g.257_298CTG[2]TTG[1]CTG[11]").expect("parse");
         let r = normalizer
-            .normalize_with_warnings(&v)
+            .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
         assert!(
             !corrected_flag(&r.warnings),

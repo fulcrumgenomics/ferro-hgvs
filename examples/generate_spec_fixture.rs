@@ -794,7 +794,7 @@ mod runner {
     ) -> (String, bool, bool, Vec<String>) {
         match parse_hgvs(input) {
             Err(e) => (format!("parse error: {e}"), false, false, Vec::new()),
-            Ok(v) => match normalizer.normalize_with_warnings(&v) {
+            Ok(v) => match normalizer.normalize_with_diagnostics(&v) {
                 Err(e) => (format!("normalize error: {e}"), true, false, Vec::new()),
                 Ok(n) => {
                     let mut codes: Vec<String> =

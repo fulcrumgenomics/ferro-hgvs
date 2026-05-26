@@ -14,7 +14,7 @@
 //!   - Lenient mode preserves the input and emits the warning.
 //!   - Silent mode still emits the warning (the emit site at
 //!     `overlap.rs:88` is unconditional); only strict-mode promotion
-//!     to error was the gap. Callers using `normalize_with_warnings`
+//!     to error was the gap. Callers using `normalize_with_diagnostics`
 //!     get the warning in any mode, while `normalize` only differs
 //!     for strict (Err) vs lenient/silent (Ok with warning attached
 //!     to the dropped vec).
@@ -61,7 +61,7 @@ fn lenient_mode_emits_w5002_warning_and_preserves_input() {
     let normalizer = Normalizer::with_config(provider(), NormalizeConfig::lenient());
     let variant = parse_hgvs("NC_000001.11:g.[100A>C;100A>G]").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode must accept coincident-bounds cis edits");
     let has_warning = result
         .warnings
@@ -99,13 +99,13 @@ fn silent_mode_still_emits_w5002_warning() {
     // The emit site at `src/normalize/overlap.rs:88` is unconditional —
     // silent mode does not suppress the warning, only changes
     // strict-mode behavior from Reject to WarnAccept. Callers using
-    // `normalize_with_warnings` get the warning regardless of mode;
+    // `normalize_with_diagnostics` get the warning regardless of mode;
     // `normalize` only differs by whether the warning is promoted
     // (strict → Err) or accepted (lenient/silent → Ok).
     let normalizer = Normalizer::with_config(provider(), NormalizeConfig::silent());
     let variant = parse_hgvs("NC_000001.11:g.[100A>C;100A>G]").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("silent mode must accept coincident-bounds cis edits");
     let has_warning = result
         .warnings

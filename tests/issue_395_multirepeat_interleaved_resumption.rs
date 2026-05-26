@@ -58,7 +58,7 @@ fn normalize_lenient(provider: MockProvider, input: &str) -> (String, Vec<Normal
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs(input).expect("parse");
     let r = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient normalize");
     (format!("{}", r.result), r.warnings)
 }

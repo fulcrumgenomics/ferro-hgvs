@@ -78,3 +78,22 @@ fn flybase_micro_loads_two_exon_protein_coding() {
         tx.exons[1].end
     );
 }
+
+/// FlyBase `Derives_from` parent edge survives end-to-end through the
+/// loader. The fixture's mRNA carries `Parent=FBgn0031208` *and*
+/// `Derives_from=FBgn0031208_pseudo`; with both edges in the feature
+/// graph, the transcript still loads cleanly and exon/CDS assembly
+/// completes (which it could not if a `Derives_from`-only ancestor
+/// were silently dropped). #397 item 1.
+#[test]
+fn flybase_derives_from_edge_survives_loader() {
+    let (db, _report) = load_annotations(
+        Path::new("tests/fixtures/annotation/flybase_micro.gff3"),
+        &LoaderConfig::new(),
+    )
+    .unwrap();
+    assert!(
+        db.get("FBtr0300689").is_some(),
+        "Derives_from-bearing mRNA must still load",
+    );
+}

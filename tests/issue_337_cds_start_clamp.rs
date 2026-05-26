@@ -183,7 +183,7 @@ fn cross_axis_5utr_to_cds_does_not_shuffle_and_warns() {
         let normalizer = Normalizer::with_config(provider_with_utr_padded_transcript(), config);
         let variant = parse_hgvs("NM_TEST.1:c.-1_1del").expect("parse");
         let result = normalizer
-            .normalize_with_warnings(&variant)
+            .normalize_with_diagnostics(&variant)
             .expect("normalize");
         assert_eq!(
             format!("{}", result.result),
@@ -214,7 +214,7 @@ fn cross_axis_cds_to_3utr_does_not_shuffle_and_warns() {
         let normalizer = Normalizer::with_config(provider_with_utr_padded_transcript(), config);
         let variant = parse_hgvs("NM_TEST.1:c.9_*1del").expect("parse");
         let result = normalizer
-            .normalize_with_warnings(&variant)
+            .normalize_with_diagnostics(&variant)
             .expect("normalize");
         assert_eq!(
             format!("{}", result.result),
@@ -241,7 +241,7 @@ fn within_axis_cds_variant_does_not_emit_cross_axis_warning() {
     );
     let variant = parse_hgvs("NM_TEST.1:c.1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert!(
         result
@@ -268,7 +268,7 @@ fn axis_clamp_emits_warning_when_constraining_5prime_shuffle() {
     );
     let variant = parse_hgvs("NM_TEST.1:c.1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_TEST.1:c.1del");
     assert!(
@@ -298,7 +298,7 @@ fn no_axis_clamp_when_upstream_utr_base_does_not_match() {
     );
     let variant = parse_hgvs("NM_INTRA.1:c.1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_INTRA.1:c.1del");
     assert!(
@@ -322,7 +322,7 @@ fn no_axis_clamp_when_5prime_shuffle_stays_within_axis() {
     );
     let variant = parse_hgvs("NM_TEST.1:c.6del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_TEST.1:c.4del");
     assert!(
@@ -492,7 +492,7 @@ fn axis_clamp_emits_warning_when_constraining_5prime_c_star_1_shuffle() {
     );
     let variant = parse_hgvs("NM_UTR3.1:c.*1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.*1del");
     assert!(
@@ -517,7 +517,7 @@ fn axis_clamp_emits_warning_when_constraining_5prime_c_star_1_dup_shuffle() {
     );
     let variant = parse_hgvs("NM_UTR3.1:c.*1dup").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.*1dup");
     assert!(
@@ -589,7 +589,7 @@ fn axis_clamp_emits_warning_when_constraining_3prime_c_cds_end_shuffle() {
     );
     let variant = parse_hgvs("NM_UTR3.1:c.9del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.9del");
     assert!(
@@ -701,7 +701,7 @@ fn minus_strand_axis_clamp_emits_warning_when_constraining_5prime_shuffle() {
     );
     let variant = parse_hgvs("NM_MTEST.1:c.1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_MTEST.1:c.1del");
     assert!(
@@ -797,7 +797,7 @@ fn minus_strand_axis_clamp_emits_warning_when_constraining_5prime_c_star_1_shuff
     );
     let variant = parse_hgvs("NM_MUTR3.1:c.*1del").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize");
     assert_eq!(format!("{}", result.result), "NM_MUTR3.1:c.*1del");
     assert!(

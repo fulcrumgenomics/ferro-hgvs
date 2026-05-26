@@ -18,6 +18,78 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  abi3-floor-consistency:
+    name: abi3 floor ↔ requires-python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install packaging
+        # `packaging.specifiers.SpecifierSet` parses compound specs
+        # (`">=3.10,<4"`, `">=3.10rc1"`, etc.) per PEP 440/621 — more
+        # robust than regex matching the literal string form.
+        run: python -m pip install --no-cache-dir 'packaging>=24'
+      - name: Assert Cargo.toml abi3-pyXY matches pyproject.toml requires-python
+        # Cargo.toml's `abi3-pyXY` pyo3 feature sets the minimum Python
+        # version the abi3 wheel can run on; pyproject.toml's
+        # `requires-python` declares the minimum Python pip will accept
+        # at install time. If they drift (e.g. a future bump on one
+        # side only), users hit either a runtime ABI mismatch
+        # (`abi3-py311` wheel on `requires-python = ">=3.10"` installs
+        # but fails to load on 3.10) or a silently-stale floor
+        # (`abi3-py310` wheel still permitted on a project that meant
+        # to drop 3.10 support). #397 item 5.
+        run: |
+          python <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
+
+          cargo = Path("Cargo.toml").read_text()
+          m = re.search(r'"abi3-py(\d+)"', cargo)
+          if not m:
+              sys.exit("Could not find abi3-pyXY feature in Cargo.toml")
+          abi3_digits = m.group(1)
+          if not abi3_digits.startswith("3"):
+              sys.exit(f"Unexpected abi3 minor in 'abi3-py{abi3_digits}'")
+          # abi3-py310 → minor='10', abi3-py37 → minor='7'.
+          abi3_floor = Version(f"3.{abi3_digits[1:]}")
+
+          pyproject = Path("pyproject.toml").read_text()
+          m = re.search(r'requires-python\s*=\s*"([^"]+)"', pyproject)
+          if not m:
+              sys.exit("Could not find requires-python in pyproject.toml")
+          spec_str = m.group(1)
+          spec = SpecifierSet(spec_str)
+
+          # The abi3 floor is correct iff the wheel's minimum CPython
+          # version is the lowest version the spec accepts. We test
+          # this by asserting (a) abi3_floor itself satisfies the spec
+          # and (b) the immediately-lower minor (3.{N-1}) does not.
+          minor = abi3_floor.minor
+          if not spec.contains(abi3_floor, prereleases=True):
+              sys.exit(
+                  f"abi3 floor / requires-python drift: Cargo.toml "
+                  f"`abi3-py{abi3_digits}` ({abi3_floor}) does not satisfy "
+                  f"pyproject.toml `requires-python = {spec_str!r}`."
+              )
+          one_below = Version(f"3.{minor - 1}") if minor > 0 else None
+          if one_below is not None and spec.contains(one_below, prereleases=True):
+              sys.exit(
+                  f"abi3 floor / requires-python drift: pyproject.toml "
+                  f"`requires-python = {spec_str!r}` would accept Python "
+                  f"{one_below}, but the abi3 wheel from "
+                  f"`abi3-py{abi3_digits}` requires Python >= {abi3_floor}."
+              )
+          print(f"OK: abi3-py{abi3_digits} ({abi3_floor}) ↔ requires-python = {spec_str!r}")
+          PY
+
   format:
     name: Format
     runs-on: ubuntu-latest
@@ -107,6 +179,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
+      - name: "Note: reference-aware tests are skipped without a manifest"
+        # `tests/mutalyzer_normalize_tests.rs` and the biocommons
+        # reference-aware suite both silently no-op when
+        # `FERRO_MANIFEST` is unset (PR CI does not provision the
+        # multi-GB reference manifest). Surface a GitHub annotation
+        # so reviewers see the skip explicitly in the PR check
+        # summary; the nightly `nightly-mutalyzer.yml` workflow runs
+        # the same suite with a real manifest. #397 item 6.
+        run: |
+          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
       - name: Run Rust tests
         run: cargo nextest run --features dev
       - name: Verify HGVS v21.0 fixture is up to date

@@ -113,7 +113,7 @@ fn normalize_emits_canonical_split_skipped_warning_on_alignment_gap() {
     let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize must not panic on alignment-gap-spanning delins");
     assert_eq!(
         format!("{}", result.result),
@@ -137,7 +137,7 @@ fn normalize_emits_canonical_split_skipped_when_ref_longer_than_span() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
     let variant = parse_hgvs("NC_000001.11:g.100_110delinsAAGCTT").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize must not panic on over-long ref window");
     assert!(
         result
@@ -222,7 +222,7 @@ fn lenient_mode_warns_and_preserves_when_variant_exceeds_reference() {
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
     let variant = parse_hgvs("NG_032871.1:g.32476_53457delinsAATTAAGGTATA").expect("parse");
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("lenient mode preserves the variant; rejection is strict-only");
     assert_eq!(
         format!("{}", result.result),

@@ -123,28 +123,140 @@ struct Case {
     spec_citation: Option<SpecCitation>,
 }
 
+/// Closed enum of corpus-runner axes. Replaces the previous free-form
+/// `String` field on `AcceptedDivergence` and `SpecCitation` — serde
+/// deserialization rejects unknown variants, so a typo in `cases.json`
+/// surfaces as a hard parse error rather than silently no-op'ing the
+/// annotation (#397 item 2). The variants match the 8 `AxisTally::new`
+/// call sites; the lowercase serde rename keeps the JSON wire format
+/// stable.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum Axis {
+    Normalized,
+    Genomic,
+    ProteinDescription,
+    CodingProteinDescriptions,
+    RnaDescription,
+    Noncoding,
+    Errors,
+    Infos,
+}
+
+impl Axis {
+    /// Stable kebab-case string used in summary lines, file paths, and
+    /// log messages. Matches the lowercase strings the previous
+    /// `&'static str` axis carried.
+    fn as_str(self) -> &'static str {
+        match self {
+            Axis::Normalized => "normalized",
+            Axis::Genomic => "genomic",
+            Axis::ProteinDescription => "protein_description",
+            Axis::CodingProteinDescriptions => "coding_protein_descriptions",
+            Axis::RnaDescription => "rna_description",
+            Axis::Noncoding => "noncoding",
+            Axis::Errors => "errors",
+            Axis::Infos => "infos",
+        }
+    }
+}
+
+impl std::fmt::Display for Axis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Closed enum of accepted-divergence policies. Each policy identifier
+/// names a specific reason a mismatch is non-failing (e.g. ferro's spec
+/// arbitration on gene-symbol selectors). Adding a new policy requires
+/// a code change here, which is intentional: it forces deliberate
+/// review of every accepted divergence rather than allowing ad-hoc
+/// string typing in `cases.json` (#397 item 2).
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum Policy {
+    /// ferro's gene-symbol-selector handling per issue #121 (the
+    /// `NM_X(GENE):c.X` rendering and the related dispatcher
+    /// arbitration). See PR #146 for the spec arbitration trail.
+    #[serde(rename = "ferro-policy-121-gene-symbol-selector")]
+    GeneSymbolSelector121,
+}
+
+impl Policy {
+    /// Stable identifier used in summary lines so reviewers can grep
+    /// across runs.
+    fn as_str(self) -> &'static str {
+        match self {
+            Policy::GeneSymbolSelector121 => "ferro-policy-121-gene-symbol-selector",
+        }
+    }
+}
+
+impl std::fmt::Display for Policy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Accepted-divergence annotation. When attached to a `Case`, the
 /// corpus runner treats a mismatch on `axis` as a tracked-but-non-failing
 /// divergence (counted in `divergence_accepted`) rather than a hard FAIL.
 ///
-/// **Typo warning:** `axis` and `policy` are free-form strings, not
-/// validated enums. A misspelled `axis` (`"normalised"`, `"genomic_"`,
-/// etc.) silently makes the annotation a no-op — the case falls through
-/// to FAIL with no warning. Cross-check spelling against the `axis` arg
-/// passed to `AxisTally::new(...)` in each test in this file. (Tightening
-/// this to a closed enum is a follow-up.)
+/// `axis` and `policy` are now closed enums — `serde` rejects unknown
+/// variants at fixture-parse time, so misspellings surface as a hard
+/// parse error rather than silently no-op'ing the annotation.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 struct AcceptedDivergence {
-    /// Axis name this annotation applies to (e.g. `"normalized"`).
-    axis: String,
-    /// Short policy identifier explaining *why* the divergence is acceptable
-    /// — e.g. `"ferro-policy-121-gene-symbol-selector"`. Surfaced in the
-    /// per-axis tally summary so reviewers can grep for the policy.
-    policy: String,
+    /// Axis this annotation applies to.
+    axis: Axis,
+    /// Closed policy identifier explaining *why* the divergence is
+    /// acceptable. Surfaced in the per-axis tally summary so reviewers
+    /// can grep for the policy.
+    policy: Policy,
     /// Optional human-readable note expanding on the policy.
     #[serde(default)]
     note: Option<String>,
+}
+
+/// Closed enum of HGVS spec section identifiers cited from `cases.json`.
+/// Mirrors [`Policy`]'s shape: adding a new section requires a code
+/// change here, which forces deliberate review of every new citation
+/// rather than allowing ad-hoc string typing in `cases.json` (#430,
+/// follow-up to #397 item 2). The `#[serde(rename = "...")]` annotation
+/// keeps the JSON wire format stable.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum SpecSection {
+    /// HGVS §Prioritization — the spec's edit-prioritization rules (dup
+    /// over ins, etc.) that ferro applies during normalization. This is
+    /// a ferro-internal label, not a stable spec heading: the upstream
+    /// spec submodule (`assets/hgvs-nomenclature/docs/recommendations/`)
+    /// has no `Prioritization` anchor today, so binding to a path here
+    /// would create a brittle pointer. The human label is the stable
+    /// catalog key; the rename string preserves the byte sequence in
+    /// `cases.json`.
+    #[serde(rename = "HGVS §Prioritization")]
+    HgvsPrioritization,
+}
+
+impl SpecSection {
+    /// Stable identifier used in summary lines so reviewers can grep
+    /// across runs. Matches the `#[serde(rename)]` strings byte-for-byte
+    /// to preserve the pre-enum summary-line format.
+    fn as_str(self) -> &'static str {
+        match self {
+            SpecSection::HgvsPrioritization => "HGVS §Prioritization",
+        }
+    }
+}
+
+impl std::fmt::Display for SpecSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Spec-citation annotation. Documentary only — does NOT affect tally
@@ -152,13 +264,19 @@ struct AcceptedDivergence {
 /// `axis` has been corrected to ferro's spec-correct value (versus
 /// mutalyzer's spec-incorrect output), with a citation to the relevant
 /// HGVS spec section.
+///
+/// `axis` and `section` are now closed enums (see [`Axis`], [`SpecSection`]);
+/// serde rejects unknown variants at fixture-parse time, so a misspelled
+/// section identifier surfaces as a hard parse error rather than silently
+/// losing cataloguability.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 struct SpecCitation {
-    /// Axis name this citation applies to (e.g. `"normalized"`).
-    axis: String,
-    /// HGVS spec section the citation references (e.g. `"HGVS §Prioritization"`).
-    section: String,
+    /// Axis this citation applies to.
+    axis: Axis,
+    /// HGVS spec section the citation references (e.g.
+    /// `SpecSection::HgvsPrioritization`).
+    section: SpecSection,
     /// Optional human-readable note expanding on the citation.
     #[serde(default)]
     note: Option<String>,
@@ -276,7 +394,7 @@ fn variant_projector() -> Option<VariantProjector<ArcProvider>> {
 
 #[derive(Debug)]
 struct AxisTally {
-    axis: &'static str,
+    axis: Axis,
     pass: usize,
     /// Mismatches gated by an `accepted_divergence` annotation whose
     /// `axis` matches this tally's axis. Tracked-but-non-failing; reported
@@ -297,7 +415,7 @@ struct AxisTally {
 }
 
 impl AxisTally {
-    fn new(axis: &'static str) -> Self {
+    fn new(axis: Axis) -> Self {
         Self {
             axis,
             pass: 0,
@@ -331,14 +449,14 @@ impl AxisTally {
             if let Some(ad) = &case.accepted_divergence {
                 if ad.axis == self.axis {
                     self.divergence_accepted
-                        .push((case.input.clone(), ad.policy.clone()));
+                        .push((case.input.clone(), ad.policy.to_string()));
                     return;
                 }
             }
             if let Some(sc) = &case.spec_citation {
                 if sc.axis == self.axis {
                     self.spec_overridden
-                        .push((case.input.clone(), sc.section.clone()));
+                        .push((case.input.clone(), sc.section.to_string()));
                     return;
                 }
             }
@@ -511,7 +629,7 @@ fn axis_normalized() {
         return;
     };
 
-    let mut t = AxisTally::new("normalized");
+    let mut t = AxisTally::new(Axis::Normalized);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -545,7 +663,7 @@ fn axis_genomic() {
         return;
     };
 
-    let mut t = AxisTally::new("genomic");
+    let mut t = AxisTally::new(Axis::Genomic);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -582,7 +700,7 @@ fn axis_protein_description() {
         return;
     };
 
-    let mut t = AxisTally::new("protein_description");
+    let mut t = AxisTally::new(Axis::ProteinDescription);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -622,7 +740,7 @@ fn axis_coding_protein_descriptions() {
         return;
     };
 
-    let mut t = AxisTally::new("coding_protein_descriptions");
+    let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -680,7 +798,7 @@ fn axis_rna_description() {
         return;
     }
 
-    let mut t = AxisTally::new("rna_description");
+    let mut t = AxisTally::new(Axis::RnaDescription);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -707,7 +825,7 @@ fn axis_noncoding() {
         return;
     }
 
-    let mut t = AxisTally::new("noncoding");
+    let mut t = AxisTally::new(Axis::Noncoding);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -735,7 +853,7 @@ fn axis_errors() {
         return;
     };
 
-    let mut t = AxisTally::new("errors");
+    let mut t = AxisTally::new(Axis::Errors);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -794,7 +912,7 @@ fn axis_infos() {
         return;
     };
 
-    let mut t = AxisTally::new("infos");
+    let mut t = AxisTally::new(Axis::Infos);
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -823,7 +941,7 @@ fn axis_infos() {
 
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e:?}"))?;
             let result = normalizer
-                .normalize_with_warnings(&v)
+                .normalize_with_diagnostics(&v)
                 .map_err(|e| format!("normalize error: {e:?}"))?;
             let emitted: Vec<&str> = result.infos.iter().map(|i| i.code()).collect();
 
@@ -1030,6 +1148,70 @@ mod comparator_tests {
         assert!(case.spec_citation.is_none());
     }
 
+    // (1b) Typo in `axis` or `policy` is rejected at deserialization
+    // (#397 item 2): the closed enums turn what used to be a silent
+    // no-op into a hard parse error during fixture load.
+    #[test]
+    fn case_axis_typo_rejected_at_deserialization() {
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "accepted_divergence": {
+                    "axis": "normalised",
+                    "policy": "ferro-policy-121-gene-symbol-selector"
+                }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected typo'd axis (`normalised` vs `normalized`) to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
+    #[test]
+    fn case_policy_typo_rejected_at_deserialization() {
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "accepted_divergence": {
+                    "axis": "normalized",
+                    "policy": "ferro-policy-999-bogus"
+                }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected unknown policy to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
+    /// Issue #430 closes `SpecCitation.section` to a [`SpecSection`] enum so
+    /// a misspelled section identifier surfaces as a hard parse error
+    /// rather than silently losing cataloguability in `cases.json`. Mirrors
+    /// `case_axis_typo_rejected_at_deserialization` and
+    /// `case_policy_typo_rejected_at_deserialization`.
+    #[test]
+    fn case_section_typo_rejected_at_deserialization() {
+        // Missing the `§` sigil — looks plausible but is not the
+        // canonical identifier.
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "spec_citation": {
+                    "axis": "normalized",
+                    "section": "HGVS Prioritization"
+                }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected typo'd section (`HGVS Prioritization` vs `HGVS §Prioritization`) to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
     // (2) `accepted_divergence` deserializes including the optional `note`.
     #[test]
     fn case_parses_with_accepted_divergence() {
@@ -1047,8 +1229,8 @@ mod comparator_tests {
             .accepted_divergence
             .as_ref()
             .expect("accepted_divergence present");
-        assert_eq!(ad.axis, "normalized");
-        assert_eq!(ad.policy, "ferro-policy-121-gene-symbol-selector");
+        assert_eq!(ad.axis, Axis::Normalized);
+        assert_eq!(ad.policy, Policy::GeneSymbolSelector121);
         assert_eq!(ad.note.as_deref(), Some("ferro emits (COL1A1) per #121"));
     }
 
@@ -1066,15 +1248,15 @@ mod comparator_tests {
             }"#,
         );
         let sc = case.spec_citation.as_ref().expect("spec_citation present");
-        assert_eq!(sc.axis, "normalized");
-        assert_eq!(sc.section, "HGVS §Prioritization");
+        assert_eq!(sc.axis, Axis::Normalized);
+        assert_eq!(sc.section, SpecSection::HgvsPrioritization);
         assert_eq!(sc.note.as_deref(), Some("dup over ins"));
     }
 
     // (4) `record` PASSes when actual == expected, regardless of annotations.
     #[test]
     fn tally_pass_when_output_matches() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case("NM_000088.3:c.459A>G", None, None);
         t.record(&case, "X", Ok("X".to_string()));
         assert_eq!(t.pass, 1);
@@ -1085,12 +1267,12 @@ mod comparator_tests {
     // (5) Mismatch on the annotated axis goes into `divergence_accepted`.
     #[test]
     fn tally_divergence_accepted_on_matching_axis() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             Some(AcceptedDivergence {
-                axis: "normalized".to_string(),
-                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                axis: Axis::Normalized,
+                policy: Policy::GeneSymbolSelector121,
                 note: None,
             }),
             None,
@@ -1111,12 +1293,12 @@ mod comparator_tests {
     // axis is still a FAIL — annotations are scoped strictly per-axis.
     #[test]
     fn tally_fail_when_annotation_axis_mismatches() {
-        let mut t = AxisTally::new("genomic");
+        let mut t = AxisTally::new(Axis::Genomic);
         let case = make_case(
             "in",
             Some(AcceptedDivergence {
-                axis: "normalized".to_string(),
-                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                axis: Axis::Normalized,
+                policy: Policy::GeneSymbolSelector121,
                 note: None,
             }),
             None,
@@ -1135,12 +1317,12 @@ mod comparator_tests {
     // silenced by the annotation.
     #[test]
     fn tally_err_with_accepted_divergence_still_fails() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             Some(AcceptedDivergence {
-                axis: "normalized".to_string(),
-                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                axis: Axis::Normalized,
+                policy: Policy::GeneSymbolSelector121,
                 note: None,
             }),
             None,
@@ -1158,7 +1340,7 @@ mod comparator_tests {
     // (7) Mismatch with no annotation is FAIL.
     #[test]
     fn tally_fail_when_no_annotation() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case("in", None, None);
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.pass, 0);
@@ -1171,13 +1353,13 @@ mod comparator_tests {
     // the `spec_overridden` bucket — non-failing, separately tracked.
     #[test]
     fn tally_spec_citation_routes_to_spec_overridden() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             None,
             Some(SpecCitation {
-                axis: "normalized".to_string(),
-                section: "HGVS §Prioritization".to_string(),
+                axis: Axis::Normalized,
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1195,13 +1377,13 @@ mod comparator_tests {
     // and must surface as FAIL — same contract as `accepted_divergence`.
     #[test]
     fn tally_err_with_spec_citation_still_fails() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             None,
             Some(SpecCitation {
-                axis: "normalized".to_string(),
-                section: "HGVS §Prioritization".to_string(),
+                axis: Axis::Normalized,
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1218,13 +1400,13 @@ mod comparator_tests {
     // route to `spec_overridden` — citations are axis-scoped.
     #[test]
     fn tally_spec_citation_other_axis_is_fail() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             None,
             Some(SpecCitation {
-                axis: "errors".to_string(),
-                section: "HGVS §Prioritization".to_string(),
+                axis: Axis::Errors,
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );
@@ -1237,7 +1419,7 @@ mod comparator_tests {
     // `spec_overridden` buckets in the documented stable format.
     #[test]
     fn tally_finish_summary_string_includes_new_bucket() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         // 1 pass, 1 divergence_accepted, 1 spec_overridden, 1 fail,
         // 0 skipped.
         t.record(&make_case("a", None, None), "X", Ok("X".to_string()));
@@ -1245,8 +1427,8 @@ mod comparator_tests {
             &make_case(
                 "b",
                 Some(AcceptedDivergence {
-                    axis: "normalized".to_string(),
-                    policy: "p".to_string(),
+                    axis: Axis::Normalized,
+                    policy: Policy::GeneSymbolSelector121,
                     note: None,
                 }),
                 None,
@@ -1259,8 +1441,8 @@ mod comparator_tests {
                 "d",
                 None,
                 Some(SpecCitation {
-                    axis: "normalized".to_string(),
-                    section: "HGVS §Prioritization".to_string(),
+                    axis: Axis::Normalized,
+                    section: SpecSection::HgvsPrioritization,
                     note: None,
                 }),
             ),
@@ -1284,17 +1466,17 @@ mod comparator_tests {
     // co-attached `spec_citation`.
     #[test]
     fn tally_coexisting_annotations_route_by_accepted_divergence() {
-        let mut t = AxisTally::new("normalized");
+        let mut t = AxisTally::new(Axis::Normalized);
         let case = make_case(
             "in",
             Some(AcceptedDivergence {
-                axis: "normalized".to_string(),
-                policy: "ferro-policy-121-gene-symbol-selector".to_string(),
+                axis: Axis::Normalized,
+                policy: Policy::GeneSymbolSelector121,
                 note: None,
             }),
             Some(SpecCitation {
-                axis: "normalized".to_string(),
-                section: "HGVS §Prioritization".to_string(),
+                axis: Axis::Normalized,
+                section: SpecSection::HgvsPrioritization,
                 note: None,
             }),
         );

@@ -211,7 +211,7 @@ fn protein_met1_dup_emits_initiator_warning() {
     let variant = parse_hgvs("NP_TESTPROT.1:p.Met1_Lys2insMet").expect("parse p.Met1_Lys2insMet");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize p.Met1_Lys2insMet");
     let out = format!("{}", result.result);
     assert!(
@@ -242,7 +242,7 @@ fn protein_non_met1_dup_does_not_emit_initiator_warning() {
         parse_hgvs("NP_TESTPROT.1:p.Glu8_Leu9insLeuGlu").expect("parse p.Glu8_Leu9insLeuGlu");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize p.Glu8_Leu9insLeuGlu");
     assert!(
         !result

@@ -558,7 +558,7 @@ impl PyNormalizer {
             .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
         let result = normalizer
-            .normalize_with_warnings(&variant)
+            .normalize_with_diagnostics(&variant)
             .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
         Ok(PyNormalizeResultWithWarnings {
             result: PyHgvsVariant {

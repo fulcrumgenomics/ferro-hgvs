@@ -14,7 +14,7 @@ fn normalize_to_string_and_warning_codes(input: &str) -> (String, Vec<String>) {
     let normalizer = Normalizer::new(MockProvider::new());
     let parsed = parse_hgvs(input).expect("parse");
     let r = normalizer
-        .normalize_with_warnings(&parsed)
+        .normalize_with_diagnostics(&parsed)
         .expect("normalize");
     let codes: Vec<String> = r.warnings.iter().map(|w| w.code().to_string()).collect();
     (r.result.to_string(), codes)
@@ -27,7 +27,7 @@ fn normalize_with_provider_and_warning_codes(
     let normalizer = Normalizer::new(provider);
     let parsed = parse_hgvs(input).expect("parse");
     let r = normalizer
-        .normalize_with_warnings(&parsed)
+        .normalize_with_diagnostics(&parsed)
         .expect("normalize");
     let codes: Vec<String> = r.warnings.iter().map(|w| w.code().to_string()).collect();
     (r.result.to_string(), codes)

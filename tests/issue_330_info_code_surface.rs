@@ -7,7 +7,7 @@
 //! your variant per the 3' rule" from "ferro left it alone" without
 //! re-comparing strings. This pins the canonical contract:
 //!
-//! - `Normalizer::normalize_with_warnings` returns a result carrying both
+//! - `Normalizer::normalize_with_diagnostics` returns a result carrying both
 //!   `warnings: Vec<NormalizationWarning>` and `infos: Vec<NormalizationInfo>`.
 //! - Each [`NormalizationInfo`] exposes `code()` (a stable identifier such as
 //!   `"SHUFFLE_APPLIED"`) and `message()` (a human-readable description).
@@ -69,7 +69,7 @@ fn shuffle_emits_info_on_homopolymer_three_prime() {
     let variant = parse_hgvs("NM_POLYA.1:c.4del").expect("parse c.4del");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize c.4del");
 
     let display = format!("{}", result.result);
@@ -111,7 +111,7 @@ fn shuffle_info_carries_direction_under_five_prime_config() {
     let variant = parse_hgvs("NM_POLYA.1:c.12del").expect("parse c.12del");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize c.12del under 5'-shift");
 
     let display = format!("{}", result.result);
@@ -149,7 +149,7 @@ fn shuffle_info_for_multi_position_span() {
     let variant = parse_hgvs("NM_POLYA.1:c.4_5del").expect("parse c.4_5del");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize c.4_5del");
 
     let display = format!("{}", result.result);
@@ -180,7 +180,7 @@ fn no_info_when_variant_is_already_canonical() {
     let variant = parse_hgvs("NM_POLYA.1:c.3G>C").expect("parse c.3G>C");
 
     let result = normalizer
-        .normalize_with_warnings(&variant)
+        .normalize_with_diagnostics(&variant)
         .expect("normalize c.3G>C");
 
     assert!(
@@ -193,7 +193,7 @@ fn no_info_when_variant_is_already_canonical() {
 /// `Normalizer::normalize()` (the non-`with_warnings` entry point)
 /// returns only the normalized variant; infos are intentionally
 /// discarded. Callers that need the diagnostic surface must use
-/// `normalize_with_warnings`. Pin this contract so a future refactor
+/// `normalize_with_diagnostics`. Pin this contract so a future refactor
 /// doesn't accidentally surface infos through the bare `normalize()`
 /// return type.
 #[test]
@@ -213,9 +213,44 @@ fn normalize_without_warnings_discards_infos_by_design() {
     // And the with_warnings entry point is the only path that surfaces
     // the info.
     let detailed = normalizer
-        .normalize_with_warnings(&variant)
-        .expect("normalize_with_warnings c.4del");
+        .normalize_with_diagnostics(&variant)
+        .expect("normalize_with_diagnostics c.4del");
     assert_eq!(detailed.infos.len(), 1);
+}
+
+/// Canonical-split (`delins → sub` via the same-base interior collapse
+/// at `apply_canonical_split`) moves the variant's position but is NOT a
+/// 3'-rule shuffle. Pin that the diagnostics surface no longer
+/// mislabels it: `c.12_13delinsAA` reduces to `c.13C>A` (the leading
+/// `A` matches c.12 and splits out, leaving a single-base substitution
+/// at c.13) and `infos` must stay empty.
+///
+/// Regression for PR #426 CR finding on `detect_shuffle_infos`: a
+/// post-hoc position-only compare emitted `SHUFFLE_APPLIED` whenever
+/// the position changed, mislabeling the canonical-split rewrite as a
+/// shuffle.
+#[test]
+fn canonical_split_delins_to_sub_does_not_emit_shuffle_info() {
+    let normalizer = Normalizer::new(provider_with_polya());
+    let variant = parse_hgvs("NM_POLYA.1:c.12_13delinsAA").expect("parse delins");
+
+    let result = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("normalize delins");
+
+    let display = format!("{}", result.result);
+    assert!(
+        display.ends_with(":c.13C>A"),
+        "expected canonical-split to land on c.13C>A; got {display:?}",
+    );
+    // The output kind changed (Delins → Substitution) and the position
+    // moved; this is canonicalization, not shuffle. `infos` must be
+    // empty.
+    assert!(
+        result.infos.is_empty(),
+        "canonical-split must not emit SHUFFLE_APPLIED; got {:?}",
+        result.infos.iter().map(|i| i.code()).collect::<Vec<_>>(),
+    );
 }
 
 /// `NormalizationInfo::code()` returns a stable identifier suitable for
@@ -224,12 +259,17 @@ fn normalize_without_warnings_discards_infos_by_design() {
 #[test]
 fn info_code_is_stable_identifier() {
     let info = NormalizationInfo::ShuffleApplied {
-        message: "moved".to_string(),
         accession: "NM_POLYA.1".to_string(),
         direction: ShuffleDirection::ThreePrime,
         original_position: "4".to_string(),
         normalized_position: "12".to_string(),
     };
     assert_eq!(info.code(), "SHUFFLE_APPLIED");
-    assert_eq!(info.message(), "moved");
+    // `message()` synthesizes from structural fields (#397 item 3
+    // dropped the per-variant `message: String` field).
+    let msg = info.message();
+    assert!(
+        msg.contains("4") && msg.contains("12") && msg.contains("NM_POLYA.1"),
+        "synthesized message should mention positions and accession; got {msg:?}",
+    );
 }

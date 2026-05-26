@@ -1,0 +1,124 @@
+name: Nightly reference-aware tests
+
+# Runs the mutalyzer / biocommons reference-aware test suites against a
+# real ferro-prepared manifest. PR CI silently skips these tests (see
+# the `::notice::` annotation in `ci.yml`) because provisioning a
+# multi-GB reference manifest would multiply PR CI time. This workflow
+# runs nightly so manifest-dependent regressions surface within 24h.
+#
+# Caching: the prepared reference directory is keyed on the Cargo.lock
+# hash (changes when the `prepare` crate's deps shift) + a fixed
+# version tag. First run takes ~30 min; subsequent runs reuse the
+# cache and finish in a few minutes.
+#
+# #397 item 6.
+
+on:
+  schedule:
+    # Daily at 04:00 UTC. Avoids contention with the weekly Sunday
+    # external-validation.yml run at 00:00 UTC.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mutalyzer-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Bump this tag whenever the manifest layout or `ferro prepare`
+  # invocation changes meaningfully, so stale caches are invalidated
+  # without manual purging.
+  MANIFEST_CACHE_VERSION: v1
+
+jobs:
+  reference-aware-tests:
+    name: Reference-aware mutalyzer / biocommons tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: true
+          lfs: true
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-nightly
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache prepared reference manifest
+        id: cache-manifest
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          # `benchmark-output/manifest.json` is one of the well-known
+          # paths the test harness probes (see `manifest_path()` in
+          # `tests/mutalyzer_normalize_tests.rs`); the surrounding
+          # `benchmark-output/` directory holds the FASTAs / cdot
+          # transcripts the manifest references.
+          path: benchmark-output/
+          # Invalidation surface: lock file (downstream-dep changes),
+          # the `prepare` crate (manifest-output shape), and the CLI
+          # wiring at `src/bin/ferro.rs` (the `prepare` subcommand
+          # binding). If a future PR adds a `src/reference/**` dep
+          # that changes `ferro prepare` behavior, bump
+          # MANIFEST_CACHE_VERSION manually.
+          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs') }}
+
+      - name: Build ferro (for prepare)
+        run: cargo build --release --bin ferro
+
+      - name: Run `ferro prepare` (cache miss only)
+        if: steps.cache-manifest.outputs.cache-hit != 'true'
+        run: |
+          ./target/release/ferro prepare \
+            --output benchmark-output \
+            --genome grch38
+
+      - name: Confirm manifest present
+        run: |
+          test -f benchmark-output/manifest.json || \
+            (echo "::error::manifest.json missing after prepare step"; exit 1)
+          echo "manifest size: $(stat -c%s benchmark-output/manifest.json) bytes"
+
+      - name: Run reference-aware tests
+        # Failures are NOT propagated to the workflow conclusion — the
+        # purpose of the nightly is to surface drift in the xfail report,
+        # not to gate PRs. (PR CI's strict-mode test job already covers
+        # manifest-free correctness.) Use step-level continue-on-error
+        # rather than `|| true` so the step's failure outcome remains
+        # visible in the GitHub Actions UI (steps.<id>.outcome stays
+        # `failure`), while the workflow conclusion stays `success`.
+        continue-on-error: true
+        env:
+          FERRO_MANIFEST: ${{ github.workspace }}/benchmark-output/manifest.json
+        run: |
+          cargo nextest run --features dev \
+            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/)'
+
+      - name: Upload xfail reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ferro-xfail-${{ github.run_id }}
+          path: /tmp/ferro-xfail/
+          if-no-files-found: warn
