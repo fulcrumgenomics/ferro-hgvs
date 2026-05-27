@@ -10,13 +10,14 @@ use super::corrections::{
     correct_old_substitution_syntax, correct_protein_arrow, correct_quote_characters,
     correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch, detect_missing_versions,
-    detect_position_zero, detect_protein_bracketed_aa_insertion, strip_trailing_annotation,
-    DetectedCorrection,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_length_mismatch,
+    detect_length_mismatch_with_provider, detect_missing_versions, detect_position_zero,
+    detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
 use crate::error::{Diagnostic, ErrorCode, FerroError, SourceSpan};
+use crate::reference::provider::ReferenceProvider;
 
 /// Warning about a correction made during preprocessing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +165,40 @@ impl InputPreprocessor {
     ///
     /// Applies corrections based on the configured error handling mode.
     pub fn preprocess(&self, input: &str) -> PreprocessResult {
+        self.preprocess_inner(input, None)
+    }
+
+    /// Preprocess the input string with a `ReferenceProvider` available
+    /// for provider-aware corrections.
+    ///
+    /// Identical to [`Self::preprocess`] except that the W3016
+    /// length-mismatch phase can resolve mixed-shape intronic-endpoint
+    /// ranges (e.g. `c.100+5_200-3del...`) via the provider's
+    /// transcript map. Without a provider those shapes silently skip
+    /// (per #390 item 5's "deliberately skipped" contract); with a
+    /// provider they're either flagged as mismatches or pass cleanly
+    /// based on the resolved genomic span (#429).
+    ///
+    /// Falls back to the no-provider behavior for every shape the
+    /// no-provider variant already handles — `preprocess_with_provider`
+    /// strictly extends, never replaces, the corrections surface.
+    pub fn preprocess_with_provider(
+        &self,
+        input: &str,
+        provider: &dyn ReferenceProvider,
+    ) -> PreprocessResult {
+        self.preprocess_inner(input, Some(provider))
+    }
+
+    /// Shared preprocessing implementation. `provider` is `Some` when
+    /// invoked via [`Self::preprocess_with_provider`], `None` otherwise.
+    /// Currently only the W3016 length-mismatch phase consults the
+    /// provider; every other correction phase ignores it.
+    fn preprocess_inner(
+        &self,
+        input: &str,
+        provider: Option<&dyn ReferenceProvider>,
+    ) -> PreprocessResult {
         // Start with the original input
         let mut current = input.to_string();
         let mut all_warnings = Vec::new();
@@ -857,7 +892,14 @@ impl InputPreprocessor {
         // (W3016 — HGVS spec recommendations/general.md range semantics).
         // `warn_accept` semantics: lenient warns without rewriting (no safe
         // auto-correction), strict rejects.
-        let length_mismatch_hits = detect_length_mismatch(&current);
+        // Provider-aware when available so mixed-shape intronic-endpoint
+        // ranges (`c.100+5_200-3del...`, `c.100_200+5del...`, etc.) are
+        // also length-checked. Without a provider, the same detector
+        // runs but silently skips those shapes (#429).
+        let length_mismatch_hits = match provider {
+            Some(p) => detect_length_mismatch_with_provider(&current, p),
+            None => detect_length_mismatch(&current),
+        };
         if !length_mismatch_hits.is_empty() {
             let action = self.action_for(ErrorType::LengthMismatch);
             match action {

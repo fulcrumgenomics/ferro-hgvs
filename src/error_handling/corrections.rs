@@ -4,6 +4,9 @@
 //! in HGVS input strings.
 
 use super::types::{ErrorType, ResolvedAction};
+use crate::convert::mapper::CoordinateMapper;
+use crate::hgvs::location::CdsPos;
+use crate::reference::provider::ReferenceProvider;
 use std::cmp::min;
 
 /// A detected correction with its details.
@@ -2495,6 +2498,48 @@ fn next_char_end(bytes: &[u8], i: usize) -> usize {
 /// involves an offset or marker — computing length requires a provider
 /// in those cases.
 pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
+    detect_length_mismatch_inner(input, None)
+}
+
+/// Provider-aware variant of [`detect_length_mismatch`]. Handles the
+/// mixed-shape intronic endpoint cases that the no-provider scan
+/// deliberately skips:
+///
+/// - different anchor bases (`c.100+5_200-3del...`),
+/// - opposite-sign offsets at the same anchor (`c.100+5_100-3del...`,
+///   intron-internal range across the anchor),
+/// - one exonic + one intronic endpoint (`c.100_200+5del...`).
+///
+/// Resolution path: parse the accession prefix of each ranged segment
+/// (`<ACC>:c.X_Ydel...`), look up the transcript via the provider, and
+/// resolve each endpoint to a genomic position via
+/// [`crate::convert::mapper::CoordinateMapper::cds_to_genomic_with_intron`].
+/// The reference-frame span is then `|g_end - g_start| + 1` (absolute
+/// value handles minus-strand transcripts where genomic order is
+/// reversed relative to transcript order).
+///
+/// Falls back to the no-provider behavior when:
+/// - the input has no accession prefix (compound-allele inner members
+///   without a fresh accession),
+/// - the provider lookup fails,
+/// - either endpoint can't be resolved to a genomic position
+///   (transcript missing genomic coords, offset outside any intron),
+/// - the axis is anything other than `c.` (only c. has the
+///   exon/intron coordinate system that benefits from this path; g./m./o.
+///   ranges already use the exonic same-axis branch).
+///
+/// #429 (follow-up to #390 item 5).
+pub fn detect_length_mismatch_with_provider(
+    input: &str,
+    provider: &dyn ReferenceProvider,
+) -> Vec<DetectedCorrection> {
+    detect_length_mismatch_inner(input, Some(provider))
+}
+
+fn detect_length_mismatch_inner(
+    input: &str,
+    provider: Option<&dyn ReferenceProvider>,
+) -> Vec<DetectedCorrection> {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
     if !has_non_protein_description(bytes) {
@@ -2508,14 +2553,46 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
     // prefix appears) are also scanned so `c.[100A>G;200_205delAAAA]`
     // catches the inner `200_205delAAAA` (#390 item 4). Multiple ranges
     // per input are handled by continuing past each match.
+    //
+    // `last_accession_span` tracks the most recent accession prefix
+    // seen (the `ACC:` before a coord marker); `last_axis` tracks the
+    // axis byte at that marker. Compound-allele inner members inherit
+    // both. Used for the provider-aware path (#429) — without correct
+    // axis tracking, a `g.[X;Y]` compound's inner `Y` would be
+    // erroneously mis-routed through the c.-axis provider path.
     let mut i = 0usize;
+    let mut last_accession_span: Option<(usize, usize)> = None;
+    let mut last_axis: Option<u8> = None;
     while i + 1 < bytes.len() {
         let prev_ok = i == 0 || matches!(bytes[i - 1], b':' | b'(' | b'[' | b';');
         let is_coord =
             matches!(bytes[i], b'c' | b'g' | b'n' | b'm' | b'o' | b'r') && bytes[i + 1] == b'.';
         if prev_ok && is_coord {
+            // If the coord marker was preceded by `:`, capture the
+            // accession span ending at that `:`. Walk back over
+            // non-separator bytes to find the accession start.
+            if i > 0 && bytes[i - 1] == b':' {
+                let acc_end = i - 1;
+                let mut acc_start = acc_end;
+                while acc_start > 0
+                    && !matches!(
+                        bytes[acc_start - 1],
+                        b':' | b'(' | b'[' | b';' | b' ' | b'\t' | b'\n'
+                    )
+                {
+                    acc_start -= 1;
+                }
+                if acc_start < acc_end {
+                    last_accession_span = Some((acc_start, acc_end));
+                }
+            }
+            let axis = bytes[i];
+            last_axis = Some(axis);
             let start_idx = i + 2;
-            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, start_idx) {
+            let accession = last_accession_span.map_or("", |(s, e)| &input[s..e]);
+            if let Some(hit) =
+                try_detect_length_mismatch_at(bytes, input, start_idx, axis, provider, accession)
+            {
                 hits.push(hit);
             }
             i = start_idx;
@@ -2523,14 +2600,26 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
         }
         // Compound-allele inner-member fast path: a digit right after
         // `[` or `;` is the start of a range that inherits the outer
-        // axis. `try_detect_length_mismatch_at` returns `None` for
+        // axis + accession (no fresh `<axis>.` marker on the inner
+        // member). `try_detect_length_mismatch_at` returns `None` for
         // anything that isn't a `<int>_<int><edit><refseq>` pattern,
         // so over-triggering is safe. The `i > 0` guard prevents an
-        // underflow on the `bytes[i - 1]` index at the very first
-        // byte (where there's no preceding separator to consider).
+        // underflow on the `bytes[i - 1]` index at the very first byte.
+        //
+        // The axis is the outer axis captured above (`last_axis`).
+        // Falling back to a hard-coded `b'c'` would mis-route a
+        // `g.[X;Y]` compound's inner `Y` into the c.-axis provider
+        // path. The axis-guard inside `try_detect_length_mismatch_at`
+        // ensures provider resolution only fires on the spec-supported
+        // c. axis; non-`c.` outer axes therefore correctly skip the
+        // provider path on inner members too.
         let prev_is_compound_separator = i > 0 && matches!(bytes[i - 1], b'[' | b';');
         if prev_is_compound_separator && bytes[i].is_ascii_digit() {
-            if let Some(hit) = try_detect_length_mismatch_at(bytes, input, i) {
+            let axis = last_axis.unwrap_or(b'c');
+            let accession = last_accession_span.map_or("", |(s, e)| &input[s..e]);
+            if let Some(hit) =
+                try_detect_length_mismatch_at(bytes, input, i, axis, provider, accession)
+            {
                 hits.push(hit);
             }
         }
@@ -2542,10 +2631,19 @@ pub fn detect_length_mismatch(input: &str) -> Vec<DetectedCorrection> {
 
 /// Try to detect a length-mismatch at `pos` (right after a coord marker
 /// like `.c.`). Returns the detection on success.
+///
+/// `axis` is the coord-system byte (`b'c'`, `b'g'`, etc.) so the
+/// provider-aware path knows whether to invoke `c.`-specific
+/// resolution. `accession` is the prefix accession (e.g. `NM_000088.3`)
+/// — empty when none is present; the provider-aware path only fires
+/// when both `provider` and a non-empty `accession` are available.
 fn try_detect_length_mismatch_at(
     bytes: &[u8],
     input: &str,
     pos: usize,
+    axis: u8,
+    provider: Option<&dyn ReferenceProvider>,
+    accession: &str,
 ) -> Option<DetectedCorrection> {
     // Endpoint 1: bare integer with optional `+offset` / `-offset`.
     let (start_base, start_off, mut j) = parse_endpoint_with_offset(bytes, pos)?;
@@ -2562,9 +2660,13 @@ fn try_detect_length_mismatch_at(
     //   (b) Both intronic with the same anchor base and same-sign
     //       offsets (`c.100+5_100+10` or `c.100-5_100-2`): the span
     //       is linear inside the intron, length = `|off2 - off1| + 1`.
-    // Anything else (one exonic + one intronic, mixed-sign offsets,
-    // different anchor bases) needs the intron length to resolve —
-    // the W3016 scan skips those cases rather than guess (#390 item 5).
+    //   (c) Mixed-shape (different anchors / opposite signs / one
+    //       exonic + one intronic): provider-aware resolution via the
+    //       transcript's c→g mapper. Only fires on the `c.` axis when
+    //       `provider` and `accession` are both available. #429
+    //       (follow-up to #390 item 5).
+    // Without a provider, mixed-shape inputs are skipped (no false
+    // positives, no panic).
     let range_len = match (start_off, end_off) {
         (0, 0) => {
             if end_base < start_base {
@@ -2578,7 +2680,24 @@ fn try_detect_length_mismatch_at(
             }
             (eo - so + 1) as usize
         }
-        _ => return None,
+        _ => {
+            // Mixed-shape: try provider-aware resolution. Only the
+            // `c.` axis carries the exon/intron coordinate system that
+            // the c→g mapper resolves; other axes fall through to the
+            // skip (per the issue's scoping).
+            if axis != b'c' || accession.is_empty() {
+                return None;
+            }
+            let provider = provider?;
+            let g_start =
+                resolve_cds_endpoint_to_genomic(provider, accession, start_base, start_off)?;
+            let g_end = resolve_cds_endpoint_to_genomic(provider, accession, end_base, end_off)?;
+            // Absolute difference handles both plus-strand (g_end >
+            // g_start) and minus-strand (g_start > g_end) transcripts;
+            // the W3016 length check only cares about the reference-frame
+            // span magnitude.
+            (g_start.max(g_end) - g_start.min(g_end) + 1) as usize
+        }
     };
 
     // Identify the edit keyword. Order matters: `delins` is a prefix of
@@ -2722,6 +2841,33 @@ fn parse_endpoint_with_offset(bytes: &[u8], pos: usize) -> Option<(i64, i64, usi
         j = o;
     }
     Some((base, offset, j))
+}
+
+/// Provider-aware resolver: convert a `c.` endpoint (`base`, `offset`)
+/// to a genomic position via the transcript's c→g mapper. Returns
+/// `None` when the transcript is missing genomic coords, the offset
+/// can't be located in any intron, or `cds_to_genomic_with_intron`
+/// otherwise fails. Used by the mixed-shape W3016 path (#429).
+fn resolve_cds_endpoint_to_genomic(
+    provider: &dyn ReferenceProvider,
+    accession: &str,
+    base: i64,
+    offset: i64,
+) -> Option<u64> {
+    // The backward accession scan stops at `(` / `[` / `;` separators but
+    // does not strip a trailing `)` left by a `NG_...(NM_...):c.` selector,
+    // so the captured span can be `NM_004006.2)`. Trim enclosing
+    // parentheses / whitespace before the provider lookup so the
+    // transcript id resolves cleanly (mixed-shape W3016, #429).
+    let accession = accession.trim_matches(|c| matches!(c, '(' | ')' | ' ' | '\t' | '\n'));
+    let transcript = provider.get_transcript(accession).ok()?;
+    let mapper = CoordinateMapper::new(&transcript);
+    let cds_pos = CdsPos {
+        base,
+        offset: if offset == 0 { None } else { Some(offset) },
+        utr3: false,
+    };
+    mapper.cds_to_genomic_with_intron(&cds_pos).ok()
 }
 
 /// Consume an IUPAC nucleotide run at `pos`. Returns the substring; empty
