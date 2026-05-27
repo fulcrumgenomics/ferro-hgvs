@@ -13,10 +13,12 @@
 //! accept-and-warn is caught.
 //!
 //! Policy decisions in `phase4_final_triage.md`:
-//! - D1 — `dupins` (absolute) and `dupT`/`dupSEQ`/`dupN` (soft) all
-//!   currently ACCEPTED by ferro at the API level; spec says reject.
-//!   Tracked as divergence; lenient mode may later accept soft forms
-//!   with a W code while rejecting absolute forms outright.
+//! - D1 — `dupT`/`dupSEQ`/`dupN` (soft) are currently ACCEPTED by ferro
+//!   at the API level; spec says reject. Tracked as divergence; lenient
+//!   mode may later accept these soft forms with a W code. The `dupins`
+//!   (absolute) form is now REJECTED outright per `DNA/duplication.md:92`
+//!   (#445) — its rejection is pinned in `tests/reject_dupins.rs`, so it
+//!   is intentionally not duplicated here.
 //! - D2 — whitespace inside variant body rejected per `general.md:96`;
 //!   ferro currently accepts spaces inside allele brackets (stripped on
 //!   Display).
@@ -190,16 +192,6 @@ fn accepts_dup_size_suffix_pre_2016_diverges_from_spec() {
         "NC_000023.11:g.123del3",
         "NC_000023.11:g.123del3",
         "checklist.md:49 — pre-2016 size-suffix form, must be g.123_125del",
-    );
-}
-
-#[test]
-fn accepts_dupins_mash_up_diverges_from_spec() {
-    // dna-duplication:C-C17 — "a format not used" (strong prohibition).
-    assert_accepted_diverges_from_spec(
-        "NM_004006.2:c.20_21dupinsATG",
-        "NM_004006.2:c.20_21dupinsATG",
-        "DNA/duplication.md — dupins is a format not used",
     );
 }
 
