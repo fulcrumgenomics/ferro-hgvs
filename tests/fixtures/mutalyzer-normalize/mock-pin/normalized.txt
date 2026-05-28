@@ -167,7 +167,7 @@ NG_012337.1(SDHD):c.274G>T	NG_012337.1(SDHD):c.274G>T
 NG_012337.1(10683):c.274G>T	NG_012337.1(10683):c.274G>T
 NG_009299.1(NM_017668.3):c.41A>C	NG_009299.1(NM_017668.3):c.41A>C
 NG_012337.1(NM_012459.2):c.5_6delinsTAG	NG_012337.1(NM_012459.2):c.5_6delinsTAG
-LRG_303t1:c.10_11insLRG_1t1:c.100_101	normalize error: Unsupported variant type: ins[LRG_1t1:c.100_101] cross-reference is valid HGVS but not yet supported by ferro; see follow-up
+LRG_303t1:c.10_11insLRG_1t1:c.100_101	normalize error: Reference not found: LRG_1t1
 LRG_303:g.[105_106del;6681G>C;6883_6884insTTTCGCCCCTTTCGCCCC]	LRG_303:g.[105_106del;6681G>C;6883_6884insTTTCGCCCCTTTCGCCCC]
 NG_012337.1:g.13124_13125del	NG_012337.1:g.13124_13125del
 NG_012337.1(NM_012459.2):c.[10del;23_25del;36_37insAAT]	NG_012337.1(NM_012459.2):c.[10del;23_25del;36_37insAAT]
@@ -210,7 +210,7 @@ NM_003002.2:c.pterdel	parse error: Parse error at position 12: Failed to parse v
 NM_003002.2:c.qterdel	parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: "qterdel", code: Tag })
 LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.pter_-51'
 LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.*835_qter'
-LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference is valid HGVS but not yet supported by ferro; see follow-up
+LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
 LRG_24t1:c.pter_qterdelinspter_qter	parse error: Parse error at position 9: Failed to parse variant: Error(Error { input: "pter_qterdelinspter_qter", code: Tag })
 LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]	parse error: Parse error at position 9: Failed to parse variant: Error(Error { input: "pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]", code: Tag })
 NG_012337.1(NM_003002.2):c.[274=;275del]	NG_012337.1(NM_003002.2):c.[274=;275del]

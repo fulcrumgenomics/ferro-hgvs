@@ -188,12 +188,21 @@ fn delins_reference_with_nested_repeat_count_parses_and_defers() {
     // depth-aware variant of the helper used by the trans-allele
     // parsers above.
     //
-    // Issue #333 changes the *normalize* contract for cross-reference
-    // payloads: ferro now defers the cross-coord lookup as
-    // `FerroError::UnsupportedVariant`. The parser pin survives —
-    // depth-aware bracket scanning still works — but `normalize` no
-    // longer round-trips this shape unchanged. The deferral message
-    // carries `cross-reference` / `follow-up` for grep.
+    // # Cross-reference contract evolution
+    //
+    // Issue #333 deferred ALL cross-reference payloads as
+    // `FerroError::UnsupportedVariant`. Issue #422 then closed the
+    // common-case deferral: simple positive-integer ranges like
+    // `NC_000022.11:g.100_200` now expand to a flat literal when the
+    // inner accession is in the provider.
+    //
+    // What remains deferred (this test's input) is the COMPLEX
+    // cross-reference shape — a reference range followed by a repeat
+    // extension (`TG[3]`). `parse_cross_reference` only accepts simple
+    // positive-integer ranges, so this shape returns `None` and the
+    // resolver surfaces `UnsupportedVariant`. The parser pin (depth-
+    // aware bracket scanning) is unchanged; only the normalize-time
+    // outcome differs from simple cross-references.
     use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
     let s = "NC_000001.11:g.100_105delins[NC_000022.11:g.100_200TG[3]]";
     let variant =
@@ -201,19 +210,19 @@ fn delins_reference_with_nested_repeat_count_parses_and_defers() {
     let normalizer = Normalizer::new(MockProvider::new());
     let err = normalizer
         .normalize(&variant)
-        .expect_err("cross-reference payload normalization must defer");
+        .expect_err("complex cross-reference payload (range + repeat) normalization must defer");
     // Pin the concrete error variant so the message-text grep below
     // can't accidentally pass on a different error type that happens
     // to contain the same words.
     assert!(
         matches!(err, ferro_hgvs::FerroError::UnsupportedVariant { .. }),
-        "expected UnsupportedVariant for cross-reference deferral (got: {:?})",
+        "expected UnsupportedVariant for complex cross-reference deferral (got: {:?})",
         err
     );
     let msg = format!("{}", err);
     assert!(
-        msg.contains("cross-reference") && msg.contains("follow-up"),
-        "deferral message must mention 'cross-reference' and 'follow-up' (got: {})",
+        msg.contains("cross-reference"),
+        "deferral message must mention 'cross-reference' (got: {})",
         msg
     );
 }

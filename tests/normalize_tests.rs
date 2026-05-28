@@ -1295,41 +1295,54 @@ mod clinvar_normalization {
     }
 
     // Embedded-accession `ins[ACC:...]` / `delins[ACC:...]` payloads are
-    // cross-reference shapes. Per issue #333, ferro defers expansion of
-    // those — normalize must surface the deferral as a
-    // `FerroError::UnsupportedVariant` carrying the grep-friendly
-    // `cross-reference` / `follow-up` markers. The round-trip pin moves
-    // to that error contract; the bracketed payload no longer survives
-    // normalize unchanged.
+    // cross-reference shapes. Per issue #422 the resolver looks up the
+    // inner accession through the provider; against an empty provider
+    // each surfaces `ReferenceNotFound` citing the missing accession.
+    // Successful-expansion coverage lives in
+    // `tests/issue_422_cross_reference_ins.rs`.
     #[rstest]
-    #[case("NC_000008.11:g.86688947_86688948ins[MF045863.1:g.1_36978]")]
-    #[case("NC_000008.11:g.86711345_86711346ins[MF045864.2:g.1_98770]")]
-    #[case("NG_016167.1:g.21559097_21559098ins[PP887427.1:g.1_1518]")]
-    #[case("LRG_1293:g.21559097_21559098ins[PP887427.1:g.1_1518]")]
-    #[case("NC_000008.11:g.86587460_86650711delins[KY923049.1:g.1_466]")]
-    fn test_embedded_accession_variants_defer_with_unsupported(#[case] input: &str) {
+    #[case(
+        "NC_000008.11:g.86688947_86688948ins[MF045863.1:g.1_36978]",
+        "MF045863.1"
+    )]
+    #[case(
+        "NC_000008.11:g.86711345_86711346ins[MF045864.2:g.1_98770]",
+        "MF045864.2"
+    )]
+    #[case(
+        "NG_016167.1:g.21559097_21559098ins[PP887427.1:g.1_1518]",
+        "PP887427.1"
+    )]
+    #[case("LRG_1293:g.21559097_21559098ins[PP887427.1:g.1_1518]", "PP887427.1")]
+    #[case(
+        "NC_000008.11:g.86587460_86650711delins[KY923049.1:g.1_466]",
+        "KY923049.1"
+    )]
+    fn test_embedded_accession_variants_defer_with_unsupported(
+        #[case] input: &str,
+        #[case] expected_missing_accession: &str,
+    ) {
         let provider = MockProvider::new();
         let normalizer = Normalizer::new(provider);
         let variant = parse_hgvs(input).expect("Failed to parse");
         let err = normalizer
             .normalize(&variant)
-            .expect_err("cross-reference payload must surface as UnsupportedVariant");
-        // Pin the concrete error variant so a different error type
-        // (e.g. a future provider-lookup failure) can't accidentally
-        // satisfy the message-text assertion below.
+            .expect_err("cross-reference payload must surface a provider-lookup error");
         assert!(
             matches!(
                 err,
-                ferro_hgvs::error::FerroError::UnsupportedVariant { .. }
+                ferro_hgvs::error::FerroError::ReferenceNotFound { .. }
+                    | ferro_hgvs::error::FerroError::GenomicReferenceNotAvailable { .. }
             ),
-            "expected UnsupportedVariant for cross-reference deferral (input: {}, got: {:?})",
+            "expected provider-lookup error for cross-reference (input: {}, got: {:?})",
             input,
             err
         );
         let msg = format!("{}", err);
         assert!(
-            msg.contains("cross-reference") && msg.contains("follow-up"),
-            "cross-reference deferral must mention both 'cross-reference' and 'follow-up' for grep (input: {}, got: {})",
+            msg.contains(expected_missing_accession),
+            "lookup error must cite the missing inner accession {} (input: {}, got: {})",
+            expected_missing_accession,
             input,
             msg
         );
@@ -5304,30 +5317,31 @@ mod ins_bracketed_expansion {
     }
 
     // -------------------------------------------------------------------
-    // 12. Cross-reference accession in the payload is deferred — error
-    //    with a grep-friendly message mentioning "cross-reference" and
-    //    "follow-up" so users can find the tracking issue.
+    // 12. Cross-reference accession in the payload is resolved against
+    //    the provider (#422). Against an empty provider the inner
+    //    lookup surfaces `ReferenceNotFound` citing the missing
+    //    accession; exhaustive expansion coverage lives in
+    //    `tests/issue_422_cross_reference_ins.rs`.
     // -------------------------------------------------------------------
     #[test]
-    fn ins_cross_reference_returns_unsupported_error() {
+    fn ins_cross_reference_missing_provider_returns_reference_not_found() {
         let err = normalize_err(
             MockProvider::new(),
             "NC_000001.11:g.5207_5208ins[NC_000022.11:g.100_200]",
         );
-        let msg = format!("{}", err);
         assert!(
-            matches!(err, FerroError::UnsupportedVariant { .. }),
-            "expected UnsupportedVariant, got {:?}",
+            matches!(
+                err,
+                FerroError::ReferenceNotFound { .. }
+                    | FerroError::GenomicReferenceNotAvailable { .. }
+            ),
+            "expected provider-lookup error against empty provider, got {:?}",
             err
         );
+        let msg = format!("{}", err);
         assert!(
-            msg.contains("cross-reference"),
-            "error message must mention 'cross-reference' for grep, got: {}",
-            msg
-        );
-        assert!(
-            msg.contains("follow-up"),
-            "error message must mention 'follow-up' for grep, got: {}",
+            msg.contains("NC_000022.11"),
+            "lookup error must cite the missing inner accession; got: {}",
             msg
         );
     }

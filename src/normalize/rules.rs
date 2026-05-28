@@ -1779,11 +1779,116 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
     provider.get_sequence(accession, tx_start - 1, tx_end)
 }
 
+/// Parse a cross-reference string (e.g.
+/// `"NC_000022.10:g.42536337_42536382"`) into its components for
+/// provider lookup. Returns `(accession, coord_kind, start, end)` on
+/// success.
+///
+/// Supports g./m./o./c./n. axes with simple positive-integer ranges
+/// (no offsets, no `*N`, no `?`, no `pter`/`qter` markers). Out-of-scope
+/// shapes return `None` so the caller can surface a focused
+/// `FerroError::UnsupportedVariant`. #422.
+///
+/// **Axis-set rationale:** the parser's `parse_reference_location`
+/// (`src/hgvs/parser/edit.rs`) accepts `g/c/m/n/r/p/o` axes for
+/// `Reference` strings. This helper accepts the subset that has a
+/// well-defined position-range fetch on the inner accession:
+///   - `g.`/`m.`/`o.`: genomic position-range fetch (`Direct`).
+///   - `c.`: CDS-relative; translated via the FOREIGN transcript's
+///     `cds_start` inside `fetch_position_range_bases`.
+///   - `n.`: non-coding transcript; positions are already transcript-
+///     relative (`Direct`).
+///
+/// **Deferred axes (`r.`, `p.`):** RNA needs U→T translation on the
+/// fetched bases (the existing `r.→g.` projection has the primitive
+/// but isn't wired here); protein is structurally invalid as a DNA-
+/// insertion payload. Both stay `UnsupportedVariant` for now. If
+/// `parse_reference_location` ever broadens to additional axes, keep
+/// the match arm below in sync.
+fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, u64)> {
+    let (acc_part, after_colon) = reference.split_once(':')?;
+    // Minimum well-formed shape: `g.A_B` = 5 chars (axis + dot + start
+    // + underscore + end).
+    if acc_part.is_empty() || after_colon.len() < 5 {
+        return None;
+    }
+    let coord_byte = *after_colon.as_bytes().first()?;
+    if after_colon.as_bytes().get(1) != Some(&b'.') {
+        return None;
+    }
+    // c. requires CDS translation via the foreign transcript's cds_start;
+    // g./m./o./n. are direct position-range fetches on the inner accession.
+    // r. and p. are deferred — see the doc-comment above.
+    let kind = match coord_byte {
+        b'g' | b'm' | b'o' | b'n' => InsCoordKind::Direct,
+        b'c' => InsCoordKind::Cds,
+        _ => return None,
+    };
+    let range_str = &after_colon[2..];
+    let (start_str, end_str) = range_str.split_once('_')?;
+    if start_str.is_empty() || end_str.is_empty() {
+        return None;
+    }
+    // Reject any decoration: offsets (`+`/`-`), UTR markers (`*`),
+    // unknown markers (`?`), pter/qter/cen. Only positive-integer
+    // ranges in scope per the issue's acceptance criteria.
+    if !start_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if !end_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let start: u64 = start_str.parse().ok()?;
+    let end: u64 = end_str.parse().ok()?;
+    Some((acc_part.to_string(), kind, start, end))
+}
+
+/// Resolve a cross-reference string to its literal sequence via the
+/// provider. Routes through `fetch_position_range_bases` for the
+/// position-translation logic (`Cds` arm translates via the foreign
+/// transcript's `cds_start`; `Direct` arm fetches directly). The
+/// outer variant's accession is not used here — the inner reference
+/// carries its own accession.
+///
+/// Cross-chromosome translocations (e.g.
+/// `NC_000002.12:g.X_Y delins[NC_000011.10:g.A_B]`) are supported as
+/// long as both accessions are present in the provider; otherwise the
+/// inner lookup returns `FerroError::ReferenceNotFound` citing the
+/// missing accession. #422.
+/// The shape-based (provider-independent) `UnsupportedVariant` error for
+/// a cross-reference whose form is out of scope (`parse_cross_reference`
+/// returned `None`). Shared by `resolve_cross_reference_bases` and the
+/// `detect_deferred_part` pre-scan so the same message is surfaced
+/// whether the unsupported `ExternalRef` is reached during expansion or
+/// caught up front (which is what makes the deferral order-independent).
+fn cross_reference_shape_error(reference: &str) -> FerroError {
+    FerroError::UnsupportedVariant {
+        variant_type: format!(
+            "ins[{}] cross-reference shape not yet supported. \
+             Expansion currently covers g./m./o./c./n. axes with simple \
+             positive-integer ranges. Out-of-scope: r. (RNA — needs U->T \
+             translation; see follow-up), p. (protein — structurally \
+             invalid as DNA-insertion payload), offsets (+/-), UTR \
+             markers (*N), unknown markers (?), and pter/qter/cen \
+             decorations",
+            reference,
+        ),
+    }
+}
+
+fn resolve_cross_reference_bases<P: ReferenceProvider>(
+    reference: &str,
+    provider: &P,
+) -> Result<String, FerroError> {
+    let (acc, kind, start, end) =
+        parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
+    fetch_position_range_bases(&acc, start, end, kind, provider)
+}
+
 /// Append bases of an `InsertedPart` to `out` if the part is a
 /// flat-resolvable form. Returns `Err(FerroError::UnsupportedVariant)`
-/// for the two deferred shapes (cross-reference accession, intronic-
-/// offset CDS range). Returns `Err(...)` for genuine provider lookup
-/// failures.
+/// for the remaining deferred shape (intronic-offset CDS range).
+/// Returns `Err(...)` for genuine provider lookup failures.
 ///
 /// Returns `Ok(false)` if the part is not flat-resolvable in a way the
 /// caller should treat as "leave the variant alone" (currently never —
@@ -1839,22 +1944,35 @@ fn append_part_bases<P: ReferenceProvider>(
             Ok(false)
         }
         InsertedPart::ExternalRef(reference) => {
-            // Same as `InsertedSequence::Reference`, but inside a
-            // Complex bracket (e.g. `ins[A;NC_000022.11:g.100_200]`).
-            Err(FerroError::UnsupportedVariant {
-                variant_type: format!(
-                    "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
-                    reference
-                ),
-            })
+            // Cross-reference inside a Complex bracket (e.g.
+            // `ins[A;NC_000022.11:g.100_200]`). Resolve via the
+            // shared cross-reference resolver, which routes through
+            // `fetch_position_range_bases` for c.-axis CDS translation
+            // and direct position fetch for g./m./o./n. axes. The
+            // resolved bases are appended to the surrounding flat
+            // payload — `[A; cross-ref]` becomes `[A; <bases>]` and
+            // ultimately a single `Literal("A" + <bases>)`. #422.
+            let bases = resolve_cross_reference_bases(reference, provider)?;
+            out.push_str(&bases);
+            Ok(true)
         }
     }
 }
 
-/// Pre-scan parts for deferred shapes — cross-reference (`ExternalRef`)
-/// or intronic-offset CDS range (`CdsPositionRange`). Returns the first
-/// deferred-shape error encountered so callers report it even when an
-/// earlier part is a non-flatten shape (e.g. `Repeat`).
+/// Pre-scan parts for shape-based deferred shapes that must be surfaced
+/// regardless of part order:
+///
+/// - intronic-offset CDS range (`CdsPositionRange`), and
+/// - an out-of-scope cross-reference (`ExternalRef` whose form
+///   `parse_cross_reference` cannot handle — r./p. axes, offsets, UTR
+///   markers, `pter`/`qter`, etc.).
+///
+/// Both are *shape* deferrals (provider-independent), unlike a resolvable
+/// `ExternalRef` or same-reference `PositionRange` whose lookup needs the
+/// provider. Catching them up front means a leading non-flatten part
+/// (e.g. `Repeat`) that short-circuits `expand_complex_parts` to
+/// `Ok(None)` can no longer mask a later unsupported cross-reference —
+/// the deferral is order-independent. #422.
 fn detect_deferred_part(parts: &[InsertedPart]) -> Option<FerroError> {
     for part in parts {
         match part {
@@ -1866,13 +1984,8 @@ fn detect_deferred_part(parts: &[InsertedPart]) -> Option<FerroError> {
                     ),
                 });
             }
-            InsertedPart::ExternalRef(reference) => {
-                return Some(FerroError::UnsupportedVariant {
-                    variant_type: format!(
-                        "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
-                        reference
-                    ),
-                });
+            InsertedPart::ExternalRef(reference) if parse_cross_reference(reference).is_none() => {
+                return Some(cross_reference_shape_error(reference));
             }
             _ => {}
         }
@@ -1884,11 +1997,13 @@ fn detect_deferred_part(parts: &[InsertedPart]) -> Option<FerroError> {
 /// literal sequence, or return `Ok(None)` if at least one part is not
 /// expandable in scope (e.g. a `Repeat { base, count }` member).
 ///
-/// Deferred shapes — `ExternalRef` (cross-reference) and
-/// `CdsPositionRange` (intronic-offset) — are reported as
+/// Deferred shapes — currently only `CdsPositionRange` (intronic-offset
+/// or UTR-marker range) — are reported as
 /// `Err(FerroError::UnsupportedVariant)` even when an earlier part is
 /// non-flatten, because preserving a `Complex` that contains an
-/// unprocessable cross-reference would otherwise silently pass through.
+/// unresolvable CDS-offset range would otherwise silently pass through.
+/// `ExternalRef` was deferred prior to #422; the cross-reference
+/// resolver now handles it via `append_part_bases`.
 pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
     parts: &[InsertedPart],
     accession: &str,
@@ -1907,7 +2022,10 @@ pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
         if !resolved {
             // A part we don't flatten (e.g. Repeat) keeps the whole
             // Complex shape intact — partial flattening would silently
-            // drop semantic content.
+            // drop semantic content. Shape-unsupported parts (CDS-offset
+            // ranges, out-of-scope cross-references) are already surfaced
+            // by `detect_deferred_part` above, so returning here cannot
+            // mask them regardless of part order.
             return Ok(None);
         }
     }
@@ -1929,12 +2047,18 @@ pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
 ///   `Complex` shapes that contain at least one non-flat part).
 /// - `Ok(Some(new_seq))` — a flat `Literal` rewrite for callers to
 ///   substitute in place of the input.
-/// - `Err(FerroError::UnsupportedVariant)` — a deferred shape
-///   (cross-reference accession, intronic-offset CDS range) that the
-///   spec permits but ferro does not yet expand. Errors carry the
-///   grep-friendly tags `"cross-reference"` / `"intronic"` and
-///   `"follow-up"` in their message.
-/// - `Err(FerroError::...)` — genuine provider lookup failure.
+/// - `Err(FerroError::UnsupportedVariant)` — a deferred shape that
+///   the spec permits but ferro does not yet expand. Two categories:
+///   - **Intronic-offset / UTR-marker CDS range** (`CdsPositionRange`):
+///     spec-undefined; error carries the grep tag `"CDS-offset range"`
+///     and `"follow-up"`.
+///   - **Out-of-scope cross-reference** (r./p. axes, or `pter`/`qter`
+///     decoration, etc.): error carries `"cross-reference"` and
+///     describes the supported axis set. Simple positive-integer
+///     ranges on g./m./o./c./n. are now expanded (#422) and no
+///     longer surface as errors.
+/// - `Err(FerroError::...)` — genuine provider lookup failure
+///   (`ReferenceNotFound`, `InvalidCoordinates`, etc.).
 pub fn expand_inserted_sequence<P: ReferenceProvider>(
     seq: &InsertedSequence,
     accession: &str,
@@ -1942,24 +2066,36 @@ pub fn expand_inserted_sequence<P: ReferenceProvider>(
     provider: &P,
 ) -> Result<Option<InsertedSequence>, FerroError> {
     match seq {
-        // `Reference("ACC:coord_a_b")`: cross-reference to another
-        // accession. Spec permits, ferro defers.
-        InsertedSequence::Reference(reference) => Err(FerroError::UnsupportedVariant {
-            variant_type: format!(
-                "ins[{}] cross-reference is valid HGVS but not yet supported by ferro; see follow-up",
-                reference
-            ),
-        }),
+        // `Reference("ACC:coord_a_b")`: bare cross-reference (no
+        // surrounding Complex bracket). Resolve via the shared
+        // cross-reference resolver. #422.
+        //
+        // Same-accession optimization: when the inner accession
+        // matches the outer variant's accession, the resolver still
+        // routes through `fetch_position_range_bases` — the helper
+        // already handles same-accession lookups efficiently, so no
+        // extra branch is needed here.
+        InsertedSequence::Reference(reference) => {
+            let bases = resolve_cross_reference_bases(reference, provider)?;
+            let seq = Sequence::from_str(&bases).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "expanded ins[{}] cross-reference payload contains non-IUPAC base in {:?}",
+                    reference, bases
+                ),
+            })?;
+            Ok(Some(InsertedSequence::Literal(seq)))
+        }
 
         // Same-reference position range — expand directly.
         InsertedSequence::PositionRange { start, end } => {
             let bases = fetch_position_range_bases(accession, *start, *end, kind, provider)?;
-            let bases_seq = Sequence::from_str(&bases).map_err(|_| FerroError::ConversionError {
-                msg: format!(
-                    "expanded ins[{}..={}] payload contains non-IUPAC base in {:?}",
-                    start, end, bases
-                ),
-            })?;
+            let bases_seq =
+                Sequence::from_str(&bases).map_err(|_| FerroError::ConversionError {
+                    msg: format!(
+                        "expanded ins[{}..={}] payload contains non-IUPAC base in {:?}",
+                        start, end, bases
+                    ),
+                })?;
             Ok(Some(InsertedSequence::Literal(bases_seq)))
         }
         InsertedSequence::PositionRangeInv { start, end } => {
