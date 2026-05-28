@@ -10,11 +10,11 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 42,
-      "diverges": 146,
+      "diverges": 135,
       "false-acceptance": 83,
       "needs-reference": 31,
       "parse-error": 338,
-      "preserved": 632
+      "preserved": 643
     },
     "by_coordinate_system": {
       "c": 464,
@@ -12897,114 +12897,6 @@
       ]
     },
     {
-      "input": "LRG_199t1:r.186_187ins186+1_186+4",
-      "current": "LRG_199t1:r.186_187ins[186+1_186+4]",
-      "spec_expected": "LRG_199t1:r.186_187ins186+1_186+4",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/numbering.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
-      "current": "NC_000023.10(NM_004006.2):r.186_187ins[186+1_186+4]",
-      "spec_expected": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/numbering.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
-      "current": "NC_000023.10(NM_004006.2):r.357_358ins[357+1_357+12]",
-      "spec_expected": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268",
-      "current": "NC_000023.11(NM_004006.2):r.649_650ins[650-1400_650-1268]",
-      "spec_expected": "NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/splicing.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1",
-      "current": "NC_000023.11(NM_004006.2):r.649_650ins[650-50_650-1]",
-      "spec_expected": "NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/splicing.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NC_000023.11(NM_004006.2):r.831_832ins831+1_831+67",
-      "current": "NC_000023.11(NM_004006.2):r.831_832ins[831+1_831+67]",
-      "spec_expected": "NC_000023.11(NM_004006.2):r.831_832ins831+1_831+67",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/splicing.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
-      "current": "NG_012232.1(NM_004006.2):r.186_187ins[186+1_186+4]",
-      "spec_expected": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/numbering.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
-      "current": "NG_012232.1(NM_004006.2):r.357_358ins[357+1_357+12]",
-      "spec_expected": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "background",
-      "source_paths": [
-        "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:r.2623_2803delins2804_2949",
-      "current": "NM_004006.2:r.2623_2803delins[2804_2949]",
-      "spec_expected": "NM_004006.2:r.2623_2803delins2804_2949",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/delins.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.2:r.[76a>u];[?]",
       "current": "[NM_004006.2:r.76a>u];[?]",
       "spec_expected": "NM_004006.2:r.[76a>u];[?]",
@@ -13037,34 +12929,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.234_235ins123_234inv",
-      "input_prefixed": "NM_004006.3:r.234_235ins123_234inv",
-      "current": "NM_004006.3:r.234_235ins[123_234inv]",
-      "spec_expected": "NM_004006.3:r.234_235ins123_234inv",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/duplication.md",
-        "docs/recommendations/RNA/insertion.md",
-        "docs/recommendations/RNA/inversion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.849_850ins858_895",
-      "input_prefixed": "NM_004006.3:r.849_850ins858_895",
-      "current": "NM_004006.3:r.849_850ins[858_895]",
-      "spec_expected": "NM_004006.3:r.849_850ins858_895",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/insertion.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -13210,7 +13074,7 @@
     {
       "input": "r.456_457ins123_456",
       "input_prefixed": "NM_004006.3:r.456_457ins123_456",
-      "current": "NM_004006.3:r.456_457ins[123_456]",
+      "current": "NM_004006.3:r.456_457ins123_456",
       "spec_expected": null,
       "status": "false-acceptance",
       "coordinate_system": "r",
@@ -14534,6 +14398,17 @@
       ]
     },
     {
+      "input": "LRG_199t1:r.186_187ins186+1_186+4",
+      "current": "LRG_199t1:r.186_187ins186+1_186+4",
+      "spec_expected": "LRG_199t1:r.186_187ins186+1_186+4",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/numbering.md"
+      ]
+    },
+    {
       "input": "LRG_199t1:r.426_427insa",
       "current": "LRG_199t1:r.426_427insa",
       "spec_expected": "LRG_199t1:r.426_427insa",
@@ -14600,9 +14475,53 @@
       ]
     },
     {
+      "input": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
+      "current": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
+      "spec_expected": "NC_000023.10(NM_004006.2):r.186_187ins186+1_186+4",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/numbering.md"
+      ]
+    },
+    {
+      "input": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
+      "current": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
+      "spec_expected": "NC_000023.10(NM_004006.2):r.357_358ins357+1_357+12",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/refseq.md"
+      ]
+    },
+    {
       "input": "NC_000023.11(NM_004006.2):r.(76a>c)",
       "current": "NC_000023.11(NM_004006.2):r.(76a>c)",
       "spec_expected": "NC_000023.11(NM_004006.2):r.(76a>c)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/splicing.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268",
+      "current": "NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268",
+      "spec_expected": "NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/splicing.md"
+      ]
+    },
+    {
+      "input": "NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1",
+      "current": "NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1",
+      "spec_expected": "NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",
@@ -14655,6 +14574,17 @@
       ]
     },
     {
+      "input": "NC_000023.11(NM_004006.2):r.831_832ins831+1_831+67",
+      "current": "NC_000023.11(NM_004006.2):r.831_832ins831+1_831+67",
+      "spec_expected": "NC_000023.11(NM_004006.2):r.831_832ins831+1_831+67",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/splicing.md"
+      ]
+    },
+    {
       "input": "NC_000023.11(NM_004006.2):r.831_832ins[ga;831+3_831+60]",
       "current": "NC_000023.11(NM_004006.2):r.831_832ins[ga;831+3_831+60]",
       "spec_expected": "NC_000023.11(NM_004006.2):r.831_832ins[ga;831+3_831+60]",
@@ -14685,6 +14615,28 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/splicing.md"
+      ]
+    },
+    {
+      "input": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
+      "current": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
+      "spec_expected": "NG_012232.1(NM_004006.2):r.186_187ins186+1_186+4",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/numbering.md"
+      ]
+    },
+    {
+      "input": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
+      "current": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
+      "spec_expected": "NG_012232.1(NM_004006.2):r.357_358ins357+1_357+12",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "background",
+      "source_paths": [
+        "docs/background/refseq.md"
       ]
     },
     {
@@ -14756,6 +14708,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/insertion.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:r.2623_2803delins2804_2949",
+      "current": "NM_004006.2:r.2623_2803delins2804_2949",
+      "spec_expected": "NM_004006.2:r.2623_2803delins2804_2949",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/delins.md"
       ]
     },
     {
@@ -15507,6 +15470,20 @@
       ]
     },
     {
+      "input": "r.234_235ins123_234inv",
+      "input_prefixed": "NM_004006.3:r.234_235ins123_234inv",
+      "current": "NM_004006.3:r.234_235ins123_234inv",
+      "spec_expected": "NM_004006.3:r.234_235ins123_234inv",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/duplication.md",
+        "docs/recommendations/RNA/insertion.md",
+        "docs/recommendations/RNA/inversion.md"
+      ]
+    },
+    {
       "input": "r.4567_4569=",
       "input_prefixed": "NM_004006.3:r.4567_4569=",
       "current": "NM_004006.3:r.4567_4569=",
@@ -15650,6 +15627,18 @@
         "docs/recommendations/RNA/alleles.md",
         "docs/recommendations/RNA/splicing.md",
         "docs/recommendations/RNA/substitution.md"
+      ]
+    },
+    {
+      "input": "r.849_850ins858_895",
+      "input_prefixed": "NM_004006.3:r.849_850ins858_895",
+      "current": "NM_004006.3:r.849_850ins858_895",
+      "spec_expected": "NM_004006.3:r.849_850ins858_895",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/insertion.md"
       ]
     },
     {
