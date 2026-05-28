@@ -153,7 +153,25 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      # The Test job builds and LINKS ~179 separate integration-test
+      # binaries (tests/*.rs). With full debuginfo (dev/test profile
+      # default `debug = true`) the linked `target/` exhausts the stock
+      # runner's ~14 GB free disk, and the linker dies with
+      # `ld terminated with signal 7 (Bus error)` — a write past a full
+      # disk. Stripping test-binary debuginfo in CI removes the bulk of
+      # each binary's size. CI-only (not in Cargo.toml), so local dev
+      # keeps full debuginfo for backtraces.
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
+      - name: Free up runner disk space
+        # Reclaim large preinstalled toolchains ferro's build never uses
+        # (~25-30 GB), as a second guard against the disk-exhaustion link
+        # crash above. Inline removal avoids adding a third-party action.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           lfs: true
@@ -175,10 +193,15 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test
+          # `-nodebug` suffix: with CARGO_PROFILE_TEST_DEBUG=0 the test
+          # artifacts are much smaller. A fresh key prevents restoring the
+          # old debuginfo-laden `target/` (which would refill the disk and
+          # defeat the size reduction). Don't fall back to the generic
+          # `-cargo-` caches for the same reason — only reuse a Cargo.lock-
+          # matched nodebug cache.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons
         # reference-aware suite both silently no-op when
