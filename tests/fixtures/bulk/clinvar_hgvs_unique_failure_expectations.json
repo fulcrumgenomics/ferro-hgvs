@@ -324,6 +324,10 @@
     "[dupins_mash_up]": {
       "category": "rejected_by_design",
       "reason": "The `dupins<seq>` form is not used in HGVS nomenclature per DNA/duplication.md:92 (closes #445)."
+    },
+    "[single_position_insertion]": {
+      "category": "rejected_by_design",
+      "reason": "Single-position insertion is explicitly invalid per DNA/insertion.md:95-101 Q&A; the canonical form requires a 2-position adjacent range (closes #446)."
     }
   },
   "expected_failures": {
@@ -526,6 +530,13 @@
     "NW_019805500.1:g.472169CCG[(100-833)]": "[deprecated_dash_range_inside_brackets]",
     "NC_000023.11:g.140662902_139977334dupinsCTCA": "[dupins_mash_up]",
     "NG_007111.1:g.21410_26335dupinsTAT": "[dupins_mash_up]",
-    "NG_007159.3:g.173054_173069dupinsAluYa5": "[dupins_mash_up]"
+    "NG_007159.3:g.173054_173069dupinsAluYa5": "[dupins_mash_up]",
+    "LRG_661t1:c.1145insA": "[single_position_insertion]",
+    "NM_000051.3:c.2839-3insALU": "[single_position_insertion]",
+    "NM_000051.3:c.8010+30insALU": "[single_position_insertion]",
+    "NM_000249.3:c.1667+678insALU": "[single_position_insertion]",
+    "NM_002485.4:c.842insT": "[single_position_insertion]",
+    "NM_003977.2:c.919insC": "[single_position_insertion]",
+    "NM_007294.3:c.3627insA": "[single_position_insertion]"
   }
 }

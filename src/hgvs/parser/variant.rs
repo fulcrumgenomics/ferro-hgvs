@@ -5647,6 +5647,10 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // nomenclature"; #445).
     validate_no_dupins(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject single-position
+    // insertion (HGVS DNA/insertion.md:95-101 Q&A — explicit "No"; #446).
+    validate_no_point_insertion(&variant, input)?;
+
     Ok(variant)
 }
 
@@ -5698,6 +5702,97 @@ fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
                 validate_no_dupins(inner)?;
             }
         }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject insertions whose anchor is a single position rather than a
+/// two-position range. Per `DNA/insertion.md:95-101`:
+///
+/// > "Can I describe a variant as `g.123insG`? **No**, since the
+/// > description is not unequivocal, it is not allowed. What does the
+/// > description mean, the insertion of a `G` **at** position `g.123`
+/// > or the insertion of a `G` **after** position `g.123`?"
+///
+/// The check walks Allele wrappers and inspects each leaf NaEdit. The
+/// canonical fix for the user is to use `g.123_124insG` (or whatever
+/// adjacent-pair anchor is intended).
+fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(), FerroError> {
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::uncertainty::Mu;
+
+    fn pos_eq<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+            _ => false,
+        }
+    }
+    fn is_insertion(edit: &Mu<NaEdit>) -> bool {
+        matches!(edit.inner(), Some(NaEdit::Insertion { .. }))
+    }
+    fn make_error(prefix: &str) -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        // Carry a structured `InvalidEdit` code (mirroring
+        // `validate_no_dupins`) so the semantic rejection survives
+        // slash-form fallback paths that would otherwise mask an
+        // unstructured parse error and lose the single-position guidance.
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "single-position insertion not allowed on {prefix}; the anchor MUST be \
+                 two adjacent positions (e.g. {prefix}123_124insATG, not \
+                 {prefix}123insATG) per DNA/insertion.md:95-101"
+            ),
+            Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+        )
+    }
+
+    match variant {
+        HgvsVariant::Genome(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("g."));
+        }
+        HgvsVariant::Cds(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("c."));
+        }
+        HgvsVariant::Tx(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("n."));
+        }
+        HgvsVariant::Rna(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("r."));
+        }
+        HgvsVariant::Mt(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("m."));
+        }
+        HgvsVariant::Circular(v)
+            if is_insertion(&v.loc_edit.edit)
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
+        {
+            return Err(make_error("o."));
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_point_insertion(inner, _source)?;
+            }
+        }
+        // Protein insertions use a different anchor model — handled
+        // elsewhere; nothing to validate here.
         _ => {}
     }
     Ok(())

@@ -215,16 +215,11 @@ fn accepts_dup_with_explicit_count_diverges_from_spec() {
     );
 }
 
-#[test]
-fn accepts_single_position_insertion_diverges_from_spec() {
-    // dna-insertion:C-C9 — insertion.md:95-101 Q&A "Can I describe a
-    // variant as `g.123insG`? No". Anchor MUST be two adjacent positions.
-    assert_accepted_diverges_from_spec(
-        "NC_000023.11:g.123insG",
-        "NC_000023.11:g.123insG",
-        "insertion.md:95-101 — single-position ins anchor explicitly rejected",
-    );
-}
+// Single-position insertion (`g.123insG`) is invalid per
+// insertion.md:95-101 and is now REJECTED at parse time (closes #446);
+// the former accept-divergence probe is obsolete. Its rejection is
+// pinned in `tests/reject_single_position_insertion.rs`, so it is
+// intentionally not duplicated here.
 
 #[test]
 fn rejects_caret_separator_in_insertion() {

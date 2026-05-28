@@ -19,6 +19,10 @@
     "[trailing_plus_after_protein_del]": {
       "category": "rejected_by_design",
       "reason": "Trailing `+` after protein deletion."
+    },
+    "[single_position_insertion]": {
+      "category": "rejected_by_design",
+      "reason": "Single-position insertion is explicitly invalid per DNA/insertion.md:95-101 Q&A; the canonical form requires a 2-position adjacent range (closes #446)."
     }
   },
   "expected_failures": {
@@ -26,6 +30,7 @@
     "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "[trans_compound_with_mosaic]",
     "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "[trans_compound_with_internal_cis]",
     "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
-    "NP_000081.1:p.Gly333_Lys350del+": "[trailing_plus_after_protein_del]"
+    "NP_000081.1:p.Gly333_Lys350del+": "[trailing_plus_after_protein_del]",
+    "LRG_135t1:c.8010+30insALU": "[single_position_insertion]"
   }
 }
