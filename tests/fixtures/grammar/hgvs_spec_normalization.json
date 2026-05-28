@@ -13,8 +13,8 @@
       "diverges": 135,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 338,
-      "preserved": 643
+      "parse-error": 334,
+      "preserved": 647
     },
     "by_coordinate_system": {
       "c": 464,
@@ -862,18 +862,6 @@
       "source_kind": "background",
       "source_paths": [
         "docs/background/refseq.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.2:c.2376G>C(;)(2376G>C)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(2376G>C)\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.2376G>C(;)(2376G>C)",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -2777,19 +2765,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "c.[2376G>C];[=]",
-      "input_prefixed": "NM_004006.2:c.[2376G>C];[=]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"=\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.[2376G>C];[=]",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "class=\"invalid\">NM_000109.3:c.-401C>T</code>",
       "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"class=\\\"invalid\\\">NM_000109.3:c.-401C>T<\", code: Alpha })",
       "spec_expected": "class=\"invalid\">NM_000109.3:c.-401C>T</code>",
@@ -3848,6 +3823,17 @@
       "source_paths": [
         "docs/recommendations/DNA/duplication.md",
         "tests/hgvs_spec_compliance_tests.rs (legacy)"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "current": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "spec_expected": "NM_004006.2:c.2376G>C(;)(2376G>C)",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
       ]
     },
     {
@@ -5713,6 +5699,18 @@
         "docs/recommendations/DNA/substitution.md"
       ],
       "working_group": "SVD-WG010"
+    },
+    {
+      "input": "c.[2376G>C];[=]",
+      "input_prefixed": "NM_004006.2:c.[2376G>C];[=]",
+      "current": "NM_004006.2:c.[2376G>C];[=]",
+      "spec_expected": "NM_004006.2:c.[2376G>C];[=]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
+      ]
     },
     {
       "input": "c.[2376_2377insGT];[2376_2377=]",
@@ -13204,18 +13202,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199t1:r.76a>u(;)(76a>u)",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(76a>u)\", code: Digit })",
-      "spec_expected": "LRG_199t1:r.76a>u(;)(76a>u)",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:r.=/6_8del",
       "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '6_8'",
       "spec_expected": "LRG_199t1:r.=/6_8del",
@@ -13229,7 +13215,7 @@
     },
     {
       "input": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(578c>u\", code: Digit })",
+      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(578c>u;1339a>g;1680del)\", code: Digit })",
       "spec_expected": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
       "status": "parse-error",
       "coordinate_system": "r",
@@ -14331,19 +14317,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "r.[76a>u];[=]",
-      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"=\", code: Digit })",
-      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "r.[83g>u,73_93del]",
       "input_prefixed": "NM_004006.3:r.[83g>u,73_93del]",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \",73_93del\", code: Tag })",
@@ -14420,6 +14393,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/insertion.md"
+      ]
+    },
+    {
+      "input": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "current": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "spec_expected": "LRG_199t1:r.76a>u(;)(76a>u)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
       ]
     },
     {
@@ -15718,6 +15702,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/delins.md"
+      ]
+    },
+    {
+      "input": "r.[76a>u];[=]",
+      "input_prefixed": "NM_004006.3:r.[76a>u];[=]",
+      "current": "NM_004006.3:r.[76a>u];[=]",
+      "spec_expected": "NM_004006.3:r.[76a>u];[=]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
       ]
     },
     {

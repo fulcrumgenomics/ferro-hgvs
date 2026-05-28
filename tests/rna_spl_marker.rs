@@ -17,8 +17,8 @@
 //! - hash + Eq distinctness across the four forms,
 //! - non-equivalence with `r.?` (whole-RNA unknown),
 //! - rejection of malformed inputs (`r.spl??`, `r.spline`, `r.SPL`, whitespace),
-//! - current rejection of whole-entity edits inside allele brackets
-//!   (`r.[spl?];[spl]`) — pre-existing parser limitation, out of E2 scope.
+//! - round-trip of whole-entity edits inside allele brackets
+//!   (`r.[spl?];[spl]`) as of #396 item 3.
 
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
@@ -228,31 +228,28 @@ fn rna_spl_question_mark_not_equal_to_rna_unknown() {
 }
 
 // ---------------------------------------------------------------------------
-// Allele compounds — pinned to current behavior.
+// Allele compounds — supported as of #396 item 3.
 //
-// ferro's RNA allele bracket parsers (`parse_rna_allele_shorthand` and
-// `parse_rna_trans_allele_shorthand`) require an interval before each segment's
-// edit, so today they reject all whole-entity splicing markers — including the
-// pre-existing `r.[spl];[spl]`. This is independent of #126 (which scopes
-// standalone `r.spl?` / `r.(spl?)`); allowing whole-entity edits inside allele
-// brackets is its own change. Pin the current behavior so any future allele
-// parser refactor surfaces it.
+// `parse_rna_bracket_member` (the per-bracket dispatcher used by both
+// `parse_rna_allele_shorthand` cis/unknown paths and
+// `parse_rna_trans_allele_shorthand`) now recognises the whole-entity RNA
+// edits `=` / `?` / `0` / `spl` / `spl?` / `(spl)` / `(spl?)` in addition to
+// the previously-supported position-based edits and predicted-wrapper form.
+// Whole-entity members attach a dummy interval at position 1 (mirroring
+// `parse_rna_variant`'s top-level handling).
 // ---------------------------------------------------------------------------
 
-/// `r.[spl?];[spl]` is currently rejected by the allele bracket parser. When/if
-/// support for whole-entity RNA edits inside allele brackets is added, flip this
-/// pin to assert successful round-trip.
+/// `r.[spl?];[spl]` must round-trip after #396 item 3. Replaces the older
+/// "currently rejected" pin.
 #[test]
-fn rna_spl_allele_compound_currently_rejected() {
-    let result = parse_hgvs("NM_004006.2:r.[spl?];[spl]");
-    assert!(
-        result.is_err(),
-        "r.[spl?];[spl] is expected to be rejected today (pre-existing limitation \
-         of the RNA allele bracket parser, independent of this PR's scope); got \
-         Ok({:?}). When support for whole-entity edits inside allele brackets is \
-         added, flip this pin to assert successful round-trip.",
-        result.ok().map(|v| v.to_string()),
-    );
+fn rna_spl_allele_compound_round_trip() {
+    let variant = parse_hgvs("NM_004006.2:r.[spl?];[spl]")
+        .expect("r.[spl?];[spl] must parse after #396 item 3");
+    // Exact-string equality so a regression that drops the `?` (yielding
+    // `[spl];[spl]`) or that loses the trans-form split (`[spl?];[spl]` →
+    // `[spl?;spl]`) is caught — a `contains("spl")` check would silently
+    // match `spl?` and miss either regression.
+    assert_eq!(variant.to_string(), "NM_004006.2:r.[spl?];[spl]");
 }
 
 // ---------------------------------------------------------------------------
