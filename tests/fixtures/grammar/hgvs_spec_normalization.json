@@ -13,8 +13,8 @@
       "diverges": 135,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 334,
-      "preserved": 647
+      "parse-error": 333,
+      "preserved": 648
     },
     "by_coordinate_system": {
       "c": 464,
@@ -11159,19 +11159,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "p.[Ser68Arg];[=]",
-      "input_prefixed": "NP_003997.1:p.[Ser68Arg];[=]",
-      "current": "parse error: Parse error at position 24: Unexpected trailing characters: ';[=]'",
-      "spec_expected": "NP_003997.1:p.[Ser68Arg];[=]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199p1:p.(Met1?)",
       "current": "LRG_199p1:p.(Met1?)",
       "spec_expected": "LRG_199p1:p.(Met1?)",
@@ -12731,6 +12718,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/delins.md"
+      ]
+    },
+    {
+      "input": "p.[Ser68Arg];[=]",
+      "input_prefixed": "NP_003997.1:p.[Ser68Arg];[=]",
+      "current": "NP_003997.1:p.[Ser68Arg];[=]",
+      "spec_expected": "NP_003997.1:p.[Ser68Arg];[=]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
       ]
     },
     {
