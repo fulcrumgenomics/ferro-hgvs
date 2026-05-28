@@ -4287,25 +4287,42 @@ fn parse_clinvar_style_allele<'a>(
     let content = &input[1..close_bracket];
     let remaining = &input[close_bracket + 1..];
 
-    // Check for unknown phase marker (;)
-    let has_unknown_phase = content.contains("(;)");
+    // Scan for top-level (depth-0) allele separators. Inner `;` / `(;)`
+    // belonging to a nested edit (`delins[A;G]`) or a predicted-wrapper
+    // member must NOT drive phase detection or member splitting — a naive
+    // `content.split(';')` mis-splits `delins[A;G]` into bogus members.
+    // See `scan_allele_separators`.
+    let scan = scan_allele_separators(content);
 
-    // Split by either (;) or ; to get individual variant parts
-    let parts: Vec<&str> = if has_unknown_phase {
-        // Split on (;) first, then on ;
-        content
-            .split("(;)")
-            .flat_map(|part| part.split(';'))
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        content
-            .split(';')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect()
-    };
+    // Mixed `;`/`(;)` inside one bracket pair is not spec-valid — there is
+    // no HGVS shape for "A and B are cis to each other but unknown phase to
+    // C" in a single bracket. Reject rather than silently flattening to
+    // `AllelePhase::Unknown` (mirrors the compact-prefix path, #396 item 2).
+    if scan.has_unknown_phase && scan.has_cis_separator {
+        return Err(FerroError::Parse {
+            pos: 1,
+            msg: "Mixed ';' and '(;)' separators in a single allele bracket are not valid HGVS"
+                .to_string(),
+            diagnostic: None,
+        });
+    }
+
+    let has_unknown_phase = scan.has_unknown_phase;
+    // Reject malformed separators (`;;`, leading/trailing `;`) rather than
+    // silently dropping the empty member, consistent with the sibling
+    // compound-allele parsers.
+    let mut parts: Vec<&str> = Vec::with_capacity(scan.members.len());
+    for member in &scan.members {
+        let member = member.trim();
+        if member.is_empty() {
+            return Err(FerroError::Parse {
+                pos: 1,
+                msg: "Empty allele member in ClinVar-style allele".to_string(),
+                diagnostic: None,
+            });
+        }
+        parts.push(member);
+    }
 
     if parts.is_empty() {
         return Err(FerroError::Parse {
@@ -4369,12 +4386,27 @@ fn parse_cis_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     // Extract content inside brackets
     let content = &input[1..close_bracket];
 
-    // Split by semicolon and parse each variant
+    // Split at top-level (depth-0) `;` only. Inner `;` belonging to a
+    // nested edit (`delins[A;G]`) is at bracket depth 1 and must not be
+    // treated as an allele separator. This entrypoint is reached only for
+    // the cis form (`detect_allele_type` routes any `(;)` to the
+    // unknown-phase entrypoint), so no mixed-phase handling is needed here.
+    // See `scan_allele_separators`.
+    let scan = scan_allele_separators(content);
+
+    // Parse each top-level member.
     let mut variants = Vec::with_capacity(4);
-    for part in content.split(';') {
+    for part in scan.members {
         let part = part.trim();
+        // Reject malformed separators (`;;`, leading/trailing `;`) rather than
+        // silently dropping the empty group, consistent with the sibling
+        // compound-allele parsers.
         if part.is_empty() {
-            continue;
+            return Err(FerroError::Parse {
+                pos: 1,
+                msg: "Empty ';' group in cis allele".to_string(),
+                diagnostic: None,
+            });
         }
         let (remaining, variant) = parse_single_variant(part)?;
         if !remaining.trim().is_empty() {
@@ -5351,12 +5383,29 @@ fn parse_unknown_phase_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     // Extract content inside brackets
     let content = &input[1..input.len() - 1];
 
-    // Split by (;) and parse each variant. Empty groups (e.g.
+    // Scan for top-level (depth-0) `(;)` separators. Inner `;` / `(;)`
+    // belonging to a nested edit must not drive member splitting. See
+    // `scan_allele_separators`.
+    let scan = scan_allele_separators(content);
+
+    // Mixed `;`/`(;)` inside one bracket pair is not spec-valid (same shape
+    // rejected by the compact-prefix path in #396 item 2): there is no HGVS
+    // form for "A and B are cis to each other but unknown phase to C".
+    if scan.has_unknown_phase && scan.has_cis_separator {
+        return Err(FerroError::Parse {
+            pos: 1,
+            msg: "Mixed ';' and '(;)' separators in a single allele bracket are not valid HGVS"
+                .to_string(),
+            diagnostic: None,
+        });
+    }
+
+    // Split at top-level `(;)` and parse each variant. Empty groups (e.g.
     // `[A:c.x(;)(;)B:c.y]`, leading/trailing `(;)`) are malformed; reject
     // rather than silently dropping them — matches the per-coord helpers
     // (`parse_genome_kind_compound_allele` etc.) introduced for #123.
     let mut variants = Vec::with_capacity(2);
-    for part in content.split("(;)") {
+    for part in scan.members {
         let part = part.trim();
         if part.is_empty() {
             return Err(FerroError::Parse {
@@ -6985,6 +7034,76 @@ mod tests {
             assert_eq!(allele.phase, AllelePhase::Unknown);
             assert_eq!(allele.variants.len(), 2);
         }
+    }
+
+    #[test]
+    fn test_parse_cis_allele_nested_delins_not_missplit() {
+        // Expanded cis allele (each member carries its own accession) whose
+        // first member is a multi-segment `delins[A;G]`. The inner `;` lives
+        // at bracket depth 1 and must NOT be treated as an allele separator,
+        // so the allele has exactly two members — not three. Regression for
+        // the naive `content.split(';')` in `parse_cis_allele`.
+        let variant =
+            parse_variant("[NC_000001.11:g.100_102delins[A;G];NC_000001.11:g.200A>G]").unwrap();
+        assert!(matches!(variant, HgvsVariant::Allele(_)));
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::Cis);
+            assert_eq!(allele.variants.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_parse_clinvar_style_allele_nested_delins_not_missplit() {
+        // Same depth-aware split for the ClinVar-style entrypoint
+        // (`accession:[c.var1;c.var2]`): the inner `;` in `delins[A;G]` is at
+        // bracket depth 1 and must not split the allele into a bogus member.
+        let variant = parse_variant("NC_000001.11:[g.100_102delins[A;G];g.200A>G]").unwrap();
+        assert!(matches!(variant, HgvsVariant::Allele(_)));
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::Cis);
+            assert_eq!(allele.variants.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_parse_clinvar_style_allele_rejects_mixed_phase() {
+        // Mixed `;`/`(;)` inside one ClinVar-style bracket pair has no
+        // spec-defined HGVS shape (same rationale as the compact-prefix
+        // `c.[A;B(;)C]` reject in #396 item 2). It must reject rather than
+        // silently flatten to `AllelePhase::Unknown`.
+        assert!(parse_variant("NM_000088.3:[c.100A>G;c.200C>T(;)c.300G>A]").is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_phase_allele_rejects_mixed_phase() {
+        // Expanded unknown-phase entrypoint (each member carries its own
+        // accession): a top-level `;` mixed with a top-level `(;)` is the
+        // same unrepresentable mixed-phase shape and must reject.
+        assert!(parse_variant(
+            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T(;)NM_000088.3:c.300G>A]"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_parse_clinvar_style_allele_rejects_empty_members() {
+        // Malformed separators (`;;`, leading `;`, trailing `;`) must ERROR
+        // rather than silently dropping the empty member, consistent with the
+        // sibling compound-allele parsers. These reach
+        // `parse_clinvar_style_allele` via the `accession:[...]` shorthand.
+        assert!(parse_variant("NM_006876.2:[c.1168A>G;;c.1217C>T]").is_err());
+        assert!(parse_variant("NM_006876.2:[;c.1168A>G;c.1217C>T]").is_err());
+        assert!(parse_variant("NM_006876.2:[c.1168A>G;c.1217C>T;]").is_err());
+        assert!(parse_variant("NM_006876.2:[ ]").is_err());
+    }
+
+    #[test]
+    fn test_parse_cis_allele_rejects_empty_members() {
+        // Same malformed-separator rejection for the expanded cis entrypoint
+        // (`parse_cis_allele`), where each member carries its own accession.
+        assert!(parse_variant("[NC_000001.11:g.100A>G;;NC_000001.11:g.200A>G]").is_err());
+        assert!(parse_variant("[;NC_000001.11:g.100A>G;NC_000001.11:g.200A>G]").is_err());
+        assert!(parse_variant("[NC_000001.11:g.100A>G;NC_000001.11:g.200A>G;]").is_err());
     }
 
     // === SVD-WG006: Circular DNA (o.) tests ===
