@@ -308,8 +308,10 @@ pub fn correct_protein_arrow(input: &str) -> (String, Vec<DetectedCorrection>) {
 /// Detects four deprecated forms within `p.` segments of the input and rewrites
 /// them to their canonical `Ter`-based equivalents:
 ///
-/// - `fsXN` (digits) → `fsTerN` — emits `DeprecatedFrameshiftX` (W3010).
-/// - `fs*N` (digits) → `fsTerN` — emits `DeprecatedFrameshiftStar` (W3009).
+/// - `fsXN` (digits) or `fsX?` (uncertain) → `fsTerN` / `fsTer?` — emits
+///   `DeprecatedFrameshiftX` (W3010).
+/// - `fs*N` (digits) or `fs*?` (uncertain) → `fsTerN` / `fsTer?` — emits
+///   `DeprecatedFrameshiftStar` (W3009).
 /// - position-then-`X` at edit boundary → `Ter` — emits `DeprecatedStopCodonX` (W3008).
 ///   Distinguished from `Xaa` by requiring `X` not followed by a letter.
 /// - position-then-`*` at edit boundary → `Ter` — emits `DeprecatedStopCodonStar` (W3007).
@@ -334,7 +336,8 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (String, Vec<DetectedCor
     while i < bytes.len() {
         let c = bytes[i];
 
-        // Detect "fs*N" or "fsXN" (frameshift termination notation).
+        // Detect "fs*N", "fsXN", "fs*?", or "fsX?" (frameshift termination
+        // notation, both known-position and uncertain-position forms).
         // Must begin at a literal "fs" boundary; the byte before the `f` is not
         // a lowercase letter (so we don't catch e.g. "ffs" — though that's
         // implausible in HGVS).
@@ -344,19 +347,24 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (String, Vec<DetectedCor
             && i + 2 < bytes.len()
             && (bytes[i + 2] == b'*' || bytes[i + 2] == b'X')
             && i + 3 < bytes.len()
-            && bytes[i + 3].is_ascii_digit()
+            && (bytes[i + 3].is_ascii_digit() || bytes[i + 3] == b'?')
             && in_protein_segment(input, i + 2)
         {
-            // Walk the digit run.
             let star_or_x = bytes[i + 2];
-            let digits_start = i + 3;
-            let mut digits_end = digits_start;
-            while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
-                digits_end += 1;
-            }
-            let digits = &input[digits_start..digits_end];
-            let original = &input[i + 2..digits_end]; // "*23" or "X23"
-            let corrected = format!("Ter{}", digits);
+            // Walk the trailing token: either a digit run ("23") or a single
+            // "?" (uncertain termination position, VEP notation).
+            let trail_start = i + 3;
+            let (corrected_trail, trail_end) = if bytes[trail_start] == b'?' {
+                ("?".to_string(), trail_start + 1)
+            } else {
+                let mut digits_end = trail_start;
+                while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
+                    digits_end += 1;
+                }
+                (input[trail_start..digits_end].to_string(), digits_end)
+            };
+            let original = &input[i + 2..trail_end]; // "*23", "X23", "*?", or "X?"
+            let corrected = format!("Ter{}", corrected_trail);
             let error_type = if star_or_x == b'*' {
                 ErrorType::DeprecatedFrameshiftStar
             } else {
@@ -367,12 +375,12 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (String, Vec<DetectedCor
                 original.to_string(),
                 corrected.clone(),
                 i + 2,
-                digits_end,
+                trail_end,
             ));
-            // Emit "fs" + "Ter" + digits to output.
+            // Emit "fs" + "Ter" + trail to output.
             out.push_str("fs");
             out.push_str(&corrected);
-            i = digits_end;
+            i = trail_end;
             continue;
         }
 
