@@ -248,6 +248,14 @@ enum SpecSection {
     /// `cases.json`.
     #[serde(rename = "HGVS §Prioritization")]
     HgvsPrioritization,
+    /// HGVS protein reference format — a `p.` description's reference is the
+    /// protein sequence accession alone (e.g. `NP_000068.1:p.(…)`); every
+    /// example in `docs/recommendations/protein/*` uses this bare form. The
+    /// `genomic_context(protein)` wrapper mutalyzer emits
+    /// (`NG_007485.1(NP_000068.1):p.…`) has no counterpart in the spec, so
+    /// ferro's bare-`NP_` output is the spec-correct value.
+    #[serde(rename = "HGVS protein reference (bare NP)")]
+    HgvsProteinReference,
 }
 
 impl SpecSection {
@@ -257,6 +265,7 @@ impl SpecSection {
     fn as_str(self) -> &'static str {
         match self {
             SpecSection::HgvsPrioritization => "HGVS §Prioritization",
+            SpecSection::HgvsProteinReference => "HGVS protein reference (bare NP)",
         }
     }
 }
@@ -563,10 +572,16 @@ impl AxisTally {
 // ----------------------------------------------------------------------------
 
 fn transcript_of(v: &HgvsVariant) -> Option<String> {
+    // Return the *bare* transcript accession (e.g. `NM_000077.4`), not the
+    // compound `genomic_context(transcript)` form `full()` produces (e.g.
+    // `NG_007485.1(NM_000077.4)`). `VariantProjector::project_variant`
+    // compares the requested transcript id against `transcript_accession()`,
+    // so the compound form spuriously trips its transcript_id-mismatch guard
+    // for every `NG_(NM_)` input (#326).
     match v {
-        HgvsVariant::Cds(c) => Some(c.accession.full()),
-        HgvsVariant::Tx(t) => Some(t.accession.full()),
-        HgvsVariant::Rna(r) => Some(r.accession.full()),
+        HgvsVariant::Cds(c) => Some(c.accession.transcript_accession()),
+        HgvsVariant::Tx(t) => Some(t.accession.transcript_accession()),
+        HgvsVariant::Rna(r) => Some(r.accession.transcript_accession()),
         _ => None,
     }
 }
