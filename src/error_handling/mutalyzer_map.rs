@@ -264,6 +264,7 @@ pub const FERRO_NO_MUTALYZER_EQUIV: &[&str] = &[
     "ProteinReferenceNotAvailable",
     "ProteinSequenceUnavailable",
     "TranscriptNotOverlapping",
+    "TranscriptVersionNotExact",
     "UnsupportedProjection",
     "UtrCdsBoundary",
     "VariantExceedsReference",
@@ -401,6 +402,7 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
         | FerroError::UnsupportedProjection { .. }
         | FerroError::ConversionError { .. }
         | FerroError::VariantExceedsReference { .. }
+        | FerroError::TranscriptVersionNotExact { .. }
         | FerroError::Io { .. }
         | FerroError::Json { .. } => &[],
     }
@@ -499,6 +501,9 @@ mod tests {
             FerroError::ReferenceNotFound {
                 id: "NM_TEST.1".to_string(),
             },
+            FerroError::TranscriptVersionNotExact {
+                requested: "NM_000088.4".to_string(),
+            },
             FerroError::ExonIntronBoundary {
                 exon: 1,
                 variant: "c.1del".to_string(),
@@ -574,6 +579,7 @@ mod tests {
         match err {
             FerroError::Parse { .. } => "Parse",
             FerroError::ReferenceNotFound { .. } => "ReferenceNotFound",
+            FerroError::TranscriptVersionNotExact { .. } => "TranscriptVersionNotExact",
             FerroError::ExonIntronBoundary { .. } => "ExonIntronBoundary",
             FerroError::UtrCdsBoundary { .. } => "UtrCdsBoundary",
             FerroError::InvalidCoordinates { .. } => "InvalidCoordinates",
