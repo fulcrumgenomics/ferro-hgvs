@@ -414,6 +414,30 @@
       "spec_section_notes": "Emitted by try_protein_ins_to_dup / try_protein_delins_canonicalize in src/normalize/mod.rs when the resulting dup interval includes position 1. mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient/silent) — the warning is purely informational (consumers should consider the p.0/p.0? substitution-rule interpretation); the runtime does not attempt to auto-correct the input to an alternative form. Closes #92."
     },
     {
+      "code": "W3023",
+      "description": "DupSizeSuffix — duplication described with a size-count suffix instead of a position range, e.g. g.123dup6 instead of g.123_128dup.",
+      "spec_section": "recommendations/DNA/duplication.md (position range recommended; size-suffix form is legacy non-canonical)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
+      "status": "enforced",
+      "spec_section_notes": "Detected by detect_dup_size_suffix in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13b. ferro cannot auto-synthesize the end position safely because g.123dup6 is ambiguous (could be g.123_128dup or g.124_129dup per spec Q&A). mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient, Accept in silent) — a warning is emitted in lenient mode only (silent mode accepts without warning), and the input is not auto-corrected."
+    },
+    {
+      "code": "W3024",
+      "description": "DupExplicitSeq — duplication described with the explicit duplicated nucleotide sequence appended after dup, e.g. c.20_23dupTAGA instead of c.20_23dup.",
+      "spec_section": "recommendations/DNA/duplication.md (explicit sequence not recommended: longer, redundant, error-prone)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/duplication/",
+      "status": "enforced",
+      "spec_section_notes": "Detected and rewritten by correct_dup_explicit_seq in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13c. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
+    },
+    {
+      "code": "W3025",
+      "description": "DelExplicitSeq — deletion described with the explicit deleted nucleotide sequence appended after del, e.g. g.33344590_33344592delGAT instead of g.33344590_33344592del.",
+      "spec_section": "recommendations/DNA/deletion.md (explicit sequence not recommended: longer, redundant, error-prone)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/deletion/",
+      "status": "enforced",
+      "spec_section_notes": "Detected and rewritten by correct_del_explicit_seq in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13d. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",

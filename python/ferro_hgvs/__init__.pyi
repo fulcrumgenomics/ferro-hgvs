@@ -966,6 +966,9 @@ class ErrorType(IntEnum):
     NonSpecMosaicForm = 34
     OverlapConflictingEdits = 35
     InitiatorMetCanonicalization = 36
+    DupSizeSuffix = 37
+    DupExplicitSeq = 38
+    DelExplicitSeq = 39
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

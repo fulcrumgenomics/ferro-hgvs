@@ -442,12 +442,14 @@ mod tests {
 
     #[test]
     fn test_extract_na_edit_info_deletion() {
+        // W3025 (DelExplicitSeq) strips the explicit sequence in lenient mode,
+        // so the parsed NaEdit::Deletion has sequence=None after preprocessing.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350delC").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
                 let (vtype, deleted, inserted) = extract_na_edit_info(edit);
                 assert_eq!(vtype, "deletion");
-                assert_eq!(deleted, Some("C".to_string()));
+                assert_eq!(deleted, None);
                 assert!(inserted.is_none());
             }
         }
@@ -510,12 +512,14 @@ mod tests {
 
     #[test]
     fn test_extract_na_edit_info_duplication() {
+        // W3024 (DupExplicitSeq) strips the explicit sequence in lenient mode,
+        // so the parsed NaEdit::Duplication has sequence=None after preprocessing.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350dupC").unwrap();
         if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
             if let Some(edit) = v.loc_edit.edit.inner() {
                 let (vtype, deleted, _inserted) = extract_na_edit_info(edit);
                 assert_eq!(vtype, "duplication");
-                assert_eq!(deleted, Some("C".to_string()));
+                assert_eq!(deleted, None);
             }
         }
     }

@@ -297,6 +297,36 @@ pub enum ErrorType {
     /// Closes-after: #92. Code: `W3022`.
     InitiatorMetCanonicalization,
 
+    /// Duplication described with a size-count suffix instead of a position
+    /// range (e.g. `g.123dup6` instead of `g.123_128dup`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/duplication.md:140-143` Q&A):
+    /// "a duplication of more than one nucleotide should give the position
+    /// of the first and last nucleotide duplicated, separated using the
+    /// range symbol (`_`, underscore), e.g., `g.123_128dup`." Position
+    /// ambiguity ("at" vs "after") prevents safe rewrite.
+    DupSizeSuffix,
+
+    /// Duplication described with an explicit duplicated sequence (e.g.
+    /// `c.20_23dupTAGA` instead of `c.20_23dup`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/duplication.md:35-36, 50-51`):
+    /// "the recommendation is not to describe the variant as
+    /// `c.20_23dupTAGA`. This description is longer, it contains redundant
+    /// information, and chances to make an error increases." Sequence is
+    /// safely droppable since the position range fully determines it.
+    DupExplicitSeq,
+
+    /// Deletion described with an explicit deleted sequence (e.g.
+    /// `g.33344590_33344592delGAT` instead of `g.33344590_33344592del`).
+    ///
+    /// Per HGVS spec (`recommendations/DNA/deletion.md:30-31, 45-46`):
+    /// "the recommendation is not to describe the variant as
+    /// `NC_000023.11:g.33344590_33344592delGAT`. This description is
+    /// longer, it contains redundant information, and chances to make an
+    /// error increases." Sequence is safely droppable.
+    DelExplicitSeq,
+
     /// Variant position range exceeds the reference sequence the
     /// provider returned (`fetch_ref_for_canonical_split` got fewer
     /// bytes than the HGVS interval span).
@@ -377,6 +407,9 @@ impl ErrorType {
             ErrorType::RnaThymineCanonicalized => "W3020",
             ErrorType::ProteinBracketedAaInsertion => "W3021",
             ErrorType::InitiatorMetCanonicalization => "W3022",
+            ErrorType::DupSizeSuffix => "W3023",
+            ErrorType::DupExplicitSeq => "W3024",
+            ErrorType::DelExplicitSeq => "W3025",
             ErrorType::SwappedPositions => "W4001",
             ErrorType::SinglePositionRange => "W4003",
             ErrorType::PositionPastEnd => "W4004",
@@ -425,6 +458,9 @@ impl ErrorType {
         ErrorType::RnaThymineCanonicalized,
         ErrorType::ProteinBracketedAaInsertion,
         ErrorType::InitiatorMetCanonicalization,
+        ErrorType::DupSizeSuffix,
+        ErrorType::DupExplicitSeq,
+        ErrorType::DelExplicitSeq,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -503,6 +539,9 @@ impl ErrorType {
             ErrorType::InitiatorMetCanonicalization => {
                 "canonical form `p.Met1dup` (or analogous) includes the initiator methionine"
             }
+            ErrorType::DupSizeSuffix => "duplication described with a size-count suffix",
+            ErrorType::DupExplicitSeq => "duplication with explicit duplicated sequence",
+            ErrorType::DelExplicitSeq => "deletion with explicit deleted sequence",
             ErrorType::VariantExceedsReference => {
                 "variant position range exceeds reference sequence"
             }
@@ -574,6 +613,13 @@ impl ErrorType {
             // is purely informational. We do not rewrite the canonical output
             // back to ins or to p.0?/p.(Met1?) — that is the consumer's call.
             ErrorType::InitiatorMetCanonicalization => false,
+            // Lenient mode warns without rewriting (warn_accept); strict rejects.
+            // Position ambiguity ("at" vs "after") prevents safe synthesis.
+            ErrorType::DupSizeSuffix => false,
+            // Sequence is redundant given the position range; lenient mode
+            // drops it (standard_correctable).
+            ErrorType::DupExplicitSeq => true,
+            ErrorType::DelExplicitSeq => true,
             // Variant exceeds reference: no safe auto-correction — the
             // variant references positions past the provider's window
             // and we cannot conjure missing bases.
@@ -644,6 +690,9 @@ impl ErrorType {
                 ("p.Arg97_Trp98ins[Ala;Pro]", "p.Arg97_Trp98insAlaPro")
             }
             ErrorType::InitiatorMetCanonicalization => ("p.Met1_Lys2insMet", "p.Met1dup"),
+            ErrorType::DupSizeSuffix => ("g.123dup6", "g.123_128dup"),
+            ErrorType::DupExplicitSeq => ("c.20_23dupTAGA", "c.20_23dup"),
+            ErrorType::DelExplicitSeq => ("g.33344590_33344592delGAT", "g.33344590_33344592del"),
             ErrorType::VariantExceedsReference => (
                 "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
@@ -897,6 +946,13 @@ mod tests {
         // InitiatorMetCanonicalization is informational only — the dup
         // form is kept; no rewrite back to ins or to p.0?/p.(Met1?).
         assert!(!ErrorType::InitiatorMetCanonicalization.is_correctable());
+        // DupSizeSuffix (W3023) uses warn_accept — the input is preserved as-is,
+        // so there is no rewrite to apply.
+        assert!(!ErrorType::DupSizeSuffix.is_correctable());
+        // DupExplicitSeq (W3024) and DelExplicitSeq (W3025) use
+        // standard_correctable — the redundant sequence suffix is stripped.
+        assert!(ErrorType::DupExplicitSeq.is_correctable());
+        assert!(ErrorType::DelExplicitSeq.is_correctable());
     }
 
     // ErrorOverride tests
@@ -1054,6 +1110,9 @@ mod tests {
             ErrorType::RnaThymineCanonicalized,
             ErrorType::ProteinBracketedAaInsertion,
             ErrorType::InitiatorMetCanonicalization,
+            ErrorType::DupSizeSuffix,
+            ErrorType::DupExplicitSeq,
+            ErrorType::DelExplicitSeq,
             ErrorType::SwappedPositions,
             ErrorType::SinglePositionRange,
             ErrorType::PositionPastEnd,
@@ -1097,6 +1156,9 @@ mod tests {
                 | ErrorType::RnaThymineCanonicalized
                 | ErrorType::ProteinBracketedAaInsertion
                 | ErrorType::InitiatorMetCanonicalization
+                | ErrorType::DupSizeSuffix
+                | ErrorType::DupExplicitSeq
+                | ErrorType::DelExplicitSeq
                 | ErrorType::SwappedPositions
                 | ErrorType::SinglePositionRange
                 | ErrorType::PositionPastEnd

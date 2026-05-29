@@ -318,8 +318,10 @@ mod w2003_extra_whitespace {
 
     #[test]
     fn test_lenient_strips_whitespace_inside_uncertain_position() {
+        // Use `dup` (no explicit sequence) so W3025 (DelExplicitSeq) does not
+        // interfere with the whitespace-stripping assertion.
         use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
-        let result = parse_hgvs_lenient("NM_000088.3:c.( 123 _ 127 )delA");
+        let result = parse_hgvs_lenient("NM_000088.3:c.( 123 _ 127 )dup");
         assert!(
             result.is_ok(),
             "lenient parse should accept whitespace inside uncertain position: {:?}",
@@ -327,7 +329,19 @@ mod w2003_extra_whitespace {
         );
         let parsed = result.unwrap();
         assert!(parsed.has_warnings());
-        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.(123_127)delA");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.error_type == ErrorType::ExtraWhitespace),
+            "expected ExtraWhitespace warning; got {:?}",
+            parsed
+                .warnings
+                .iter()
+                .map(|w| w.error_type.code())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(parsed.preprocessed_input, "NM_000088.3:c.(123_127)dup");
     }
 
     #[test]
@@ -1315,6 +1329,195 @@ mod w3011_del_size_suffix_emission {
         let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
         assert_eq!(r1.preprocessed_input, r2.preprocessed_input);
         assert!(r2.has_warnings());
+    }
+}
+
+mod w3023_dup_size_suffix_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_warns_without_rewrite() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_21dup2").unwrap();
+        assert!(result.has_warnings());
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DupSizeSuffix)
+                .count(),
+            1
+        );
+        // warn_accept: input is unchanged.
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_21dup2");
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NM_004006.2:c.20_21dup2", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_accepts_without_warning() {
+        let result = parse_hgvs_silent("NM_004006.2:c.20_21dup2").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupSizeSuffix));
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_21dup2");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_21dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupSizeSuffix));
+    }
+
+    #[test]
+    fn idempotent_re_pass() {
+        let r1 = parse_hgvs_lenient("NM_004006.2:c.20_21dup2").unwrap();
+        let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        assert_eq!(r1.preprocessed_input, r2.preprocessed_input);
+        assert!(r2.has_warnings());
+    }
+}
+
+mod w3024_dup_explicit_seq_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_corrects_drops_seq() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_23dupTAGA").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_23dup");
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DupExplicitSeq)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config("NM_004006.2:c.20_23dupTAGA", ErrorConfig::strict());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NM_004006.2:c.20_23dupTAGA").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:c.20_23dup");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+
+    #[test]
+    fn rna_lowercase_corrected() {
+        let result = parse_hgvs_lenient("NM_004006.2:r.6_8dupugc").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:r.6_8dup");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NM_004006.2:c.20_23dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+
+    #[test]
+    fn protein_dup_unaffected() {
+        let result = parse_hgvs_lenient("NP_003997.2:p.Val7dup").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DupExplicitSeq));
+    }
+}
+
+mod w3025_del_explicit_seq_emission {
+    use super::*;
+    use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+
+    #[test]
+    fn lenient_corrects_drops_seq() {
+        let result = parse_hgvs_lenient("NC_000023.11:g.33344590_33344592delGAT").unwrap();
+        assert_eq!(
+            result.preprocessed_input,
+            "NC_000023.11:g.33344590_33344592del"
+        );
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::DelExplicitSeq)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_rejects() {
+        let result = parse_hgvs_with_config(
+            "NC_000023.11:g.33344590_33344592delGAT",
+            ErrorConfig::strict(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn silent_corrects_without_warning() {
+        let result = parse_hgvs_silent("NC_000023.11:g.33344591delA").unwrap();
+        assert_eq!(result.preprocessed_input, "NC_000023.11:g.33344591del");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn delins_unaffected() {
+        // delins<seq> is canonical for delins; W3025 must NOT fire.
+        let result = parse_hgvs_lenient("NC_000001.11:g.123delinsATG").unwrap();
+        assert_eq!(result.preprocessed_input, "NC_000001.11:g.123delinsATG");
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn rna_lowercase_corrected() {
+        let result = parse_hgvs_lenient("NM_004006.2:r.6_8deluug").unwrap();
+        assert_eq!(result.preprocessed_input, "NM_004006.2:r.6_8del");
+    }
+
+    #[test]
+    fn canonical_input_does_not_warn() {
+        let result = parse_hgvs_lenient("NC_000023.11:g.33344591del").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
+    }
+
+    #[test]
+    fn protein_del_unaffected() {
+        let result = parse_hgvs_lenient("NP_003997.2:p.Val7del").unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DelExplicitSeq));
     }
 }
 

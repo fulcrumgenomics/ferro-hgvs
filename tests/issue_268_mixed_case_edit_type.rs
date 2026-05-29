@@ -61,7 +61,25 @@ mod nucleotide {
 
     #[test]
     fn cds_uppercase_dup() {
-        assert_rewrites_with_w1004("NM_000088.3:c.100_102DUPATG", "NM_000088.3:c.100_102dupATG");
+        // W3024 (DupExplicitSeq) strips the explicit seq after case-folding,
+        // so the canonical output is `dup` without the trailing bases. Assert
+        // both warnings fire (W1004 case-fold + W3024 seq-strip), mirroring the
+        // chained-warning pattern in `cds_uppercase_con_chains_to_delins`.
+        let r = parse_hgvs_lenient("NM_000088.3:c.100_102DUPATG").unwrap();
+        let codes: Vec<_> = r
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code().to_string())
+            .collect();
+        assert!(
+            codes.iter().any(|c| c == "W1004"),
+            "expected W1004; got {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "W3024"),
+            "expected W3024; got {codes:?}"
+        );
+        assert_eq!(format!("{}", r.result), "NM_000088.3:c.100_102dup");
     }
 
     #[test]
@@ -97,10 +115,25 @@ mod nucleotide {
     /// Genomic accession also lowercases.
     #[test]
     fn genomic_uppercase_del() {
-        assert_rewrites_with_w1004(
-            "NC_000001.11:g.100_102DELAcg",
-            "NC_000001.11:g.100_102delACG",
+        // W3025 (DelExplicitSeq) strips the explicit seq after case-folding,
+        // so the canonical output is `del` without the trailing bases. Assert
+        // both warnings fire (W1004 case-fold + W3025 seq-strip), mirroring the
+        // chained-warning pattern in `cds_uppercase_con_chains_to_delins`.
+        let r = parse_hgvs_lenient("NC_000001.11:g.100_102DELAcg").unwrap();
+        let codes: Vec<_> = r
+            .warnings
+            .iter()
+            .map(|w| w.error_type.code().to_string())
+            .collect();
+        assert!(
+            codes.iter().any(|c| c == "W1004"),
+            "expected W1004; got {codes:?}"
         );
+        assert!(
+            codes.iter().any(|c| c == "W3025"),
+            "expected W3025; got {codes:?}"
+        );
+        assert_eq!(format!("{}", r.result), "NC_000001.11:g.100_102del");
     }
 }
 

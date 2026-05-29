@@ -2462,6 +2462,45 @@ fn has_non_protein_description(bytes: &[u8]) -> bool {
     false
 }
 
+/// Returns true if byte index `pos` in `input` is inside a nucleic-acid
+/// coordinate segment (`g.`, `c.`, `n.`, `r.`, or `m.`), as opposed to a
+/// protein (`p.`) segment.
+///
+/// Lookback walks from `pos` toward the start of input, returning the
+/// boundary-most-recent coordinate prefix. The walk stops at the previous
+/// top-level boundary (`:` from a sequence-id boundary, `[` opening a
+/// bracket allele, `;` separating cis variants, or start-of-input).
+///
+/// Used to scope `del<seq>` / `dup<seq>` / `dup<N>` detection to nucleic
+/// acid contexts so we don't false-positive on protein descriptors where
+/// `del` / `dup` carry different semantics (amino-acid level edits).
+fn in_nucleic_acid_segment(input: &str, pos: usize) -> bool {
+    let bytes = input.as_bytes();
+    let end = pos.min(bytes.len());
+    // Walk backwards from `pos` looking for a `<coord>.` prefix preceded by
+    // a boundary character. The most-recent such prefix wins.
+    let mut i = end;
+    while i > 1 {
+        i -= 1;
+        if bytes[i] != b'.' {
+            continue;
+        }
+        let coord = bytes[i - 1];
+        let is_na = matches!(coord, b'g' | b'c' | b'n' | b'r' | b'm');
+        let is_protein = coord == b'p';
+        if !is_na && !is_protein {
+            continue;
+        }
+        // The byte before `coord` must be a top-level boundary, or the coord
+        // must be at the start of input.
+        let prev_ok = i == 1 || matches!(bytes[i - 2], b':' | b'(' | b'[' | b';');
+        if prev_ok {
+            return is_na;
+        }
+    }
+    false
+}
+
 /// Returns the byte index immediately after the UTF-8 character starting at
 /// `i` in `bytes`. Falls back to `i + 1` for malformed input.
 #[inline]
@@ -2938,6 +2977,205 @@ pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
         i = j;
     }
     hits
+}
+
+/// Detect duplications described with a size-count suffix (W3023).
+///
+/// Matches `dup` followed by one or more ASCII digits, terminated by a
+/// top-level boundary (`)`, `;`, `]`, whitespace, or end-of-input), inside
+/// a nucleic-acid coordinate segment. Per HGVS spec
+/// (`recommendations/DNA/duplication.md:140-143`), the canonical form names
+/// both endpoints, not a size; this detector is warn-only (mirrors W3011
+/// DelSizeSuffix; the position ambiguity prevents safe rewrite).
+pub fn detect_dup_size_suffix(input: &str) -> Vec<DetectedCorrection> {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return hits;
+    }
+
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"dup" {
+            i += 1;
+            continue;
+        }
+        let digit_start = i + 3;
+        let mut j = digit_start;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digit_start {
+            i += 3;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            i = j;
+            continue;
+        }
+        hits.push(DetectedCorrection::new(
+            ErrorType::DupSizeSuffix,
+            &input[i..j],
+            String::new(),
+            i,
+            j,
+        ));
+        i = j;
+    }
+    hits
+}
+
+/// Detect and correct duplications with an explicit duplicated sequence (W3024).
+///
+/// Matches `dup` followed by one or more ASCII nucleotide letters in
+/// `[ACGTUNacgtun]` (DNA upper-case + RNA lower-case; `U`/`u` for RNA),
+/// terminated by a top-level boundary, inside a nucleic-acid coordinate
+/// segment. Drops the trailing sequence in the rewritten output, emits one
+/// `DetectedCorrection` per occurrence with `original = "<seq>"` and
+/// `corrected = ""`.
+///
+/// Per HGVS spec (`recommendations/DNA/duplication.md:35-36`): the seq is
+/// redundant given the position range, and including it increases the
+/// chance of a typing error (`dupG` vs `dupT`). Safe to drop.
+pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"dup" {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        let seq_start = i + 3;
+        let mut j = seq_start;
+        while j < bytes.len()
+            && matches!(
+                bytes[j],
+                b'A' | b'C' | b'G' | b'T' | b'U' | b'N' | b'a' | b'c' | b'g' | b't' | b'u' | b'n'
+            )
+        {
+            j += 1;
+        }
+        if j == seq_start {
+            out.push_str("dup");
+            i = seq_start;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        out.push_str("dup");
+        hits.push(DetectedCorrection::new(
+            ErrorType::DupExplicitSeq,
+            &input[seq_start..j],
+            String::new(),
+            seq_start,
+            j,
+        ));
+        i = j;
+    }
+    if i < bytes.len() {
+        out.push_str(&input[i..]);
+    }
+    (out, hits)
+}
+
+/// Detect and correct deletions with an explicit deleted sequence (W3025).
+///
+/// Matches `del` followed by one or more ASCII nucleotide letters in
+/// `[ACGTUNacgtun]`, terminated by a top-level boundary, inside a
+/// nucleic-acid coordinate segment. EXCLUDES the `delins` keyword (the
+/// trailing seq there is canonical for the insertion).
+///
+/// Per HGVS spec (`recommendations/DNA/deletion.md:30-31`): the seq is
+/// redundant; including it increases the chance of a typing error
+/// (`delG` vs `delA`). Safe to drop.
+pub fn correct_del_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+    let mut hits = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) {
+        return (input.to_string(), hits);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"del" {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        // Skip the `delins` keyword — that trailing seq is canonical.
+        if i + 6 <= bytes.len() && &bytes[i + 3..i + 6] == b"ins" {
+            out.push_str(&input[i..i + 6]);
+            i += 6;
+            continue;
+        }
+        let seq_start = i + 3;
+        let mut j = seq_start;
+        while j < bytes.len()
+            && matches!(
+                bytes[j],
+                b'A' | b'C' | b'G' | b'T' | b'U' | b'N' | b'a' | b'c' | b'g' | b't' | b'u' | b'n'
+            )
+        {
+            j += 1;
+        }
+        if j == seq_start {
+            out.push_str("del");
+            i = seq_start;
+            continue;
+        }
+        let end_byte = bytes.get(j).copied();
+        let is_terminator =
+            end_byte.is_none_or(|b| b == b')' || b == b';' || b == b']' || b.is_ascii_whitespace());
+        if !is_terminator {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        if !in_nucleic_acid_segment(input, i) {
+            out.push_str(&input[i..j]);
+            i = j;
+            continue;
+        }
+        out.push_str("del");
+        hits.push(DetectedCorrection::new(
+            ErrorType::DelExplicitSeq,
+            &input[seq_start..j],
+            String::new(),
+            seq_start,
+            j,
+        ));
+        i = j;
+    }
+    if i < bytes.len() {
+        out.push_str(&input[i..]);
+    }
+    (out, hits)
 }
 
 /// Detect and correct deletion-insertions whose inserted sequence is empty
@@ -4417,6 +4655,63 @@ mod tests {
         assert!(hits.is_empty());
     }
 
+    // --- W3023 DupSizeSuffix ---
+
+    #[test]
+    fn test_detect_dup_size_suffix_basic() {
+        let hits = detect_dup_size_suffix("NM_004006.2:c.20_21dup2");
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one W3023 hit, got {hits:?}"
+        );
+        let h = &hits[0];
+        assert_eq!(h.error_type, ErrorType::DupSizeSuffix);
+        assert_eq!(h.original, "dup2");
+        assert_eq!(h.corrected, "");
+        assert_eq!(
+            &("NM_004006.2:c.20_21dup2".as_bytes())[h.start..h.end],
+            b"dup2"
+        );
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_canonical_no_hit() {
+        let hits = detect_dup_size_suffix("NM_004006.2:c.20_21dup");
+        assert!(hits.is_empty(), "canonical dup must not fire W3023");
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_skips_protein() {
+        let hits = detect_dup_size_suffix("NP_000079.2:p.Val7dup");
+        assert!(hits.is_empty(), "protein dup must not fire W3023");
+    }
+
+    #[test]
+    fn test_detect_dup_size_suffix_multiple() {
+        // Bracket allele with two dup<N> tokens.
+        let hits = detect_dup_size_suffix("NM_004006.2:c.[20dup2;30dup4]");
+        assert_eq!(hits.len(), 2, "expected two W3023 hits in bracket allele");
+        assert_eq!(hits[0].original, "dup2");
+        assert_eq!(hits[1].original, "dup4");
+    }
+
+    #[test]
+    fn test_in_nucleic_acid_segment() {
+        // Lookback finds g./c./n./r./m. at top-level boundaries.
+        assert!(in_nucleic_acid_segment("NC_000001.11:g.123del", 16));
+        assert!(in_nucleic_acid_segment("NM_004006.2:c.20_23dup", 14));
+        assert!(in_nucleic_acid_segment("NR_002196.2:n.123del", 14));
+        assert!(in_nucleic_acid_segment("NM_004006.2:r.6_8del", 14));
+        assert!(in_nucleic_acid_segment("NC_012920.1:m.3243del", 15));
+        // Protein segment returns false.
+        assert!(!in_nucleic_acid_segment("NP_000079.2:p.Arg97fs", 16));
+        // Inside a bracket-allele, the most-recent boundary determines context.
+        assert!(in_nucleic_acid_segment("NM_004006.2:c.[20del;30dup]", 18,));
+        // No coord-prefix at all → false.
+        assert!(!in_nucleic_acid_segment("just a string", 5));
+    }
+
     // --- W3012 EmptyDelinsInsert ---
 
     #[test]
@@ -5089,5 +5384,104 @@ mod tests {
         let (out, hits) = correct_rna_thymine(input);
         assert_eq!(out, "r.[1a>u;2u>g]");
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_basic() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20_23dupTAGA");
+        assert_eq!(rewritten, "NM_004006.2:c.20_23dup");
+        assert_eq!(hits.len(), 1);
+        let h = &hits[0];
+        assert_eq!(h.error_type, ErrorType::DupExplicitSeq);
+        assert_eq!(h.original, "TAGA");
+        assert_eq!(h.corrected, "");
+        assert_eq!(
+            &("NM_004006.2:c.20_23dupTAGA".as_bytes())[h.start..h.end],
+            b"TAGA"
+        );
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_single_letter() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20dupT");
+        assert_eq!(rewritten, "NM_004006.2:c.20dup");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "T");
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_rna_lowercase() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:r.6_8dupugc");
+        assert_eq!(rewritten, "NM_004006.2:r.6_8dup");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "ugc");
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_canonical_no_hit() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.20_23dup");
+        assert_eq!(rewritten, "NM_004006.2:c.20_23dup");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_skips_protein() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NP_000079.2:p.Val7_Lys23dup");
+        assert_eq!(rewritten, "NP_000079.2:p.Val7_Lys23dup");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_dup_explicit_seq_bracket_allele() {
+        let (rewritten, hits) = correct_dup_explicit_seq("NM_004006.2:c.[20_23dupTAGA;30_31dupGT]");
+        assert_eq!(rewritten, "NM_004006.2:c.[20_23dup;30_31dup]");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_basic() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344590_33344592delGAT");
+        assert_eq!(rewritten, "NC_000023.11:g.33344590_33344592del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].error_type, ErrorType::DelExplicitSeq);
+        assert_eq!(hits[0].original, "GAT");
+        assert_eq!(hits[0].corrected, "");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_single_letter() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344591delA");
+        assert_eq!(rewritten, "NC_000023.11:g.33344591del");
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_excludes_delins() {
+        // `delinsATG` is canonical; must NOT be matched.
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000001.11:g.123delinsATG");
+        assert_eq!(rewritten, "NC_000001.11:g.123delinsATG");
+        assert!(hits.is_empty(), "delins must not fire W3025");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_rna_lowercase() {
+        let (rewritten, hits) = correct_del_explicit_seq("NM_004006.2:r.6_8deluug");
+        assert_eq!(rewritten, "NM_004006.2:r.6_8del");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "uug");
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_canonical_no_hit() {
+        let (rewritten, hits) = correct_del_explicit_seq("NC_000023.11:g.33344591del");
+        assert_eq!(rewritten, "NC_000023.11:g.33344591del");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_del_explicit_seq_skips_protein() {
+        let (rewritten, hits) = correct_del_explicit_seq("NP_000079.2:p.Val7del");
+        assert_eq!(rewritten, "NP_000079.2:p.Val7del");
+        assert!(hits.is_empty());
     }
 }
