@@ -2844,6 +2844,70 @@ fn parse_whole_protein_unknown(input: &str) -> IResult<&str, ProteinEdit> {
     .parse(input)
 }
 
+/// Parse a single protein bracket-member `interval+edit`, recognising
+/// whole-entity protein edits (`=`, `(=)`, `(?)`) before the
+/// position-based `parse_prot_interval` + `parse_protein_edit` path.
+///
+/// This is the protein-axis analogue of `parse_cds_bracket_member` /
+/// `parse_genome_bracket_member` / `parse_rna_bracket_member`, but the
+/// protein axis does not share the `NaEdit` type: whole-entity protein
+/// edits are `ProteinEdit::Identity { whole_protein: true, .. }` /
+/// `ProteinEdit::Unknown { whole_protein: true, .. }` and carry no
+/// position, so we attach a dummy interval at `Met1` (mirroring
+/// `parse_protein_variant`'s top-level handling of `p.=` / `p.(?)`). The
+/// `predicted` flag lives inside the edit, so the returned `LocEdit` is
+/// `Mu::Certain` — matching the top-level dispatch. #468, follow-up to
+/// #423 (nucleic-acid axes) and #396 item 3 (`r.` axis).
+///
+/// Whole-entity protein forms admitted here, per HGVS v21
+/// `recommendations/protein/`:
+/// - `=` / `(=)` — whole-protein identity (`alleles.md` line 58-60:
+///   `p.[Ser68Arg];[=]` is valid and distinct from `[Ser68=]`;
+///   `substitution.md` "the description `p.=` means the **entire**
+///   protein coding region was analysed").
+/// - `(?)` — predicted whole-protein unknown (`alleles.md`:
+///   `p.[(Ser68Arg)];[?]` uses the bare `[?]` *trans whole-allele*
+///   marker; the parenthesised `p.(?)` is the per-member predicted form).
+///
+/// Bare `?` is intentionally NOT probed here: it is only the trans
+/// whole-allele marker (handled upstream in
+/// `parse_protein_trans_allele_shorthand` → `HgvsVariant::UnknownAllele`)
+/// and is not a valid cis / unknown-phase bracket member — `p.[?]`,
+/// `p.[?;X]`, `p.[X;?]` continue to reject (pinned by
+/// `tests/protein_unknown_roundtrip.rs`).
+///
+/// `0` / `0?` / `(0)` (whole-protein no-protein) is likewise NOT probed
+/// here: `[0]` is not a valid cis bracket member (issue #277), and the
+/// protein-coordinate trans-allele path handles `[0]` separately in
+/// `parse_protein_trans_allele_shorthand`.
+fn parse_protein_bracket_member(part: &str) -> IResult<&str, LocEdit<ProtInterval, ProteinEdit>> {
+    /// Whole-entity protein edits carry no position; attach a dummy
+    /// interval at `Met1` (mirrors `parse_protein_variant`).
+    fn dummy_prot_interval() -> ProtInterval {
+        ProtInterval::point(ProtPos::new(AminoAcid::Met, 1))
+    }
+
+    if let Ok((remaining, edit)) = parse_whole_protein_identity(part) {
+        return Ok((remaining, LocEdit::new(dummy_prot_interval(), edit)));
+    }
+    // Only the parenthesised predicted unknown `(?)` is admitted as a
+    // bracket member; bare `?` is reserved for the trans whole-allele
+    // marker and must not parse here (see the doc comment above).
+    if let Some(remaining) = part.strip_prefix("(?)") {
+        return Ok((
+            remaining,
+            LocEdit::new(
+                dummy_prot_interval(),
+                ProteinEdit::whole_protein_unknown_predicted(),
+            ),
+        ));
+    }
+
+    let (edit_remaining, interval) = parse_prot_interval(part)?;
+    let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;
+    Ok((final_remaining, LocEdit::new(interval, edit)))
+}
+
 /// Parse a protein allele shorthand:
 ///   `p.[edit1;edit2;...]`     (cis)
 ///   `p.[edit1(;)edit2;...]`   (unknown phase)
@@ -2897,8 +2961,7 @@ fn parse_protein_allele_shorthand(
                     nom::error::ErrorKind::Verify,
                 )));
             }
-            let (edit_remaining, interval) = parse_prot_interval(part)?;
-            let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;
+            let (final_remaining, loc_edit) = parse_protein_bracket_member(part)?;
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     final_remaining,
@@ -2908,7 +2971,7 @@ fn parse_protein_allele_shorthand(
             variants.push(HgvsVariant::Protein(ProteinVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             }));
         }
 
@@ -2934,14 +2997,14 @@ fn parse_protein_allele_shorthand(
     let mut current = remaining;
 
     loop {
-        // Parse interval and edit
-        let (rest, interval) = parse_prot_interval(current)?;
-        let (rest, edit) = parse_protein_edit(rest)?;
+        // Parse interval and edit, admitting whole-entity members
+        // (`=`, `(=)`, `(?)`) alongside position-based edits. #468.
+        let (rest, loc_edit) = parse_protein_bracket_member(current)?;
 
         variants.push(HgvsVariant::Protein(ProteinVariant {
             accession: accession.clone(),
             gene_symbol: gene_symbol.clone(),
-            loc_edit: LocEdit::new(interval, edit),
+            loc_edit,
         }));
 
         // Check for more variants (semicolon separator) or end of allele
@@ -3069,8 +3132,12 @@ fn parse_protein_trans_allele_shorthand(
                 loc_edit: LocEdit::new(dummy_interval, ProteinEdit::NoProtein { predicted: true }),
             })
         } else {
-            let (edit_remaining, interval) = parse_prot_interval(content)?;
-            let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;
+            // All other members (position-based edits plus whole-entity
+            // identity `=` / `(=)` and unknown `(?)`) flow through the
+            // shared bracket-member dispatcher. Bare `?` and the `0`
+            // forms are handled by the arms above, so they never reach
+            // here. #468.
+            let (final_remaining, loc_edit) = parse_protein_bracket_member(content)?;
 
             if !final_remaining.trim().is_empty() {
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -3082,7 +3149,7 @@ fn parse_protein_trans_allele_shorthand(
             HgvsVariant::Protein(ProteinVariant {
                 accession: accession.clone(),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, edit),
+                loc_edit,
             })
         };
 

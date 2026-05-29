@@ -469,9 +469,6 @@ fn silent_eq_rejects_malformed_adjacent_inputs() {
         "p.(=)",
         "p.Leu54=",
         "p.(Leu54=)",
-        // Cis-bracket forms — bare `[=]` is NOT a sanctioned NullAllele-like
-        // marker (only `[0]` and `[?]` are special-cased at variant.rs:1383).
-        "NP_000079.2:p.[=]",
     ];
 
     for input in &rejects {
@@ -482,6 +479,26 @@ fn silent_eq_rejects_malformed_adjacent_inputs() {
             result.ok()
         );
     }
+}
+
+/// Since #468, whole-entity protein edits (`=`, `(=)`, `(?)`) are
+/// admitted as bracket members so compound forms like `p.[Ser68Arg];[=]`
+/// parse (HGVS v21 `recommendations/protein/alleles.md`). Bare `?` is
+/// NOT admitted here — it remains the trans whole-allele unknown marker
+/// (`UnknownAllele`), handled outside `parse_protein_bracket_member`. As a
+/// consequence, a *singleton* bracketed whole-protein identity `p.[=]`
+/// now parses too — unwrapping to the spec-sanctioned `p.=`, exactly as
+/// every other singleton bracket unwraps its sole member
+/// (`p.[Ser68Arg]` → `p.Ser68Arg`). This replaces the prior pin that
+/// rejected `p.[=]` outright (the rejection was an artifact of
+/// whole-entity members not being admitted in bracket position at all).
+#[test]
+fn silent_eq_singleton_bracket_unwraps_to_whole_protein_identity() {
+    let parsed = parse_hgvs("NP_000079.2:p.[=]").expect("p.[=] must parse since #468");
+    assert_eq!(parsed.to_string(), "NP_000079.2:p.=");
+    // Re-parse fixed point on the canonical (unwrapped) form.
+    let reparsed = parse_hgvs("NP_000079.2:p.=").expect("p.= must parse");
+    assert_eq!(reparsed.to_string(), "NP_000079.2:p.=");
 }
 
 #[test]
