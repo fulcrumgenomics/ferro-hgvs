@@ -74,10 +74,49 @@ struct Case {
     source_function: String,
     #[serde(default = "default_true")]
     to_test: bool,
+    /// Optional disposition for a row where ferro diverges from biocommons.
+    /// Absent means "ferro must match biocommons". See [`Disposition`] and
+    /// `classify_outcome` (issue #478, conformance-harness redesign).
+    #[serde(default)]
+    disposition: Option<Disposition>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Why a row diverges from biocommons, and what ferro produces instead.
+///
+/// Drives the conformance harness's pass/fail decision (issue #478 pillars 1-2).
+/// An annotated divergence whose recorded `ferro_output` still holds is
+/// accounted for (not a failure). An annotation that no longer holds fails the
+/// suite loudly so it gets corrected: a `known_bug` that started matching
+/// biocommons (XPASS — the bug appears fixed), or any drift away from the
+/// recorded `ferro_output`. This is what makes the burn-down self-correcting —
+/// a fixed bug cannot linger silently in the fixture.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(dead_code)] // `spec_citation` is documentation for humans reading cases.json.
+enum Disposition {
+    /// ferro intentionally diverges from biocommons and is spec-correct.
+    AcceptedDivergence {
+        /// Human rationale: the HGVS-spec basis or data-availability constraint.
+        reason: String,
+        /// Optional citation into the HGVS recommendations.
+        #[serde(default)]
+        spec_citation: Option<String>,
+        /// The exact output ferro is expected to produce.
+        ferro_output: String,
+    },
+    /// ferro is wrong; xfail until fixed. If ferro starts matching biocommons
+    /// the harness fails (XPASS) so the annotation and the fixed row are
+    /// cleaned up.
+    KnownBug {
+        /// Issue tracking the fix.
+        tracking_issue: u64,
+        /// The (incorrect) output ferro currently produces.
+        ferro_output: String,
+    },
 }
 
 fn direction_from_str(s: &str) -> ShuffleDirection {
@@ -325,10 +364,95 @@ fn regression_under_mock_normalized() {
 // Layer 2: axis_normalized — manifest-mode strict assertion
 // ----------------------------------------------------------------------------
 
+/// Outcome of comparing ferro's output for one row against biocommons and the
+/// row's [`Disposition`]. See [`classify_outcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecordOutcome {
+    /// ferro matches biocommons; no annotation needed.
+    Match,
+    /// ferro diverges exactly as an annotated, spec-correct accepted divergence.
+    AcceptedDivergence,
+    /// ferro diverges exactly as an annotated known bug (xfail).
+    KnownBug,
+    /// A failure that must break the suite.
+    Fail(FailKind),
+}
+
+/// The distinct ways a row can fail the conformance suite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FailKind {
+    /// Divergence from biocommons with no annotation explaining it.
+    Unannotated,
+    /// A `known_bug` row now matches biocommons — the bug appears fixed (XPASS);
+    /// remove the annotation and demote the row.
+    KnownBugFixed,
+    /// An `accepted_divergence` row now matches biocommons — the divergence is
+    /// gone; remove the annotation.
+    AcceptedDivergenceGone,
+    /// ferro's output no longer equals the annotation's recorded `ferro_output`.
+    AnnotationDrift,
+}
+
+impl FailKind {
+    fn label(&self) -> &'static str {
+        match self {
+            FailKind::Unannotated => "UNANNOTATED",
+            FailKind::KnownBugFixed => "XPASS",
+            FailKind::AcceptedDivergenceGone => "XPASS",
+            FailKind::AnnotationDrift => "DRIFT",
+        }
+    }
+}
+
+/// Pure classification of one row, given biocommons' `expected` value, ferro's
+/// `actual` result, and the row's optional `disposition`. The heart of #478
+/// pillars 1-2: unannotated divergences fail; an annotation that still holds is
+/// accounted for; an annotation that no longer holds (XPASS or drift) fails so
+/// it gets corrected.
+fn classify_outcome(
+    expected: &str,
+    actual: &Result<String, String>,
+    disposition: Option<&Disposition>,
+) -> RecordOutcome {
+    let actual_str = actual.as_deref().ok();
+    let matches_upstream = actual_str == Some(expected);
+    match disposition {
+        None => {
+            if matches_upstream {
+                RecordOutcome::Match
+            } else {
+                RecordOutcome::Fail(FailKind::Unannotated)
+            }
+        }
+        Some(Disposition::KnownBug { ferro_output, .. }) => {
+            if matches_upstream {
+                RecordOutcome::Fail(FailKind::KnownBugFixed)
+            } else if actual_str == Some(ferro_output.as_str()) {
+                RecordOutcome::KnownBug
+            } else {
+                RecordOutcome::Fail(FailKind::AnnotationDrift)
+            }
+        }
+        Some(Disposition::AcceptedDivergence { ferro_output, .. }) => {
+            if matches_upstream {
+                RecordOutcome::Fail(FailKind::AcceptedDivergenceGone)
+            } else if actual_str == Some(ferro_output.as_str()) {
+                RecordOutcome::AcceptedDivergence
+            } else {
+                RecordOutcome::Fail(FailKind::AnnotationDrift)
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct AxisTally {
     axis: &'static str,
     pass: usize,
+    /// Annotated, spec-correct divergences whose `ferro_output` still holds.
+    accepted: usize,
+    /// Annotated known bugs (xfail) still producing their recorded output.
+    known_bug: usize,
     fail: Vec<(String, String)>,
     skipped: usize,
 }
@@ -338,20 +462,58 @@ impl AxisTally {
         Self {
             axis,
             pass: 0,
+            accepted: 0,
+            known_bug: 0,
             fail: Vec::new(),
             skipped: 0,
         }
     }
 
-    fn record(&mut self, case_input: &str, expected: &str, actual: Result<String, String>) {
-        if matches!(&actual, Ok(s) if s == expected) {
-            self.pass += 1;
-        } else {
-            let diag = match actual {
-                Ok(got) => format!("expected={expected:?} got={got:?}"),
-                Err(e) => format!("expected={expected:?} err={e}"),
-            };
-            self.fail.push((case_input.to_string(), diag));
+    fn record(
+        &mut self,
+        case_input: &str,
+        expected: &str,
+        actual: Result<String, String>,
+        disposition: Option<&Disposition>,
+    ) {
+        match classify_outcome(expected, &actual, disposition) {
+            RecordOutcome::Match => self.pass += 1,
+            RecordOutcome::AcceptedDivergence => self.accepted += 1,
+            RecordOutcome::KnownBug => self.known_bug += 1,
+            RecordOutcome::Fail(kind) => {
+                let got = match &actual {
+                    Ok(s) => format!("got={s:?}"),
+                    Err(e) => format!("err={e}"),
+                };
+                // Use the disposition's own fields to make the failure
+                // actionable (and to read them, satisfying dead-code lints).
+                let detail = match (&kind, disposition) {
+                    (
+                        FailKind::KnownBugFixed,
+                        Some(Disposition::KnownBug { tracking_issue, .. }),
+                    ) => format!(
+                        " — known_bug #{tracking_issue} now matches biocommons; the fix appears \
+                         to have landed: remove the annotation and demote the row"
+                    ),
+                    (
+                        FailKind::AcceptedDivergenceGone,
+                        Some(Disposition::AcceptedDivergence { reason, .. }),
+                    ) => format!(
+                        " — accepted_divergence no longer diverges (recorded reason: {reason}); \
+                         remove the annotation"
+                    ),
+                    (FailKind::AnnotationDrift, _) => {
+                        " — output no longer matches the recorded ferro_output; update or remove \
+                         the annotation"
+                            .to_string()
+                    }
+                    _ => String::new(),
+                };
+                self.fail.push((
+                    case_input.to_string(),
+                    format!("[{}] expected={expected:?} {got}{detail}", kind.label()),
+                ));
+            }
         }
     }
 
@@ -370,9 +532,12 @@ impl AxisTally {
         let _ = fs::write(&tsv_path, &tsv);
 
         println!(
-            "{}: {} pass / {} FAIL / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} accepted-divergence / {} known-bug / {} FAIL / {} skipped \
+             (FAIL inputs -> {})",
             self.axis,
             self.pass,
+            self.accepted,
+            self.known_bug,
             self.fail.len(),
             self.skipped,
             report_path.display()
@@ -428,7 +593,12 @@ fn axis_normalized() {
                     Ok(n) => Err(format!("accepted: {n}")),
                 }
             });
-            t.record(&case.input, "<expects error>", actual);
+            t.record(
+                &case.input,
+                "<expects error>",
+                actual,
+                case.disposition.as_ref(),
+            );
             continue;
         }
         let Some(expected) = case.normalized.as_deref() else {
@@ -445,7 +615,137 @@ fn axis_normalized() {
             Ok(format!("{n}"))
         });
 
-        t.record(&case.input, expected, actual);
+        t.record(&case.input, expected, actual, case.disposition.as_ref());
     }
     t.finish();
+}
+
+// ----------------------------------------------------------------------------
+// #478 pillars 1-2: classify_outcome — annotation + XPASS unit tests.
+// These are hermetic (no manifest) and run in CI on every PR.
+// ----------------------------------------------------------------------------
+
+mod classify_outcome_tests {
+    use super::*;
+
+    fn ok(s: &str) -> Result<String, String> {
+        Ok(s.to_string())
+    }
+
+    fn accepted(ferro_output: &str) -> Disposition {
+        Disposition::AcceptedDivergence {
+            reason: "spec-correct per HGVS edit-type priority".to_string(),
+            spec_citation: None,
+            ferro_output: ferro_output.to_string(),
+        }
+    }
+
+    fn known_bug(ferro_output: &str) -> Disposition {
+        Disposition::KnownBug {
+            tracking_issue: 999,
+            ferro_output: ferro_output.to_string(),
+        }
+    }
+
+    #[test]
+    fn no_disposition_match_is_match() {
+        assert_eq!(
+            classify_outcome("c.5dup", &ok("c.5dup"), None),
+            RecordOutcome::Match
+        );
+    }
+
+    #[test]
+    fn no_disposition_divergence_is_unannotated_fail() {
+        assert_eq!(
+            classify_outcome("c.5dup", &ok("c.4_5dup"), None),
+            RecordOutcome::Fail(FailKind::Unannotated)
+        );
+    }
+
+    #[test]
+    fn known_bug_producing_recorded_output_is_known_bug() {
+        // ferro still produces the recorded wrong answer → accounted xfail.
+        assert_eq!(
+            classify_outcome(
+                "c.36_37dup",
+                &ok("c.35_36dup"),
+                Some(&known_bug("c.35_36dup"))
+            ),
+            RecordOutcome::KnownBug
+        );
+    }
+
+    #[test]
+    fn known_bug_now_matching_upstream_is_xpass_fail() {
+        // THE KEYSTONE: a fixed known_bug must fail loudly so it can't linger.
+        assert_eq!(
+            classify_outcome(
+                "c.36_37dup",
+                &ok("c.36_37dup"),
+                Some(&known_bug("c.35_36dup"))
+            ),
+            RecordOutcome::Fail(FailKind::KnownBugFixed)
+        );
+    }
+
+    #[test]
+    fn known_bug_drifted_output_is_drift_fail() {
+        // ferro's wrong answer changed to a third value → annotation is stale.
+        assert_eq!(
+            classify_outcome(
+                "c.36_37dup",
+                &ok("c.34_35dup"),
+                Some(&known_bug("c.35_36dup"))
+            ),
+            RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
+
+    #[test]
+    fn accepted_divergence_producing_recorded_output_is_accepted() {
+        assert_eq!(
+            classify_outcome(
+                "c.-1_1insAC",
+                &ok("c.-1_1dup"),
+                Some(&accepted("c.-1_1dup"))
+            ),
+            RecordOutcome::AcceptedDivergence
+        );
+    }
+
+    #[test]
+    fn accepted_divergence_now_matching_upstream_is_xpass_fail() {
+        assert_eq!(
+            classify_outcome(
+                "c.-1_1insAC",
+                &ok("c.-1_1insAC"),
+                Some(&accepted("c.-1_1dup"))
+            ),
+            RecordOutcome::Fail(FailKind::AcceptedDivergenceGone)
+        );
+    }
+
+    #[test]
+    fn accepted_divergence_drifted_output_is_drift_fail() {
+        assert_eq!(
+            classify_outcome(
+                "c.-1_1insAC",
+                &ok("c.1delinsACA"),
+                Some(&accepted("c.-1_1dup"))
+            ),
+            RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
+
+    #[test]
+    fn annotated_row_that_errors_is_drift_fail() {
+        // An annotation recording a concrete ferro_output, but ferro now errors,
+        // is drift worth surfacing.
+        let err: Result<String, String> = Err("normalize error: boom".to_string());
+        assert_eq!(
+            classify_outcome("c.5dup", &err, Some(&known_bug("c.4_5dup"))),
+            RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
 }
