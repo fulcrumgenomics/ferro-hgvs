@@ -69,6 +69,14 @@ const FIXTURE_PATH: &str = "tests/fixtures/mutalyzer-normalize/cases.json";
 const XFAIL_REPORT_DIR: &str = "/tmp/ferro-xfail";
 const FAIL_PRINT_LIMIT: usize = 10;
 
+/// Policy label recorded for `infos`-axis accepted divergences. The upstream
+/// mutalyzer code is one ferro intentionally does not model
+/// (`error_handling::info_map::NO_FERRO_INFO_EQUIV`): a mutalyzer *internal*
+/// diagnostic (e.g. `ISORTEDVARIANTS`, `ICORRECTEDCOORDINATESYSTEM`) that is
+/// not part of the HGVS nomenclature spec, so ferro is under no obligation to
+/// mirror it. See #326 (spec arbitration).
+const INFO_NO_SPEC_EQUIVALENT: &str = "mutalyzer-info-no-spec-equivalent";
+
 // ----------------------------------------------------------------------------
 // Fixture model
 // ----------------------------------------------------------------------------
@@ -923,21 +931,24 @@ fn axis_infos() {
         };
         let expected_repr = expected_list.join(",");
 
+        // Partition the expected mutalyzer codes: those ferro models (a
+        // concrete `NormalizationInfo` tag) vs those ferro intentionally does
+        // NOT model (`info_map::NO_FERRO_INFO_EQUIV`). The latter are mutalyzer
+        // *internal* diagnostics (e.g. `ISORTEDVARIANTS`, `ICORRECTED*`) that
+        // are absent from the HGVS nomenclature spec, so an expected code with
+        // no ferro equivalent is an accepted divergence, not a failure (see
+        // #326). A *mapped* code ferro fails to emit remains a hard FAIL.
+        let has_no_equiv = expected_list
+            .iter()
+            .any(|c| map_mutalyzer_info_code(c).is_none());
+
         let actual = catch_panics(|| -> Result<String, String> {
-            // Translate each expected mutalyzer info code into the
-            // corresponding ferro `NormalizationInfo::code()` string.
-            // Codes ferro intentionally does not model (see
-            // `info_map::NO_FERRO_INFO_EQUIV`) come back as `None`, which
-            // is a real FAIL — ferro cannot match the upstream signal.
+            // Only the modelled codes are required; drop the no-equivalent
+            // ones from the comparison entirely.
             let mapped: Vec<&str> = expected_list
                 .iter()
-                .map(|c| map_mutalyzer_info_code(c).unwrap_or("<unmapped>"))
+                .filter_map(|c| map_mutalyzer_info_code(c))
                 .collect();
-            if mapped.contains(&"<unmapped>") {
-                return Err(format!(
-                    "no ferro equivalent for one of {expected_list:?} (info-axis)"
-                ));
-            }
 
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e:?}"))?;
             let result = normalizer
@@ -945,24 +956,13 @@ fn axis_infos() {
                 .map_err(|e| format!("normalize error: {e:?}"))?;
             let emitted: Vec<&str> = result.infos.iter().map(|i| i.code()).collect();
 
-            // Empty expected list ⇒ ferro must also emit nothing. Without
-            // this check the trivial "loop over empty mapped" path passes
-            // every case, even if ferro spuriously emitted infos.
-            if expected_list.is_empty() {
-                if emitted.is_empty() {
-                    return Ok(expected_repr.clone());
-                }
-                return Err(format!(
-                    "mutalyzer expected no infos; ferro emitted {emitted:?}"
-                ));
-            }
-
-            // Compare per-code multiplicities, not just presence. Using
-            // `Vec::contains` would let `[A, A]` pass even when ferro
-            // emits only `[A]` (and vice versa for over-emission). Build
-            // frequency maps over `mapped` and `emitted` so repeated
-            // expected codes require the same number of ferro emissions
-            // and any ferro over-emission is also caught honestly.
+            // Compare per-code multiplicities over the modelled codes. ferro
+            // must emit every modelled code the upstream expected (under-
+            // emission = real bug) and must not emit extras the upstream did
+            // not (over-emission = divergence). No-equivalent expected codes
+            // are excluded above, so they never require a ferro emission; an
+            // empty `mapped` therefore requires ferro to emit nothing, which
+            // the over-emission check below enforces.
             let mut expected_counts = std::collections::HashMap::<&str, usize>::new();
             for tag in &mapped {
                 *expected_counts.entry(*tag).or_insert(0) += 1;
@@ -979,11 +979,9 @@ fn axis_infos() {
                     ));
                 }
             }
-            // Symmetric over-emission check: any ferro info beyond what
-            // the upstream corpus expected is also a divergence, even
-            // when every expected code is matched. Comparing counts (not
-            // just presence) catches both `[A, A]` vs `[A]` and unknown
-            // extras like `[A, B]` vs `[A]`.
+            // Symmetric over-emission check: any ferro info beyond what the
+            // upstream corpus expected is a divergence (catches `[A, A]` vs
+            // `[A]` and unknown extras like `[A, B]` vs `[A]`).
             for (tag, got) in &emitted_counts {
                 let need = expected_counts.get(tag).copied().unwrap_or(0);
                 if *got > need {
@@ -995,7 +993,17 @@ fn axis_infos() {
             Ok(expected_repr.clone())
         });
 
-        t.record(case, &expected_repr, actual);
+        // A clean match where the upstream expected at least one code ferro
+        // intentionally does not model is an accepted divergence (ferro does
+        // not mirror mutalyzer's non-spec internal info codes), tallied
+        // separately so it stays visible. Errors (under/over-emission, parse,
+        // normalize, panic) are real failures routed through `record`.
+        if actual.is_ok() && has_no_equiv {
+            t.divergence_accepted
+                .push((case.input.clone(), INFO_NO_SPEC_EQUIVALENT.to_string()));
+        } else {
+            t.record(case, &expected_repr, actual);
+        }
     }
     t.finish();
 }
