@@ -714,6 +714,31 @@ impl MultiFastaProvider {
             }
         }
 
+        // #471: the bases above are pulled straight from the genome without
+        // applying the cdot CIGAR, so flag — at a severity matching the
+        // available alignment evidence — when the reconstruction is at elevated
+        // risk of diverging from the deposited transcript. The call site already
+        // emitted a soft "synthesizing from cdot" notice; the gapless case adds
+        // nothing further.
+        match classify_cdot_synthesis_risk(&tx.exon_cigars) {
+            CdotSynthesisRisk::UnappliedIndels {
+                insertions,
+                deletions,
+            } => warn!(
+                "{id}: cdot exon alignment encodes {insertions} inserted and {deletions} deleted \
+                 base(s) that base synthesis does not apply — the synthesized sequence will \
+                 diverge from the deposited transcript in length and content; treat normalize \
+                 output for {id} as low-confidence (issue #471)"
+            ),
+            CdotSynthesisRisk::NoAlignmentGapData => warn!(
+                "{id}: cdot record carries no per-exon alignment-gap (CIGAR) data — synthesized \
+                 bases assume an exact genome match and cannot represent transcript-specific \
+                 indels or substitutions, so normalize output for {id} may diverge from the \
+                 deposited transcript (issues #471, #400)"
+            ),
+            CdotSynthesisRisk::Gapless => {}
+        }
+
         // Project cdot exons + CDS metadata onto the transcript struct using the
         // same conventions as the FASTA-backed `get_transcript` path above so
         // downstream consumers see one shape regardless of which path served them.
@@ -761,6 +786,64 @@ impl MultiFastaProvider {
             exon_cigars: tx.exon_cigars.clone(),
             cached_introns: OnceLock::new(),
         })
+    }
+}
+
+/// Risk that cdot-driven base synthesis ([`MultiFastaProvider::synthesize_transcript_from_cdot`])
+/// produces bases that diverge from the deposited transcript.
+///
+/// cdot's GFF3 `Gap` CIGAR encodes only `M`/`I`/`D` operations (never
+/// substitutions), and `synthesize_transcript_from_cdot` reconstructs bases
+/// purely from the genome FASTA over each exon's genomic span — it does **not**
+/// apply the CIGAR. So the reconstruction is faithful only when the alignment
+/// is gapless; missing CIGARs or indel-bearing CIGARs mean the synthesized
+/// bases can silently diverge from the GenBank-deposited transcript. See issue
+/// #471 (and #400, the `NM_001166478.1` reconstruction mismatch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CdotSynthesisRisk {
+    /// Every exon carries a gapless (`M`-only) CIGAR: the synthesized length is
+    /// exact. Only substitution-level differences — which cdot's GFF3 Gap CIGAR
+    /// cannot represent — could still diverge. Lowest risk.
+    Gapless,
+    /// No per-exon alignment-gap data (the CIGAR vector is empty, or at least
+    /// one exon has no CIGAR entry): the synthesis assumes an exact genome match
+    /// and cannot represent any transcript-specific indel or substitution.
+    NoAlignmentGapData,
+    /// At least one exon's CIGAR encodes indels that base synthesis does not
+    /// apply, so the synthesized length and content provably diverge.
+    UnappliedIndels { insertions: u64, deletions: u64 },
+}
+
+/// Classify the divergence risk of cdot base synthesis from the per-exon
+/// CIGARs. Pure; see [`CdotSynthesisRisk`]. Indels anywhere dominate (strongest,
+/// most actionable signal); otherwise fully-covered gapless CIGARs are low risk
+/// and any missing per-exon data is elevated.
+pub(crate) fn classify_cdot_synthesis_risk(
+    exon_cigars: &[Option<Vec<crate::data::cdot::CigarOp>>],
+) -> CdotSynthesisRisk {
+    use crate::data::cdot::CigarOp;
+    let mut insertions = 0u64;
+    let mut deletions = 0u64;
+    for op in exon_cigars.iter().flatten().flatten() {
+        match op {
+            CigarOp::Insertion(n) => insertions += n,
+            CigarOp::Deletion(n) => deletions += n,
+            CigarOp::Match(_) => {}
+        }
+    }
+    if insertions > 0 || deletions > 0 {
+        CdotSynthesisRisk::UnappliedIndels {
+            insertions,
+            deletions,
+        }
+    } else if !exon_cigars.is_empty()
+        && exon_cigars
+            .iter()
+            .all(|c| matches!(c, Some(ops) if !ops.is_empty()))
+    {
+        CdotSynthesisRisk::Gapless
+    } else {
+        CdotSynthesisRisk::NoAlignmentGapData
     }
 }
 
@@ -1347,6 +1430,120 @@ mod tests {
         assert_eq!(
             MultiFastaProvider::infer_build_from_parent(&ng_accession("012772", 1)),
             None,
+        );
+    }
+
+    // ---- #471: cdot base-synthesis divergence-risk classifier ----
+
+    #[test]
+    fn cdot_synthesis_risk_empty_is_no_gap_data() {
+        // No CIGAR data at all (the common cdot case) → cannot represent any
+        // transcript-vs-genome difference → elevated risk.
+        assert_eq!(
+            classify_cdot_synthesis_risk(&[]),
+            CdotSynthesisRisk::NoAlignmentGapData
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_all_none_is_no_gap_data() {
+        assert_eq!(
+            classify_cdot_synthesis_risk(&[None, None]),
+            CdotSynthesisRisk::NoAlignmentGapData
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_empty_inner_vec_is_no_gap_data() {
+        // `Some(vec![])` is a CIGAR slot that is present but carries no operations:
+        // there is no alignment data for that exon, so it must elevate to
+        // NoAlignmentGapData rather than masquerade as Gapless (per the doc on
+        // `CdotSynthesisRisk::NoAlignmentGapData`).
+        assert_eq!(
+            classify_cdot_synthesis_risk(&[Some(vec![])]),
+            CdotSynthesisRisk::NoAlignmentGapData
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_mixed_empty_inner_vec_is_no_gap_data() {
+        use crate::data::cdot::CigarOp;
+        // One exon has real alignment data, another has an empty CIGAR vector:
+        // we cannot vouch for the whole transcript, so this is elevated, not gapless.
+        let cigars = vec![Some(vec![CigarOp::Match(185)]), Some(vec![])];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::NoAlignmentGapData
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_all_match_is_gapless() {
+        use crate::data::cdot::CigarOp;
+        let cigars = vec![
+            Some(vec![CigarOp::Match(185)]),
+            Some(vec![CigarOp::Match(250)]),
+        ];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::Gapless
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_partial_coverage_is_no_gap_data() {
+        use crate::data::cdot::CigarOp;
+        // One exon carries a CIGAR, one does not — we cannot vouch for the whole
+        // transcript, so this is elevated, not gapless.
+        let cigars = vec![Some(vec![CigarOp::Match(185)]), None];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::NoAlignmentGapData
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_insertion_is_unapplied_indels() {
+        use crate::data::cdot::CigarOp;
+        let cigars = vec![Some(vec![
+            CigarOp::Match(185),
+            CigarOp::Insertion(3),
+            CigarOp::Match(250),
+        ])];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::UnappliedIndels {
+                insertions: 3,
+                deletions: 0
+            }
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_deletion_is_unapplied_indels() {
+        use crate::data::cdot::CigarOp;
+        let cigars = vec![Some(vec![CigarOp::Match(100), CigarOp::Deletion(5)])];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::UnappliedIndels {
+                insertions: 0,
+                deletions: 5
+            }
+        );
+    }
+
+    #[test]
+    fn cdot_synthesis_risk_indels_dominate_missing_data() {
+        use crate::data::cdot::CigarOp;
+        // An indel on one exon and a missing CIGAR on another → the indel is the
+        // strongest, most actionable signal and must win.
+        let cigars = vec![Some(vec![CigarOp::Insertion(2)]), None];
+        assert_eq!(
+            classify_cdot_synthesis_risk(&cigars),
+            CdotSynthesisRisk::UnappliedIndels {
+                insertions: 2,
+                deletions: 0
+            }
         );
     }
 
