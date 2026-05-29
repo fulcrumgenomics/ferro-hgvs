@@ -92,6 +92,12 @@ struct RawCdotTranscript {
     gene_version: Option<String>,
     #[serde(default)]
     biotype: Option<Vec<String>>,
+    /// Protein accession for the transcript's CDS (e.g. `NP_000068.1`). cdot
+    /// records this per-transcript; plumbing it through lets the projector
+    /// emit the correct `p.` accession instead of falling back to the
+    /// (frequently wrong) `NM_*` → `NP_*` number-preserving inference.
+    #[serde(default)]
+    protein: Option<String>,
     #[serde(default)]
     genome_builds: Option<HashMap<String, RawGenomeBuild>>,
     /// CDS start in transcript coordinates (0-indexed)
@@ -224,7 +230,7 @@ impl RawCdotTranscript {
             cds_start,
             cds_end,
             gene_id: None,
-            protein: None,
+            protein: self.protein.clone(),
         })
     }
 
@@ -261,7 +267,7 @@ impl RawCdotTranscript {
             cds_start: self.cds_start,
             cds_end: self.cds_end,
             gene_id: None,
-            protein: None,
+            protein: self.protein.clone(),
         })
     }
 }
@@ -2854,6 +2860,43 @@ mod tests {
             tx.cds_start,
             Some(20),
             "alt-build fallback must deterministically pick the highest version (.4 over .3)"
+        );
+    }
+
+    #[test]
+    fn test_protein_accession_parsed_from_cdot() {
+        // cdot records the CDS protein accession per transcript. The loader
+        // must surface it on `CdotTranscript.protein` so the projector emits
+        // the correct `p.` accession (here NP_000068.1) instead of falling
+        // back to the NM_* -> NP_* number-preserving inference (NP_000077.4),
+        // which is wrong whenever the NP number differs from the NM number.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000077.4": {
+                    "gene_name": "CDKN2A",
+                    "protein": "NP_000068.1",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000009.12",
+                            "strand": "+",
+                            "exons": [[21967750, 21968240, 1, 0, 490, "M490"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let tx = mapper
+            .get_transcript_on_build("NM_000077.4", "GRCh38")
+            .expect("transcript present");
+        assert_eq!(
+            tx.protein.as_deref(),
+            Some("NP_000068.1"),
+            "cdot `protein` field must be plumbed onto CdotTranscript.protein"
         );
     }
 
