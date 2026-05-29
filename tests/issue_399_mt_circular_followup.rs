@@ -223,6 +223,63 @@ fn spdi_conversion_rejects_wraparound_circular() {
 }
 
 // =============================================================================
+// W4001 SwappedPositions must be axis-aware: skip m./o. wraparound ranges
+// =============================================================================
+// A wraparound (origin-crossing) range on a circular contig legitimately has
+// start > end (SVD-WG006). The W4001 SwappedPositions preprocessor must not
+// treat that as a transposition error and rewrite it. Linear axes (c./g./n./r.)
+// keep flagging reversed ranges as before.
+
+mod w4001_axis_aware {
+    use ferro_hgvs::hgvs::parser::parse_hgvs_lenient;
+
+    fn warning_codes(input: &str) -> Vec<String> {
+        let r =
+            parse_hgvs_lenient(input).unwrap_or_else(|e| panic!("lenient parse {input:?}: {e}"));
+        r.warnings
+            .iter()
+            .map(|w| w.error_type.code().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn wraparound_mt_del_does_not_emit_w4001() {
+        let codes = warning_codes("NC_012920.1:m.16569_1del");
+        assert!(
+            !codes.iter().any(|c| c == "W4001"),
+            "wraparound m. range must not emit W4001 SwappedPositions, got {codes:?}"
+        );
+    }
+
+    #[test]
+    fn wraparound_mt_range_is_not_rewritten() {
+        // The reversed start > end form must survive preprocessing so the
+        // wraparound signal reaches the parser intact.
+        let r = parse_hgvs_lenient("NC_012920.1:m.16569_1del").unwrap();
+        assert_eq!(format!("{}", r.result), "NC_012920.1:m.16569_1del");
+    }
+
+    #[test]
+    fn wraparound_circular_dup_does_not_emit_w4001() {
+        let codes = warning_codes("J01749.1:o.4344_197dup");
+        assert!(
+            !codes.iter().any(|c| c == "W4001"),
+            "wraparound o. range must not emit W4001 SwappedPositions, got {codes:?}"
+        );
+    }
+
+    #[test]
+    fn linear_genomic_swapped_still_emits_w4001() {
+        // Regression guard: axis-aware skip must not disable W4001 on linear axes.
+        let codes = warning_codes("NC_000001.11:g.500_100dup");
+        assert!(
+            codes.iter().any(|c| c == "W4001"),
+            "linear g. swapped range must still emit W4001, got {codes:?}"
+        );
+    }
+}
+
+// =============================================================================
 // Validate handler: wraps_origin field on ValidateResponse
 // =============================================================================
 

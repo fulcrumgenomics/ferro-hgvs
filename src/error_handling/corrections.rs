@@ -1157,24 +1157,55 @@ fn parse_endpoint_token(
 /// offset-bearing forms (`c.100+5_99+3del`) and 3'UTR `*N` markers
 /// (`c.*5_*1del`). Returns Some with the detected swap information and
 /// the swapped endpoint pair (with offsets and markers preserved).
+///
+/// Axis-aware: the `m.` (mitochondrial) and `o.` (circular) axes are skipped
+/// entirely. On a circular contig a range with `start > end` is a valid
+/// origin-crossing wraparound (SVD-WG006), not a transposition error, so
+/// rewriting it would destroy the wraparound signal. See issue #467.
 pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
-    // Find coordinate marker.
-    let coord_markers = [".c.", ".g.", ".n.", ".m.", ".o.", ".r."];
+    // Find the coordinate marker and remember which axis it names so circular
+    // axes (m./o.) can be skipped.
+    let coord_markers = [
+        (".c.", 'c'),
+        (".g.", 'g'),
+        (".n.", 'n'),
+        (".m.", 'm'),
+        (".o.", 'o'),
+        (".r.", 'r'),
+    ];
     let mut search_start = 0;
-    for marker in &coord_markers {
-        if let Some(pos) = input.find(marker) {
-            search_start = pos + marker.len();
-            break;
-        }
+    let mut axis = None;
+    // Pick the earliest (leftmost) marker in the input, not the first marker
+    // kind in `coord_markers`. A later embedded coord prefix (e.g. a source
+    // HGVS appended after the main variant) must not override the axis of the
+    // leading expression, which would parse the wrong range. See issue #467.
+    if let Some((pos, marker_len, marker_axis)) = coord_markers
+        .iter()
+        .filter_map(|(marker, marker_axis)| {
+            input
+                .find(marker)
+                .map(|pos| (pos, marker.len(), *marker_axis))
+        })
+        .min_by_key(|(pos, _, _)| *pos)
+    {
+        search_start = pos + marker_len;
+        axis = Some(marker_axis);
     }
     if search_start == 0 {
-        if let Some(pos) = input.find(['c', 'g', 'n', 'm', 'r']) {
+        if let Some(pos) = input.find(['c', 'g', 'n', 'm', 'o', 'r']) {
             if input.get(pos + 1..pos + 2) == Some(".") {
                 search_start = pos + 2;
+                axis = input[pos..].chars().next();
             }
         }
     }
     if search_start == 0 {
+        return None;
+    }
+
+    // Skip circular axes: a reversed range here is a valid origin-crossing
+    // wraparound, not a swapped-position error.
+    if matches!(axis, Some('m') | Some('o')) {
         return None;
     }
 
@@ -4055,6 +4086,28 @@ mod tests {
         let result = detect_swapped_positions("c.-10_-50del");
         // -10 > -50, so this should be detected as swapped
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_detect_swapped_positions_picks_leftmost_marker() {
+        // The leftmost coordinate marker is a circular axis (`m.`), so a reversed
+        // range there is a valid origin-crossing wraparound and must NOT be flagged.
+        // A later embedded `c.` HGVS (e.g. a source expression) with a swapped
+        // range must not cause the detector to lock onto that later marker and
+        // emit a spurious correction. See issue #467 / PR #474.
+        // The dotted accession-with-version form (`...920.1.m.`) exercises the
+        // primary marker scan. The leftmost marker is `.m.`; a later `.c.` is
+        // earlier in the marker array, so a naive "first marker kind" scan would
+        // lock onto the embedded `.c.` range (`500_100`, reversed) and wrongly
+        // report a swap. Picking the leftmost marker selects the circular `m.`
+        // axis instead, which is skipped (valid origin-crossing wraparound).
+        let result =
+            detect_swapped_positions("NC_012920.1.m.16100_16000del NM_000088.3.c.500_100del");
+        assert!(
+            result.is_none(),
+            "leftmost marker is circular (m.), so no swap should be reported even though a \
+             later embedded c. range is reversed; got {result:?}"
+        );
     }
 
     #[test]
