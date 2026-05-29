@@ -14,10 +14,19 @@
 //! absent (CI by default), every axis test reports `skipping — no manifest`
 //! and exits 0. Same convention as `tests/real_data_normalization_tests.rs`.
 //!
-//! Each axis test also writes its current FAIL list to
-//! `/tmp/ferro-xfail/<axis>.{txt,tsv}` so contributors can regenerate the
-//! committed `baseline-failures/` snapshot or feed
-//! `tests/fixtures/mutalyzer-normalize/failure-patterns.md`.
+//! The per-axis `axis_*` tests are pure pass/fail gates and do NOT touch the
+//! filesystem. To (re)generate the FAIL lists under `/tmp/ferro-xfail/<axis>.{txt,tsv}`
+//! — used to seed the committed `baseline-failures/` snapshot and
+//! `failure-patterns.md` — run the single-process `regenerate_baselines`
+//! generator (it is `#[ignore]`d in the normal suite):
+//!
+//!     FERRO_MANIFEST=/path/to/manifest.json \
+//!       cargo nextest run --features dev -E 'test(regenerate_baselines)' \
+//!       --run-ignored only --no-capture
+//!
+//! Running it in one process (rather than relying on best-effort writes from
+//! the parallel, panicking per-axis test processes) avoids intermittently
+//! dropped artifact files.
 //!
 //! **Regression layer (CI-always):** `regression_under_mock_normalized` runs
 //! every `to_test` case with a `normalized` expectation through ferro under
@@ -476,41 +485,30 @@ impl AxisTally {
         self.fail.push((case.input.clone(), diag));
     }
 
-    /// Single-line, grep-friendly summary of the tally state. Stable
-    /// format used by both `finish()` and unit tests.
-    fn summary_line(&self, report_path: &Path) -> String {
+    /// Single-line, grep-friendly summary of the tally state. When
+    /// `report_path` is `Some`, the FAIL-list path is appended (used by the
+    /// regenerator, which writes that file); the gate path passes `None`.
+    fn summary_line(&self, report_path: Option<&Path>) -> String {
+        let dest = match report_path {
+            Some(p) => format!(" (FAIL inputs -> {})", p.display()),
+            None => String::new(),
+        };
         format!(
-            "{}: {} pass / {} divergence_accepted / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} divergence_accepted / {} spec_overridden / {} FAIL / {} skipped{}",
             self.axis,
             self.pass,
             self.divergence_accepted.len(),
             self.spec_overridden.len(),
             self.fail.len(),
             self.skipped,
-            report_path.display()
+            dest
         )
     }
 
-    fn finish(self) {
-        // Write FAIL inputs (one per line) to /tmp/ferro-xfail/<axis>.txt and
-        // (input \t diagnostic) pairs to /tmp/ferro-xfail/<axis>.tsv so the
-        // committed baseline-failures/<axis>.txt and failure-patterns.md can
-        // be regenerated from a single run.
-        let dir = Path::new(XFAIL_REPORT_DIR);
-        let _ = fs::create_dir_all(dir);
-        let report_path = dir.join(format!("{}.txt", self.axis));
-        let tsv_path = dir.join(format!("{}.tsv", self.axis));
-        let body: String = self.fail.iter().map(|(i, _)| format!("{i}\n")).collect();
-        let _ = fs::write(&report_path, &body);
-        let tsv: String = self
-            .fail
-            .iter()
-            .map(|(i, d)| format!("{i}\t{d}\n"))
-            .collect();
-        let _ = fs::write(&tsv_path, &tsv);
-
-        println!("{}", self.summary_line(&report_path));
-
+    /// Print the per-bucket diagnostics (accepted / spec-overridden / fail),
+    /// truncated to `FAIL_PRINT_LIMIT` per bucket. Shared by the gate
+    /// (`assert_clean`) and the regenerator (`write_artifacts`).
+    fn print_diagnostics(&self) {
         for (input, policy) in self.divergence_accepted.iter().take(FAIL_PRINT_LIMIT) {
             eprintln!(
                 "  DIVERGENCE_ACCEPTED  [{}] {} | policy={}",
@@ -542,19 +540,48 @@ impl AxisTally {
         }
         if self.fail.len() > FAIL_PRINT_LIMIT {
             eprintln!(
-                "  ... {} more FAIL — full list in {}",
+                "  ... {} more FAIL (full list via `regenerate_baselines`)",
                 self.fail.len() - FAIL_PRINT_LIMIT,
-                report_path.display()
             );
         }
+    }
 
+    /// Gate path (used by every `axis_*` test): print a summary + diagnostics
+    /// and assert the axis has zero divergences. Performs **no** filesystem
+    /// I/O — baseline / `.tsv` artifacts are written only by
+    /// [`regenerate_baselines`], in a single process, so we never depend on
+    /// best-effort writes from parallel, panicking per-axis test processes.
+    fn assert_clean(self) {
+        println!("{}", self.summary_line(None));
+        self.print_diagnostics();
         assert!(
             self.fail.is_empty(),
-            "{}: {} divergence(s) from mutalyzer — see {} and tests/fixtures/mutalyzer-normalize/failure-patterns.md",
+            "{}: {} divergence(s) from mutalyzer — run `regenerate_baselines` (see module docs) and consult tests/fixtures/mutalyzer-normalize/failure-patterns.md",
             self.axis,
             self.fail.len(),
-            report_path.display()
         );
+    }
+
+    /// Regeneration path (used only by [`regenerate_baselines`]): write the
+    /// FAIL inputs to `/tmp/ferro-xfail/<axis>.txt` (one per line) and
+    /// `(input \t diagnostic)` pairs to `<axis>.tsv`, then print the summary +
+    /// diagnostics. Never asserts. Because the regenerator runs all axes in a
+    /// single process, these writes are race-free.
+    fn write_artifacts(&self) {
+        let dir = Path::new(XFAIL_REPORT_DIR);
+        let _ = fs::create_dir_all(dir);
+        let report_path = dir.join(format!("{}.txt", self.axis));
+        let tsv_path = dir.join(format!("{}.tsv", self.axis));
+        let body: String = self.fail.iter().map(|(i, _)| format!("{i}\n")).collect();
+        let _ = fs::write(&report_path, &body);
+        let tsv: String = self
+            .fail
+            .iter()
+            .map(|(i, d)| format!("{i}\t{d}\n"))
+            .collect();
+        let _ = fs::write(&tsv_path, &tsv);
+        println!("{}", self.summary_line(Some(report_path.as_path())));
+        self.print_diagnostics();
     }
 }
 
@@ -630,13 +657,8 @@ fn manifest_or_skip() {
 // Axis: normalized
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_normalized() {
-    let Some(normalizer) = normalizer() else {
-        eprintln!("axis_normalized: skipping — no manifest");
-        return;
-    };
-
+fn run_normalized() -> Option<AxisTally> {
+    let normalizer = normalizer()?;
     let mut t = AxisTally::new(Axis::Normalized);
     for case in &fixture().cases {
         if !case.to_test {
@@ -657,20 +679,23 @@ fn axis_normalized() {
 
         t.record(case, expected, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_normalized() {
+    match run_normalized() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_normalized: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: genomic
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_genomic() {
-    let Some(normalizer) = normalizer() else {
-        eprintln!("axis_genomic: skipping — no manifest");
-        return;
-    };
-
+fn run_genomic() -> Option<AxisTally> {
+    let normalizer = normalizer()?;
     let mut t = AxisTally::new(Axis::Genomic);
     for case in &fixture().cases {
         if !case.to_test {
@@ -694,20 +719,23 @@ fn axis_genomic() {
 
         t.record(case, expected, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_genomic() {
+    match run_genomic() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_genomic: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: protein_description
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_protein_description() {
-    let Some(vp) = variant_projector() else {
-        eprintln!("axis_protein_description: skipping — no manifest");
-        return;
-    };
-
+fn run_protein_description() -> Option<AxisTally> {
+    let vp = variant_projector()?;
     let mut t = AxisTally::new(Axis::ProteinDescription);
     for case in &fixture().cases {
         if !case.to_test {
@@ -734,20 +762,23 @@ fn axis_protein_description() {
 
         t.record(case, expected, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_protein_description() {
+    match run_protein_description() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_protein_description: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: coding_protein_descriptions
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_coding_protein_descriptions() {
-    let Some(vp) = variant_projector() else {
-        eprintln!("axis_coding_protein_descriptions: skipping — no manifest");
-        return;
-    };
-
+fn run_coding_protein_descriptions() -> Option<AxisTally> {
+    let vp = variant_projector()?;
     let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
     for case in &fixture().cases {
         if !case.to_test {
@@ -790,21 +821,25 @@ fn axis_coding_protein_descriptions() {
 
         t.record(case, &expected_repr, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_coding_protein_descriptions() {
+    match run_coding_protein_descriptions() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_coding_protein_descriptions: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: rna_description
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_rna_description() {
+fn run_rna_description() -> Option<AxisTally> {
     // Manifest-gate even though the current body doesn't consume the
     // manifest — keeps CI green and matches the other axes' shape.
-    if manifest_path().is_none() {
-        eprintln!("axis_rna_description: skipping — no manifest");
-        return;
-    }
+    manifest_path()?;
 
     let mut t = AxisTally::new(Axis::RnaDescription);
     for case in &fixture().cases {
@@ -819,19 +854,23 @@ fn axis_rna_description() {
             Err("ferro-hgvs r. prediction surface not yet wired into this runner".to_string());
         t.record(case, expected, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_rna_description() {
+    match run_rna_description() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_rna_description: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: noncoding
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_noncoding() {
-    if manifest_path().is_none() {
-        eprintln!("axis_noncoding: skipping — no manifest");
-        return;
-    }
+fn run_noncoding() -> Option<AxisTally> {
+    manifest_path()?;
 
     let mut t = AxisTally::new(Axis::Noncoding);
     for case in &fixture().cases {
@@ -847,20 +886,23 @@ fn axis_noncoding() {
             Err("ferro-hgvs n. projection surface not yet wired into this runner".to_string());
         t.record(case, &expected, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_noncoding() {
+    match run_noncoding() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_noncoding: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: errors
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_errors() {
-    let Some(normalizer) = normalizer() else {
-        eprintln!("axis_errors: skipping — no manifest");
-        return;
-    };
-
+fn run_errors() -> Option<AxisTally> {
+    let normalizer = normalizer()?;
     let mut t = AxisTally::new(Axis::Errors);
     for case in &fixture().cases {
         if !case.to_test {
@@ -906,20 +948,23 @@ fn axis_errors() {
 
         t.record(case, &expected_repr, actual);
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_errors() {
+    match run_errors() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_errors: skipping — no manifest"),
+    }
 }
 
 // ----------------------------------------------------------------------------
 // Axis: infos
 // ----------------------------------------------------------------------------
 
-#[test]
-fn axis_infos() {
-    let Some(normalizer) = normalizer() else {
-        eprintln!("axis_infos: skipping — no manifest");
-        return;
-    };
-
+fn run_infos() -> Option<AxisTally> {
+    let normalizer = normalizer()?;
     let mut t = AxisTally::new(Axis::Infos);
     for case in &fixture().cases {
         if !case.to_test {
@@ -1005,7 +1050,67 @@ fn axis_infos() {
             t.record(case, &expected_repr, actual);
         }
     }
-    t.finish();
+    Some(t)
+}
+
+#[test]
+fn axis_infos() {
+    match run_infos() {
+        Some(t) => t.assert_clean(),
+        None => eprintln!("axis_infos: skipping — no manifest"),
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Baseline regeneration (single-process; run explicitly)
+// ----------------------------------------------------------------------------
+
+/// Regenerate the per-axis FAIL artifacts under `/tmp/ferro-xfail/` in a
+/// **single process**, so the writes are race-free. The per-axis `axis_*`
+/// gate tests never touch the filesystem (see `AxisTally::assert_clean`); they
+/// run as separate, parallel, panic-on-divergence processes, and relying on
+/// best-effort writes from those occasionally dropped a file. This test is the
+/// one supported way to (re)generate the `.txt`/`.tsv` snapshots that seed
+/// `tests/fixtures/mutalyzer-normalize/baseline-failures/<axis>.txt` and
+/// `failure-patterns.md`.
+///
+/// `#[ignore]` so it does not run in the normal suite (it would always
+/// "fail-as-skip" without a manifest and is a generator, not a gate). Run it:
+///
+///     FERRO_MANIFEST=/path/to/manifest.json \
+///       cargo nextest run --features dev -E 'test(regenerate_baselines)' \
+///       --run-ignored only --no-capture
+fn run_all_axes() -> Vec<AxisTally> {
+    [
+        run_normalized(),
+        run_genomic(),
+        run_protein_description(),
+        run_coding_protein_descriptions(),
+        run_rna_description(),
+        run_noncoding(),
+        run_errors(),
+        run_infos(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+#[test]
+#[ignore = "generator, not a gate: run explicitly to (re)write /tmp/ferro-xfail artifacts"]
+fn regenerate_baselines() {
+    assert!(
+        manifest_path().is_some(),
+        "regenerate_baselines requires a manifest (set FERRO_MANIFEST or provide a well-known one)"
+    );
+    let tallies = run_all_axes();
+    assert!(
+        !tallies.is_empty(),
+        "manifest present but no axis produced a tally"
+    );
+    for t in &tallies {
+        t.write_artifacts();
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -1460,11 +1565,17 @@ mod comparator_tests {
         t.record(&make_case("c", None, None), "X", Ok("Y".to_string()));
 
         let path = PathBuf::from("/tmp/example.txt");
-        let line = t.summary_line(&path);
+        let line = t.summary_line(Some(path.as_path()));
         assert_eq!(
             line,
             "normalized: 1 pass / 1 divergence_accepted / 1 spec_overridden / 1 FAIL / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
+        );
+        // `None` omits the path suffix (the gate path).
+        let line_no_path = t.summary_line(None);
+        assert_eq!(
+            line_no_path,
+            "normalized: 1 pass / 1 divergence_accepted / 1 spec_overridden / 1 FAIL / 0 skipped"
         );
     }
 
