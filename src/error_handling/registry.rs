@@ -1199,6 +1199,42 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3026",
+        CodeInfo {
+            code: "W3026",
+            name: "NonConformantBracketCardinality",
+            summary: "Standalone single-member allele bracket (e.g. c.[76A>C], p.[=]).",
+            explanation: "`[ ]` is allele syntax. The HGVS spec admits only two conformant \
+                shapes, identically across every coordinate system (c/g/n/m/o/r/p): one \
+                bracket group with two or more cis members (`c.[76A>C;88G>T]`), or two or \
+                more trans groups (`c.[76A>C];[88G>T]`). A single variant wrapped in \
+                brackets standalone is explicitly invalid (DNA/alleles.md: the notation \
+                `c.[76A>C]` without describing the second allele is misleading; the \
+                recommended form is `c.[76A>C];[76=]`), and the pure markers `=`/`?`/`0` \
+                are valid only as a whole group inside a multi-group trans construct \
+                (`c.[2376G>C];[=]`), never standalone. The canonical repair drops the \
+                redundant brackets (`c.[76A>C]` -> `c.76A>C`). Strict mode rejects; lenient \
+                unwraps and warns; silent unwraps without a warning.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NM_000088.3:c.[76A>C]",
+                "NC_000001.11:g.[1000G>A]",
+                "NP_000079.2:p.[=]",
+            ],
+            good_examples: &[
+                "NM_000088.3:c.76A>C",
+                "NM_000088.3:c.[76A>C;88G>T]",
+                "NM_000088.3:c.[76A>C];[76=]",
+            ],
+            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/alleles/",
+            ),
+            related_codes: &["W3004", "W3021"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(

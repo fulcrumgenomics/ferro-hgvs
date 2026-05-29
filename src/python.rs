@@ -2275,6 +2275,10 @@ pub enum PyErrorType {
     DupSizeSuffix = 37,
     DupExplicitSeq = 38,
     DelExplicitSeq = 39,
+    // 40 is W3026 NonConformantBracketCardinality — standalone single-member
+    // allele bracket (c.[76A>C], p.[=]); brackets require >=2 cis members or
+    // >=2 trans groups.
+    NonConformantBracketCardinality = 40,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2319,6 +2323,9 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::DupSizeSuffix => PyErrorType::DupSizeSuffix,
             ErrorType::DupExplicitSeq => PyErrorType::DupExplicitSeq,
             ErrorType::DelExplicitSeq => PyErrorType::DelExplicitSeq,
+            ErrorType::NonConformantBracketCardinality => {
+                PyErrorType::NonConformantBracketCardinality
+            }
         }
     }
 }
@@ -2365,6 +2372,9 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::DupSizeSuffix => ErrorType::DupSizeSuffix,
             PyErrorType::DupExplicitSeq => ErrorType::DupExplicitSeq,
             PyErrorType::DelExplicitSeq => ErrorType::DelExplicitSeq,
+            PyErrorType::NonConformantBracketCardinality => {
+                ErrorType::NonConformantBracketCardinality
+            }
         }
     }
 }

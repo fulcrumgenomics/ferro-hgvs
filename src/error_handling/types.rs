@@ -371,6 +371,29 @@ pub enum ErrorType {
     /// `always_warn_if_not_rejected` policy table that declared
     /// Strict→Reject.
     OverlapConflictingEdits,
+
+    /// A bracketed allele construct that violates the HGVS cardinality
+    /// rule: a standalone single-member bracket (`c.[76A>C]`, `g.[1000G>A]`,
+    /// `p.[=]`, `c.[?]`, `p.[(?)]`).
+    ///
+    /// `[ ]` is allele syntax. The spec admits only two conformant shapes,
+    /// identically across every coordinate system (`c/g/n/m/o/r/p`):
+    /// one bracket group with **two or more** cis members
+    /// (`c.[76A>C;88G>T]`), or **two or more** trans groups
+    /// (`c.[76A>C];[88G>T]`). A single variant in brackets standalone is
+    /// explicitly marked invalid (`DNA/alleles.md`: *"I find the notation
+    /// `c.[76A>C]` … misleading"* → recommended `c.[76A>C];[76=]`), and the
+    /// pure markers `=`/`?`/`0` are valid only as a whole group inside a
+    /// multi-group trans construct (`c.[2376G>C];[=]`), never standalone.
+    ///
+    /// The canonical repair is to drop the redundant brackets
+    /// (`c.[76A>C]` → `c.76A>C`); `AlleleVariant::Display` already renders a
+    /// singleton without brackets, so the corrected output is produced for
+    /// free. Strict mode rejects; lenient unwraps the wrapper and emits
+    /// W3026; silent unwraps without a warning. The bracket form
+    /// `[a;b]` (≥2 cis) and `[a];[b]` (≥2 trans) are conformant and are not
+    /// flagged. See #493.
+    NonConformantBracketCardinality,
 }
 
 impl ErrorType {
@@ -416,6 +439,7 @@ impl ErrorType {
             ErrorType::RefSeqMismatch => "W5001",
             ErrorType::OverlapConflictingEdits => "W5002",
             ErrorType::VariantExceedsReference => "W5003",
+            ErrorType::NonConformantBracketCardinality => "W3026",
         }
     }
 
@@ -461,6 +485,7 @@ impl ErrorType {
         ErrorType::DupSizeSuffix,
         ErrorType::DupExplicitSeq,
         ErrorType::DelExplicitSeq,
+        ErrorType::NonConformantBracketCardinality,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -549,6 +574,9 @@ impl ErrorType {
             ErrorType::OverlapConflictingEdits => {
                 "two or more cis-allele edits share identical reference bounds"
             }
+            ErrorType::NonConformantBracketCardinality => {
+                "standalone single-member bracket (allele brackets require \u{2265}2 cis members or \u{2265}2 trans groups)"
+            }
         }
     }
 
@@ -630,6 +658,10 @@ impl ErrorType {
             // Coincident-bounds cis-allele edits have no spec-defined
             // canonical form; ferro preserves the input verbatim.
             ErrorType::OverlapConflictingEdits => false,
+            // The canonical repair is to drop the redundant brackets
+            // (`c.[76A>C]` -> `c.76A>C`); the singleton AlleleVariant is
+            // unwrapped to its sole member.
+            ErrorType::NonConformantBracketCardinality => true,
         }
     }
 
@@ -702,6 +734,9 @@ impl ErrorType {
                 "g.[100A>C;100A>G] (two cis edits at the same bound)",
                 "(no auto-correct)",
             ),
+            ErrorType::NonConformantBracketCardinality => {
+                ("NM_000088.3:c.[76A>C]", "NM_000088.3:c.76A>C")
+            }
         }
     }
 }
@@ -1119,6 +1154,7 @@ mod tests {
             ErrorType::RefSeqMismatch,
             ErrorType::OverlapConflictingEdits,
             ErrorType::VariantExceedsReference,
+            ErrorType::NonConformantBracketCardinality,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
         // this match fails to compile until `every_variant` is extended.
@@ -1164,7 +1200,8 @@ mod tests {
                 | ErrorType::PositionPastEnd
                 | ErrorType::RefSeqMismatch
                 | ErrorType::OverlapConflictingEdits
-                | ErrorType::VariantExceedsReference => {}
+                | ErrorType::VariantExceedsReference
+                | ErrorType::NonConformantBracketCardinality => {}
             }
             assert!(
                 ErrorType::ALL.contains(&v),

@@ -969,6 +969,7 @@ class ErrorType(IntEnum):
     DupSizeSuffix = 37
     DupExplicitSeq = 38
     DelExplicitSeq = 39
+    NonConformantBracketCardinality = 40
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""
