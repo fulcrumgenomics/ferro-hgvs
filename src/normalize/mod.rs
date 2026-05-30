@@ -3676,7 +3676,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_start,
             rel_end,
             &boundaries,
-        );
+        )?;
 
         // Perform normalization in transcript-view space (CDS intronic context).
         // HGVS spec (repeated.md): the codon-frame restriction
@@ -3842,7 +3842,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_start,
             rel_end,
             &boundaries,
-        );
+        )?;
 
         // Perform normalization in transcript-view space (n. non-coding intronic context).
         let seq_bytes = work_seq.as_bytes();
@@ -3982,7 +3982,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_start,
             rel_end,
             &boundaries,
-        );
+        )?;
 
         // HGVS spec (repeated.md): the codon-frame restriction applies
         // only to bases inside the CDS proper. Boundary-spanning
@@ -5649,16 +5649,41 @@ fn flip_intronic_for_strand(
     rel_start: u64,
     rel_end: u64,
     boundaries: &Boundaries,
-) -> (String, u64, u64, Boundaries) {
+) -> Result<(String, u64, u64, Boundaries), FerroError> {
     if strand != Strand::Minus {
-        return (
+        return Ok((
             genomic_seq.to_string(),
             rel_start,
             rel_end,
             boundaries.clone(),
-        );
+        ));
     }
     let seq_len = genomic_seq.len() as u64;
+    // The reverse-complement flip maps a coordinate `x` to `seq_len - x + 1`,
+    // which underflows (and previously panicked with "attempt to subtract
+    // with overflow") whenever `x` exceeds the fetched window. That happens
+    // for minus-strand intronic inputs whose enclosing intron extends past
+    // the variant-sized window — `boundaries.right` is the far intron edge,
+    // which for a large intron can lie far outside the fetched bases (e.g.
+    // `NG_007107.2(NM_004992.3):c.378-17delT`). We cannot reliably 3'-shift
+    // within bases we did not fetch, and silently clamping the boundary to
+    // the window edge produces an off-by-one shift, so surface a clear error
+    // instead. Sizing the window to the enclosing intron is the real fix that
+    // would let these normalize (and demote) rather than error — see #488.
+    let in_window = |x: u64| (1..=seq_len).contains(&x);
+    if !in_window(rel_start)
+        || !in_window(rel_end)
+        || !in_window(boundaries.left)
+        || !in_window(boundaries.right)
+    {
+        return Err(FerroError::ConversionError {
+            msg: format!(
+                "intronic minus-strand shuffle window too small: rel {rel_start}..{rel_end}, \
+                 boundaries {}..{} exceed fetched window of length {seq_len}",
+                boundaries.left, boundaries.right
+            ),
+        });
+    }
     let rc = crate::sequence::reverse_complement(genomic_seq);
     let new_rel_start = seq_len - rel_end + 1;
     let new_rel_end = seq_len - rel_start + 1;
@@ -5666,7 +5691,7 @@ fn flip_intronic_for_strand(
         seq_len - boundaries.right + 1,
         seq_len - boundaries.left + 1,
     );
-    (rc, new_rel_start, new_rel_end, new_boundaries)
+    Ok((rc, new_rel_start, new_rel_end, new_boundaries))
 }
 
 /// Inverse of [`flip_intronic_for_strand`] for the result positions
@@ -7848,6 +7873,44 @@ mod tests {
             output.contains('+') || output.contains('-'),
             "Normalized intronic n. variant should retain intronic notation, got: {}",
             output
+        );
+    }
+
+    // #488: a minus-strand intronic shuffle boundary can lie outside the
+    // fetched genomic window (the window is sized to the variant, the intron
+    // far edge is not). The reverse-complement flip `seq_len - x + 1` then
+    // underflowed and panicked. It must now surface a clean error, and the
+    // in-window path must be unaffected.
+    #[test]
+    fn flip_intronic_for_strand_errors_on_out_of_window_boundary() {
+        let seq = "ACGTACGT"; // len 8
+        let boundaries = Boundaries::new(2, 100); // right = 100 >> seq_len = 8
+        let result = flip_intronic_for_strand(Strand::Minus, seq, 3, 4, &boundaries);
+        assert!(
+            matches!(result, Err(FerroError::ConversionError { .. })),
+            "out-of-window boundary must yield ConversionError, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn flip_intronic_for_strand_in_window_and_plus_passthrough() {
+        let seq = "ACGTACGT"; // len 8
+        let boundaries = Boundaries::new(2, 7);
+
+        // Minus strand: flips sequence + coordinates into transcript view.
+        let (rc, rel_start, rel_end, b) =
+            flip_intronic_for_strand(Strand::Minus, seq, 3, 5, &boundaries)
+                .expect("in-window minus-strand flip");
+        assert_eq!(rc, crate::sequence::reverse_complement(seq));
+        assert_eq!((rel_start, rel_end), (8 - 5 + 1, 8 - 3 + 1));
+        assert_eq!((b.left, b.right), (8 - 7 + 1, 8 - 2 + 1));
+
+        // Plus strand: returned unchanged.
+        let (s2, rs2, re2, b2) = flip_intronic_for_strand(Strand::Plus, seq, 3, 5, &boundaries)
+            .expect("plus-strand passthrough");
+        assert_eq!(
+            (s2.as_str(), rs2, re2, b2.left, b2.right),
+            (seq, 3, 5, 2, 7)
         );
     }
 }
