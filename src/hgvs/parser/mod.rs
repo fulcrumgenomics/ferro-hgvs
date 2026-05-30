@@ -19,7 +19,10 @@ pub mod position;
 pub mod variant;
 
 use crate::error::FerroError;
-use crate::error_handling::{ErrorConfig, InputPreprocessor, ParseResultWithWarnings};
+use crate::error_handling::{
+    CorrectionWarning, ErrorConfig, ErrorType, InputPreprocessor, ParseResultWithWarnings,
+    ResolvedAction,
+};
 use crate::hgvs::HgvsVariant;
 
 /// Parse an HGVS string into a variant
@@ -123,6 +126,10 @@ pub fn parse_hgvs_with_config(
     input: &str,
     config: ErrorConfig,
 ) -> Result<ParseResultWithWarnings<HgvsVariant>, FerroError> {
+    // Resolve the bracket-cardinality action before `config` is consumed by the
+    // preprocessor; the rule itself is applied post-parse on the AST below.
+    let cardinality_action = config.action_for(ErrorType::NonConformantBracketCardinality);
+
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
     let preprocess_result = preprocessor.preprocess(input);
@@ -141,13 +148,100 @@ pub fn parse_hgvs_with_config(
     // Parse the preprocessed input
     let variant = variant::parse_variant(&preprocess_result.preprocessed)?;
 
+    // Apply the bracket/allele cardinality conformance rule on the parsed AST
+    // (#493). This is a structural rule, identical across all coordinate
+    // systems, so it is enforced once here rather than per-axis in the parser.
+    let mut warnings = preprocess_result.warnings;
+    let variant = apply_bracket_cardinality_rule(
+        variant,
+        cardinality_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
     // Return result with warnings
     Ok(ParseResultWithWarnings::new(
         variant,
-        preprocess_result.warnings,
+        warnings,
         preprocess_result.original,
         preprocess_result.preprocessed,
     ))
+}
+
+/// Enforce the HGVS bracket/allele cardinality rule on a parsed variant (#493).
+///
+/// `[ ]` is allele syntax. The spec admits only two conformant shapes, identically
+/// across every coordinate system (`c/g/n/m/o/r/p`): one bracket group with two or
+/// more cis members (`c.[76A>C;88G>T]`), or two or more trans groups
+/// (`c.[76A>C];[88G>T]`). A standalone single-member bracket — `c.[76A>C]`,
+/// `g.[1000G>A]`, `p.[=]`, `c.[?]`, `p.[(?)]` — is non-conformant
+/// (`DNA/alleles.md`). It parses to an [`HgvsVariant::Allele`] with exactly one
+/// member, which is the uniform signal this rule keys off.
+///
+/// The canonical repair drops the redundant brackets, unwrapping the singleton to
+/// its sole member ([`AlleleVariant::Display`](crate::hgvs::variant::AlleleVariant)
+/// already renders a singleton bracket-free, so the corrected output is identical).
+/// `Reject` (strict) returns a `W3026` parse error; `WarnCorrect` (lenient) unwraps
+/// and pushes a `W3026` warning; `SilentCorrect` (silent) unwraps quietly; `Accept`
+/// leaves the wrapper intact. Conformant multi-member brackets pass through
+/// untouched.
+fn apply_bracket_cardinality_rule(
+    variant: HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<HgvsVariant, FerroError> {
+    // Only a standalone single-member allele bracket is non-conformant. Multi-member
+    // cis groups and >=2 trans groups carry more than one member and pass through.
+    let is_singleton = matches!(&variant, HgvsVariant::Allele(av) if av.variants.len() == 1);
+    if !is_singleton {
+        return Ok(variant);
+    }
+
+    match action {
+        ResolvedAction::Accept => Ok(variant),
+        ResolvedAction::Reject => {
+            let canonical = variant.to_string();
+            Err(FerroError::Parse {
+                pos: 0,
+                msg: format!(
+                    "[{}] standalone single-member allele bracket is not HGVS-conformant: \
+                     allele brackets require two or more cis members (`c.[a;b]`) or two or \
+                     more trans groups (`c.[a];[b]`). Drop the brackets (canonical \
+                     `{}`) or pair with a second allele (e.g. `[a];[=]`).",
+                    ErrorType::NonConformantBracketCardinality.code(),
+                    canonical,
+                ),
+                diagnostic: None,
+            })
+        }
+        ResolvedAction::WarnCorrect | ResolvedAction::SilentCorrect => {
+            // Canonical repair: unwrap the singleton wrapper to its sole member.
+            let member = match variant {
+                HgvsVariant::Allele(av) => av
+                    .variants
+                    .into_iter()
+                    .next()
+                    .expect("singleton allele has exactly one member"),
+                // Unreachable: `is_singleton` already established this is an Allele.
+                other => return Ok(other),
+            };
+            if action == ResolvedAction::WarnCorrect {
+                let canonical = member.to_string();
+                warnings.push(CorrectionWarning::new(
+                    ErrorType::NonConformantBracketCardinality,
+                    format!(
+                        "standalone single-member allele bracket unwrapped to `{canonical}`; \
+                         allele brackets require >=2 cis members or >=2 trans groups"
+                    ),
+                    None,
+                    source.to_string(),
+                    canonical,
+                ));
+            }
+            Ok(member)
+        }
+    }
 }
 
 /// Parse an HGVS string with lenient error handling.

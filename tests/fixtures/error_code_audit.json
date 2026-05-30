@@ -438,6 +438,14 @@
       "spec_section_notes": "Detected and rewritten by correct_del_explicit_seq in src/error_handling/corrections.rs. Wired as InputPreprocessor in Phase 13d. mode_behavior is standard_correctable (Reject in strict, WarnAndRewrite in lenient, silently rewrite in silent) — ferro rewrites the explicit form to the canonical form in lenient/silent modes."
     },
     {
+      "code": "W3026",
+      "description": "NonConformantBracketCardinality — a standalone single-member allele bracket (c.[76A>C], g.[1000G>A], p.[=], c.[?], p.[(?)]). Allele brackets require ≥2 cis members or ≥2 trans groups; the canonical repair drops the redundant brackets.",
+      "spec_section": "recommendations/DNA/alleles.md (a single variant in brackets is invalid — 'c.[76A>C]' is misleading, use 'c.[76A>C];[76=]'; pure markers =/?/0 are valid only as a whole group inside a multi-group trans construct, never standalone)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/alleles/",
+      "status": "enforced",
+      "spec_section_notes": "Applied post-parse on the AST in apply_bracket_cardinality_rule (src/hgvs/parser/mod.rs) — a top-level HgvsVariant::Allele with exactly one member is the uniform non-conformant signal across all seven coordinate systems (c/g/n/m/o/r/p). Strict rejects with a W3026 parse error; lenient unwraps the singleton to its sole member and emits W3026; silent unwraps without a warning. AlleleVariant::Display already renders a singleton bracket-free, so the corrected output is produced for free; the bare parse_hgvs path stays permissive and preserves the wrapper for programmatic callers (test_singleton_cis_allele_preserves_wrapper). Conformant multi-member brackets ([a;b], [a];[b]) pass through untouched. See #493."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",
