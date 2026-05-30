@@ -122,6 +122,13 @@ struct Case {
     /// Tallied into `AxisTally::divergence_accepted` instead of `fail`.
     #[serde(default)]
     accepted_divergence: Option<AcceptedDivergence>,
+    /// Marks a mismatch on a specific axis as a known ferro bug (xfail):
+    /// ferro is wrong and the divergence is tracked by an issue rather than
+    /// accepted as policy. Tallied into `AxisTally::known_bug` instead of
+    /// `fail`. If ferro starts matching mutalyzer (XPASS), the harness fails
+    /// so the annotation and now-fixed row are cleaned up.
+    #[serde(default)]
+    known_bug: Option<KnownBug>,
     /// Documentary annotation for cases where mutalyzer's expected output
     /// has been corrected in `cases.json` to ferro's spec-correct value.
     /// Has NO effect on tally bucketing — the corrected expected string
@@ -225,6 +232,31 @@ struct AcceptedDivergence {
     /// can grep for the policy.
     policy: Policy,
     /// Optional human-readable note expanding on the policy.
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Known-bug annotation. When attached to a `Case`, the corpus runner
+/// treats a mismatch on `axis` as an expected failure (xfail): ferro is
+/// *wrong* on this axis and the divergence is a tracked bug rather than a
+/// policy decision. Tallied into `AxisTally::known_bug` instead of `fail`.
+///
+/// Contrast with [`AcceptedDivergence`], which marks an *intentional*,
+/// spec-allowed divergence. A `known_bug` says ferro should eventually
+/// match mutalyzer once `tracking_issue` is fixed.
+///
+/// If ferro *starts* matching mutalyzer on this axis (an XPASS), the
+/// harness FAILs loudly: the bug appears fixed, so the annotation and the
+/// stale fixture row must be cleaned up (the row demoted to a normal
+/// passing case).
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+struct KnownBug {
+    /// Axis name this annotation applies to (e.g. `"normalized"`).
+    axis: Axis,
+    /// Issue tracking the fix.
+    tracking_issue: u64,
+    /// Optional human-readable note.
     #[serde(default)]
     note: Option<String>,
 }
@@ -427,6 +459,11 @@ struct AxisTally {
     /// the upstream mutalyzer expectation still differs, the citation
     /// keeps the case visible without surfacing as a FAIL.
     spec_overridden: Vec<(String, String)>,
+    /// Mismatches gated by a `known_bug` annotation whose `axis` matches
+    /// this tally's axis. Tracked-but-non-failing (xfail); reported in the
+    /// summary line as `known_bug` and NOT written to
+    /// `baseline-failures/<axis>.txt`. Stores `(input, "#<issue>")`.
+    known_bug: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
 }
@@ -438,27 +475,63 @@ impl AxisTally {
             pass: 0,
             divergence_accepted: Vec::new(),
             spec_overridden: Vec::new(),
+            known_bug: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
         }
     }
 
     /// Bucket a single case against `expected`/`actual`:
-    /// 1. PASS when `actual == expected`.
+    /// 1. On a match (`actual == expected`):
+    ///    - XPASS FAIL when the case carries an `accepted_divergence` or
+    ///      `known_bug` annotation for this tally's axis — the annotation
+    ///      is now stale (the divergence/bug is gone) and must be removed.
+    ///    - PASS otherwise.
     /// 2. `divergence_accepted` when the case carries
     ///    `accepted_divergence` matching this tally's axis.
-    /// 3. `spec_overridden` when the case carries a `spec_citation`
+    /// 3. `known_bug` (xfail) when the case carries a `known_bug`
     ///    matching this tally's axis.
-    /// 4. FAIL otherwise.
+    /// 4. `spec_overridden` when the case carries a `spec_citation`
+    ///    matching this tally's axis.
+    /// 5. FAIL otherwise.
     ///
-    /// `accepted_divergence` and `spec_citation` only catch a *string
-    /// mismatch* from a successful run. An `Err` means ferro failed to
-    /// produce any result (panic, parse error, normalize failure) —
+    /// `accepted_divergence`, `known_bug`, and `spec_citation` only catch a
+    /// *string mismatch* from a successful run. An `Err` means ferro failed
+    /// to produce any result (panic, parse error, normalize failure) —
     /// those are real bugs and must surface as FAIL even when an
     /// annotation is present.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
         let matches = matches!(&actual, Ok(s) if s == expected);
         if matches {
+            // XPASS detection: a match on an axis that carries an
+            // `accepted_divergence` or `known_bug` annotation means the
+            // annotation is stale — the divergence/bug the row documents is
+            // gone. Fail loudly so the annotation (and, for known_bug, the
+            // fixed row) is cleaned up rather than silently rotting.
+            if let Some(ad) = &case.accepted_divergence {
+                if ad.axis == self.axis {
+                    self.fail.push((
+                        case.input.clone(),
+                        format!(
+                            "XPASS: accepted_divergence (policy {}) now matches mutalyzer; the divergence is gone — remove the annotation",
+                            ad.policy
+                        ),
+                    ));
+                    return;
+                }
+            }
+            if let Some(kb) = &case.known_bug {
+                if kb.axis == self.axis {
+                    self.fail.push((
+                        case.input.clone(),
+                        format!(
+                            "XPASS: known_bug #{} now matches mutalyzer; the fix appears to have landed — remove the annotation and demote the row",
+                            kb.tracking_issue
+                        ),
+                    ));
+                    return;
+                }
+            }
             self.pass += 1;
             return;
         }
@@ -467,6 +540,13 @@ impl AxisTally {
                 if ad.axis == self.axis {
                     self.divergence_accepted
                         .push((case.input.clone(), ad.policy.to_string()));
+                    return;
+                }
+            }
+            if let Some(kb) = &case.known_bug {
+                if kb.axis == self.axis {
+                    self.known_bug
+                        .push((case.input.clone(), format!("#{}", kb.tracking_issue)));
                     return;
                 }
             }
@@ -489,10 +569,11 @@ impl AxisTally {
     /// format used by both `finish()` and unit tests.
     fn summary_line(&self, report_path: &Path) -> String {
         format!(
-            "{}: {} pass / {} divergence_accepted / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} divergence_accepted / {} known_bug / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
             self.divergence_accepted.len(),
+            self.known_bug.len(),
             self.spec_overridden.len(),
             self.fail.len(),
             self.skipped,
@@ -530,6 +611,19 @@ impl AxisTally {
             eprintln!(
                 "  ... {} more divergence_accepted",
                 self.divergence_accepted.len() - FAIL_PRINT_LIMIT,
+            );
+        }
+
+        for (input, issue) in self.known_bug.iter().take(FAIL_PRINT_LIMIT) {
+            eprintln!(
+                "  KNOWN_BUG  [{}] {} | tracking_issue={}",
+                self.axis, input, issue
+            );
+        }
+        if self.known_bug.len() > FAIL_PRINT_LIMIT {
+            eprintln!(
+                "  ... {} more known_bug",
+                self.known_bug.len() - FAIL_PRINT_LIMIT,
             );
         }
 
@@ -1152,6 +1246,7 @@ mod comparator_tests {
             noncoding: None,
             to_test: true,
             accepted_divergence,
+            known_bug: None,
             spec_citation,
         }
     }
@@ -1478,7 +1573,7 @@ mod comparator_tests {
         let line = t.summary_line(&path);
         assert_eq!(
             line,
-            "normalized: 1 pass / 1 divergence_accepted / 1 spec_overridden / 1 FAIL / 0 skipped \
+            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 1 spec_overridden / 1 FAIL / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
         );
     }
@@ -1506,5 +1601,112 @@ mod comparator_tests {
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.divergence_accepted.len(), 1);
         assert!(t.fail.is_empty());
+    }
+
+    // (11) `known_bug` deserializes including the optional `note`. The
+    // `axis` field is the closed [`Axis`] enum, so a typo would be rejected
+    // at parse time (same contract as `accepted_divergence`).
+    #[test]
+    fn case_parses_with_known_bug() {
+        let case = parse_case(
+            r#"{
+                "input": "NM_000088.3:c.459A>G",
+                "known_bug": {
+                    "axis": "normalized",
+                    "tracking_issue": 325,
+                    "note": "ferro mis-shifts this duplication"
+                }
+            }"#,
+        );
+        let kb = case.known_bug.as_ref().expect("known_bug present");
+        assert_eq!(kb.axis, Axis::Normalized);
+        assert_eq!(kb.tracking_issue, 325);
+        assert_eq!(
+            kb.note.as_deref(),
+            Some("ferro mis-shifts this duplication")
+        );
+    }
+
+    // (12) A string mismatch on an axis with a matching `known_bug` routes
+    // into the `known_bug` (xfail) bucket — non-failing, separately tracked,
+    // and never counted as a pass.
+    #[test]
+    fn tally_known_bug_on_matching_axis() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.known_bug = Some(KnownBug {
+            axis: Axis::Normalized,
+            tracking_issue: 325,
+            note: None,
+        });
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert_eq!(t.known_bug, vec![("in".to_string(), "#325".to_string())]);
+        assert!(t.fail.is_empty());
+    }
+
+    // (13) XPASS on a `known_bug` axis: ferro now matches mutalyzer, so the
+    // bug appears fixed. This must FAIL loudly so the stale annotation and
+    // fixed row are cleaned up — not silently counted as a pass.
+    #[test]
+    fn tally_known_bug_xpass_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.known_bug = Some(KnownBug {
+            axis: Axis::Normalized,
+            tracking_issue: 325,
+            note: None,
+        });
+        t.record(&case, "X", Ok("X".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.known_bug.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("XPASS"));
+        assert!(t.fail[0].1.contains("now matches"));
+    }
+
+    // (14) XPASS on an `accepted_divergence` axis: ferro now matches
+    // mutalyzer, so the documented divergence is gone. This must FAIL so the
+    // stale annotation is removed (mirrors the known_bug XPASS contract).
+    #[test]
+    fn tally_accepted_divergence_xpass_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::Normalized,
+                policy: Policy::GeneSymbolSelector121,
+                note: None,
+            }),
+            None,
+        );
+        t.record(&case, "X", Ok("X".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("XPASS"));
+    }
+
+    // (15) `Err` result with `known_bug` on the matching axis is STILL FAIL
+    // — the annotation accepts a string difference (an xfail), not a
+    // catastrophic failure (panic / parse / normalize Err). Mirrors
+    // `tally_err_with_accepted_divergence_still_fails`.
+    #[test]
+    fn tally_err_with_known_bug_still_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.known_bug = Some(KnownBug {
+            axis: Axis::Normalized,
+            tracking_issue: 325,
+            note: None,
+        });
+        t.record(&case, "X", Err("normalize: panic boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.known_bug.is_empty(),
+            "Err must not silence into known_bug bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("err=normalize: panic boom"));
     }
 }
