@@ -18,8 +18,13 @@
           "NG_007485.1(NP_478102.2):p.(Asp68_Gly69delinsGlu)"
         ]
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54_Gly55delinsSer)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54_Gly55delinsSer)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -81,8 +86,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54delinsAsnPro)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -101,8 +111,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54delinsAsnPro)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -122,8 +137,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54delinsAsnPro)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -144,8 +164,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444delinsGGGAT"
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsAsnPro)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54delinsAsnPro)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -2323,9 +2348,14 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+26436_616+26437del"
       ],
-      "protein_description": "NG_007485.1(NP_478102.2):p.(Met48AlafsTer14)",
+      "protein_description": "NP_478102.2:p.(Met48AlafsTer14)",
       "rna_description": "NG_007485.1(NM_058195.3):r.(141_142del)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [],
@@ -3255,9 +3285,14 @@
           "NG_008835.1(NP_071407.4):p.(=)"
         ]
       ],
-      "protein_description": "NG_008835.1(NP_071436.1):p.(Asn190ThrfsTer14)",
+      "protein_description": "NP_071436.1:p.(Asn190ThrfsTer14)",
       "rna_description": "NG_008835.1(NM_022153.2):r.(569del)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value."
+      }
     },
     {
       "keywords": [
