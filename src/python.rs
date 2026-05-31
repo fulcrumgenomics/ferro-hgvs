@@ -649,10 +649,12 @@ pub struct PyVariantProjection {
 
 #[pymethods]
 impl PyVariantProjection {
-    /// The normalized g. variant as an HGVS string.
+    /// The normalized g. variant as an HGVS string (None when no genomic
+    /// representation is available — e.g. a bare-`NM_` coding input with no
+    /// genome alignment; see #498).
     #[getter]
-    fn g_name(&self) -> String {
-        self.inner.genomic.to_string()
+    fn g_name(&self) -> Option<String> {
+        self.inner.genomic.as_ref().map(|v| v.to_string())
     }
 
     /// The c./n. variant as an HGVS string (None when projection skipped).
