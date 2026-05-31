@@ -305,6 +305,22 @@ pub enum FerroError {
     #[error("Reference not found: {id}")]
     ReferenceNotFound { id: String },
 
+    /// A transcript was requested at an exact versioned accession under
+    /// strict resolution, but only a sibling version or a cdot-genome
+    /// reconstruction could satisfy it. Returned by
+    /// [`MultiFastaProvider::get_transcript_strict`] when the requested
+    /// version is not directly present, so callers (e.g. a conformance
+    /// harness) get a hard signal instead of a silently-substituted
+    /// transcript. See design pillar 3 (reference-version pinning).
+    ///
+    /// [`MultiFastaProvider::get_transcript_strict`]: crate::reference::multi_fasta::MultiFastaProvider::get_transcript_strict
+    #[error(
+        "transcript {requested} is not available at the exact requested version \
+         (a sibling version or cdot reconstruction would be required; strict \
+         resolution refuses to substitute)"
+    )]
+    TranscriptVersionNotExact { requested: String },
+
     /// Variant spans an exon-intron boundary
     #[error("Variant spans exon-intron boundary at exon {exon}: {variant}")]
     ExonIntronBoundary { exon: u32, variant: String },
@@ -433,6 +449,7 @@ impl FerroError {
                 ..
             } => d.code,
             FerroError::ReferenceNotFound { .. } => Some(ErrorCode::ReferenceNotFound),
+            FerroError::TranscriptVersionNotExact { .. } => Some(ErrorCode::ReferenceNotFound),
             FerroError::ExonIntronBoundary { .. } => Some(ErrorCode::ExonIntronBoundary),
             FerroError::UtrCdsBoundary { .. } => Some(ErrorCode::UtrCdsBoundary),
             FerroError::InvalidCoordinates { .. } => Some(ErrorCode::InvalidRange),
@@ -757,6 +774,12 @@ mod tests {
     fn test_ferro_error_code() {
         let err = FerroError::ReferenceNotFound {
             id: "NM_123".to_string(),
+        };
+        assert_eq!(err.code(), Some(ErrorCode::ReferenceNotFound));
+
+        // Strict exact-version refusal currently shares the ReferenceNotFound code.
+        let err = FerroError::TranscriptVersionNotExact {
+            requested: "NM_000088.4".to_string(),
         };
         assert_eq!(err.code(), Some(ErrorCode::ReferenceNotFound));
 

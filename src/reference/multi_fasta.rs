@@ -1100,6 +1100,67 @@ impl MultiFastaProvider {
     fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
         crate::liftover::aliases::infer_genome_build_from_accession(parent)
     }
+
+    /// Whether `id` names a transcript whose bases are directly available at
+    /// the *exact* requested versioned accession.
+    ///
+    /// This is the authoritative-source notion of "exact" for the FASTA /
+    /// supplemental index: the FASTA index ([`Self::index`]) is keyed by the
+    /// full versioned accession (e.g. `NM_212556.4`), and supplemental
+    /// transcript FASTAs are loaded into that same map, so a direct
+    /// [`HashMap::contains_key`] is exactly "we ship these bases at this
+    /// version". It deliberately does *not* consult
+    /// [`resolve_name`](Self::resolve_name), which performs version-strip and
+    /// chromosome-alias fallbacks — those are the silent substitutions strict
+    /// resolution exists to reject.
+    ///
+    /// Shared by the strict path ([`get_transcript_strict`](Self::get_transcript_strict))
+    /// and exposed for callers that want to spot-check version pinning without
+    /// materializing a [`Transcript`]. See design pillar 3 (#471 / #478).
+    pub fn has_transcript_exact(&self, id: &str) -> bool {
+        self.index.contains_key(id)
+    }
+
+    /// Resolve a transcript ONLY if its bases are directly available at the
+    /// exact requested versioned accession; otherwise return
+    /// [`FerroError::TranscriptVersionNotExact`] WITHOUT falling back to a
+    /// sibling version or a cdot-genome reconstruction.
+    ///
+    /// This is an additive, opt-in capability for callers (e.g. a conformance
+    /// harness) that must pin the reference version: the lenient
+    /// [`get_transcript`](ReferenceProvider::get_transcript) chain (exact FASTA
+    /// → version-strip fallback → cdot exon-alignment synthesis) silently
+    /// substitutes a sibling version or a reconstructed transcript and only
+    /// emits a `warn!`, which produces "phantom" divergences in conformance
+    /// suites (e.g. a manifest shipping `NG_029146.2` serving a request for
+    /// `NG_029146.1`). Strict resolution turns that soft signal into a hard
+    /// `Err`.
+    ///
+    /// Exactness is determined by [`has_transcript_exact`](Self::has_transcript_exact):
+    /// the FASTA/supplemental index must carry the full versioned accession
+    /// directly. When the entry is present, this delegates to the same
+    /// transcript-construction body as the lenient path
+    /// ([`get_transcript_on_build`](Self::get_transcript_on_build)) so the
+    /// returned [`Transcript`] is byte-for-byte identical to what the lenient
+    /// path would yield for an exact hit — only the *acceptance criterion*
+    /// differs. cdot metadata (CDS, exons) is still attached when available; it
+    /// is the cdot-genome base *synthesis* fallback that strict mode refuses,
+    /// not cdot metadata enrichment of an exact FASTA entry.
+    ///
+    /// The lenient `get_transcript` and the [`ReferenceProvider`] trait impl
+    /// are unchanged.
+    pub fn get_transcript_strict(&self, id: &str) -> Result<Transcript, FerroError> {
+        if !self.has_transcript_exact(id) {
+            return Err(FerroError::TranscriptVersionNotExact {
+                requested: id.to_string(),
+            });
+        }
+        // Exact FASTA entry present: reuse the shared construction body. The
+        // exactness gate above guarantees `resolve_name(id)` returns `id`
+        // itself (direct index hit wins in `resolve_name`), so this takes the
+        // FASTA-backed branch and never the cdot-synthesis fallback.
+        self.get_transcript_on_build(id, None)
+    }
 }
 
 impl ReferenceProvider for MultiFastaProvider {
@@ -2242,6 +2303,134 @@ mod tests {
         assert!(
             matches!(err, FerroError::InvalidCoordinates { .. }),
             "expected InvalidCoordinates, got {err:?}"
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // get_transcript_strict — exact-version pinning (#471 / #478 pillar 3)
+    //
+    // These tests pin the opt-in strict-resolution capability and, crucially,
+    // assert that the lenient `get_transcript` chain is UNCHANGED: where strict
+    // refuses a sibling-version substitution, lenient still falls back to it.
+    // ----------------------------------------------------------------------
+
+    /// Build a provider from a transcript FASTA carrying exactly the given
+    /// `(accession, sequence)` entries (one record each). No genome, no cdot.
+    /// Returns the provider plus the kept `TempDir`.
+    fn build_provider_with_transcripts(
+        entries: &[(&str, &str)],
+    ) -> (MultiFastaProvider, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("tx.fna");
+        let fai_path = dir.path().join("tx.fna.fai");
+        let mut fasta = File::create(&fasta_path).unwrap();
+        let mut fai = File::create(&fai_path).unwrap();
+        let mut offset: u64 = 0;
+        for (acc, seq) in entries {
+            // Header line ">{acc}\n" then "{seq}\n".
+            let header_len = acc.len() as u64 + 2; // '>' + acc + '\n'
+            let seq_offset = offset + header_len;
+            writeln!(fasta, ">{}", acc).unwrap();
+            writeln!(fasta, "{}", seq).unwrap();
+            // name<TAB>length<TAB>offset<TAB>line_bases<TAB>line_bytes
+            let len = seq.len() as u64;
+            writeln!(
+                fai,
+                "{}\t{}\t{}\t{}\t{}",
+                acc,
+                len,
+                seq_offset,
+                len,
+                len + 1
+            )
+            .unwrap();
+            // Advance past this record: header + seq + newline.
+            offset = seq_offset + len + 1;
+        }
+        drop(fasta);
+        drop(fai);
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        (provider, dir)
+    }
+
+    #[test]
+    fn test_get_transcript_strict_returns_exact_version() {
+        // FASTA carries the exact requested version → strict returns Ok with
+        // the right sequence, identical to the lenient path.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_212556.2", "ACGTACGTAC")]);
+
+        let strict = provider
+            .get_transcript_strict("NM_212556.2")
+            .expect("exact version present → strict must succeed");
+        assert_eq!(strict.id, "NM_212556.2");
+        assert_eq!(strict.sequence.as_deref(), Some("ACGTACGTAC"));
+
+        // has_transcript_exact agrees.
+        assert!(provider.has_transcript_exact("NM_212556.2"));
+
+        // Strict result matches the lenient result for an exact hit.
+        let lenient = provider.get_transcript("NM_212556.2").unwrap();
+        assert_eq!(strict.id, lenient.id);
+        assert_eq!(strict.sequence, lenient.sequence);
+    }
+
+    #[test]
+    fn test_get_transcript_strict_rejects_sibling_version_but_lenient_falls_back() {
+        // FASTA ships only the .4 sibling; the request is for .2.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_212556.4", "TTTTGGGGCC")]);
+
+        // Strict: structured error, no substitution.
+        let err = provider
+            .get_transcript_strict("NM_212556.2")
+            .expect_err("only sibling .4 present → strict must refuse .2");
+        match err {
+            FerroError::TranscriptVersionNotExact { requested } => {
+                assert_eq!(requested, "NM_212556.2");
+            }
+            other => panic!("expected TranscriptVersionNotExact, got {other:?}"),
+        }
+        assert!(!provider.has_transcript_exact("NM_212556.2"));
+        assert!(provider.has_transcript_exact("NM_212556.4"));
+
+        // Lenient: UNCHANGED — still falls back to the .4 sibling and serves
+        // its bases. This is the behavior strict exists to opt out of.
+        let lenient = provider
+            .get_transcript("NM_212556.2")
+            .expect("lenient must still fall back to the sibling version");
+        assert_eq!(lenient.id, "NM_212556.4");
+        assert_eq!(lenient.sequence.as_deref(), Some("TTTTGGGGCC"));
+    }
+
+    #[test]
+    fn test_get_transcript_strict_refuses_cdot_synthesis_but_lenient_synthesizes() {
+        use crate::reference::transcript::Strand;
+
+        // Genome FASTA only (NC_TEST.1); NM_TEST.1 is NOT in any transcript
+        // FASTA. cdot carries the exon alignment, so the lenient path
+        // synthesizes bases from the genome — strict must refuse that
+        // reconstruction.
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+
+        // Strict: NM_TEST.1 is absent from the FASTA index, so refuse even
+        // though cdot could reconstruct it.
+        let err = provider
+            .get_transcript_strict("NM_TEST.1")
+            .expect_err("cdot-genome reconstruction must be refused under strict resolution");
+        assert!(
+            matches!(err, FerroError::TranscriptVersionNotExact { .. }),
+            "expected TranscriptVersionNotExact, got {err:?}"
+        );
+        assert!(!provider.has_transcript_exact("NM_TEST.1"));
+
+        // Lenient: UNCHANGED — still synthesizes the transcript from cdot.
+        let synthesized = provider
+            .get_transcript("NM_TEST.1")
+            .expect("lenient must still synthesize from cdot exon alignment");
+        assert_eq!(
+            synthesized.sequence.as_deref(),
+            Some("GGTTTTAAAACCCCGGGGTT")
         );
     }
 }
