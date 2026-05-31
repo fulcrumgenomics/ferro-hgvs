@@ -129,6 +129,17 @@ struct Case {
     /// so the annotation and now-fixed row are cleaned up.
     #[serde(default)]
     known_bug: Option<KnownBug>,
+    /// Marks a mismatch on a specific axis as a tracked *improvement* (not a
+    /// bug): ferro's output is valid HGVS but not the spec-*preferred*
+    /// canonical form, and `normalize()` should converge on the preferred form
+    /// once `tracking_issue` lands. Tallied into `AxisTally::improvement`
+    /// instead of `fail`. Distinct from `known_bug` (ferro is *wrong*) and from
+    /// `accepted_divergence` (a deliberate, terminal policy where both forms
+    /// are equally spec-allowed). Requires a `section` citation so every use is
+    /// substantiated by the spec line that makes ferro's form non-preferred.
+    /// XPASS-guarded like `known_bug`.
+    #[serde(default)]
+    improvement: Option<Improvement>,
     /// Documentary annotation for cases where mutalyzer's expected output
     /// has been corrected in `cases.json` to ferro's spec-correct value.
     /// Has NO effect on tally bucketing — the corrected expected string
@@ -261,6 +272,42 @@ struct KnownBug {
     note: Option<String>,
 }
 
+/// Tracked-improvement annotation. When attached to a `Case`, the corpus
+/// runner treats a mismatch on `axis` as a tracked *enhancement* (xfail):
+/// ferro's output is valid HGVS but the spec strongly *prefers* the form
+/// mutalyzer emits, and `normalize()` should converge on that preferred form
+/// once `tracking_issue` is implemented. Tallied into `AxisTally::improvement`
+/// instead of `fail`.
+///
+/// This is the middle disposition between [`AcceptedDivergence`] and
+/// [`KnownBug`]:
+/// - `accepted_divergence` — terminal policy; both forms are equally
+///   spec-allowed and ferro will *not* change.
+/// - `improvement` — ferro's output is *valid but spec-non-preferred*; ferro
+///   *will* converge (tracked to `tracking_issue`).
+/// - `known_bug` — ferro's output is *wrong / invalid*; ferro *will* be fixed.
+///
+/// Unlike `known_bug`, an `improvement` also requires a `section`: the spec
+/// citation that establishes ferro's current form as non-preferred. This keeps
+/// the disposition substantiated rather than a catch-all for deferred work.
+///
+/// XPASS-guarded like `known_bug`: if ferro *starts* matching mutalyzer on
+/// this axis the harness FAILs loudly so the stale annotation and the
+/// now-converged fixture row are cleaned up.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+struct Improvement {
+    /// Axis this annotation applies to.
+    axis: Axis,
+    /// Issue tracking the convergence to the spec-preferred form.
+    tracking_issue: u64,
+    /// HGVS spec section establishing ferro's current form as non-preferred.
+    section: SpecSection,
+    /// Optional human-readable note.
+    #[serde(default)]
+    note: Option<String>,
+}
+
 /// Closed enum of HGVS spec section identifiers cited from `cases.json`.
 /// Mirrors [`Policy`]'s shape: adding a new section requires a code
 /// change here, which forces deliberate review of every new citation
@@ -279,7 +326,7 @@ enum SpecSection {
     /// catalog key; the rename string preserves the byte sequence in
     /// `cases.json`.
     #[serde(rename = "HGVS §Prioritization")]
-    HgvsPrioritization,
+    Prioritization,
     /// HGVS protein reference format — a `p.` description's reference is the
     /// protein sequence accession alone (e.g. `NP_000068.1:p.(…)`); every
     /// example in `docs/recommendations/protein/*` uses this bare form. The
@@ -287,7 +334,19 @@ enum SpecSection {
     /// (`NG_007485.1(NP_000068.1):p.…`) has no counterpart in the spec, so
     /// ferro's bare-`NP_` output is the spec-correct value.
     #[serde(rename = "HGVS protein reference (bare NP)")]
-    HgvsProteinReference,
+    ProteinReference,
+    /// HGVS RefSeqGene transcript selection — on a genomic reference
+    /// (`NG_`/`NC_`/`LRG_`) the parenthetical selector for a `c.`/`n.`
+    /// coordinate must name a transcript (`NM_`) or protein (`NP_`) accession,
+    /// not a gene symbol (`assets/hgvs-nomenclature/docs/background/refseq.md`
+    /// L38-42: "Gene symbols should not be used as specification"; L138-139:
+    /// the transcript used should be indicated). ferro preserves the input's
+    /// gene-symbol selector verbatim — valid HGVS, but the transcript-accession
+    /// form mutalyzer emits is spec-preferred. (The `NM_(GENE)` policy from #121
+    /// is unaffected; this section concerns only the genomic-reference selector
+    /// slot, which #121 never examined.)
+    #[serde(rename = "HGVS §RefSeqGene transcript selection")]
+    RefSeqGeneSelector,
 }
 
 impl SpecSection {
@@ -296,8 +355,9 @@ impl SpecSection {
     /// to preserve the pre-enum summary-line format.
     fn as_str(self) -> &'static str {
         match self {
-            SpecSection::HgvsPrioritization => "HGVS §Prioritization",
-            SpecSection::HgvsProteinReference => "HGVS protein reference (bare NP)",
+            SpecSection::Prioritization => "HGVS §Prioritization",
+            SpecSection::ProteinReference => "HGVS protein reference (bare NP)",
+            SpecSection::RefSeqGeneSelector => "HGVS §RefSeqGene transcript selection",
         }
     }
 }
@@ -324,7 +384,7 @@ struct SpecCitation {
     /// Axis this citation applies to.
     axis: Axis,
     /// HGVS spec section the citation references (e.g.
-    /// `SpecSection::HgvsPrioritization`).
+    /// `SpecSection::Prioritization`).
     section: SpecSection,
     /// Optional human-readable note expanding on the citation.
     #[serde(default)]
@@ -464,6 +524,11 @@ struct AxisTally {
     /// summary line as `known_bug` and NOT written to
     /// `baseline-failures/<axis>.txt`. Stores `(input, "#<issue>")`.
     known_bug: Vec<(String, String)>,
+    /// Mismatches gated by an `improvement` annotation whose `axis` matches
+    /// this tally's axis. Tracked-but-non-failing (xfail); reported in the
+    /// summary line as `improvement` and NOT written to
+    /// `baseline-failures/<axis>.txt`. Stores `(input, "#<issue>")`.
+    improvement: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
 }
@@ -476,6 +541,7 @@ impl AxisTally {
             divergence_accepted: Vec::new(),
             spec_overridden: Vec::new(),
             known_bug: Vec::new(),
+            improvement: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
         }
@@ -483,20 +549,23 @@ impl AxisTally {
 
     /// Bucket a single case against `expected`/`actual`:
     /// 1. On a match (`actual == expected`):
-    ///    - XPASS FAIL when the case carries an `accepted_divergence` or
-    ///      `known_bug` annotation for this tally's axis — the annotation
-    ///      is now stale (the divergence/bug is gone) and must be removed.
+    ///    - XPASS FAIL when the case carries an `accepted_divergence`,
+    ///      `known_bug`, or `improvement` annotation for this tally's axis —
+    ///      the annotation is now stale (the divergence/bug/non-preferred form
+    ///      is gone) and must be removed.
     ///    - PASS otherwise.
     /// 2. `divergence_accepted` when the case carries
     ///    `accepted_divergence` matching this tally's axis.
     /// 3. `known_bug` (xfail) when the case carries a `known_bug`
     ///    matching this tally's axis.
-    /// 4. `spec_overridden` when the case carries a `spec_citation`
+    /// 4. `improvement` (xfail) when the case carries an `improvement`
     ///    matching this tally's axis.
-    /// 5. FAIL otherwise.
+    /// 5. `spec_overridden` when the case carries a `spec_citation`
+    ///    matching this tally's axis.
+    /// 6. FAIL otherwise.
     ///
-    /// `accepted_divergence`, `known_bug`, and `spec_citation` only catch a
-    /// *string mismatch* from a successful run. An `Err` means ferro failed
+    /// `accepted_divergence`, `known_bug`, `improvement`, and `spec_citation`
+    /// only catch a *string mismatch* from a successful run. An `Err` means ferro failed
     /// to produce any result (panic, parse error, normalize failure) —
     /// those are real bugs and must surface as FAIL even when an
     /// annotation is present.
@@ -532,6 +601,18 @@ impl AxisTally {
                     return;
                 }
             }
+            if let Some(imp) = &case.improvement {
+                if imp.axis == self.axis {
+                    self.fail.push((
+                        case.input.clone(),
+                        format!(
+                            "XPASS: improvement #{} now matches mutalyzer; ferro reached the spec-preferred form — remove the annotation and demote the row",
+                            imp.tracking_issue
+                        ),
+                    ));
+                    return;
+                }
+            }
             self.pass += 1;
             return;
         }
@@ -547,6 +628,13 @@ impl AxisTally {
                 if kb.axis == self.axis {
                     self.known_bug
                         .push((case.input.clone(), format!("#{}", kb.tracking_issue)));
+                    return;
+                }
+            }
+            if let Some(imp) = &case.improvement {
+                if imp.axis == self.axis {
+                    self.improvement
+                        .push((case.input.clone(), format!("#{}", imp.tracking_issue)));
                     return;
                 }
             }
@@ -569,11 +657,12 @@ impl AxisTally {
     /// format used by both `finish()` and unit tests.
     fn summary_line(&self, report_path: &Path) -> String {
         format!(
-            "{}: {} pass / {} divergence_accepted / {} known_bug / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} divergence_accepted / {} known_bug / {} improvement / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
             self.divergence_accepted.len(),
             self.known_bug.len(),
+            self.improvement.len(),
             self.spec_overridden.len(),
             self.fail.len(),
             self.skipped,
@@ -624,6 +713,19 @@ impl AxisTally {
             eprintln!(
                 "  ... {} more known_bug",
                 self.known_bug.len() - FAIL_PRINT_LIMIT,
+            );
+        }
+
+        for (input, issue) in self.improvement.iter().take(FAIL_PRINT_LIMIT) {
+            eprintln!(
+                "  IMPROVEMENT  [{}] {} | tracking_issue={}",
+                self.axis, input, issue
+            );
+        }
+        if self.improvement.len() > FAIL_PRINT_LIMIT {
+            eprintln!(
+                "  ... {} more improvement",
+                self.improvement.len() - FAIL_PRINT_LIMIT,
             );
         }
 
@@ -1247,6 +1349,7 @@ mod comparator_tests {
             to_test: true,
             accepted_divergence,
             known_bug: None,
+            improvement: None,
             spec_citation,
         }
     }
@@ -1367,7 +1470,7 @@ mod comparator_tests {
         );
         let sc = case.spec_citation.as_ref().expect("spec_citation present");
         assert_eq!(sc.axis, Axis::Normalized);
-        assert_eq!(sc.section, SpecSection::HgvsPrioritization);
+        assert_eq!(sc.section, SpecSection::Prioritization);
         assert_eq!(sc.note.as_deref(), Some("dup over ins"));
     }
 
@@ -1477,7 +1580,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: SpecSection::HgvsPrioritization,
+                section: SpecSection::Prioritization,
                 note: None,
             }),
         );
@@ -1501,7 +1604,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: SpecSection::HgvsPrioritization,
+                section: SpecSection::Prioritization,
                 note: None,
             }),
         );
@@ -1524,7 +1627,7 @@ mod comparator_tests {
             None,
             Some(SpecCitation {
                 axis: Axis::Errors,
-                section: SpecSection::HgvsPrioritization,
+                section: SpecSection::Prioritization,
                 note: None,
             }),
         );
@@ -1560,7 +1663,7 @@ mod comparator_tests {
                 None,
                 Some(SpecCitation {
                     axis: Axis::Normalized,
-                    section: SpecSection::HgvsPrioritization,
+                    section: SpecSection::Prioritization,
                     note: None,
                 }),
             ),
@@ -1573,7 +1676,7 @@ mod comparator_tests {
         let line = t.summary_line(&path);
         assert_eq!(
             line,
-            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 1 spec_overridden / 1 FAIL / 0 skipped \
+            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 0 improvement / 1 spec_overridden / 1 FAIL / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
         );
     }
@@ -1594,7 +1697,7 @@ mod comparator_tests {
             }),
             Some(SpecCitation {
                 axis: Axis::Normalized,
-                section: SpecSection::HgvsPrioritization,
+                section: SpecSection::Prioritization,
                 note: None,
             }),
         );
@@ -1705,6 +1808,134 @@ mod comparator_tests {
         assert!(
             t.known_bug.is_empty(),
             "Err must not silence into known_bug bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("err=normalize: panic boom"));
+    }
+
+    // (16) `improvement` deserializes including the optional `note`. Both
+    // `axis` and `section` are closed enums, so a typo in either is rejected
+    // at parse time (same contract as `known_bug` / `spec_citation`).
+    #[test]
+    fn case_parses_with_improvement() {
+        let case = parse_case(
+            r#"{
+                "input": "NG_012337.1(TIMM8B_v001):c.12_13insGATC",
+                "known_bug": null,
+                "improvement": {
+                    "axis": "normalized",
+                    "tracking_issue": 500,
+                    "section": "HGVS §RefSeqGene transcript selection",
+                    "note": "ferro preserves the gene-symbol selector; spec prefers the NM_ accession"
+                }
+            }"#,
+        );
+        let imp = case.improvement.as_ref().expect("improvement present");
+        assert_eq!(imp.axis, Axis::Normalized);
+        assert_eq!(imp.tracking_issue, 500);
+        assert_eq!(imp.section, SpecSection::RefSeqGeneSelector);
+        assert_eq!(
+            imp.note.as_deref(),
+            Some("ferro preserves the gene-symbol selector; spec prefers the NM_ accession")
+        );
+    }
+
+    // (16b) `improvement` requires a `section`: omitting it is a hard parse
+    // error, so every tracked improvement is substantiated by a spec citation.
+    #[test]
+    fn case_improvement_without_section_rejected() {
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "improvement": { "axis": "normalized", "tracking_issue": 500 }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected improvement without a section to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
+    // (17) A string mismatch on an axis with a matching `improvement` routes
+    // into the `improvement` (xfail) bucket — non-failing, separately tracked,
+    // and never counted as a pass.
+    #[test]
+    fn tally_improvement_on_matching_axis() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.improvement = Some(Improvement {
+            axis: Axis::Normalized,
+            tracking_issue: 500,
+            section: SpecSection::RefSeqGeneSelector,
+            note: None,
+        });
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert_eq!(t.improvement, vec![("in".to_string(), "#500".to_string())]);
+        assert!(t.fail.is_empty());
+    }
+
+    // (18) XPASS on an `improvement` axis: ferro now matches mutalyzer, so it
+    // reached the spec-preferred form. This must FAIL loudly so the stale
+    // annotation and converged row are cleaned up (mirrors the known_bug /
+    // accepted_divergence XPASS contract).
+    #[test]
+    fn tally_improvement_xpass_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.improvement = Some(Improvement {
+            axis: Axis::Normalized,
+            tracking_issue: 500,
+            section: SpecSection::RefSeqGeneSelector,
+            note: None,
+        });
+        t.record(&case, "X", Ok("X".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.improvement.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("XPASS"));
+        assert!(t.fail[0].1.contains("now matches"));
+    }
+
+    // (19) `improvement` on a different axis from the tally's must NOT route
+    // to the improvement bucket — annotations are axis-scoped.
+    #[test]
+    fn tally_improvement_other_axis_is_fail() {
+        let mut t = AxisTally::new(Axis::Genomic);
+        let mut case = make_case("in", None, None);
+        case.improvement = Some(Improvement {
+            axis: Axis::Normalized,
+            tracking_issue: 500,
+            section: SpecSection::RefSeqGeneSelector,
+            note: None,
+        });
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.improvement.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert_eq!(t.fail[0].0, "in");
+    }
+
+    // (20) `Err` result with `improvement` on the matching axis is STILL FAIL
+    // — the annotation accepts a string difference (an xfail), not a
+    // catastrophic failure (panic / parse / normalize Err). Mirrors
+    // `tally_err_with_known_bug_still_fails`.
+    #[test]
+    fn tally_err_with_improvement_still_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let mut case = make_case("in", None, None);
+        case.improvement = Some(Improvement {
+            axis: Axis::Normalized,
+            tracking_issue: 500,
+            section: SpecSection::RefSeqGeneSelector,
+            note: None,
+        });
+        t.record(&case, "X", Err("normalize: panic boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.improvement.is_empty(),
+            "Err must not silence into improvement bucket"
         );
         assert_eq!(t.fail.len(), 1);
         assert!(t.fail[0].1.contains("err=normalize: panic boom"));
