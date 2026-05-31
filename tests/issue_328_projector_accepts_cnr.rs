@@ -98,7 +98,16 @@ fn projector_accepts_cds_substitution_input() {
     // `.genomic` must carry the projected g. form, not the input c.
     // This pins the contract that downstream consumers reading
     // `.genomic` get a canonical g. variant regardless of input axis.
-    let g = format!("{}", result.genomic);
+    // This c. input carries an explicit NC_ genomic_context, so it takes the
+    // genome-pivot path and `.genomic` is present (a bare-NM_ input would be
+    // `None`; see #498).
+    let g = format!(
+        "{}",
+        result
+            .genomic
+            .as_ref()
+            .expect(".genomic must be present for a genome-anchored c. input")
+    );
     assert!(
         g.contains(":g."),
         ".genomic must be a g. variant for c. input; got {g}",
@@ -152,22 +161,34 @@ fn projector_accepts_rna_substitution_input() {
     assert_eq!(p, "NP_TEST.1:p.(Arg2Ser)");
 }
 
-/// Negative control: passing a `c.` input that lacks the parent NG/NC
-/// `genomic_context` cannot be projected back to g. and must error.
-/// Per `project_to_genomic` (#327) the parent reference is required.
+/// A bare `c.` input (no parent NG/NC `genomic_context`) projects directly
+/// to protein without a genome roundtrip (#498). This reverses the prior
+/// #327/#328 "must error" contract: ferro still does **not synthesize** a
+/// genomic form (`genomic` is `None`, not a fabricated g.), but protein is
+/// predicted straight from the transcript's CDS, since an exonic c. position
+/// is already the 1-based CDS position prediction needs.
 #[test]
-fn projector_rejects_cds_without_genomic_context() {
+fn projector_bare_cds_projects_directly_to_protein() {
     let (projector, provider) = fixture();
     let vp = VariantProjector::new(projector, provider);
     // No NC_ parent in the accession — just `NM_TEST.1:c.4C>A`.
-    let err = vp
+    let result = vp
         .project("NM_TEST.1:c.4C>A", "NM_TEST.1")
-        .expect_err("expected error: no parent reference for c→g projection");
-    let msg = format!("{}", err);
+        .expect("bare-NM_ c. input should project directly to protein (#498)");
+    // No genomic form is synthesized for a bare-NM_ input (#327 preserved).
     assert!(
-        msg.contains("genomic_context") || msg.contains("parent reference"),
-        "expected genomic-context-missing diagnostic; got {msg}",
+        result.genomic.is_none(),
+        "bare-NM_ projection must not synthesize a genomic form; got {:?}",
+        result.genomic,
     );
+    // Coding axis present; protein predicted from the CDS.
+    assert!(result.coding.is_some(), "coding form should be present");
+    let p = result
+        .protein
+        .as_ref()
+        .expect("protein should be predicted via the direct c.→p. path")
+        .to_string();
+    assert_eq!(p, "NP_TEST.1:p.(Arg2Ser)");
 }
 
 /// `n.` projection support is a downstream scope item. The existing

@@ -873,7 +873,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .gene_name
             .clone();
             return Ok(VariantProjection {
-                genomic: original.clone(),
+                genomic: Some(original.clone()),
                 coding: None,
                 protein: None,
                 transcript_id: transcript_id.to_string(),
@@ -921,7 +921,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         Ok(VariantProjection {
-            genomic: original.clone(),
+            genomic: Some(original.clone()),
             coding,
             protein,
             transcript_id: transcript_id.to_string(),
@@ -962,11 +962,215 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// variant. The c.-input projection preserves the c.-axis canonical
     /// form by construction.
     /// (#328)
+    /// Predict the protein consequence of a coding variant from its 1-based
+    /// CDS position(s) and edit. Shared by the genome-pivot path
+    /// (`project_single_inner`) and the direct bare-NM_ path
+    /// (`project_coding_direct`) so both compute protein identically.
+    ///
+    /// Returns `Ok(None)` when no protein consequence applies — intronic, UTR,
+    /// a non-coding transcript, or an edit shape with no in-frame/frameshift
+    /// prediction. `Err` is reserved for genuine failures (unknown reference,
+    /// etc.), never for "no consequence" (mirrors the existing contract).
+    ///
+    /// `cds_start`/`cds_end` are 1-based CDS positions; `cache_variant` keys
+    /// the per-(transcript, parent) sequence and ref-translation caches.
+    #[allow(clippy::too_many_arguments)]
+    fn predict_protein_consequence(
+        &self,
+        transcript_id: &str,
+        cdot_protein: Option<String>,
+        is_coding: bool,
+        is_intronic: bool,
+        is_utr: bool,
+        c_edit: &NaEdit,
+        cds_start: &CdsPos,
+        cds_end: &CdsPos,
+        cache_variant: &HgvsVariant,
+    ) -> Result<Option<HgvsVariant>, FerroError> {
+        if is_intronic || is_utr || !is_coding {
+            return Ok(None);
+        }
+        // Resolve the protein accession: explicit cdot/reference value, else
+        // RefSeq inference (NM_*→NP_*, XM_*→XP_*), else the transcript id
+        // itself (the HGVS p. grammar requires a sequence identifier; see
+        // #310). Substring stripping avoids mangling accessions whose suffix
+        // contains `NM_`.
+        let prot_acc: Option<String> = cdot_protein
+            .or_else(|| {
+                transcript_id
+                    .strip_prefix("NM_")
+                    .map(|rest| format!("NP_{rest}"))
+            })
+            .or_else(|| {
+                transcript_id
+                    .strip_prefix("XM_")
+                    .map(|rest| format!("XP_{rest}"))
+            })
+            .or_else(|| Some(transcript_id.to_string()));
+        let Some(prot_acc) = prot_acc else {
+            return Ok(None);
+        };
+        // Issue #332: route per-codon lookups through the variant-aware path
+        // so an NG/NC-parented `cache_variant` picks the build-correct
+        // chromosome; falls back to the bare provider lookup on
+        // ReferenceNotFound. For a bare-NM_ `cache_variant` (no parent) this
+        // is just the plain provider lookup.
+        let mut protein = None;
+        match c_edit {
+            NaEdit::Substitution { .. } => {
+                let tx_for_codon =
+                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+                protein = Some(predict_substitution_protein(
+                    &tx_for_codon,
+                    cds_start.base,
+                    c_edit,
+                    &prot_acc,
+                )?);
+            }
+            NaEdit::Deletion { .. }
+            | NaEdit::Insertion { .. }
+            | NaEdit::Duplication { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+                // Only predict for concrete exonic CDS positions (intronic
+                // offsets are already excluded by the is_intronic guard).
+                if cds_start.offset.is_none()
+                    && cds_end.offset.is_none()
+                    && cds_start.base > 0
+                    && cds_end.base > 0 =>
+            {
+                let tx_for_codon =
+                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+                let ref_bundle =
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                match predict_indel_protein(
+                    &tx_for_codon,
+                    &ref_bundle,
+                    cds_start.base,
+                    cds_end.base,
+                    c_edit,
+                    &prot_acc,
+                ) {
+                    Ok(pv) => protein = Some(pv),
+                    // Non-fatal: unsupported edits or missing sequence → None.
+                    Err(FerroError::UnsupportedProjection { .. })
+                    | Err(FerroError::ProteinSequenceUnavailable { .. }) => {}
+                    Err(other) => return Err(other),
+                }
+            }
+            _ => {}
+        }
+        Ok(protein)
+    }
+
+    /// Direct c.→p. projection for a bare transcript coding input (no
+    /// `genomic_context` parent). The c.→g.→CDS roundtrip cannot run without a
+    /// genome alignment, but protein prediction only needs the transcript's
+    /// CDS sequence and the 1-based CDS position — which an exonic c. variant
+    /// already provides. The resulting projection has `genomic = None` (no
+    /// genomic representation is available for a bare-NM_ input) (#498).
+    fn project_coding_direct(
+        &self,
+        cds: &CdsVariant,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        // Mirror the genome path's transcript_id-mismatch guard.
+        let input_tx = cds.accession.transcript_accession();
+        if input_tx != transcript_id {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "transcript_id mismatch: input is on {} but projection requested \
+                     against {}; transcript-coordinate inputs must be projected against \
+                     their own transcript",
+                    input_tx, transcript_id,
+                ),
+            });
+        }
+
+        // Coding/protein/gene metadata: prefer cdot, fall back to the
+        // sequence provider's transcript record.
+        let (is_coding, cdot_protein, gene_symbol) =
+            match self.projector.mapper().cdot().get_transcript(transcript_id) {
+                Some(t) => (
+                    t.cds_start.is_some(),
+                    t.protein.clone(),
+                    t.gene_name.clone(),
+                ),
+                None => {
+                    let tx = self.cached_get_transcript_for_variant(normalized, transcript_id)?;
+                    (
+                        tx.cds_start.is_some(),
+                        tx.protein_id.clone(),
+                        tx.gene_symbol.clone(),
+                    )
+                }
+            };
+
+        let edit = cds.loc_edit.edit.inner().cloned().ok_or_else(|| {
+            FerroError::UnsupportedProjection {
+                reason: "coding variant has no concrete edit".to_string(),
+            }
+        })?;
+        let cds_start = cds
+            .loc_edit
+            .location
+            .start
+            .inner()
+            .cloned()
+            .ok_or_else(|| FerroError::InvalidCoordinates {
+                msg: "coding interval start is unknown".to_string(),
+            })?;
+        let cds_end = cds.loc_edit.location.end.inner().cloned().ok_or_else(|| {
+            FerroError::InvalidCoordinates {
+                msg: "coding interval end is unknown".to_string(),
+            }
+        })?;
+
+        // Flags derived straight from the input c. position (no genome):
+        // intronic = any offset; UTR = 5'UTR (base ≤ 0) or 3'UTR (`*`).
+        let is_intronic = cds_start.offset.is_some() || cds_end.offset.is_some();
+        let is_utr = !is_intronic
+            && (cds_start.base <= 0 || cds_end.base <= 0 || cds_start.utr3 || cds_end.utr3);
+
+        let protein = self.predict_protein_consequence(
+            transcript_id,
+            cdot_protein,
+            is_coding,
+            is_intronic,
+            is_utr,
+            &edit,
+            &cds_start,
+            &cds_end,
+            normalized,
+        )?;
+
+        let frameshift = is_frameshift(normalized);
+        Ok(VariantProjection {
+            genomic: None,
+            coding: Some(normalized.clone()),
+            protein,
+            transcript_id: transcript_id.to_string(),
+            gene_symbol,
+            is_frameshift: frameshift,
+            is_intronic,
+            is_utr,
+        })
+    }
+
     fn project_single_inner(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
+        // Direct c.→p. path: a bare coding input (no genomic_context parent)
+        // has no genome alignment to roundtrip through, but protein can be
+        // predicted straight from the CDS (#498).
+        if let HgvsVariant::Cds(c) = normalized {
+            if c.accession.genomic_context.is_none() {
+                return self.project_coding_direct(c, normalized, transcript_id);
+            }
+        }
         // Track which g. variant feeds the downstream pipeline AND will
         // be reported in `VariantProjection.genomic`. For g. input the
         // two are the same; for c./n./r. input we project once and use
@@ -1196,93 +1400,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let is_utr = !is_intronic
             && (info_start.in_5utr || info_start.in_3utr || info_end.in_5utr || info_end.in_3utr);
 
-        // Predict protein consequence for CDS variants.
-        let mut protein = None;
-        if !is_intronic && !is_utr && is_coding {
-            // Resolve the protein accession in priority order:
-            //   1. `cdot_protein` — explicit value from cdot.protein or from the
-            //      ferro reference JSON's `protein_id` field (which the cdot
-            //      mapper builders plumb into `CdotTranscript.protein`).
-            //   2. RefSeq inference: `NM_*` → `NP_*`, `XM_*` → `XP_*`. Substring
-            //      stripping (not replace) avoids mangling accessions whose
-            //      suffix happens to contain `NM_`.
-            //   3. The transcript ID itself, used as the `p.` accession prefix.
-            //      Keeps protein prediction live for references whose transcript
-            //      IDs do not match a RefSeq convention (e.g. `MY_GENE-gene.1`
-            //      from `ferro convert-gff`). The HGVS protein grammar requires
-            //      a `sequence_identifier`, so accession-less `p.` is not a valid
-            //      alternative. See #310.
-            let prot_acc: Option<String> = cdot_protein
-                .or_else(|| {
-                    transcript_id
-                        .strip_prefix("NM_")
-                        .map(|rest| format!("NP_{rest}"))
-                })
-                .or_else(|| {
-                    transcript_id
-                        .strip_prefix("XM_")
-                        .map(|rest| format!("XP_{rest}"))
-                })
-                .or_else(|| Some(transcript_id.to_string()));
-            if let Some(prot_acc) = prot_acc {
-                // Issue #332: route per-codon transcript lookups through the
-                // variant-aware path so an NG/NC-parented input (carried on
-                // the input `coding` variant we're projecting) picks the
-                // build-correct chromosome. `cached_get_transcript_for_variant`
-                // caches by `(transcript_id, parent_accession)` so repeat
-                // lookups on the same parent are free, and falls back to the
-                // bare provider lookup on `ReferenceNotFound` (the previous
-                // `tx_for_codon_with_fallback` contract). Other provider
-                // errors propagate.
-                match &c_edit {
-                    NaEdit::Substitution { .. } => {
-                        let tx_for_codon = self
-                            .cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
-                        protein = Some(predict_substitution_protein(
-                            &tx_for_codon,
-                            cds_start.base,
-                            &c_edit,
-                            &prot_acc,
-                        )?);
-                    }
-                    NaEdit::Deletion { .. }
-                    | NaEdit::Insertion { .. }
-                    | NaEdit::Duplication { .. }
-                    | NaEdit::Delins { .. }
-                    | NaEdit::Inversion { .. }
-                        // Only predict when both CDS positions are concrete exonic positions
-                        // (no intronic offsets — already guarded above).
-                        if cds_start.offset.is_none()
-                            && cds_end.offset.is_none()
-                            && cds_start.base > 0
-                            && cds_end.base > 0 =>
-                    {
-                        let tx_for_codon = self
-                            .cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
-                        let ref_bundle = self.cached_ref_translation(
-                            &cache_variant,
-                            transcript_id,
-                            &tx_for_codon,
-                        )?;
-                        match predict_indel_protein(
-                            &tx_for_codon,
-                            &ref_bundle,
-                            cds_start.base,
-                            cds_end.base,
-                            &c_edit,
-                            &prot_acc,
-                        ) {
-                            Ok(pv) => protein = Some(pv),
-                            // Non-fatal: unsupported edits or missing sequence → leave protein=None.
-                            Err(FerroError::UnsupportedProjection { .. })
-                            | Err(FerroError::ProteinSequenceUnavailable { .. }) => {}
-                            Err(other) => return Err(other),
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // Predict protein consequence for CDS variants. Shared with the
+        // direct bare-NM_ c.→p. path (`project_coding_direct`) so both entry
+        // points use identical CDS→protein logic (#498).
+        let protein = self.predict_protein_consequence(
+            transcript_id,
+            cdot_protein,
+            is_coding,
+            is_intronic,
+            is_utr,
+            &c_edit,
+            &cds_start,
+            &cds_end,
+            &cache_variant,
+        )?;
 
         let frameshift = is_frameshift(&coding);
         // `.genomic` is always the canonical g. representation. For g.
@@ -1291,7 +1422,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Using `projected_genome` for both cases keeps `.genomic`
         // axis-correct regardless of how the caller entered.
         Ok(VariantProjection {
-            genomic: projected_genome,
+            genomic: Some(projected_genome),
             coding: Some(coding),
             protein,
             transcript_id: transcript_id.to_string(),
@@ -3550,5 +3681,99 @@ mod tests {
             "expected ReferenceNotFound for unknown transcript, got: {:?}",
             err
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Direct c.→p. path for bare-NM_ inputs (#498)
+    //
+    // A bare transcript coding input (no genomic_context parent) carries
+    // no genome alignment, so the c.→g.→CDS roundtrip cannot run. Protein
+    // prediction only needs the CDS sequence + the 1-based CDS position,
+    // which for an exonic c. variant the input already provides. These
+    // tests pin that the direct path predicts protein and reports
+    // `genomic = None` (there is no genomic form for a bare-NM_ input).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn project_bare_nm_substitution_predicts_protein_without_genome() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_TEST.1:c.4C>A — bare, no genomic_context parent.
+        let variant = make_coding_variant("NM_TEST.1", None);
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare-NM_ projection should succeed via the direct c.→p. path");
+        // No alignment ingested for a bare NM_ ⇒ no genomic representation.
+        assert!(
+            proj.genomic.is_none(),
+            "bare-NM_ projection should have genomic = None, got {:?}",
+            proj.genomic
+        );
+        // The coding axis is the input itself.
+        assert!(proj.coding.is_some(), "coding form should be present");
+        // c.4C>A: codon 2 CGC(Arg) → AGC(Ser) ⇒ p.(Arg2Ser).
+        let protein = proj.protein.expect("protein should be predicted");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_bare_nm_inframe_deletion_predicts_protein_without_genome() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_TEST.1:c.4_6del — delete codon 2 (CGC = Arg) from ATG|CGC|TAA,
+        // an in-frame single-residue deletion ⇒ p.(Arg2del). Bare, no parent.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(4), CdsPos::new(6)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare-NM_ deletion projection should succeed via the direct path");
+        assert!(
+            proj.genomic.is_none(),
+            "bare-NM_ projection has no genomic form"
+        );
+        let protein = proj.protein.expect("protein should be predicted");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2del)");
+    }
+
+    #[test]
+    fn project_bare_nm_intronic_has_no_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_TEST.1:c.4+5A>G — intronic offset on a bare NM_. Without a
+        // genome alignment the intronic position cannot be placed, so
+        // protein prediction is not attempted: protein = None, no panic.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::with_offset(4, 5)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare-NM_ intronic projection should succeed (no protein)");
+        assert!(proj.genomic.is_none());
+        assert!(
+            proj.protein.is_none(),
+            "intronic variant should not predict a protein consequence"
+        );
+        assert!(proj.is_intronic, "is_intronic flag should be set");
     }
 }
