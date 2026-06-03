@@ -4,7 +4,7 @@
 //! independently of the rest of the projector machinery.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{InsertedSequence, NaEdit, ProteinEdit};
+use crate::hgvs::edit::{ExtDirection, InsertedSequence, NaEdit, ProteinEdit};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
@@ -12,7 +12,7 @@ use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
 use crate::sequence::reverse_complement;
 
-use super::substitution::translate_bytes;
+use super::substitution::{translate, translate_bytes};
 
 /// Does `edit` modify a base of the translation initiation codon (1-based CDS
 /// positions 1–3)?
@@ -424,6 +424,70 @@ pub(crate) fn translate_full_cds_with_stop(cds: &str) -> Vec<AminoAcid> {
         }
     }
     result
+}
+
+// ── C-terminal extension ──────────────────────────────────────────────────────
+
+/// Build a C-terminal extension protein variant for a stop-loss (no-stop)
+/// change.
+///
+/// The reference stop codon at 1-based protein position `stop_pos` now codes
+/// for an amino acid, so translation reads through `mut_cds` — the mutated CDS
+/// concatenated with the downstream 3'UTR, in transcript orientation — until a
+/// new stop codon. The result is `p.(TerNNN<aa>extTer<k>)`, where `k` is the
+/// 1-based residue offset of the new stop within the added tail, or `extTer?`
+/// when no new stop is reached within the available sequence
+/// (`recommendations/protein/extension.md:30,50`).
+///
+/// Shared by the substitution and indel stop-loss paths so both render
+/// extensions identically.
+pub(crate) fn build_cterminal_extension(
+    stop_pos: u64,
+    mut_cds: &str,
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> Result<HgvsVariant, FerroError> {
+    let stop_offset = (stop_pos.saturating_sub(1) as usize) * 3;
+
+    // The amino acid now coded by the former stop codon (None if the read-through
+    // codon is itself a stop, or the sequence is too short).
+    let new_aa: Option<AminoAcid> = if stop_offset + 3 <= mut_cds.len() {
+        translate(&mut_cds[stop_offset..stop_offset + 3]).filter(|aa| *aa != AminoAcid::Ter)
+    } else {
+        None
+    };
+
+    // `extTer{K}`: K is the position of the new stop in the *added* sequence —
+    // the amino acids added **beyond** the original Ter (`docs/syntax.yaml:78`,
+    // extension_length). The converted-stop residue occupies the original Ter's
+    // slot (the C-terminal mirror of `Met1`, the N-terminal `ext-N` anchor) and
+    // is NOT counted. The downstream scan starts at the original stop codon, so
+    // `downstream[0]` is that converted-stop residue and `downstream[k]` is the
+    // k-th added residue; K is therefore the 0-based scan index of the new Ter
+    // (do NOT add 1 — that would count the converted-stop residue). `None` when
+    // the available sequence has no further stop (`extTer?`). NB: the
+    // frameshift `fsTer` count differs — there the first *changed* residue is a
+    // genuinely-new residue and is position 1 — so do not unify the two.
+    let ext_count: Option<i64> = if stop_offset < mut_cds.len() {
+        translate_full_cds_with_stop(&mut_cds[stop_offset..])
+            .iter()
+            .position(|aa| *aa == AminoAcid::Ter)
+            .map(|p| p as i64)
+    } else {
+        None
+    };
+
+    let protein_edit = ProteinEdit::Extension {
+        new_aa,
+        direction: ExtDirection::CTerminal,
+        count: ext_count,
+    };
+    let loc = ProtInterval::point(ProtPos::new(AminoAcid::Ter, stop_pos));
+    Ok(HgvsVariant::Protein(ProteinVariant {
+        accession: parse_accession(protein_accession),
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new_predicted(loc, protein_edit),
+    }))
 }
 
 // ── Diff helpers ─────────────────────────────────────────────────────────────
