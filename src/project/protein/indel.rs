@@ -10,9 +10,9 @@ use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
 
 use super::helpers::{
-    build_mutated_cds_with_ref, first_diff_position, net_length_change,
-    translate_full_cds_with_stop, translate_mutated_cds, translate_mutated_cds_inframe,
-    RefProteinBundle,
+    affects_initiation_codon, build_initiator_unknown, build_mutated_cds_with_ref,
+    first_diff_position, net_length_change, translate_full_cds_with_stop, translate_mutated_cds,
+    translate_mutated_cds_inframe, RefProteinBundle,
 };
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -33,6 +33,13 @@ pub(crate) fn predict_indel_protein(
     edit: &NaEdit,
     protein_accession: &str,
 ) -> Result<HgvsVariant, FerroError> {
+    // A change touching the translation initiation codon (CDS 1–3) has an
+    // unpredictable protein consequence — report p.(Met1?) up front rather
+    // than a concrete del/ins/delins, which the spec disallows (#498).
+    if affects_initiation_codon(edit, cds_pos_start, cds_pos_end) {
+        return Ok(build_initiator_unknown(protein_accession, transcript));
+    }
+
     // 1. The reference CDS + translation are pre-computed by the caller (and
     //    cached on `VariantProjector` so fan-out across many indels on the
     //    same transcript doesn't re-translate (or re-read+re-uppercase) the
@@ -915,29 +922,125 @@ mod tests {
     /// (ATG). HGVS recommendation: report as `p.(Met1?)` because we can't
     /// predict where translation actually starts on the altered transcript.
     ///
-    /// We accept either the strict `Met1?` form or any variant that flags
-    /// the first amino acid — what we require is that the prediction not
-    /// silently lose the start-codon edge case.
+    /// Deleting the initiation codon yields an unpredictable protein
+    /// consequence, reported as `p.(Met1?)` (HGVS deletion.md:62; #498) — not
+    /// a concrete `Met1del`.
     #[test]
     fn del_start_codon_initiator_met_loss() {
-        // CDS "ATGCGCTAA" → after del c.1_3, mut_cds = "CGCTAA".
-        // CDS-length change: -3 (in-frame at the AA level, but the new
-        // sequence starts with CGC = Arg — no Met at position 1).
+        // CDS "ATGCGCTAA"; del c.1_3 removes the entire start codon (ATG).
         let t = tx("ATGCGCTAA", 1, 9);
         let edit = NaEdit::Deletion {
             sequence: None,
             length: None,
         };
         let result = predict_indel(&t, 1, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Initiator Met loss via delins: replacing c.1_3 (the start codon) with
+    /// any sequence has an unpredictable protein consequence, reported as
+    /// `p.(Met1?)` rather than a concrete `Met1delins…` (#498). The
+    /// `[start,end]` span overlaps CDS 1–3 so the guard fires for delins.
+    #[test]
+    fn delins_start_codon_initiator_met_loss() {
+        // CDS "ATGCGCTAA"; delins c.1_3 (ATG → TCC) overwrites the start codon.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "TCC".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 1, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Initiator Met loss via duplication: duplicating c.1_3 (the start codon)
+    /// disrupts initiation, reported as `p.(Met1?)` rather than a concrete
+    /// `Met1dup` (#498). The `[start,end]` span overlaps CDS 1–3.
+    #[test]
+    fn dup_start_codon_initiator_met_loss() {
+        // CDS "ATGCGCTAA"; dup c.1_3 (ATG) overlaps the start codon.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let edit = NaEdit::Duplication {
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        };
+        let result = predict_indel(&t, 1, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Initiator Met loss via inversion: inverting c.1_3 (the start codon)
+    /// disrupts initiation, reported as `p.(Met1?)` rather than a concrete
+    /// `Met1delins…` (#498). The `[start,end]` span overlaps CDS 1–3.
+    #[test]
+    fn inversion_start_codon_initiator_met_loss() {
+        // CDS "ATGCGCTAA"; inv c.1_3 (ATG → CAT) overwrites the start codon.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let edit = NaEdit::Inversion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 1, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Initiator Met loss via insertion *inside* the start codon: an insertion
+    /// disrupts initiation only when the gap is strictly inside CDS 1–3, i.e.
+    /// `cds_pos_start ∈ {1,2}`. An insertion at c.1_2 (start=1) splits the
+    /// start codon and is reported as `p.(Met1?)` (#498).
+    #[test]
+    fn ins_within_start_codon_initiator_met_loss() {
+        // CDS "ATGCGCTAA"; insert "GGG" at c.1_2 (gap between c.1 and c.2,
+        // strictly inside the start codon ATG).
+        let t = tx("ATGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "GGG".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 1, 1, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Initiator Met loss via insertion at the *second* interior gap of the
+    /// start codon (gap between c.2 and c.3, `cds_pos_start = 2`). The helper
+    /// treats both interior gaps (`cds_pos_start ∈ {1,2}`) as disrupting
+    /// initiation, so this also reports `p.(Met1?)` (#498). Pins the
+    /// `cds_pos_start == 2` branch that `ins_within_start_codon` (start=1) and
+    /// `ins_after_start_codon` (start=3) leave uncovered, guarding against an
+    /// off-by-one regression on the interior-gap range.
+    #[test]
+    fn ins_second_gap_within_start_codon_initiator_met_loss() {
+        // CDS "ATGCGCTAA"; insert "GGG" at c.2_3 (gap between c.2 and c.3,
+        // strictly inside the start codon ATG).
+        let t = tx("ATGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "GGG".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 2, 2, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
+    }
+
+    /// Insertion boundary: an insertion *after* the start codon (gap between
+    /// c.3 and c.4, `cds_pos_start = 3`) does NOT disrupt initiation, so the
+    /// guard must NOT fire — the normal in-frame insertion consequence is
+    /// reported instead of `p.(Met1?)`. Pins the insertion-specific boundary
+    /// of `affects_initiation_codon` (#498).
+    #[test]
+    fn ins_after_start_codon_does_not_trigger_initiator_unknown() {
+        // CDS "ATGCGCTAA"; insert "GGG" at c.3_4 (gap just past the start
+        // codon). Same fixture as ins_three_bases_codon_aligned.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "GGG".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
-        // The codon-aligned in-frame deletion of codon 1 emits a Met1del
-        // (or some Met1-flagged form). Just assert the start codon was
-        // touched and the prediction succeeded.
-        assert!(
-            s.contains("Met1") || s.contains("M1"),
-            "expected Met1 reference in start-codon-loss prediction, got '{}'",
-            s
-        );
+        assert_ne!(s, "NP_TEST.1:p.(Met1?)", "guard must not fire past CDS 3");
+        assert_eq!(s, "NP_TEST.1:p.(Met1_Arg2insGly)");
     }
 
     /// Large multi-codon in-frame deletion (4 codons, 12 bases) — covers
