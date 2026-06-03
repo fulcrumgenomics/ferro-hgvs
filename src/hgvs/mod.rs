@@ -13,7 +13,7 @@ pub mod variant;
 pub mod version;
 
 // Re-export commonly used types
-pub use edit::{NaEdit, ProteinEdit, RepeatUnit};
+pub use edit::{FrameshiftTer, NaEdit, ProteinEdit, RepeatUnit};
 pub use interval::{CdsInterval, GenomeInterval, ProtInterval, TxInterval};
 pub use location::{CdsPos, GenomePos, ProtPos, SpecialPosition, TxPos};
 pub use uncertainty::Mu;

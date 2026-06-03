@@ -100,12 +100,12 @@ fn lenient_rewrites_fs_x_n_with_digits() {
 
 #[test]
 fn lenient_rewrites_fs_x_question_uncertain() {
-    // NEW: corrector now handles the `?` (uncertain stop position) lane,
-    // not just digits. Previously this rejected as "Unexpected trailing
-    // characters: 'Xaa?'" because the corrector required digits.
+    // Corrector handles the `?` (uncertain stop position) lane, not just
+    // digits. The deprecated `X?` rewrites to the canonical unknown-stop
+    // marker `fsTer?` (preserved, no longer collapsed to bare `fs`).
     lenient_rewrites_to(
         &format!("{ACC}:p.Arg97fsX?"),
-        &format!("{ACC}:p.Arg97fs"),
+        &format!("{ACC}:p.Arg97fsTer?"),
         ErrorType::DeprecatedFrameshiftX,
     );
 }
@@ -144,11 +144,12 @@ fn lenient_rewrites_fs_star_n_with_digits() {
 
 #[test]
 fn lenient_rewrites_fs_star_question_uncertain() {
-    // NEW: `fs*?` now goes through the corrector instead of being
-    // parser-native silent acceptance. Same mode mapping as `fs*N`.
+    // `fs*?` goes through the corrector (same mode mapping as `fs*N`); the
+    // deprecated `*?` rewrites to the canonical unknown-stop marker `fsTer?`
+    // (preserved, no longer collapsed to bare `fs`).
     lenient_rewrites_to(
         &format!("{ACC}:p.Arg97fs*?"),
-        &format!("{ACC}:p.Arg97fs"),
+        &format!("{ACC}:p.Arg97fsTer?"),
         ErrorType::DeprecatedFrameshiftStar,
     );
 }
@@ -174,9 +175,9 @@ fn lenient_canonical_fs_ter_n_silent_roundtrip() {
 
 #[test]
 fn lenient_canonical_fs_ter_question_silent_roundtrip() {
-    // Uncertain-stop with canonical Ter glyph: Display canonicalizes
-    // `fsTer?` to the short form `fs` (existing behavior per
-    // frameshift.md `p.Ile327Argfs*?` ≡ `p.Ile327fs`).
+    // Uncertain-stop with canonical Ter glyph: `fsTer?` round-trips unchanged
+    // (the explicit unknown-stop marker is preserved; the short form `fs`
+    // remains an accepted equivalent input per frameshift.md `p.Ile327Argfs*?`).
     let input = format!("{ACC}:p.Arg97fsTer?");
     let result = parse_hgvs_with_config(&input, lenient()).expect("parse");
     let display = result.result.to_string();

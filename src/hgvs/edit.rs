@@ -945,6 +945,28 @@ pub enum ExtDirection {
     CTerminal,
 }
 
+/// Termination detail of a frameshift's shifted reading frame.
+///
+/// The HGVS grammar (`docs/syntax.yaml`, `aa.fs`) makes the `Ter` clause
+/// optional: `aa_position "fs" [ "Ter" position ]`. These three states capture
+/// the distinct renderings — they are NOT interchangeable, so a frameshift's
+/// termination detail round-trips losslessly:
+/// - [`Unspecified`](FrameshiftTer::Unspecified) — short form `p.Arg97fs`, no
+///   termination detail given (e.g. on input).
+/// - [`Unknown`](FrameshiftTer::Unknown) — `p.Arg97fsTer?`: the shifted frame
+///   reaches no new stop within the available sequence (position unknown).
+/// - [`At`](FrameshiftTer::At) — `p.Arg97fsTer23`: a new stop at position N of
+///   the shifted frame (1-based; the first changed amino acid is position 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FrameshiftTer {
+    /// Short format `p.Arg97fs` — no termination detail.
+    Unspecified,
+    /// `p.Arg97fsTer?` — no new stop is reached (position unknown).
+    Unknown,
+    /// `p.Arg97fsTer23` — new stop at position N of the shifted frame.
+    At(u64),
+}
+
 /// Protein edit types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProteinEdit {
@@ -975,8 +997,8 @@ pub enum ProteinEdit {
     Frameshift {
         /// The new amino acid at the frameshift position (e.g., Pro in p.Arg97ProfsTer23)
         new_aa: Option<AminoAcid>,
-        /// Position of new termination codon (e.g., 23 in p.Arg97ProfsTer23)
-        ter_pos: Option<u64>,
+        /// Termination detail of the shifted reading frame (see [`FrameshiftTer`]).
+        ter: FrameshiftTer,
     },
 
     /// Extension: extension beyond normal start/stop (e.g., p.Met1ext-5, p.Ter110Glnext*17)
@@ -1137,13 +1159,18 @@ impl fmt::Display for ProteinEdit {
             ProteinEdit::Insertion { sequence } => write!(f, "ins{}", sequence),
             ProteinEdit::Delins { sequence } => write!(f, "delins{}", sequence),
             ProteinEdit::Duplication => write!(f, "dup"),
-            ProteinEdit::Frameshift { new_aa, ter_pos } => {
+            ProteinEdit::Frameshift { new_aa, ter } => {
                 if let Some(aa) = new_aa {
                     write!(f, "{}", aa)?;
                 }
                 write!(f, "fs")?;
-                if let Some(pos) = ter_pos {
-                    write!(f, "Ter{}", pos)?;
+                // Three-letter `Ter` is the spec-preferred form for the
+                // termination codon (`*` is an accepted input alternative);
+                // Display canonicalizes both to `Ter`.
+                match ter {
+                    FrameshiftTer::Unspecified => {}
+                    FrameshiftTer::Unknown => write!(f, "Ter?")?,
+                    FrameshiftTer::At(pos) => write!(f, "Ter{}", pos)?,
                 }
                 Ok(())
             }
@@ -1358,22 +1385,31 @@ mod tests {
 
     #[test]
     fn test_protein_frameshift() {
+        // Known stop position → fsTer{N}.
         let edit = ProteinEdit::Frameshift {
             new_aa: None,
-            ter_pos: Some(45),
+            ter: FrameshiftTer::At(45),
         };
         assert_eq!(format!("{}", edit), "fsTer45");
 
+        // Short form (no termination detail) → bare fs.
         let edit = ProteinEdit::Frameshift {
             new_aa: None,
-            ter_pos: None,
+            ter: FrameshiftTer::Unspecified,
         };
         assert_eq!(format!("{}", edit), "fs");
 
-        // Frameshift with new amino acid
+        // No new stop reached → explicit fsTer? marker.
+        let edit = ProteinEdit::Frameshift {
+            new_aa: None,
+            ter: FrameshiftTer::Unknown,
+        };
+        assert_eq!(format!("{}", edit), "fsTer?");
+
+        // Frameshift with new amino acid + known stop.
         let edit = ProteinEdit::Frameshift {
             new_aa: Some(crate::hgvs::location::AminoAcid::Pro),
-            ter_pos: Some(23),
+            ter: FrameshiftTer::At(23),
         };
         assert_eq!(format!("{}", edit), "ProfsTer23");
     }

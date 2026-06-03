@@ -2,7 +2,7 @@
 //! deletion-insertion, inversion) in the CDS.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{AminoAcidSeq, ExtDirection, NaEdit, ProteinEdit};
+use crate::hgvs::edit::{AminoAcidSeq, ExtDirection, FrameshiftTer, NaEdit, ProteinEdit};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
@@ -567,21 +567,28 @@ fn build_frameshift_variant(
     let new_aa = alt_protein.get(first_diff).copied();
 
     // Scan downstream from first_diff in the mutated CDS to find a stop codon.
+    // A computed frameshift always carries an explicit termination state: the
+    // new stop position when found (`fsTer{K}`), else `fsTer?` (no new stop in
+    // the available sequence). The predictor never emits the bare short form
+    // `fs` — that is reserved for human-authored input with no detail. The
+    // degenerate `else` (frameshift starts at/beyond the CDS end) is likewise
+    // an unknown-termination case (frameshift.md:44; spec example p.Ile327Argfs*?).
     let codon_byte_offset = first_diff * 3;
-    let ter_pos: Option<u64> = if codon_byte_offset < mut_cds.len() {
+    let ter: FrameshiftTer = if codon_byte_offset < mut_cds.len() {
         let downstream = &mut_cds[codon_byte_offset..];
         let downstream_aas = translate_full_cds_with_stop(downstream);
-        // ter_pos = 1-based position of the Ter in the downstream scan.
-        // HGVS fsTer{K}: K is the number of amino acids (including the new shifted AA) until Ter.
+        // fsTer{K}: K is the 1-based position of the Ter in the downstream
+        // scan (counting the new shifted amino acid as position 1).
         downstream_aas
             .iter()
             .position(|aa| *aa == AminoAcid::Ter)
-            .map(|p| (p + 1) as u64)
+            .map(|p| FrameshiftTer::At((p + 1) as u64))
+            .unwrap_or(FrameshiftTer::Unknown)
     } else {
-        None
+        FrameshiftTer::Unknown
     };
 
-    let protein_edit = ProteinEdit::Frameshift { new_aa, ter_pos };
+    let protein_edit = ProteinEdit::Frameshift { new_aa, ter };
     let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_pos));
     let accession = parse_accession(protein_accession);
     let variant = ProteinVariant {
@@ -737,13 +744,12 @@ mod tests {
         };
         let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
-        // Arg2[Ala]fsTer? — with no downstream stop in the remaining sequence.
-        // alt_protein = [Met, Ala], first_diff=1, new_aa=Ala
-        // downstream from byte 3 = "GCTAA" → Ala, then incomplete AA
-        // no Ter → ter_pos = None
-        assert!(s.contains("Arg2"), "expected Arg2 in '{}'", s);
-        assert!(s.contains("fs"), "expected fs in '{}'", s);
-        assert!(s.contains("Ala"), "expected Ala new_aa in '{}'", s);
+        // alt_protein = [Met, Ala], first_diff=1, new_aa=Ala. The downstream
+        // scan from byte 3 ("GCTAA" → Ala, then an incomplete codon) finds no
+        // new stop, so the shifted frame's termination is unknown: the
+        // predictor must emit the explicit `fsTer?` marker (not bare `fs`),
+        // matching the spec's no-stop example p.Ile327Argfs*? (frameshift.md:44).
+        assert_eq!(s, "NP_TEST.1:p.(Arg2AlafsTer?)");
     }
 
     #[test]

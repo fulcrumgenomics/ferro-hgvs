@@ -10465,7 +10465,7 @@
     {
       "input": "p.Ile327Argfs*?",
       "input_prefixed": "NP_003997.1:p.Ile327Argfs*?",
-      "current": "NP_003997.1:p.Ile327Argfs",
+      "current": "NP_003997.1:p.Ile327ArgfsTer?",
       "spec_expected": "NP_003997.1:p.Ile327Argfs*?",
       "status": "diverges",
       "coordinate_system": "p",

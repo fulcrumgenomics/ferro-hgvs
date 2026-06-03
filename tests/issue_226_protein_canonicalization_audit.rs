@@ -21,8 +21,11 @@
 //!   - D8: predicted-vs-confirmed parens — sub / fs / del / identity /
 //!     1-letter-inside-parens canonicalization / empty-parens reject.
 //!
-//! A probe of every shape in this file confirmed the current behavior
-//! is correct; this PR is pure coverage (no `src/` changes).
+//! Originally (#226) pure coverage of then-current behavior. The D1
+//! unknown-stop frameshift cases were later revised: a frameshift whose
+//! shifted frame reaches no new stop now renders the explicit `fsTer?`
+//! marker (preserved losslessly) instead of being collapsed to short `fs`,
+//! matching the spec example `p.Ile327Argfs*?` (frameshift.md:44).
 
 use ferro_hgvs::parse_hgvs;
 
@@ -46,10 +49,17 @@ fn assert_canonicalizes_to(input: &str, expected: &str) {
 // SECTION D1 — frameshift rendering
 // =============================================================================
 //
-// Spec (`recommendations/protein/frameshift.md`): three forms accepted —
-// short (`Arg97fs`), long-Ter (`Arg97ProfsTer23`), long-star
-// (`Arg97Profs*23`). The long-Ter form is the spec-preferred canonical
-// emission.
+// Spec grammar (`docs/syntax.yaml`, `aa.fs`): one production
+// `aa_position "fs" [ "Ter" position ]` with the Ter clause *optional* — the
+// short (`Arg97fs`) and full (`Arg97ProfsTer23` / `Arg97Profs*23`) forms are
+// co-equal permitted renderings; the spec mandates no single canonical form.
+// ferro nonetheless canonicalizes for stable output: `*` → `Ter`, and it keeps
+// a known stop position (`fsTer23`) rather than dropping it. For consistency,
+// an *unknown* stop (the shifted frame reaches no new stop) is rendered with
+// the explicit `fsTer?` marker — matching the spec's own example for that case
+// (`p.Ile327Argfs*?`, frameshift.md:44) — rather than silently dropped to bare
+// `fs`. (This reverses the earlier #226 choice; the short form remains a valid
+// *input* and round-trips as-is.)
 
 mod d1_frameshift {
     use super::*;
@@ -87,19 +97,24 @@ mod d1_frameshift {
         assert_round_trips("NP_003997.1:p.(Arg97ProfsTer23)");
     }
 
-    /// `Argfs*?` (unknown stop, star form) → short canonical `fs`
-    /// when stop is unknown. The new-AA info is also dropped — spec
-    /// lists `p.Ile327Argfs*?` and `p.Ile327fs` as equivalent
-    /// (recommendations/protein/frameshift.md examples).
+    /// `Argfs*?` (unknown stop, star form) canonicalizes only the `*` → `Ter`;
+    /// the unknown-stop marker is preserved as `fsTer?` (not dropped to bare
+    /// `fs`), and the new amino acid is kept. This matches the spec's example
+    /// for a frameshift whose new frame finds no stop: `p.Ile327Argfs*?`
+    /// (frameshift.md:44). (Reverses the earlier #226 short-form canonical.)
     #[test]
-    fn unknown_ter_star_canonicalizes_to_short_form() {
-        assert_canonicalizes_to("NP_003997.1:p.Ile327Argfs*?", "NP_003997.1:p.Ile327Argfs");
+    fn unknown_ter_star_preserves_marker_canonicalizing_to_ter() {
+        assert_canonicalizes_to(
+            "NP_003997.1:p.Ile327Argfs*?",
+            "NP_003997.1:p.Ile327ArgfsTer?",
+        );
     }
 
-    /// Same equivalence using `Ter?` notation.
+    /// The three-letter `fsTer?` form round-trips unchanged — the unknown-stop
+    /// marker is no longer lossily collapsed to bare `fs`.
     #[test]
-    fn unknown_ter_three_letter_canonicalizes_to_short_form() {
-        assert_canonicalizes_to("NP_003997.1:p.Ile327ArgfsTer?", "NP_003997.1:p.Ile327Argfs");
+    fn unknown_ter_three_letter_round_trips() {
+        assert_round_trips("NP_003997.1:p.Ile327ArgfsTer?");
     }
 
     /// One-letter short form canonicalizes to three-letter.

@@ -3,8 +3,8 @@
 //! Parses the edit portion of HGVS variants (substitution, deletion, insertion, etc.)
 
 use crate::hgvs::edit::{
-    AminoAcidSeq, Base, ExtDirection, InsertedPart, InsertedSequence, MethylationStatus, NaEdit,
-    ProteinEdit, RepeatCount, RepeatUnit, Sequence,
+    AminoAcidSeq, Base, ExtDirection, FrameshiftTer, InsertedPart, InsertedSequence,
+    MethylationStatus, NaEdit, ProteinEdit, RepeatCount, RepeatUnit, Sequence,
 };
 use crate::hgvs::location::AminoAcid;
 use crate::hgvs::parser::position::{parse_amino_acid, parse_amino_acid_one_letter};
@@ -12,7 +12,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, digit1},
-    combinator::{map, opt},
+    combinator::{map, map_res, opt},
     multi::many1,
     sequence::preceded,
     IResult, Parser,
@@ -1628,17 +1628,19 @@ fn parse_protein_frameshift(input: &str) -> IResult<&str, ProteinEdit> {
     // Try to parse optional amino acid before "fs"
     let (input, new_aa) = opt(parse_amino_acid).parse(input)?;
     let (input, _) = tag("fs").parse(input)?;
-    // Parse optional termination position: Ter12 or *12 or Ter? or *?
-    let (input, ter_pos) = opt(alt((
-        // Ter? or *? - uncertain termination position (VEP notation)
-        map(tag("Ter?"), |_| Some(None)),
-        map(tag("*?"), |_| Some(None)),
+    // Parse the optional termination clause. The three spec renderings map to
+    // distinct `FrameshiftTer` states (no longer collapsed to a single
+    // `Option`, which lost the `fsTer?` vs short-`fs` distinction):
+    //   absent          → Unspecified (short form `p.Arg97fs`)
+    //   Ter? / *?       → Unknown     (no new stop reached)
+    //   Ter12 / *12     → At(12)      (new stop at position 12)
+    let (input, ter) = opt(alt((
+        // Ter? or *? - uncertain termination position (VEP / spec notation)
+        map(tag("Ter?"), |_| FrameshiftTer::Unknown),
+        map(tag("*?"), |_| FrameshiftTer::Unknown),
         // Ter12 or *12 - specific termination position
-        preceded(
-            tag("Ter"),
-            map(digit1, |s: &str| Some(s.parse::<u64>().ok())),
-        ),
-        preceded(tag("*"), map(digit1, |s: &str| Some(s.parse::<u64>().ok()))),
+        preceded(tag("Ter"), map_res(digit1, parse_frameshift_ter_at)),
+        preceded(tag("*"), map_res(digit1, parse_frameshift_ter_at)),
     )))
     .parse(input)?;
 
@@ -1646,9 +1648,26 @@ fn parse_protein_frameshift(input: &str) -> IResult<&str, ProteinEdit> {
         input,
         ProteinEdit::Frameshift {
             new_aa,
-            ter_pos: ter_pos.flatten().flatten(),
+            ter: ter.unwrap_or(FrameshiftTer::Unspecified),
         },
     ))
+}
+
+/// Parse the digits of a concrete frameshift termination position into
+/// [`FrameshiftTer::At`]. The position is 1-based (`docs/syntax.yaml`, `aa.fs`;
+/// the first changed amino acid is position 1), so `0` is rejected. Returning
+/// `Err` (on `0` or `u64` overflow) makes the enclosing `alt`/`opt` reject the
+/// trailing digits rather than accept a bogus `At(0)` — so e.g. `fsTer0` leaves
+/// `Ter0` unconsumed and the surrounding variant parser fails on it instead of
+/// round-tripping it as `fsTer0`.
+fn parse_frameshift_ter_at(s: &str) -> Result<FrameshiftTer, &'static str> {
+    let pos = s
+        .parse::<u64>()
+        .map_err(|_| "invalid frameshift termination position")?;
+    if pos == 0 {
+        return Err("frameshift termination position must be >= 1");
+    }
+    Ok(FrameshiftTer::At(pos))
 }
 
 /// Parse protein identity (= or (=) for predicted)
@@ -2462,9 +2481,9 @@ mod tests {
     fn test_parse_protein_frameshift() {
         let (remaining, edit) = parse_protein_edit("fsTer12").unwrap();
         assert_eq!(remaining, "");
-        if let ProteinEdit::Frameshift { new_aa, ter_pos } = edit {
+        if let ProteinEdit::Frameshift { new_aa, ter } = edit {
             assert_eq!(new_aa, None);
-            assert_eq!(ter_pos, Some(12));
+            assert_eq!(ter, FrameshiftTer::At(12));
         } else {
             panic!("Expected frameshift");
         }
@@ -2472,11 +2491,61 @@ mod tests {
         // Frameshift with new amino acid
         let (remaining, edit) = parse_protein_edit("ProfsTer23").unwrap();
         assert_eq!(remaining, "");
-        if let ProteinEdit::Frameshift { new_aa, ter_pos } = edit {
+        if let ProteinEdit::Frameshift { new_aa, ter } = edit {
             assert_eq!(new_aa, Some(crate::hgvs::location::AminoAcid::Pro));
-            assert_eq!(ter_pos, Some(23));
+            assert_eq!(ter, FrameshiftTer::At(23));
         } else {
             panic!("Expected frameshift");
+        }
+
+        // Short form: no termination detail → Unspecified.
+        let (remaining, edit) = parse_protein_edit("fs").unwrap();
+        assert_eq!(remaining, "");
+        assert!(matches!(
+            edit,
+            ProteinEdit::Frameshift {
+                new_aa: None,
+                ter: FrameshiftTer::Unspecified
+            }
+        ));
+
+        // Unknown stop (both Ter? and *? spellings) → Unknown, preserved.
+        for s in ["fsTer?", "fs*?"] {
+            let (remaining, edit) = parse_protein_edit(s).unwrap();
+            assert_eq!(remaining, "");
+            assert!(
+                matches!(
+                    edit,
+                    ProteinEdit::Frameshift {
+                        new_aa: None,
+                        ter: FrameshiftTer::Unknown
+                    }
+                ),
+                "parsing {s} should yield Unknown ter"
+            );
+        }
+
+        // `FrameshiftTer::At` is 1-based, so position 0 is invalid: `fsTer0` /
+        // `fs*0` must NOT round-trip as `At(0)`. The termination clause is
+        // rejected and its digits are left unconsumed (a bare `fs` with the
+        // `Ter0` / `*0` trailing), which the enclosing variant parser then
+        // fails on rather than silently accepting a bogus position.
+        for (s, leftover) in [("fsTer0", "Ter0"), ("fs*0", "*0")] {
+            let (remaining, edit) = parse_protein_edit(s).unwrap();
+            assert_eq!(
+                remaining, leftover,
+                "parsing {s} should leave the invalid termination clause unconsumed"
+            );
+            assert!(
+                matches!(
+                    edit,
+                    ProteinEdit::Frameshift {
+                        new_aa: None,
+                        ter: FrameshiftTer::Unspecified
+                    }
+                ),
+                "parsing {s} must not yield a frameshift At(0), got {edit:?}"
+            );
         }
     }
 
