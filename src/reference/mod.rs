@@ -10,6 +10,7 @@ pub mod multi_fasta;
 pub mod protein;
 pub mod provider;
 pub mod transcript;
+pub mod validate;
 
 pub use annotation::{load_annotations, AnnotationFormat, LoaderConfig, LoaderReport};
 pub use fasta::FastaProvider;
