@@ -11,6 +11,8 @@ use crate::project::protein::helpers::{affects_initiation_codon, build_initiator
 use crate::reference::transcript::Transcript;
 use once_cell::sync::Lazy;
 
+use super::helpers::build_cterminal_extension;
+
 /// Standard genetic-code table, built once and reused. Constructing a fresh
 /// `CodonTable` per call dominates protein-prediction CPU because
 /// `translate_full_cds` invokes `translate` once per codon of every CDS.
@@ -78,6 +80,42 @@ pub(crate) fn apply_substitution(codon: &str, frame: u8, alt: Base) -> String {
     String::from_utf8(bytes).expect("alt base is ASCII")
 }
 
+/// Build the mutated CDS + 3'UTR (transcript orientation, uppercase) for a
+/// single CDS substitution: the transcript sequence from `cds_start` to its 3'
+/// end, with the base at 1-based CDS position `cds_pos` replaced by `alt`.
+///
+/// Used by the stop-loss path so the read-through can be translated into the
+/// 3'UTR to locate the new stop codon. The slice runs to the transcript end (it
+/// deliberately includes the 3'UTR, unlike `read_full_cds`, which stops at the
+/// annotated stop).
+fn mutated_cds_with_3utr(
+    transcript: &Transcript,
+    cds_pos: i64,
+    alt: Base,
+) -> Result<String, FerroError> {
+    let cds_start = transcript
+        .cds_start
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS", transcript.id),
+        })?;
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
+    let mut bytes = seq.as_bytes()[(cds_start as usize - 1)..].to_ascii_uppercase();
+    let offset = (cds_pos - 1) as usize;
+    if offset >= bytes.len() {
+        return Err(FerroError::ProteinSequenceUnavailable {
+            accession: transcript.id.clone(),
+        });
+    }
+    bytes[offset] = alt.to_u8();
+    Ok(String::from_utf8(bytes).expect("transcript sequence is ASCII"))
+}
+
 /// Translate a 3-character codon to an `AminoAcid`. Returns `Some(Ter)` for stop codons,
 /// `Some(Xaa)` if the codon is unrecognized; `None` only if the input is not 3 ASCII bases.
 pub(crate) fn translate(codon: &str) -> Option<AminoAcid> {
@@ -129,6 +167,16 @@ pub(crate) fn predict_substitution_protein(
     let ref_aa = translate(&ref_codon).unwrap_or(AminoAcid::Xaa);
     let alt_aa = translate(&alt_codon).unwrap_or(AminoAcid::Xaa);
     let aa_number = ((cds_pos - 1) / 3 + 1) as u64;
+
+    // Stop-loss (no-stop) substitution: the reference stop codon now codes for
+    // an amino acid, so translation reads through into the 3'UTR until a new
+    // stop — a C-terminal extension `p.(TerNNN<aa>extTer<k>)`, not a bare
+    // `Ter→aa` substitution (recommendations/protein/extension.md:30; #498). A
+    // stop→stop change (e.g. TAA→TAG) is not a stop-loss and falls through.
+    if ref_aa == AminoAcid::Ter && alt_aa != AminoAcid::Ter {
+        let mut_cds = mutated_cds_with_3utr(transcript, cds_pos, alt)?;
+        return build_cterminal_extension(aa_number, &mut_cds, protein_accession, transcript);
+    }
 
     // For the identity case, use predicted: false — the outer Mu::Uncertain wrapper
     // (from LocEdit::new_predicted) already provides the p.(...) predicted wrapping.
@@ -420,5 +468,66 @@ mod tests {
             _ => panic!("expected Protein variant"),
         };
         assert_eq!(s, "NP_000288.1:p.(Arg2Ter)");
+    }
+
+    fn prot_str(v: &HgvsVariant) -> String {
+        match v {
+            HgvsVariant::Protein(p) => p.to_string(),
+            _ => panic!("expected Protein variant"),
+        }
+    }
+
+    /// Stop-loss (no-stop) substitution with a new stop codon a few codons
+    /// downstream in the 3'UTR: the reference stop codes for an amino acid and
+    /// translation reads through to the new stop, a C-terminal extension
+    /// `p.(TerNNN<aa>extTer<k>)` (extension.md:30), NOT a bare `Ter→aa`
+    /// substitution.
+    #[test]
+    fn substitution_stop_loss_extends_to_new_downstream_stop() {
+        // CDS "ATGAAATAA" (Met-Lys-Ter; stop codon TAA at c.7-9) + 3'UTR
+        // "GGGTAA". c.7T>C turns the stop TAA → CAA (Gln); read-through then
+        // translates GGG (Gly), TAA (Ter). K counts the amino acids added
+        // *beyond* the original Ter (syntax.yaml:78) — the converted-stop Gln
+        // is not counted — so the added sequence is Gly(1), Ter(2) → extTer2.
+        let tx = tx_with_seq("ATGAAATAAGGGTAA", 1, 9);
+        let edit = NaEdit::Substitution {
+            reference: Base::T,
+            alternative: Base::C,
+        };
+        let pv = predict_substitution_protein(&tx, 7, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&pv), "NP_TEST.1:p.(Ter3GlnextTer2)");
+    }
+
+    /// Stop-loss substitution where the 3'UTR contains no in-frame stop within
+    /// the available transcript sequence: the extension length is unknown and
+    /// reported as `extTer?` (extension.md:33,50).
+    #[test]
+    fn substitution_stop_loss_without_downstream_stop_is_ext_ter_unknown() {
+        // Same CDS, but 3'UTR "GGGGGG" has no in-frame stop. c.7T>C → CAA
+        // (Gln); read-through translates GGG, GGG with no Ter → extTer?.
+        let tx = tx_with_seq("ATGAAATAAGGGGGG", 1, 9);
+        let edit = NaEdit::Substitution {
+            reference: Base::T,
+            alternative: Base::C,
+        };
+        let pv = predict_substitution_protein(&tx, 7, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&pv), "NP_TEST.1:p.(Ter3GlnextTer?)");
+    }
+
+    /// A synonymous change in the stop codon (stop → stop, e.g. TAA→TAG) is
+    /// NOT a stop-loss: it must remain `p.(=)`-style identity, never an
+    /// extension.
+    #[test]
+    fn substitution_stop_to_stop_is_not_an_extension() {
+        // CDS "ATGAAATAA" + 3'UTR. c.9A>G turns TAA → TAG (still Ter).
+        let tx = tx_with_seq("ATGAAATAAGGGTAA", 1, 9);
+        let edit = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        };
+        let pv = predict_substitution_protein(&tx, 9, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&pv);
+        assert!(!s.contains("ext"), "stop→stop must not extend, got {s}");
+        assert_eq!(s, "NP_TEST.1:p.(Ter3=)");
     }
 }

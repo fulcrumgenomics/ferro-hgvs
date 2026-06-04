@@ -2,7 +2,7 @@
 //! deletion-insertion, inversion) in the CDS.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{AminoAcidSeq, ExtDirection, FrameshiftTer, NaEdit, ProteinEdit};
+use crate::hgvs::edit::{AminoAcidSeq, FrameshiftTer, NaEdit, ProteinEdit};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
@@ -10,9 +10,10 @@ use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
 
 use super::helpers::{
-    affects_initiation_codon, build_initiator_unknown, build_mutated_cds_with_ref,
-    first_diff_position, net_length_change, translate_full_cds_with_stop, translate_mutated_cds,
-    translate_mutated_cds_inframe, RefProteinBundle,
+    affects_initiation_codon, build_cterminal_extension, build_initiator_unknown,
+    build_mutated_cds_with_ref, first_diff_position, net_length_change,
+    translate_full_cds_with_stop, translate_mutated_cds, translate_mutated_cds_inframe,
+    RefProteinBundle,
 };
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -616,44 +617,33 @@ fn build_extension_variant(
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
-    let stop_pos = (ref_protein.len() + 1) as u64; // 1-based position of the original stop codon
+    // 1-based protein position of the original stop codon; the read-through
+    // tail is computed by the shared C-terminal extension builder.
+    let stop_pos = (ref_protein.len() + 1) as u64;
 
-    // The new amino acid at the stop codon position.
-    // Translate starting from the stop-codon position in the mutated CDS.
-    let stop_offset = ref_protein.len() * 3;
-    let new_aa: Option<AminoAcid> = if stop_offset + 3 <= mut_cds.len() {
-        let stop_codon_seq = &mut_cds[stop_offset..stop_offset + 3];
-        super::substitution::translate(stop_codon_seq).filter(|aa| *aa != AminoAcid::Ter)
-    } else {
-        None
-    };
+    // `mut_cds` from `build_mutated_cds_with_ref` stops at the annotated CDS
+    // end (the original stop codon). Stop-loss read-through continues into the
+    // 3'UTR, so `build_cterminal_extension` needs the mutated CDS *plus* the
+    // downstream transcript sequence to locate the new stop — without it a stop
+    // in the tail is missed and the extension degrades to `extTer?` (or a
+    // too-short count). The edit lies within the CDS, so the 3'UTR slice
+    // `seq[cds_end..]` is unchanged by it; append it. Mirrors the substitution
+    // path's `mutated_cds_with_3utr`.
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
+    let cds_end = transcript
+        .cds_end
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS end", transcript.id),
+        })? as usize;
+    let mut_cds_with_3utr = format!("{mut_cds}{}", seq[cds_end..].to_ascii_uppercase());
 
-    // Count extension amino acids until a new stop is found.
-    let ext_count: Option<i64> = if stop_offset < mut_cds.len() {
-        let downstream = &mut_cds[stop_offset..];
-        let downstream_aas = translate_full_cds_with_stop(downstream);
-        downstream_aas
-            .iter()
-            .position(|aa| *aa == AminoAcid::Ter)
-            .map(|p| (p + 1) as i64) // +1: distance from new AA to new stop (inclusive)
-    } else {
-        None
-    };
-
-    let protein_edit = ProteinEdit::Extension {
-        new_aa,
-        direction: ExtDirection::CTerminal,
-        count: ext_count,
-    };
-
-    let loc = ProtInterval::point(ProtPos::new(AminoAcid::Ter, stop_pos));
-    let accession = parse_accession(protein_accession);
-    let variant = ProteinVariant {
-        accession,
-        gene_symbol: transcript.gene_symbol.clone(),
-        loc_edit: LocEdit::new_predicted(loc, protein_edit),
-    };
-    Ok(HgvsVariant::Protein(variant))
+    build_cterminal_extension(stop_pos, &mut_cds_with_3utr, protein_accession, transcript)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -972,6 +962,35 @@ mod tests {
         assert!(s.contains("Ter3"), "expected Ter3 in '{}'", s);
         assert!(s.contains("Trp"), "expected Trp in '{}'", s);
         assert!(s.contains("ext"), "expected ext in '{}'", s);
+    }
+
+    #[test]
+    fn stop_readthrough_extension_into_3utr() {
+        // Stop-loss read-through whose new stop lies in the 3'UTR, not the
+        // annotated CDS. The mutated CDS alone has no further stop, so the
+        // extension count can only be found by reading through into the
+        // downstream transcript sequence. Regression for passing a CDS-only
+        // `mut_cds` into `build_cterminal_extension` (degraded to `extTer?`).
+        //
+        // Transcript "ATGCGCTAAGCATAA": CDS c.1_9 = "ATGCGCTAA"
+        // ([Met, Arg, Ter]); 3'UTR = "GCATAA". delins c.7_9 TGG converts the
+        // stop "TAA" to "TGG" (Trp), so translation reads through into the
+        // 3'UTR: "TGG"(Trp) "GCA"(Ala) "TAA"(Ter) → the new stop is the 2nd
+        // added residue → extTer2 (the converted-stop residue is not counted).
+        let t = tx("ATGCGCTAAGCATAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "TGG".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert!(
+            s.contains("Ter3Trp") && s.contains("extTer2"),
+            "expected p.(Ter3TrpextTer2) reading into the 3'UTR, got '{}'",
+            s
+        );
     }
 
     // ─── Structural diversity tests (c17) ─────────────────────────────────────
