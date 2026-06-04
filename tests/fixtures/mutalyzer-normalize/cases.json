@@ -1470,8 +1470,13 @@
         "Variant in stop codon where an alternative stop codon is found downstream in the RNA should yield `ext*P` where P is a position."
       ],
       "input": "NM_000143.3:c.1531T>G",
-      "protein_description": "NM_000143.3(NP_000134.2):p.(Ter511GlyextTer3)",
-      "to_test": true
+      "protein_description": "NP_000134.2:p.(Ter511GlyextTer3)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Stop-loss (no-stop) substitution: the stop codon Ter511 becomes Gly and translation reads through to a new stop 3 residues into the added sequence — p.(Ter511GlyextTer3), the spec-correct extension (extension.md:30; count = amino acids added beyond the original Ter per syntax.yaml:78). ferro's prediction matches mutalyzer's; it differs only by the genomic-context wrapper — an HGVS p. description references the protein accession alone (bare NP_, #483/#495), so ferro's NP_000134.2:p.(...) is the spec-correct value."
+      }
     },
     {
       "keywords": [
