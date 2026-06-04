@@ -119,8 +119,23 @@ fn parse_offset(input: &str) -> IResult<&str, i64> {
 /// Parse a CDS position (can include offset, negative positions, * notation)
 /// Note: Position 0 is invalid in HGVS CDS notation (we go from -1 to 1)
 /// Also supports ? for unknown positions (e.g., c.?-232 for unknown position with offset)
+/// Also supports pter/qter/cen telomere/centromere markers (mirrors parse_genome_pos).
+/// Resolution to a concrete coordinate happens at normalize time.
 #[inline]
 pub fn parse_cds_pos(input: &str) -> IResult<&str, CdsPos> {
+    // Telomere/centromere markers (mirror parse_genome_pos): pter/qter (4 bytes),
+    // cen (3 bytes).
+    let bytes = input.as_bytes();
+    if bytes.len() >= 4 && bytes[0..4] == *b"pter" {
+        return Ok((&input[4..], CdsPos::pter()));
+    }
+    if bytes.len() >= 4 && bytes[0..4] == *b"qter" {
+        return Ok((&input[4..], CdsPos::qter()));
+    }
+    if bytes.len() >= 3 && bytes[0..3] == *b"cen" {
+        return Ok((&input[3..], CdsPos::cen()));
+    }
+
     // ? or ?+5 or ?-232 (unknown position with optional offset)
     if let Some(rest) = input.strip_prefix('?') {
         let (remaining, offset) = opt(parse_offset).parse(rest)?;
@@ -699,5 +714,16 @@ mod tests {
         assert_eq!(pos.base, 100);
         assert_eq!(pos.offset, Some(5));
         assert!(!pos.downstream);
+    }
+
+    #[test]
+    fn parse_cds_special_positions() {
+        use crate::hgvs::location::SpecialPosition;
+        let (_r, p) = parse_cds_pos("pter").unwrap();
+        assert_eq!(p.special, Some(SpecialPosition::Pter));
+        let (_r, q) = parse_cds_pos("qter").unwrap();
+        assert_eq!(q.special, Some(SpecialPosition::Qter));
+        let (_r, c) = parse_cds_pos("cen").unwrap();
+        assert_eq!(c.special, Some(SpecialPosition::Cen));
     }
 }

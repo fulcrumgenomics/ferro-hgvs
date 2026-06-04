@@ -136,8 +136,16 @@ fn parse_cds_boundary(
         )));
     }
 
-    // Fast path: if starts with digit, *, or - it's likely a certain position
-    if bytes[0].is_ascii_digit() || bytes[0] == b'*' || bytes[0] == b'-' {
+    // Fast path: if starts with digit, *, or - it's likely a certain position.
+    // Also accept p/q/c for pter/qter/cen special markers (mirrors the
+    // starts_with_special_pos fast-path on the genomic interval path).
+    if bytes[0].is_ascii_digit()
+        || bytes[0] == b'*'
+        || bytes[0] == b'-'
+        || bytes[0] == b'p'
+        || bytes[0] == b'q'
+        || bytes[0] == b'c'
+    {
         return map(parse_cds_pos, UncertainBoundary::certain).parse(input);
     }
 
@@ -463,6 +471,13 @@ fn parse_simple_uncertain_cds_interval(input: &str) -> IResult<&str, CdsInterval
 /// we allow the range (return false) since patterns like c.85-47_84+48 are
 /// valid intronic ranges that appear in databases like ExAC.
 fn cds_pos_is_inverted(start: &CdsPos, end: &CdsPos) -> bool {
+    // Special telomere/centromere markers carry a base==0 sentinel with no
+    // comparable base value; never treat a special-bearing range as inverted
+    // (mirrors the genomic-axis guards in this file).
+    if start.is_special() || end.is_special() {
+        return false;
+    }
+
     // If either position is unknown (?), we can't determine order. Allow these ranges.
     if start.is_unknown() || end.is_unknown() {
         return false;
@@ -591,12 +606,17 @@ fn parse_cds_interval(input: &str) -> IResult<&str, CdsInterval> {
         )));
     }
 
-    // Fast path: if starts with digit, *, or - it's a simple position or range
+    // Fast path: if starts with digit, *, or - it's a simple position or range.
+    // Also accept p/q/c for pter/qter/cen special markers (mirrors the
+    // starts_with_special_pos fast-path on the genomic interval path).
     // Also handle ? when followed by +/- offset (e.g., ?-232) but NOT when followed by _
     // (e.g., ?_-540 needs the complex parser for patterns like ?_-540_3117+?del)
     let use_fast_path = bytes[0].is_ascii_digit()
         || bytes[0] == b'*'
         || bytes[0] == b'-'
+        || bytes[0] == b'p'
+        || bytes[0] == b'q'
+        || bytes[0] == b'c'
         || (bytes[0] == b'?' && bytes.len() > 1 && (bytes[1] == b'+' || bytes[1] == b'-'));
     if use_fast_path {
         let (remaining, start) = parse_cds_pos(input)?;
@@ -605,11 +625,15 @@ fn parse_cds_interval(input: &str) -> IResult<&str, CdsInterval> {
             // Only use fast path if followed by a position start character (simple range)
             // Fall through to complex parser for patterns like 100_(200)del
             let after_bytes = after_underscore.as_bytes();
-            // Note: ? is NOT included - it needs the complex parser
+            // Note: ? is NOT included - it needs the complex parser.
+            // p/q/c are included for pter/qter/cen special markers.
             let is_simple_range = !after_bytes.is_empty()
                 && (after_bytes[0].is_ascii_digit()
                     || after_bytes[0] == b'*'
-                    || after_bytes[0] == b'-');
+                    || after_bytes[0] == b'-'
+                    || after_bytes[0] == b'p'
+                    || after_bytes[0] == b'q'
+                    || after_bytes[0] == b'c');
             if is_simple_range {
                 let (remaining, end) = parse_cds_pos(after_underscore)?;
                 // Reject inverted ranges
@@ -7553,6 +7577,21 @@ mod tests {
         // With offset
         let variant = parse_variant("NR_033294.1:n.*5+10C>G").expect("should parse");
         assert_eq!(variant.to_string(), "NR_033294.1:n.*5+10C>G");
+    }
+
+    #[test]
+    fn parse_cds_special_ranges_not_inverted() {
+        assert!(parse_variant("NM_003002.2:c.pterdel").is_ok());
+        assert!(parse_variant("NM_003002.2:c.qterdel").is_ok());
+        assert!(parse_variant("NM_003002.2:c.cendel").is_ok());
+        assert!(parse_variant("NM_003002.2:c.pter_qterdel").is_ok());
+        assert!(parse_variant("NM_003002.2:c.pter_50del").is_ok());
+        // The special marker round-trips through Display (exercises the
+        // CdsPos special branch at the variant level).
+        assert_eq!(
+            parse_variant("NM_003002.2:c.pterdel").unwrap().to_string(),
+            "NM_003002.2:c.pterdel"
+        );
     }
 
     // ----- Issue #115: self-cancelling allele rejection (E3006) -----
