@@ -105,6 +105,16 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.has_protein_data(),
         }
     }
+
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        // Forward to the inner provider so the protein version-exact gate (#505)
+        // is enforced on the Python path; otherwise this falls through to the
+        // trait default `true` and the gate is inert for Python consumers.
+        match self {
+            PyProvider::Mock(p) => p.has_transcript_version_exact(id),
+            PyProvider::MultiFasta(p) => p.has_transcript_version_exact(id),
+        }
+    }
 }
 
 impl PyProvider {

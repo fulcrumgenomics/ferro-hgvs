@@ -1221,6 +1221,40 @@ impl ReferenceProvider for MultiFastaProvider {
         }
     }
 
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        // Version-exact = the bases the read path would actually serve for
+        // `id` correspond to the *exact* requested version, with no
+        // cross-version substitution. Two ways that holds:
+        //
+        //  1. The FASTA/supplemental index ships the exact versioned accession.
+        //  2. The FASTA index has no entry that `resolve_name` would resolve to
+        //     (so no version-strip sibling shadows `id`) AND cdot stores the
+        //     exon alignment at the exact version — then `get_transcript_on_build`
+        //     reconstructs the bases from the genome at the exact version (#331).
+        //
+        // Condition 2 must check `resolve_name(id).is_none()`: the read path
+        // resolves the FASTA (including a version-strip sibling) BEFORE it ever
+        // reaches cdot synthesis, so a cdot-exact record shadowed by a FASTA
+        // sibling would NOT be the bases actually served. Omitting that check
+        // would green-light translating the sibling's bases as `id` — the exact
+        // wrong-protein attribution #505 exists to prevent.
+        //
+        // Scope: the cdot arm consults the *primary-build* transcript map
+        // (`CdotMapper::has_transcript_exact`). The bare-transcript protein path
+        // (no NG/NC parent) routes through `get_transcript_on_build(id, None)`,
+        // which is exactly the primary-build view this models. An NG/NC-parented
+        // variant can probe alt-build maps that carry their own version-strip
+        // fallback; covering that path's exactness is left to follow-up work.
+        if self.has_transcript_exact(id) {
+            return true;
+        }
+        self.resolve_name(id).is_none()
+            && self
+                .cdot_mapper
+                .as_ref()
+                .is_some_and(|cdot| cdot.has_transcript_exact(id))
+    }
+
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
         let resolved = self
             .resolve_name(id)
@@ -2432,5 +2466,66 @@ mod tests {
             synthesized.sequence.as_deref(),
             Some("GGTTTTAAAACCCCGGGGTT")
         );
+    }
+
+    #[test]
+    fn has_transcript_version_exact_true_for_exact_fasta() {
+        // The exact requested version is shipped in the FASTA → version-exact.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_212556.2", "ACGTACGTAC")]);
+        assert!(provider.has_transcript_version_exact("NM_212556.2"));
+    }
+
+    #[test]
+    fn has_transcript_version_exact_false_for_sibling_only() {
+        // Only the .4 sibling is shipped; a request for .2 would be served by
+        // the lenient version-strip substitution. The protein gate (#505) must
+        // see this as NOT version-exact so it declines to translate the wrong
+        // bases — even though the lenient `get_transcript` still substitutes.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_212556.4", "TTTTGGGGCC")]);
+        assert!(!provider.has_transcript_version_exact("NM_212556.2"));
+        // The exact sibling itself is version-exact.
+        assert!(provider.has_transcript_version_exact("NM_212556.4"));
+    }
+
+    #[test]
+    fn has_transcript_version_exact_true_for_exact_cdot_synthesis() {
+        use crate::reference::transcript::Strand;
+        // NM_TEST.1 is absent from the transcript FASTA but cdot carries it at
+        // the exact version, so the lenient path reconstructs its bases from
+        // the genome. Those bases DO correspond to the requested version, so it
+        // is version-exact and the gate must permit protein prediction — unlike
+        // strict resolution, which refuses all synthesis. This pins the #331
+        // (exact-version synthesis) regression guard called out in the #505
+        // design review.
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let tx = build_single_exon_synthetic_tx(Strand::Plus);
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+        // Not in the FASTA index...
+        assert!(!provider.has_transcript_exact("NM_TEST.1"));
+        // ...but cdot carries the exact version, so it is version-exact.
+        assert!(provider.has_transcript_version_exact("NM_TEST.1"));
+    }
+
+    #[test]
+    fn has_transcript_version_exact_false_when_fasta_sibling_shadows_cdot_exact() {
+        use crate::reference::transcript::Strand;
+        // The FASTA ships only the .2 sibling; cdot carries the exact .1. The
+        // read path (`get_transcript_on_build`) resolves the FASTA sibling via
+        // `resolve_name`'s version-strip BEFORE it would ever reach cdot
+        // synthesis, so a request for .1 is actually served the .2 bases. The
+        // gate must therefore report .1 as NOT version-exact even though cdot
+        // has an exact .1 record — otherwise it green-lights translating .2
+        // bases as .1, the exact wrong-protein attribution #505 targets.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_TEST.2", "ACGTACGTAC")]);
+        let tx = build_single_exon_synthetic_tx(Strand::Plus); // id NM_TEST.1
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+        // Precondition: cdot really does carry the exact .1 record...
+        assert!(provider
+            .cdot_mapper()
+            .unwrap()
+            .has_transcript_exact("NM_TEST.1"));
+        // ...but a FASTA sibling (.2) shadows it on the read path, so .1 is not
+        // reachable at its exact version.
+        assert!(!provider.has_transcript_version_exact("NM_TEST.1"));
     }
 }

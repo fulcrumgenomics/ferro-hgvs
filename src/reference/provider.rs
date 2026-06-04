@@ -53,6 +53,28 @@ pub trait ReferenceProvider {
         self.get_transcript(id).is_ok()
     }
 
+    /// Whether `id`'s bases are available at the *exact* requested versioned
+    /// accession — i.e. not via a silent version-strip substitution to a
+    /// sibling version.
+    ///
+    /// Protein prediction reads a transcript's CDS bases directly and
+    /// translates them. If the reference only carries a *different* version of
+    /// the transcript, those bases may pair with a different CDS/exon
+    /// structure, so the prediction would be wrong yet attributed to the
+    /// requested version (issue #505). The protein path consults this before
+    /// the CDS read and declines to predict when it returns `false`.
+    ///
+    /// The default is `true`: providers that do not track multiple versions of
+    /// a transcript (e.g. test doubles) never trigger the gate, so existing
+    /// behavior is preserved. Version-aware providers (e.g.
+    /// `MultiFastaProvider`) override this to mean "the exact version is
+    /// directly present, or can be reconstructed at the exact version" — which
+    /// deliberately still permits exact-version cdot-genome synthesis and only
+    /// rejects cross-version substitution.
+    fn has_transcript_version_exact(&self, _id: &str) -> bool {
+        true
+    }
+
     /// Get genomic sequence for a contig/chromosome
     ///
     /// This is used for normalizing intronic variants which require access
@@ -156,6 +178,10 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
 
     fn has_transcript(&self, id: &str) -> bool {
         (**self).has_transcript(id)
+    }
+
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        (**self).has_transcript_version_exact(id)
     }
 
     fn get_genomic_sequence(
