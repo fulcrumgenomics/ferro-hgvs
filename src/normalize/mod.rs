@@ -1279,8 +1279,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !needs_normalization(edit) {
             return Ok((HV::Genome(variant.clone()), vec![]));
         }
-        let start = match variant.loc_edit.location.start.inner() {
-            Some(pos) => pos.base,
+        let start_pos = match variant.loc_edit.location.start.inner() {
+            Some(pos) => pos,
             None => {
                 return Ok((
                     HV::Genome(self.canonicalize_genome_variant(variant)),
@@ -1288,8 +1288,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ))
             }
         };
-        let end = match variant.loc_edit.location.end.inner() {
-            Some(pos) => pos.base,
+        let end_pos = match variant.loc_edit.location.end.inner() {
+            Some(pos) => pos,
             None => {
                 return Ok((
                     HV::Genome(self.canonicalize_genome_variant(variant)),
@@ -1297,6 +1297,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ))
             }
         };
+
+        // Decorated genome positions (pter/qter/cen, encoded as a `base == 0`
+        // sentinel, or offset-carrying) cannot be losslessly remapped through
+        // base-only window normalization: the `base == 0` would flow into
+        // `coords::hgvs_pos_to_index(0)` (a `pos - 1` conversion) and underflow,
+        // panicking with "attempt to subtract with overflow" (#488, e.g.
+        // `NG_012337.1:g.pterdel`), and rebuilding via `GenomePos::new` would
+        // silently drop the decoration. Mirror `normalize_mt`'s guard and fall
+        // back to minimal-notation cleanup. Resolving pter→1 / qter→contig-end
+        // so these actually 3'-shift (and demote their corpus rows) is a
+        // telomere-coordinate-resolution follow-up.
+        if start_pos.is_special()
+            || end_pos.is_special()
+            || start_pos.offset.is_some()
+            || end_pos.offset.is_some()
+        {
+            return Ok((
+                HV::Genome(self.canonicalize_genome_variant(variant)),
+                vec![],
+            ));
+        }
+
+        let start = start_pos.base;
+        let end = end_pos.base;
 
         // Try to get transcript/sequence, fall back to minimal notation if not found
         let window_start = start.saturating_sub(self.config.window_size);
@@ -7912,5 +7936,49 @@ mod tests {
             (s2.as_str(), rs2, re2, b2.left, b2.right),
             (seq, 3, 5, 2, 7)
         );
+    }
+
+    // #488: a genomic variant whose position is a telomere/centromere marker
+    // (`pter`/`qter`/`cen`) carries a `base == 0` sentinel. Before the guard in
+    // `normalize_genome`, that 0 flowed into `coords::hgvs_pos_to_index(0)`
+    // (`pos - 1`) and panicked with "attempt to subtract with overflow". The
+    // normalizer must instead fall back to minimal canonicalization, preserving
+    // the marker, and never panic — regardless of whether reference bases for
+    // the contig are available (the panic site is reached only once a window of
+    // bases is successfully fetched).
+    #[test]
+    fn genome_special_position_does_not_panic() {
+        use crate::reference::MockProvider;
+
+        // A contig long enough that the window fetch (window_size = 100)
+        // succeeds, so normalization actually proceeds into the coordinate
+        // math that used to underflow — without sequence the path bails early
+        // and would mask the regression.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_000002.12", format!("TTT{}", "ACGT".repeat(50)));
+        let normalizer = Normalizer::new(provider);
+
+        // Each marker, as both a single-position del and (for pter) a dup, must
+        // round-trip without panicking and keep its special marker.
+        for (input, marker) in [
+            ("NC_000002.12:g.pterdel", "pter"),
+            ("NC_000002.12:g.qterdel", "qter"),
+            ("NC_000002.12:g.cendel", "cen"),
+            ("NC_000002.12:g.pterdup", "pter"),
+        ] {
+            let variant = parse_hgvs(input).expect("parse special-position genomic variant");
+            let result = normalizer.normalize(&variant);
+            assert!(
+                result.is_ok(),
+                "{input} must normalize without panicking, got {result:?}"
+            );
+            // Marker is preserved (no spec-correct telomere resolution yet),
+            // so the canonicalized output still renders the special position.
+            let output = format!("{}", result.unwrap());
+            assert!(
+                output.contains(marker),
+                "{input}: expected output to retain '{marker}', got '{output}'"
+            );
+        }
     }
 }
