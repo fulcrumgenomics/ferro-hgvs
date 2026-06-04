@@ -433,13 +433,54 @@ fn build_inframe_delins(
         return build_identity_variant(ref_protein, protein_accession, transcript);
     }
 
+    // Pure-insertion guard (#498): when the last differing ref index falls
+    // *before* `first_diff`, the ref differing region is empty — no ref
+    // residues are replaced, so this is an insertion, not a delins. Rendering
+    // it as a delins would cross the positions (`start > end`) into malformed
+    // HGVS. Emit an insertion between the two flanking ref residues with
+    // ascending positions. (Requires an interior insertion point with a
+    // residue on each side; the N-terminal edge `first_diff == 0` falls
+    // through to the clamped delins path below, which stays ascending.)
+    if last_diff_ref < first_diff && first_diff >= 1 && first_diff < ref_len {
+        let n_inserted = alt_len.saturating_sub(ref_len);
+        let left_idx = first_diff - 1;
+        let left_aa = ref_protein.get(left_idx).copied().unwrap_or(AminoAcid::Xaa);
+        let right_aa = ref_protein
+            .get(first_diff)
+            .copied()
+            .unwrap_or(AminoAcid::Ter);
+        let inserted: Vec<AminoAcid> = alt_protein
+            .get(first_diff..first_diff + n_inserted)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        let loc = ProtInterval::new(
+            ProtPos::new(left_aa, (left_idx + 1) as u64),
+            ProtPos::new(right_aa, (first_diff + 1) as u64),
+        );
+        let variant = ProteinVariant {
+            accession: parse_accession(protein_accession),
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(
+                loc,
+                ProteinEdit::Insertion {
+                    sequence: AminoAcidSeq::new(inserted),
+                },
+            ),
+        };
+        return Ok(HgvsVariant::Protein(variant));
+    }
+
     let start_aa = ref_protein
         .get(first_diff)
         .copied()
         .unwrap_or(AminoAcid::Xaa);
     let start_pos = (first_diff + 1) as u64;
 
-    let end_ref = last_diff_ref.min(ref_len.saturating_sub(1));
+    // Clamp the end to never fall below the start: `find_last_diff` can return
+    // an index below `first_diff` for the degenerate cases not handled by the
+    // pure-insertion guard above, which would otherwise yield a descending
+    // (malformed) range.
+    let end_ref = last_diff_ref.max(first_diff).min(ref_len.saturating_sub(1));
     let end_aa = ref_protein.get(end_ref).copied().unwrap_or(AminoAcid::Xaa);
     let end_pos = (end_ref + 1) as u64;
 
@@ -636,6 +677,23 @@ mod tests {
             HgvsVariant::Protein(p) => p.to_string(),
             _ => panic!("expected Protein variant"),
         }
+    }
+
+    /// Regression (#498): `build_inframe_delins` must never emit a descending
+    /// (start > end) protein range. A pure insertion mis-routed here — alt is
+    /// `ref` with residues inserted between two unchanged residues — used to
+    /// produce a crossed range like `p.(Gly3_Ala2delinsIle)` because the
+    /// forward `first_diff` scan and the backward `find_last_diff` scan cross
+    /// over (`last_diff_ref < first_diff`). The spec-correct rendering is an
+    /// insertion with ascending positions.
+    #[test]
+    fn inframe_delins_renders_pure_insertion_as_ascending_ins() {
+        use crate::hgvs::location::AminoAcid::{Ala, Gly, Ile, Met};
+        let t = tx("ATGGCTGGTTAA", 1, 12); // sequence unused by the position logic
+        let ref_protein = [Met, Ala, Gly];
+        let alt_protein = [Met, Ala, Ile, Gly]; // Ile inserted between Ala(2) and Gly(3)
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala2_Gly3insIle)");
     }
 
     /// Test convenience wrapper: build the `RefProteinBundle` on demand so
