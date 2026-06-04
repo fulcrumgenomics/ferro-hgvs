@@ -7,6 +7,7 @@ use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
 use crate::project::accession::parse_accession;
+use crate::project::protein::helpers::{affects_initiation_codon, build_initiator_unknown};
 use crate::reference::transcript::Transcript;
 use once_cell::sync::Lazy;
 
@@ -117,6 +118,12 @@ pub(crate) fn predict_substitution_protein(
             })
         }
     };
+    // A substitution in the translation initiation codon (CDS 1–3) has an
+    // unpredictable protein consequence — report p.(Met1?) rather than a
+    // concrete missense, which the spec disallows (#498).
+    if affects_initiation_codon(edit, cds_pos, cds_pos) {
+        return Ok(build_initiator_unknown(protein_accession, transcript));
+    }
     let (ref_codon, frame) = read_ref_codon(transcript, cds_pos)?;
     let alt_codon = apply_substitution(&ref_codon, frame, alt);
     let ref_aa = translate(&ref_codon).unwrap_or(AminoAcid::Xaa);
@@ -340,49 +347,78 @@ mod tests {
 
     #[test]
     fn substitution_missense_arg_to_gly() {
-        // CDS "CGGGGG": codon 1 = CGG = Arg. c.1C>G → codon 1 = GGG = Gly.
-        let tx = tx_with_seq("CGGGGG", 1, 6);
+        // CDS "ATGCGGGGG": codon 2 = CGG = Arg. c.4C>G → codon 2 = GGG = Gly.
+        // (Codon 2, not 1, so the initiation-codon guard does not apply.)
+        let tx = tx_with_seq("ATGCGGGGG", 1, 9);
         let edit = NaEdit::Substitution {
             reference: Base::C,
             alternative: Base::G,
         };
-        let pv = predict_substitution_protein(&tx, 1, &edit, "NP_000288.1").unwrap();
+        let pv = predict_substitution_protein(&tx, 4, &edit, "NP_000288.1").unwrap();
         let s = match &pv {
             HgvsVariant::Protein(p) => p.to_string(),
             _ => panic!("expected Protein variant"),
         };
-        assert_eq!(s, "NP_000288.1:p.(Arg1Gly)");
+        assert_eq!(s, "NP_000288.1:p.(Arg2Gly)");
     }
 
     #[test]
     fn substitution_synonymous_arg_arg() {
-        // CGG (Arg) → CGC (Arg). Frame 2 of codon 1, alt C.
-        let tx = tx_with_seq("CGGGGG", 1, 6);
+        // codon 2 = CGG (Arg) → CGC (Arg). Frame 2 of codon 2 (c.6), alt C.
+        let tx = tx_with_seq("ATGCGGGGG", 1, 9);
         let edit = NaEdit::Substitution {
             reference: Base::G,
             alternative: Base::C,
         };
-        let pv = predict_substitution_protein(&tx, 3, &edit, "NP_000288.1").unwrap();
+        let pv = predict_substitution_protein(&tx, 6, &edit, "NP_000288.1").unwrap();
         let s = match &pv {
             HgvsVariant::Protein(p) => p.to_string(),
             _ => panic!("expected Protein variant"),
         };
-        assert_eq!(s, "NP_000288.1:p.(Arg1=)");
+        assert_eq!(s, "NP_000288.1:p.(Arg2=)");
+    }
+
+    #[test]
+    fn substitution_in_initiation_codon_is_met1_unknown() {
+        // A substitution anywhere in the initiation codon (CDS 1–3) has an
+        // unpredictable protein consequence → p.(Met1?), NOT a concrete
+        // missense (HGVS substitution.md:51; #498). Sequence codon 1 = CTG
+        // (Leu) — protein residue 1 is still the initiator Met.
+        let tx = tx_with_seq("CTGGGGTAA", 1, 9);
+        // Reference base differs per position in codon CTG, so build a
+        // position-specific substitution for each rather than reusing one
+        // edit — every case is a true substitution against the actual base.
+        for (pos, reference, alternative) in [
+            (1, Base::C, Base::G),
+            (2, Base::T, Base::G),
+            (3, Base::G, Base::A),
+        ] {
+            let edit = NaEdit::Substitution {
+                reference,
+                alternative,
+            };
+            let pv = predict_substitution_protein(&tx, pos, &edit, "NP_TEST.1").unwrap();
+            let s = match &pv {
+                HgvsVariant::Protein(p) => p.to_string(),
+                _ => panic!("expected Protein variant"),
+            };
+            assert_eq!(s, "NP_TEST.1:p.(Met1?)", "cds_pos {pos}");
+        }
     }
 
     #[test]
     fn substitution_nonsense_arg_ter() {
-        // CGA (Arg) → TGA (Ter). Frame 0 of codon 1, alt T.
-        let tx = tx_with_seq("CGAAAA", 1, 6);
+        // codon 2 = CGA (Arg) → TGA (Ter). Frame 0 of codon 2 (c.4), alt T.
+        let tx = tx_with_seq("ATGCGAAAA", 1, 9);
         let edit = NaEdit::Substitution {
             reference: Base::C,
             alternative: Base::T,
         };
-        let pv = predict_substitution_protein(&tx, 1, &edit, "NP_000288.1").unwrap();
+        let pv = predict_substitution_protein(&tx, 4, &edit, "NP_000288.1").unwrap();
         let s = match &pv {
             HgvsVariant::Protein(p) => p.to_string(),
             _ => panic!("expected Protein variant"),
         };
-        assert_eq!(s, "NP_000288.1:p.(Arg1Ter)");
+        assert_eq!(s, "NP_000288.1:p.(Arg2Ter)");
     }
 }

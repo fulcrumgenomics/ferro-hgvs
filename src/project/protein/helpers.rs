@@ -4,12 +4,53 @@
 //! independently of the rest of the projector machinery.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{InsertedSequence, NaEdit};
-use crate::hgvs::location::AminoAcid;
+use crate::hgvs::edit::{InsertedSequence, NaEdit, ProteinEdit};
+use crate::hgvs::interval::ProtInterval;
+use crate::hgvs::location::{AminoAcid, ProtPos};
+use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
+use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
 use crate::sequence::reverse_complement;
 
 use super::substitution::translate_bytes;
+
+/// Does `edit` modify a base of the translation initiation codon (1-based CDS
+/// positions 1–3)?
+///
+/// An insertion places bases *between* `cds_pos_start` and the next position,
+/// so it disrupts the start codon only when the gap is strictly inside it
+/// (between c.1/c.2 or c.2/c.3, i.e. `cds_pos_start ∈ {1,2}`). Every other edit
+/// (substitution, deletion, delins, duplication, inversion) modifies the
+/// `[start,end]` span, so it disrupts the start codon whenever that span
+/// overlaps `[1,3]`.
+pub(crate) fn affects_initiation_codon(
+    edit: &NaEdit,
+    cds_pos_start: i64,
+    cds_pos_end: i64,
+) -> bool {
+    match edit {
+        NaEdit::Insertion { .. } => (1..=2).contains(&cds_pos_start),
+        _ => cds_pos_start <= 3 && cds_pos_end >= 1,
+    }
+}
+
+/// Build a predicted `p.(Met1?)` variant for a change affecting the translation
+/// initiation codon. Per HGVS (`recommendations/protein/substitution.md:51`,
+/// `deletion.md:62`) the protein consequence of an initiation-codon variant
+/// cannot be predicted, so it is reported as `Met1?`; emitting a concrete
+/// missense (`p.Met1Thr`-style) is explicitly disallowed by the spec. Protein
+/// residue 1 is the initiator `Met` regardless of the reference codon.
+pub(crate) fn build_initiator_unknown(
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> HgvsVariant {
+    let loc = ProtInterval::point(ProtPos::new(AminoAcid::Met, 1));
+    HgvsVariant::Protein(ProteinVariant {
+        accession: parse_accession(protein_accession),
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new_predicted(loc, ProteinEdit::position_unknown()),
+    })
+}
 
 // ── CDS sequence readers ──────────────────────────────────────────────────────
 
