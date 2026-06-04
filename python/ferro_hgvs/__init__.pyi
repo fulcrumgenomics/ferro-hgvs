@@ -1448,8 +1448,12 @@ class VariantProjection:
     """The result of projecting a g. variant onto a transcript."""
 
     @property
-    def g_name(self) -> str:
-        """The normalized g. variant as an HGVS string."""
+    def g_name(self) -> str | None:
+        """The normalized g. variant as an HGVS string.
+
+        None when no genomic representation is available (e.g. a bare-NM_
+        coding input with no genome alignment; see #498).
+        """
         ...
 
     @property

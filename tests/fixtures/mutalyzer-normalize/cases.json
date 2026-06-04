@@ -207,12 +207,17 @@
       ],
       "input": "NM_003002.2:c.273del",
       "normalized": "NM_003002.2:c.274del",
-      "protein_description": "NM_003002.2(NP_002993.1):p.(Asp92ThrfsTer43)",
+      "protein_description": "NP_002993.1:p.(Asp92ThrfsTer43)",
       "infos": [
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -221,8 +226,13 @@
       ],
       "input": "NM_003002.2:c.274del",
       "normalized": "NM_003002.2:c.274del",
-      "protein_description": "NM_003002.2(NP_002993.1):p.(Asp92ThrfsTer43)",
-      "to_test": true
+      "protein_description": "NP_002993.1:p.(Asp92ThrfsTer43)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -1313,8 +1323,13 @@
         "Delins with explicit length of deleted sequence (bug #108)."
       ],
       "input": "NM_000193.2:c.108_109del2insG",
-      "protein_description": "NM_000193.2(NP_000184.1):p.(Lys38SerfsTer2)",
-      "to_test": true
+      "protein_description": "NP_000184.1:p.(Lys38SerfsTer2)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value."
+      }
     },
     {
       "keywords": [
@@ -3541,8 +3556,13 @@
       "input": "NM_003002.4:c.206_210delins190_220inv",
       "normalized": "NM_003002.4:c.206_209delins191_220inv",
       "rna_description": "NM_003002.4:r.(206_209delinscacugacaacccucucgcuaguccagugga)",
-      "protein_description": "NM_003002.4(NP_002993.1):p.(Glu69AlafsTer26)",
-      "to_test": true
+      "protein_description": "NP_002993.1:p.(Glu69AlafsTer26)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value."
+      }
     },
     {
       "keywords": [
