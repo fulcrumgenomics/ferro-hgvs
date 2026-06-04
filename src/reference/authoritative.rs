@@ -264,6 +264,43 @@ impl CanonicalOverrides {
     }
 }
 
+/// Build a [`CanonicalOverrides`] for `accessions` by fetching and parsing each
+/// one's GenBank record.
+///
+/// `fetch_gb` is the GenBank-text source: given an exact versioned accession it
+/// returns the record text, or `None` if the fetch failed. Injecting it keeps
+/// this orchestration network-free and testable — the `ferro prepare` caller
+/// supplies an NCBI-efetch implementation, tests supply fixtures.
+///
+/// Returns the assembled overrides plus the list of accessions that could not
+/// be fetched or parsed (so the caller can report them). A record whose parsed
+/// `accession` differs from the requested one is still keyed by its own
+/// `VERSION` accession (the authoritative truth), and the requested accession is
+/// recorded as unresolved.
+pub fn build_canonical_overrides<F>(
+    accessions: &[String],
+    mut fetch_gb: F,
+) -> (CanonicalOverrides, Vec<String>)
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut overrides = CanonicalOverrides::default();
+    let mut failed = Vec::new();
+    for accession in accessions {
+        match fetch_gb(accession)
+            .as_deref()
+            .and_then(parse_authoritative_genbank)
+        {
+            // The fetched record's VERSION must match what we asked for; a
+            // mismatch means efetch resolved to a different version and the
+            // record is not authoritative for `accession`.
+            Some(record) if record.accession == *accession => overrides.insert(record),
+            _ => failed.push(accession.clone()),
+        }
+    }
+    (overrides, failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +508,38 @@ ORIGIN
                 .and_then(|r| r.protein_id.as_deref()),
             Some("NP_036591.2")
         );
+    }
+
+    #[test]
+    fn build_overrides_collects_parsed_records() {
+        let accs = vec!["NM_012459.2".to_string()];
+        let (ov, failed) = build_canonical_overrides(&accs, |acc| {
+            assert_eq!(acc, "NM_012459.2");
+            Some(FIXTURE.to_string())
+        });
+        assert!(failed.is_empty());
+        assert_eq!(ov.len(), 1);
+        assert_eq!(
+            ov.get("NM_012459.2").and_then(|r| r.protein_id.as_deref()),
+            Some("NP_036591.2")
+        );
+    }
+
+    #[test]
+    fn build_overrides_records_fetch_failures() {
+        let accs = vec!["NM_NOPE.1".to_string()];
+        let (ov, failed) = build_canonical_overrides(&accs, |_| None);
+        assert!(ov.is_empty());
+        assert_eq!(failed, vec!["NM_NOPE.1".to_string()]);
+    }
+
+    #[test]
+    fn build_overrides_rejects_version_mismatch() {
+        // Requested .9 but efetch returned the .2 record → not authoritative
+        // for the requested version, so it is recorded as failed, not inserted.
+        let accs = vec!["NM_012459.9".to_string()];
+        let (ov, failed) = build_canonical_overrides(&accs, |_| Some(FIXTURE.to_string()));
+        assert!(ov.is_empty());
+        assert_eq!(failed, vec!["NM_012459.9".to_string()]);
     }
 }

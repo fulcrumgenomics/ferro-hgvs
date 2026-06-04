@@ -113,6 +113,15 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    if let Some(ref overrides) = manifest.canonical_overrides {
+        if !overrides.exists() {
+            result.warnings.push(format!(
+                "Canonical overrides JSON not found: {}",
+                overrides.display()
+            ));
+        }
+    }
+
     result
 }
 
@@ -165,6 +174,10 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
         eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
     } else {
         eprintln!("  cdot metadata (GRCh37): not available");
+    }
+
+    if let Some(ref overrides) = manifest.canonical_overrides {
+        eprintln!("  Canonical overrides: {}", overrides.display());
     }
 
     if let Some(ref supp) = manifest.supplemental_fasta {
@@ -227,6 +240,7 @@ mod tests {
             legacy_transcripts_metadata: None,
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
+            canonical_overrides: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
