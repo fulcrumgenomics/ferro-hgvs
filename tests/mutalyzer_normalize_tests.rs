@@ -359,6 +359,17 @@ enum SpecSection {
     /// the in-frame missense against the canonical standalone RefSeq transcript.
     #[serde(rename = "HGVS §Substitution (no frameshift)")]
     SubstitutionConsequence,
+    /// HGVS protein initiation codon — a variant affecting the translation
+    /// initiation codon (CDS 1–3) has an unpredictable protein consequence,
+    /// reported as `p.(Met1?)` (`docs/recommendations/protein/substitution.md:51`,
+    /// `deletion.md:62`). ferro derives the consequence from the canonical
+    /// normalized variant; when an input's normalized form spans into the
+    /// initiation codon (e.g. `c.-1_2dup`), ferro reports `p.(Met1?)`. mutalyzer
+    /// computes the consequence from the un-normalized input and so can report
+    /// inconsistent results for inputs that share a normalized form, so ferro's
+    /// `p.(Met1?)` is the spec-correct value (#504, #512).
+    #[serde(rename = "HGVS protein initiation codon (Met1?)")]
+    ProteinInitiationCodon,
 }
 
 impl SpecSection {
@@ -371,6 +382,7 @@ impl SpecSection {
             SpecSection::ProteinReference => "HGVS protein reference (bare NP)",
             SpecSection::RefSeqGeneSelector => "HGVS §RefSeqGene transcript selection",
             SpecSection::SubstitutionConsequence => "HGVS §Substitution (no frameshift)",
+            SpecSection::ProteinInitiationCodon => "HGVS protein initiation codon (Met1?)",
         }
     }
 }

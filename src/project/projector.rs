@@ -14,7 +14,8 @@ use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
-    predict_indel_protein, predict_substitution_protein, RefProteinBundle,
+    affects_initiation_codon, build_initiator_unknown, predict_indel_protein,
+    predict_substitution_protein, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -990,7 +991,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         cds_end: &CdsPos,
         cache_variant: &HgvsVariant,
     ) -> Result<Option<HgvsVariant>, FerroError> {
-        if is_intronic || is_utr || !is_coding {
+        // An edit whose span reaches the translation initiation codon (CDS
+        // 1–3) has an unpredictable protein consequence, reported as
+        // `p.(Met1?)` (HGVS recommendations/protein/{substitution.md:51,
+        // deletion.md:62}; #512). This holds even when the edit's 5' end lies
+        // in the 5'UTR (CDS base ≤ 0) — e.g. a boundary-spanning insertion or
+        // duplication like `c.-1_2dup` — so the coarse `is_utr` gate must not
+        // drop it to "no protein predicted" (#504). Intronic offsets never
+        // reach the initiation codon, so an offset disqualifies the edit here.
+        let affects_init = !is_intronic
+            && cds_start.offset.is_none()
+            && cds_end.offset.is_none()
+            && affects_initiation_codon(c_edit, cds_start.base, cds_end.base);
+        if is_intronic || !is_coding || (is_utr && !affects_init) {
             return Ok(None);
         }
         // Resolve the protein accession: explicit cdot/reference value, else
@@ -1013,6 +1026,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let Some(prot_acc) = prot_acc else {
             return Ok(None);
         };
+        // An initiation-codon-affecting edit short-circuits to `p.(Met1?)`
+        // here, before edit-type dispatch, so boundary-spanning edits whose
+        // 5' end is in the 5'UTR (which the per-edit paths reject via their
+        // `cds base > 0` guards) are still reported. The in-CDS start-codon
+        // cases (e.g. `c.1A>G`) also funnel through here; the per-edit paths
+        // keep their own `affects_initiation_codon` guard as defense in depth
+        // for direct callers (#504, #512).
+        if affects_init {
+            let tx_for_codon =
+                self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+            return Ok(Some(build_initiator_unknown(&prot_acc, &tx_for_codon)));
+        }
         // Issue #332: route per-codon lookups through the variant-aware path
         // so an NG/NC-parented `cache_variant` picks the build-correct
         // chromosome; falls back to the bare provider lookup on
@@ -3944,5 +3969,128 @@ mod tests {
             matches!(err, FerroError::UnsupportedProjection { .. }),
             "concrete `?` sentinel should be UnsupportedProjection, got {err:?}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #504: CDS-boundary edits that reach the initiation codon
+    // -------------------------------------------------------------------------
+
+    /// Bare-`NM_` coding transcript with a 5 nt 5'UTR ("GCACC") preceding the
+    /// CDS "ATGTACTAA" (Met-Tyr-Stop). The 5'UTR lets `c.-1` exist so an edit
+    /// can span the 5'UTR→CDS boundary into the translation initiation codon.
+    ///
+    /// Full transcript sequence: "GCACCATGTACTAA" (14 nt).
+    ///   tx 1-5  = 5'UTR  G C A C C   → c.-5 c.-4 c.-3 c.-2 c.-1
+    ///   tx 6-8  = ATG    (initiation codon) → c.1 c.2 c.3
+    ///   tx 9-14 = TACTAA (Tyr-Stop)
+    /// So `c.-1`=C(tx5), `c.1`=A(tx6), `c.2`=T(tx7), `c.3`=G(tx8).
+    fn make_utr5_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_UTR5.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                // [genome_start(0-based), genome_end(0-based excl), tx_start(1-based), tx_end]
+                exons: vec![[1000, 1014, 0, 14]],
+                cds_start: Some(5), // 0-based: CDS starts at tx_pos 5 (5 nt 5'UTR)
+                cds_end: Some(14),  // 0-based exclusive
+                gene_id: None,
+                protein: Some("NP_UTR5.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_UTR5.1".to_string(),
+            gene_symbol: Some("TESTGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("GCACCATGTACTAA".to_string()),
+            cds_start: Some(6), // 1-based inclusive: first CDS base (A of ATG)
+            cds_end: Some(14),
+            exons: vec![Exon::new(1, 1, 14)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1013),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: Some("NP_UTR5.1".to_string()),
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "GCACCATGTACTAA", suffix));
+        (projector, provider)
+    }
+
+    /// A boundary-spanning duplication whose span reaches into the initiation
+    /// codon (CDS 1–3) has an unpredictable protein consequence and must be
+    /// reported as `p.(Met1?)` — even though its 5' end is in the 5'UTR
+    /// (`c.-1`, CDS base ≤ 0). Before #504 the coarse `is_utr` gate dropped it
+    /// to "no protein predicted" (`None`). Exercised via `project_normalized`
+    /// so the canonical boundary-spanning form is fed straight to the gate.
+    #[test]
+    fn boundary_dup_reaching_initiation_codon_is_met1_unknown() {
+        let (projector, provider) = make_utr5_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.-1_2dup duplicates c.-1,c.1,c.2 — the copy is inserted between c.2
+        // and c.3, splitting the ATG initiation codon.
+        let v = crate::parse_hgvs("NM_UTR5.1:c.-1_2dup").expect("parse c.-1_2dup");
+        let result = vp
+            .project_normalized(&v, "NM_UTR5.1")
+            .expect("projection should succeed");
+        let p = result
+            .protein
+            .as_ref()
+            .map(|p| p.to_string())
+            .expect("a boundary edit reaching the initiation codon must predict a protein");
+        assert_eq!(p, "NP_UTR5.1:p.(Met1?)");
+    }
+
+    /// A 5'UTR edit that does **not** reach the initiation codon (both
+    /// endpoints have CDS base ≤ 0) has no predictable CDS consequence, so the
+    /// refined gate must still report `None` — not a spurious `p.(Met1?)`.
+    /// Guards against #504 widening the gate too far.
+    #[test]
+    fn pure_5utr_edit_not_reaching_initiation_codon_predicts_no_protein() {
+        let (projector, provider) = make_utr5_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.-3_-2del deletes two 5'UTR bases; the CDS is untouched.
+        let v = crate::parse_hgvs("NM_UTR5.1:c.-3_-2del").expect("parse c.-3_-2del");
+        let result = vp
+            .project_normalized(&v, "NM_UTR5.1")
+            .expect("projection should succeed");
+        assert!(
+            result.protein.is_none(),
+            "pure-5'UTR edit must not predict a protein, got {:?}",
+            result.protein.map(|p| p.to_string())
+        );
+    }
+
+    /// A substitution in the initiation codon proper (CDS base 1–3, not UTR)
+    /// also funnels through the gate's initiation-codon short-circuit, yielding
+    /// `p.(Met1?)`. Confirms #504's refactor did not regress the in-CDS
+    /// start-codon path (#512).
+    #[test]
+    fn in_cds_initiation_codon_substitution_is_met1_unknown() {
+        let (projector, provider) = make_utr5_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.1A>G changes the first base of the ATG start codon.
+        let v = crate::parse_hgvs("NM_UTR5.1:c.1A>G").expect("parse c.1A>G");
+        let result = vp
+            .project_normalized(&v, "NM_UTR5.1")
+            .expect("projection should succeed");
+        let p = result
+            .protein
+            .as_ref()
+            .map(|p| p.to_string())
+            .expect("a start-codon substitution must predict a protein");
+        assert_eq!(p, "NP_UTR5.1:p.(Met1?)");
     }
 }

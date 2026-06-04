@@ -315,12 +315,12 @@
       ],
       "input": "NM_000143.3:c.-1_1insCAT",
       "normalized": "NM_000143.3:c.-1_2dup",
-      "protein_description": "NM_000143.3(NP_000134.2):p.(=)",
+      "protein_description": "NP_000134.2:p.(Met1?)",
       "to_test": true,
       "spec_citation": {
-        "axis": "normalized",
-        "section": "HGVS §Prioritization",
-        "note": "When a variant can be described as a duplication, HGVS mandates dup; ferro applies this rule. mutalyzer left the variant in ins form."
+        "axis": "protein_description",
+        "section": "HGVS protein initiation codon (Met1?)",
+        "note": "Both ferro and mutalyzer normalize this input to c.-1_2dup. That duplication's copy is inserted between c.2 and c.3, splitting the ATG initiation codon, so the consequence on translation initiation is unknown: p.(Met1?) (substitution.md:51). ferro derives the consequence from the canonical c.-1_2dup; mutalyzer computed p.(=) from the un-normalized 5'UTR-side input — inconsistent, since c.1_2insCAT shares the same normalized form yet mutalyzer reports p.? for it. ferro's p.(Met1?) (bare NP_ per #483/#495) is the spec-correct value (#504, #512)."
       }
     },
     {
@@ -330,12 +330,12 @@
       ],
       "input": "NM_000143.3:c.1_2insCAT",
       "normalized": "NM_000143.3:c.-1_2dup",
-      "protein_description": "NM_000143.3(NP_000134.2):p.?",
+      "protein_description": "NP_000134.2:p.(Met1?)",
       "to_test": true,
       "spec_citation": {
-        "axis": "normalized",
-        "section": "HGVS §Prioritization",
-        "note": "When a variant can be described as a duplication, HGVS mandates dup; ferro applies this rule. mutalyzer left the variant in ins form."
+        "axis": "protein_description",
+        "section": "HGVS protein initiation codon (Met1?)",
+        "note": "Both ferro and mutalyzer normalize this input to c.-1_2dup, whose copy splits the ATG initiation codon, so the translation-initiation consequence is unknown: p.(Met1?) (substitution.md:51). mutalyzer reports the coarser p.? here but p.(=) for c.-1_1insCAT, which shares the same normalized form — inconsistent, because it predicts from the un-normalized input. ferro predicts from the canonical c.-1_2dup; its p.(Met1?) (bare NP_ per #483/#495) is the spec-correct value (#504, #512)."
       }
     },
     {
