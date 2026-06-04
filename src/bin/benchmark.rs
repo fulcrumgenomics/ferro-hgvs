@@ -1493,6 +1493,7 @@ fn run_prepare_tool(
             let config = PrepareConfig {
                 output_dir: output_dir.to_path_buf(),
                 download_transcripts: true,
+                download_proteins: false,
                 download_genome: matches!(genome, GenomeOption::Grch38 | GenomeOption::All),
                 download_genome_grch37: matches!(genome, GenomeOption::Grch37 | GenomeOption::All),
                 download_refseqgene: !no_refseqgene,
