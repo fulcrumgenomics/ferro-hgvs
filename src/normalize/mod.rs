@@ -3588,6 +3588,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // remapping via `pos.base` and rebuilding with `GenomePos::new`
         // would silently drop the decoration. Fall back to minimal-
         // notation cleanup for these.
+        //
+        // Telomere/centromere markers are intentionally NOT resolved for
+        // mitochondrial (circular) references — `m.` has no telomeres, so
+        // pter/qter/cen are meaningless here; keep the deliberate bail-out
+        // rather than unifying with normalize_genome's resolver (#488).
         if start_pos.offset.is_some()
             || end_pos.offset.is_some()
             || start_pos.is_special()
@@ -8137,36 +8142,40 @@ mod tests {
     fn genome_special_position_does_not_panic() {
         use crate::reference::MockProvider;
 
-        // A contig long enough that the window fetch (window_size = 100)
-        // succeeds, so normalization actually proceeds into the coordinate
-        // math that used to underflow — without sequence the path bails early
-        // and would mask the regression.
+        // Contig starts with "TTT" so that pter (→ base 1) 3'-shifts through
+        // the leading T-run; length = 3 + 200 = 203. Sequence registered so
+        // the 100-base window fetch succeeds and normalization reaches the
+        // coordinate math that used to underflow (#488).
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence("NC_000002.12", format!("TTT{}", "ACGT".repeat(50)));
         let normalizer = Normalizer::new(provider);
 
-        // Each marker, as both a single-position del and (for pter) a dup, must
-        // round-trip without panicking and keep its special marker.
-        for (input, marker) in [
-            ("NC_000002.12:g.pterdel", "pter"),
-            ("NC_000002.12:g.qterdel", "qter"),
-            ("NC_000002.12:g.cendel", "cen"),
-            ("NC_000002.12:g.pterdup", "pter"),
+        // pter and qter now resolve to concrete coordinates and are then
+        // 3'-shifted in the normal way. Observed outputs (not guessed):
+        //   pter del → base 1, shifts right through TTT → g.3del
+        //   qter del → base 203 (last base), no further right-shift → g.203del
+        for (input, expected) in [
+            ("NC_000002.12:g.pterdel", "NC_000002.12:g.3del"),
+            ("NC_000002.12:g.qterdel", "NC_000002.12:g.203del"),
         ] {
             let variant = parse_hgvs(input).expect("parse special-position genomic variant");
-            let result = normalizer.normalize(&variant);
-            assert!(
-                result.is_ok(),
-                "{input} must normalize without panicking, got {result:?}"
-            );
-            // Marker is preserved (no spec-correct telomere resolution yet),
-            // so the canonicalized output still renders the special position.
-            let output = format!("{}", result.unwrap());
-            assert!(
-                output.contains(marker),
-                "{input}: expected output to retain '{marker}', got '{output}'"
-            );
+            let out = format!("{}", normalizer.normalize(&variant).expect("normalize"));
+            assert_eq!(out, expected, "{input} should resolve to {expected}");
         }
+
+        // cen is structurally unresolvable: must not panic and must be
+        // preserved verbatim in the output.
+        let cen = parse_hgvs("NC_000002.12:g.cendel").expect("parse cen");
+        let cen_out = format!(
+            "{}",
+            normalizer
+                .normalize(&cen)
+                .expect("normalize cen — must not error")
+        );
+        assert!(
+            cen_out.contains("cen"),
+            "cen retained verbatim, got {cen_out}"
+        );
     }
 
     #[test]
@@ -8214,6 +8223,7 @@ mod tests {
 
     #[test]
     fn genome_cen_emits_warning_not_silent() {
+        use crate::normalize::NormalizationWarning;
         use crate::reference::MockProvider;
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence("NC_TEST.4", "ACGT".repeat(50));
@@ -8225,9 +8235,69 @@ mod tests {
             result
                 .warnings
                 .iter()
-                .any(|w| format!("{w}").contains("centromere")),
-            "cen must emit a visible warning, got {:?}",
+                .any(|w| matches!(w, NormalizationWarning::UnresolvableSpecialPosition { .. })),
+            "cen must emit an UnresolvableSpecialPosition warning, got {:?}",
             result.warnings
+        );
+    }
+
+    #[test]
+    fn genome_mixed_special_plain_past_end_matches_plain_path() {
+        use crate::reference::MockProvider;
+        // Regression for the PR #526 review concern (CodeRabbit): a mixed
+        // special/plain span like `g.pter_<past-end>del` resolves `pter` to base
+        // 1 while leaving the plain endpoint beyond the contig. The resulting
+        // relative end falls outside the fetched window, but `shuffle` guards
+        // every reference index (shuffle.rs: `ref_idx >= ref_seq.len()`), so the
+        // shift simply cannot advance — no panic, no out-of-bounds, and the
+        // variant is echoed verbatim. Crucially this is byte-identical to the
+        // equivalent plain-coordinate span: the special-position resolution adds
+        // no window-overflow misbehavior of its own. A special-only early-return
+        // (or clamping the endpoint to the contig length) would be either dead
+        // complexity or an active corruption of the user's past-end coordinate.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_PASTEND.1", "ACGT".repeat(50)); // length 200
+        let n = Normalizer::new(provider);
+
+        let special = parse_hgvs("NC_PASTEND.1:g.pter_5000del").expect("parse special past-end");
+        let special_out = n
+            .normalize(&special)
+            .expect("mixed special/plain past-end must not error or panic");
+
+        let plain = parse_hgvs("NC_PASTEND.1:g.1_5000del").expect("parse plain past-end");
+        let plain_out = n
+            .normalize(&plain)
+            .expect("plain past-end normalizes without error");
+
+        assert_eq!(
+            format!("{special_out}"),
+            format!("{plain_out}"),
+            "resolved-special past-end span must behave identically to its plain-coordinate equivalent"
+        );
+        assert_eq!(
+            format!("{special_out}"),
+            "NC_PASTEND.1:g.1_5000del",
+            "past-end span is echoed verbatim (shuffle cannot shift past the fetched window)"
+        );
+    }
+
+    #[test]
+    fn genome_qter_without_length_canonicalizes_gracefully() {
+        use crate::reference::MockProvider;
+        // Provider has the contig genomic sequence NOT registered -> qter length
+        // is unavailable -> graceful canonicalize fallback (no panic, no error).
+        let provider = MockProvider::new();
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_NONE.1:g.qterdel").unwrap();
+        let result = n.normalize(&v);
+        assert!(
+            result.is_ok(),
+            "length-less qter must not error/panic, got {result:?}"
+        );
+        // Marker preserved verbatim since it could not be resolved.
+        assert!(
+            format!("{}", result.unwrap()).contains("qter"),
+            "unresolved qter should be returned verbatim"
         );
     }
 }
