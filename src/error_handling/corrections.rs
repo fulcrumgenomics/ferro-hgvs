@@ -2944,6 +2944,7 @@ fn resolve_cds_endpoint_to_genomic(
         base,
         offset: if offset == 0 { None } else { Some(offset) },
         utr3: false,
+        special: None,
     };
     mapper.cds_to_genomic_with_intron(&cds_pos).ok()
 }

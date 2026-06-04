@@ -3370,6 +3370,7 @@ impl PyCoordinateMapper {
             base: cds_position,
             offset: effective_offset,
             utr3: false,
+            special: None,
         };
 
         if effective_offset.is_some() {
@@ -3500,6 +3501,7 @@ impl PyCoordinateMapper {
             base: cds_position,
             offset,
             utr3,
+            special: None,
         };
 
         mapper

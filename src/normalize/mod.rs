@@ -100,10 +100,12 @@ fn intron_length_at_tx_boundary(
 /// Note on the `base == 0` arm: `c.0` is rejected by the parser at
 /// `src/hgvs/parser/position.rs` (per #269), and the caller
 /// `check_cds_pos_past_end` short-circuits via `pos.is_unknown()` before
-/// this helper sees `CdsPos { base: 0, utr3: false }`. The arm is dead
-/// code in the W4004 path; kept here for parity with
-/// `Normalizer::cds_to_tx_pos` so this helper remains a drop-in
-/// replacement if a future caller needs it outside the bounds check.
+/// this helper sees `CdsPos { base: 0, utr3: false }`. Special positions
+/// (pter/qter/cen, which also carry `base == 0`) are similarly skipped by
+/// the caller before reaching this helper. The arm is dead code in the
+/// W4004 path; kept here for parity with `Normalizer::cds_to_tx_pos` so
+/// this helper remains a drop-in replacement if a future caller needs it
+/// outside the bounds check.
 fn cds_pos_to_tx_boundary(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
@@ -161,8 +163,8 @@ fn check_cds_pos_past_end(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
 ) -> Option<NormalizationWarning> {
-    // Unknown positions can't be bounds-checked.
-    if pos.is_unknown() {
+    // Unknown positions and special markers (pter/qter/cen) can't be bounds-checked.
+    if pos.is_unknown() || pos.is_special() {
         return None;
     }
     // Intronic-offset bound check (#392). Requires both the c.→tx
@@ -5288,18 +5290,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 base: pos as i64 - cds_start as i64,
                 offset: None,
                 utr3: false,
+                special: None,
             })
         } else if pos > end {
             Ok(CdsPos {
                 base: (pos - end) as i64,
                 offset: None,
                 utr3: true,
+                special: None,
             })
         } else {
             Ok(CdsPos {
                 base: (pos - cds_start + 1) as i64,
                 offset: None,
                 utr3: false,
+                special: None,
             })
         }
     }
@@ -7016,6 +7021,7 @@ mod tests {
             base: -5,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 10, Some(50));
         assert!(result.is_ok());
@@ -7031,6 +7037,7 @@ mod tests {
             base: 5,
             offset: None,
             utr3: true,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 10, Some(50));
         assert!(result.is_ok());
@@ -7047,6 +7054,7 @@ mod tests {
             base: 10,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 5, Some(50));
         assert!(result.is_ok());
@@ -7859,6 +7867,7 @@ mod tests {
             base: -6,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
         assert!(
@@ -7880,6 +7889,7 @@ mod tests {
             base: -3,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
         assert_eq!(result.unwrap(), 2);

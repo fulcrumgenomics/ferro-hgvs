@@ -506,6 +506,7 @@ fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
             base: b,
             offset: None,
             utr3: true,
+            special: None,
         },
         _ => unreachable!("non-c. region {:?} on CdsVariant", region),
     });

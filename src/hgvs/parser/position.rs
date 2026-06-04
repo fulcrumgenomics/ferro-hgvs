@@ -147,6 +147,7 @@ pub fn parse_cds_pos(input: &str) -> IResult<&str, CdsPos> {
                 base,
                 offset,
                 utr3: true,
+                special: None,
             },
         ));
     }
@@ -173,6 +174,7 @@ pub fn parse_cds_pos(input: &str) -> IResult<&str, CdsPos> {
                 base,
                 offset,
                 utr3: false,
+                special: None,
             },
         ));
     }
@@ -196,6 +198,7 @@ pub fn parse_cds_pos(input: &str) -> IResult<&str, CdsPos> {
             base,
             offset,
             utr3: false,
+            special: None,
         },
     ))
 }

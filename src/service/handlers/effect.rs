@@ -235,6 +235,7 @@ fn extract_cds_position(
             base: start.base,
             offset: start.offset,
             utr3: start.utr3,
+            special: start.special,
         }
     } else {
         CdsPos::new(1)
@@ -907,6 +908,7 @@ mod tests {
             base: 117,
             offset: Some(-2),
             utr3: false,
+            special: None,
         };
         let effect = predict_cds_effect("deletion", true, false, &cds_pos);
         assert_eq!(effect.name, "splice_site_variant");
@@ -919,6 +921,7 @@ mod tests {
             base: 117,
             offset: Some(-5),
             utr3: false,
+            special: None,
         };
         let effect = predict_cds_effect("substitution", true, false, &cds_pos);
         assert_eq!(effect.name, "splice_region_variant");
@@ -931,6 +934,7 @@ mod tests {
             base: 117,
             offset: Some(-50),
             utr3: false,
+            special: None,
         };
         let effect = predict_cds_effect("substitution", true, false, &cds_pos);
         assert_eq!(effect.name, "intron_variant");
@@ -943,6 +947,7 @@ mod tests {
             base: -10,
             offset: None,
             utr3: false,
+            special: None,
         };
         let effect = predict_cds_effect("substitution", false, false, &cds_pos);
         assert_eq!(effect.name, "5_prime_UTR_variant");
@@ -954,6 +959,7 @@ mod tests {
             base: 10,
             offset: None,
             utr3: true,
+            special: None,
         };
         let effect = predict_cds_effect("substitution", false, false, &cds_pos);
         assert_eq!(effect.name, "3_prime_UTR_variant");

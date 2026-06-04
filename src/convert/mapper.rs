@@ -213,6 +213,7 @@ impl<'a> CoordinateMapper<'a> {
                 base: cds_offset, // Will be negative for 5' UTR
                 offset: pos.offset,
                 utr3: false,
+                special: None,
             })
         } else if base > cds_end {
             // 3' UTR - count bases forward from CDS end through exons
@@ -221,6 +222,7 @@ impl<'a> CoordinateMapper<'a> {
                 base: cds_offset - 1, // Adjust for 3' UTR notation (*1, *2, etc.)
                 offset: pos.offset,
                 utr3: true,
+                special: None,
             })
         } else {
             // Within CDS - use exon-aware mapping
@@ -229,6 +231,7 @@ impl<'a> CoordinateMapper<'a> {
                 base: cds_pos,
                 offset: pos.offset,
                 utr3: false,
+                special: None,
             })
         }
     }
@@ -689,6 +692,7 @@ impl<'a> CoordinateMapper<'a> {
             base: cds_boundary.base,
             offset: Some(offset),
             utr3: cds_boundary.utr3,
+            special: None,
         })
     }
 }
@@ -1285,6 +1289,7 @@ mod intronic_debug_tests {
             base: 1435,
             offset: None,
             utr3: false,
+            special: None,
         };
         let tx_result = mapper.cds_to_tx(&cds_pos);
         eprintln!("  actual tx from mapper: {:?}", tx_result);

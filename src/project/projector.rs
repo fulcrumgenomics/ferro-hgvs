@@ -588,6 +588,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     base: p.base,
                     offset: p.offset,
                     utr3: p.downstream,
+                    special: None,
                 };
                 (
                     v.accession.clone(),
@@ -605,6 +606,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     base: p.base,
                     offset: p.offset,
                     utr3: p.utr3,
+                    special: None,
                 };
                 (
                     v.accession.clone(),
@@ -3233,6 +3235,7 @@ mod tests {
                         base: 1,
                         offset: None,
                         utr3: true,
+                        special: None,
                     }),
                     NaEdit::Substitution {
                         reference: Base::A,

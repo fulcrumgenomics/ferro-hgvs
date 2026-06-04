@@ -141,6 +141,10 @@ pub struct CdsPos {
     pub offset: Option<i64>,
     /// Whether this is a 3' UTR position (uses * notation)
     pub utr3: bool,
+    /// Special position marker (pter/qter/cen). When `Some`, `base` is a 0
+    /// sentinel and `offset` is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub special: Option<SpecialPosition>,
 }
 
 /// Sentinel value for unknown CDS base position (?)
@@ -153,6 +157,7 @@ impl CdsPos {
             base,
             offset: None,
             utr3: false,
+            special: None,
         }
     }
 
@@ -163,12 +168,13 @@ impl CdsPos {
             base: CDS_BASE_UNKNOWN,
             offset,
             utr3: false,
+            special: None,
         }
     }
 
     /// Check if this is an unknown position (?)
     pub fn is_unknown(&self) -> bool {
-        self.base == CDS_BASE_UNKNOWN && !self.utr3
+        self.base == CDS_BASE_UNKNOWN && !self.utr3 && self.special.is_none()
     }
 
     /// Create a CDS position with intronic offset
@@ -177,6 +183,7 @@ impl CdsPos {
             base,
             offset: Some(offset),
             utr3: false,
+            special: None,
         }
     }
 
@@ -186,7 +193,43 @@ impl CdsPos {
             base,
             offset: None,
             utr3: true,
+            special: None,
         }
+    }
+
+    /// Create a pter (telomere, first transcript nucleotide) position.
+    pub fn pter() -> Self {
+        Self {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: Some(SpecialPosition::Pter),
+        }
+    }
+
+    /// Create a qter (telomere, last transcript nucleotide) position.
+    pub fn qter() -> Self {
+        Self {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: Some(SpecialPosition::Qter),
+        }
+    }
+
+    /// Create a cen (centromere — unresolvable on a transcript) position.
+    pub fn cen() -> Self {
+        Self {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: Some(SpecialPosition::Cen),
+        }
+    }
+
+    /// Whether this is a special telomere/centromere marker.
+    pub fn is_special(&self) -> bool {
+        self.special.is_some()
     }
 
     /// Check if this position is intronic
@@ -196,7 +239,7 @@ impl CdsPos {
 
     /// Check if this position is in 5' UTR
     pub fn is_5utr(&self) -> bool {
-        !self.utr3 && self.base < 1 && self.offset.is_none()
+        self.special.is_none() && !self.utr3 && self.base < 1 && self.offset.is_none()
     }
 
     /// Check if this position is in 3' UTR
@@ -207,6 +250,9 @@ impl CdsPos {
 
 impl fmt::Display for CdsPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(special) = self.special {
+            return write!(f, "{special}");
+        }
         if self.utr3 {
             write!(f, "*{}", self.base)?;
         } else if self.base == CDS_BASE_UNKNOWN {
@@ -622,6 +668,7 @@ impl IvsPos {
             base: boundary_cds_pos,
             offset: Some(self.offset),
             utr3: is_utr3,
+            special: None,
         }
     }
 
@@ -717,6 +764,14 @@ mod tests {
     }
 
     #[test]
+    fn cds_pos_special_is_not_5utr() {
+        assert!(!CdsPos::pter().is_5utr(), "pter is not 5'UTR");
+        assert!(!CdsPos::qter().is_5utr());
+        // A genuine 5'UTR position still is.
+        assert!(CdsPos::new(-5).is_5utr());
+    }
+
+    #[test]
     fn test_prot_pos_display() {
         let pos = ProtPos::new(AminoAcid::Met, 1);
         assert_eq!(format!("{}", pos), "Met1");
@@ -802,5 +857,18 @@ mod tests {
 
         let intronic_tx = TxPos::with_offset(100, -10);
         assert!(intronic_tx.has_ivs_notation());
+    }
+
+    #[test]
+    fn cds_pos_special_is_not_unknown_and_displays_marker() {
+        let pter = CdsPos::pter();
+        assert!(pter.is_special());
+        assert!(!pter.is_unknown(), "special must not be is_unknown");
+        assert_eq!(format!("{pter}"), "pter");
+        assert_eq!(format!("{}", CdsPos::qter()), "qter");
+        assert_eq!(format!("{}", CdsPos::cen()), "cen");
+        let unk = CdsPos::unknown(None);
+        assert!(unk.is_unknown());
+        assert_eq!(format!("{unk}"), "?");
     }
 }

@@ -1948,6 +1948,7 @@ fn parse_cds_variant(
                 base: 1,
                 offset: None,
                 utr3: false,
+                special: None,
             };
             let dummy_interval = CdsInterval::point(dummy_pos);
             return Ok((
@@ -1967,6 +1968,7 @@ fn parse_cds_variant(
                 base: 1,
                 offset: None,
                 utr3: false,
+                special: None,
             };
             let dummy_interval = CdsInterval::point(dummy_pos);
             return Ok((
@@ -2147,6 +2149,7 @@ fn parse_cds_bracket_member(
             base: 1,
             offset: None,
             utr3: false,
+            special: None,
         })
     }
 
@@ -4633,6 +4636,7 @@ fn create_identity_variant_from(reference: &HgvsVariant) -> Result<HgvsVariant, 
                 base: 1,
                 offset: None,
                 utr3: false,
+                special: None,
             };
             let dummy_interval = CdsInterval::point(dummy_pos);
             Ok(HgvsVariant::Cds(CdsVariant {
