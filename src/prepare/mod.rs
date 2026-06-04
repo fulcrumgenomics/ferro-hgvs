@@ -33,6 +33,10 @@ pub struct PrepareConfig {
     pub output_dir: PathBuf,
     /// Download RefSeq transcripts
     pub download_transcripts: bool,
+    /// Download companion RefSeq protein FASTAs (`*.protein.faa.gz`, ~same size
+    /// as the transcript set) for the translated-CDS-vs-canonical-protein check
+    /// (issue #520). Off by default — opt in only when you need the check.
+    pub download_proteins: bool,
     /// Download GRCh38 genome (large ~3GB)
     pub download_genome: bool,
     /// Download GRCh37 genome (large ~3GB) - for older ClinVar patterns
@@ -64,6 +68,7 @@ impl Default for PrepareConfig {
         Self {
             output_dir: PathBuf::from("ferro-reference"),
             download_transcripts: true,
+            download_proteins: false,
             download_genome: true,
             download_genome_grch37: false,
             download_refseqgene: false,
@@ -227,6 +232,62 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         manifest.transcript_count = count;
         manifest.available_prefixes = prefixes;
         eprintln!("\n  Total transcripts: {}", count);
+    }
+
+    // Companion RefSeq protein FASTAs (`*.protein.faa.gz`) for the
+    // translated-CDS-vs-canonical-protein check (issue #520, edge 3). Opt-in:
+    // the protein set is roughly the size of the RNA set, so it is NOT pulled
+    // by a default `ferro prepare`. Same `mRNA_Prot/human.N.` base as the RNA
+    // files. Discover the available `.gz` files first (break on the first 404
+    // past #1), then decompress + index + record each by its `.faa` path.
+    if config.download_proteins {
+        eprintln!("\n=== Downloading RefSeq proteins ===");
+        let protein_dir = config.output_dir.join("transcripts");
+        fs::create_dir_all(&protein_dir).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create directory: {}", e),
+        })?;
+
+        let mut gz_paths: Vec<PathBuf> = Vec::new();
+        for i in 1..=urls::REFSEQ_RNA_COUNT {
+            let gz_name = format!("human.{}.protein.faa.gz", i);
+            let gz_path = protein_dir.join(&gz_name);
+            if config.skip_existing && gz_path.exists() {
+                eprintln!("  Skipping {} (exists)", gz_name);
+                gz_paths.push(gz_path);
+                continue;
+            }
+            let url = format!("{}{}.protein.faa.gz", urls::REFSEQ_RNA_BASE, i);
+            match download_file(&url, &gz_path) {
+                Ok(_) => {
+                    eprintln!("  Downloaded {}", gz_name);
+                    gz_paths.push(gz_path);
+                }
+                Err(e) => {
+                    if i > 1 {
+                        eprintln!(
+                            "  No more protein files after human.{}.protein.faa.gz",
+                            i - 1
+                        );
+                        break;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        for gz_path in &gz_paths {
+            let faa_path = gz_path.with_extension("").with_extension("faa");
+            if !(config.skip_existing && faa_path.exists()) {
+                decompress_gzip(gz_path, &faa_path)?;
+            }
+            let fai_path = PathBuf::from(format!("{}.fai", faa_path.display()));
+            if !(config.skip_existing && fai_path.exists()) {
+                index_fasta(&faa_path)?;
+            }
+            if !manifest.protein_fastas.contains(&faa_path) {
+                manifest.protein_fastas.push(faa_path);
+            }
+        }
     }
 
     // Download genome

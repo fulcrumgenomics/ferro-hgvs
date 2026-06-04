@@ -3075,6 +3075,7 @@ impl PyPrepareConfig {
             inner: PrepareConfig {
                 output_dir: std::path::PathBuf::from(output_dir),
                 download_transcripts,
+                download_proteins: false,
                 download_genome,
                 download_genome_grch37,
                 download_refseqgene,

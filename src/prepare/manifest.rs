@@ -14,6 +14,10 @@ pub struct ReferenceManifest {
     pub prepared_at: String,
     /// Transcript FASTA files
     pub transcript_fastas: Vec<PathBuf>,
+    /// Protein FASTA files (`*.protein.faa`, NP_/XP_ accessions) for the
+    /// translated-CDS-vs-canonical-protein check (issue #520).
+    #[serde(default)]
+    pub protein_fastas: Vec<PathBuf>,
     /// GRCh38 genome FASTA file (if downloaded)
     pub genome_fasta: Option<PathBuf>,
     /// GRCh37 genome FASTA file (if downloaded)
@@ -72,6 +76,7 @@ impl Default for ReferenceManifest {
             // Empty string by default; `save()` populates this with the current time.
             prepared_at: String::new(),
             transcript_fastas: Vec::new(),
+            protein_fastas: Vec::new(),
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
@@ -400,6 +405,7 @@ mod tests {
         let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
             transcript_fastas: vec![ref_dir.join("transcripts.fa")],
+            protein_fastas: Vec::new(),
             genome_fasta: Some(ref_dir.join("genome.fa")),
             genome_grch37_fasta: Some(ref_dir.join("genome37.fa")),
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],
