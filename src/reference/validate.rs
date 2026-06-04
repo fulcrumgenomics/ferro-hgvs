@@ -398,6 +398,142 @@ pub fn validate_against_overrides<P: ReferenceProvider>(
     anomalies
 }
 
+/// A single correction applied to (or required for) a served transcript when
+/// reconciling it with the authoritative record.
+///
+/// `#[non_exhaustive]`: later phases may add correction kinds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Correction {
+    /// The CDS bounds were overridden from the authoritative record.
+    CdsCorrected {
+        /// The served `(cds_start, cds_end)` before correction.
+        from: (Option<u64>, Option<u64>),
+        /// The authoritative 1-based inclusive `(cds_start, cds_end)`.
+        to: (u64, u64),
+    },
+    /// The paired protein accession was overridden from the authoritative record.
+    ProteinIdCorrected {
+        /// The served `protein_id` before correction.
+        from: Option<String>,
+        /// The authoritative `protein_id`.
+        to: String,
+    },
+    /// The served sequence length disagrees with the authoritative record, so
+    /// CDS/protein were **not** overridden — the authoritative coordinates
+    /// index a different-length sequence. The served *bases* themselves need
+    /// re-ingestion from the canonical record, which [`CanonicalOverrides`]
+    /// does not carry.
+    SequenceReingestionRequired {
+        /// Served sequence length.
+        served: u64,
+        /// Authoritative transcript length.
+        authoritative: u64,
+    },
+}
+
+/// Reconcile a served transcript's CDS/protein metadata with the authoritative
+/// record for its exact accession version, mutating `tx` in place and returning
+/// the corrections applied.
+///
+/// This fixes the **metadata-mismatch** class (e.g. `NM_012459.2`, whose served
+/// `.2` bases are canonical but whose cdot CDS/`protein_id` point at the `.3`
+/// short isoform): the CDS bounds and `protein_id` are overridden from the
+/// authoritative record so downstream protein prediction translates the
+/// canonical reading frame.
+///
+/// It deliberately does **not** touch the bases. When the served length
+/// disagrees with the authoritative length (the **wrong-sequence** class, e.g.
+/// `NM_000193.2` served at 4650 nt vs the canonical 1576), the authoritative
+/// coordinates do not apply to the served sequence, so no override is made and
+/// a [`Correction::SequenceReingestionRequired`] is reported instead — fixing
+/// that case needs the authoritative *bases*, which the overrides file does not
+/// carry. The served length is the sequence byte length, or, for a
+/// coordinate-only record, the exon-sum length.
+///
+/// CDS and `protein_id` are corrected **together or not at all**: a corrected
+/// reading frame paired with a stale protein label (or vice versa) is more
+/// misleading than no correction, so the override is applied only when the
+/// authoritative record carries the full coding triple (both CDS bounds *and* a
+/// `protein_id`).
+///
+/// # Limitations
+///
+/// - **Same-length-but-edited** sequences are not detected: length equality is
+///   a proxy for base identity (the overrides carry no checksum), so a
+///   canonical-length sequence with point edits passes through as if canonical.
+/// - This corrects only the served [`Transcript`]. The projection path also
+///   reads the **cdot mapper's** parallel `protein`/CDS fields and prefers them,
+///   so for full effect the wiring must reconcile the cdot record too (or route
+///   projection through the corrected transcript).
+/// - **Ordering contract:** call this on a freshly loaded transcript *before*
+///   it is cached or translated. Mutating an already-translated transcript
+///   would leave a cached reference translation (the projector's
+///   `ref_protein_cache`) stale.
+///
+/// Returns an empty vec when there is no override for `tx.id` or nothing needs
+/// changing.
+pub fn apply_canonical_overrides(
+    tx: &mut Transcript,
+    overrides: &CanonicalOverrides,
+) -> Vec<Correction> {
+    let Some(auth) = overrides.get(&tx.id) else {
+        return Vec::new();
+    };
+    let mut corrections = Vec::new();
+
+    // Served length: sequence byte length, else the exon-sum length for a
+    // coordinate-only record. If the served length disagrees with the
+    // authoritative length, the authoritative CDS coordinates index a
+    // different-length sequence — applying them would corrupt the reading
+    // frame (and could place `cds_end` out of range). Report that the sequence
+    // needs re-ingestion and leave the record untouched.
+    let served_len = tx.sequence.as_deref().map(|s| s.len() as u64).or_else(|| {
+        let sum: u64 = tx
+            .exons
+            .iter()
+            .map(|e| e.end.saturating_sub(e.start) + 1)
+            .sum();
+        (sum > 0).then_some(sum)
+    });
+    if let Some(served) = served_len {
+        if served != auth.tx_length {
+            corrections.push(Correction::SequenceReingestionRequired {
+                served,
+                authoritative: auth.tx_length,
+            });
+            return corrections;
+        }
+    }
+
+    // All-or-nothing for the coding triple: only override when the authoritative
+    // record is fully coding (CDS bounds + protein_id present).
+    let (Some(as_), Some(ae), Some(ap)) =
+        (auth.cds_start, auth.cds_end, auth.protein_id.as_deref())
+    else {
+        return corrections;
+    };
+
+    if (tx.cds_start, tx.cds_end) != (Some(as_), Some(ae)) {
+        corrections.push(Correction::CdsCorrected {
+            from: (tx.cds_start, tx.cds_end),
+            to: (as_, ae),
+        });
+        tx.cds_start = Some(as_);
+        tx.cds_end = Some(ae);
+    }
+
+    if tx.protein_id.as_deref() != Some(ap) {
+        corrections.push(Correction::ProteinIdCorrected {
+            from: tx.protein_id.clone(),
+            to: ap.to_string(),
+        });
+        tx.protein_id = Some(ap.to_string());
+    }
+
+    corrections
+}
+
 /// Whether `codon` is the canonical start codon `ATG` (case-insensitive).
 fn is_start_codon(codon: &[u8]) -> bool {
     codon.eq_ignore_ascii_case(b"ATG")
@@ -749,5 +885,146 @@ mod tests {
         let found = validate_against_overrides(&FailingProvider, &ov);
         assert_eq!(kinds(&found), vec![AnomalyKind::LoadError]);
         assert_eq!(found[0].transcript_id, "NM_BROKEN.1");
+    }
+
+    // --- correction (phase 3) -----------------------------------------------
+
+    #[test]
+    fn correction_overrides_cds_and_protein_when_sequence_is_canonical_length() {
+        // NM_012459.2 shape: canonical-length bases but cdot points at the
+        // short isoform. Metadata is corrected in place.
+        let s = "A".repeat(327);
+        let mut tx = coding_tx(&s, 34, 285);
+        tx.id = "NM_012459.2".to_string();
+        tx.protein_id = Some("NP_036591.3".to_string());
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth(
+            "NM_012459.2",
+            327,
+            Some((31, 327)),
+            Some("NP_036591.2"),
+        ));
+
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections.contains(&Correction::CdsCorrected {
+            from: (Some(34), Some(285)),
+            to: (31, 327),
+        }));
+        assert!(corrections.contains(&Correction::ProteinIdCorrected {
+            from: Some("NP_036591.3".to_string()),
+            to: "NP_036591.2".to_string(),
+        }));
+        // Mutation applied.
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(31), Some(327)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_036591.2"));
+    }
+
+    #[test]
+    fn correction_requires_reingestion_when_sequence_length_is_wrong() {
+        // NM_000193.2 shape: served bases are the wrong length, so authoritative
+        // coordinates do not apply — no override, re-ingestion reported.
+        let s = "A".repeat(4650);
+        let mut tx = coding_tx(&s, 342, 1730);
+        tx.id = "NM_000193.2".to_string();
+        tx.protein_id = Some("NP_000184.1".to_string());
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth(
+            "NM_000193.2",
+            1576,
+            Some((152, 1540)),
+            Some("NP_000184.1"),
+        ));
+
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert_eq!(
+            corrections,
+            vec![Correction::SequenceReingestionRequired {
+                served: 4650,
+                authoritative: 1576,
+            }]
+        );
+        // Untouched: coordinates for the canonical 1576 nt would be wrong here.
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(342), Some(1730)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_000184.1"));
+    }
+
+    #[test]
+    fn correction_is_noop_when_already_canonical_or_no_override() {
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+
+        // No override entry for this accession.
+        assert!(apply_canonical_overrides(&mut tx, &CanonicalOverrides::default()).is_empty());
+
+        // Override that already matches → no corrections.
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1")));
+        assert!(apply_canonical_overrides(&mut tx, &ov).is_empty());
+    }
+
+    #[test]
+    fn correction_applies_to_coordinate_only_record_via_exon_sum_length() {
+        // No sequence; the exon-sum length (9) matches the authoritative length.
+        let mut tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OLD.1".to_string()),
+            exons: vec![Exon::new(1, 1, 9)],
+            ..Default::default()
+        };
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((4, 9)), Some("NP_NEW.2")));
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections
+            .iter()
+            .any(|c| matches!(c, Correction::CdsCorrected { .. })));
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(4), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_NEW.2"));
+    }
+
+    #[test]
+    fn correction_requires_reingestion_for_coordinate_only_length_mismatch() {
+        // No sequence; the exon-sum length (9) disagrees with the authoritative
+        // length (100) → re-ingestion required, record untouched.
+        let mut tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OLD.1".to_string()),
+            exons: vec![Exon::new(1, 1, 9)],
+            ..Default::default()
+        };
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 100, Some((1, 99)), Some("NP_NEW.2")));
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert_eq!(
+            corrections,
+            vec![Correction::SequenceReingestionRequired {
+                served: 9,
+                authoritative: 100,
+            }]
+        );
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+    }
+
+    #[test]
+    fn correction_skips_partial_authoritative_coding_triple() {
+        // Authoritative has CDS but no protein_id → all-or-nothing: nothing is
+        // overridden (a corrected CDS with a stale protein label is misleading).
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((4, 9)), None));
+        assert!(apply_canonical_overrides(&mut tx, &ov).is_empty());
+        assert_eq!(
+            (tx.cds_start, tx.cds_end),
+            (Some(1), Some(9)),
+            "no half-correction"
+        );
     }
 }
