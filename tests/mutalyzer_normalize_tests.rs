@@ -347,6 +347,18 @@ enum SpecSection {
     /// slot, which #121 never examined.)
     #[serde(rename = "HGVS §RefSeqGene transcript selection")]
     RefSeqGeneSelector,
+    /// HGVS substitution consequence — a single-base coding substitution
+    /// preserves length and reading frame, so its predicted protein
+    /// consequence is a missense / nonsense / synonymous / stop-loss extension
+    /// / initiation-codon change, **never** a frameshift
+    /// (`docs/recommendations/protein/substitution.md:5`; `frameshift.md:18`,
+    /// where a frameshift requires an indel whose length is not a multiple of
+    /// 3). A `p.…fs…` consequence reported for a substitution can only arise
+    /// when the transcript reference is reconstructed from a divergent
+    /// genomic embedding; it is invalid against a fixed reference. ferro emits
+    /// the in-frame missense against the canonical standalone RefSeq transcript.
+    #[serde(rename = "HGVS §Substitution (no frameshift)")]
+    SubstitutionConsequence,
 }
 
 impl SpecSection {
@@ -358,6 +370,7 @@ impl SpecSection {
             SpecSection::Prioritization => "HGVS §Prioritization",
             SpecSection::ProteinReference => "HGVS protein reference (bare NP)",
             SpecSection::RefSeqGeneSelector => "HGVS §RefSeqGene transcript selection",
+            SpecSection::SubstitutionConsequence => "HGVS §Substitution (no frameshift)",
         }
     }
 }
@@ -1472,6 +1485,38 @@ mod comparator_tests {
         assert_eq!(sc.axis, Axis::Normalized);
         assert_eq!(sc.section, SpecSection::Prioritization);
         assert_eq!(sc.note.as_deref(), Some("dup over ins"));
+    }
+
+    // (3b) The `SubstitutionConsequence` section deserializes from its wire
+    // string and routes the cited row to `spec_overridden` when ferro's value
+    // differs (the c.41A>C substitution-not-frameshift arbitration). Pinning
+    // the rename here keeps the `cases.json` byte sequence stable.
+    #[test]
+    fn case_parses_with_substitution_consequence_section() {
+        let case = parse_case(
+            r#"{
+                "input": "NG_009299.1(NM_017668.3):c.41A>C",
+                "protein_description": "NP_060138.1:p.(Glu14Ala)",
+                "spec_citation": {
+                    "axis": "protein_description",
+                    "section": "HGVS §Substitution (no frameshift)",
+                    "note": "a substitution cannot be a frameshift"
+                }
+            }"#,
+        );
+        let sc = case.spec_citation.as_ref().expect("spec_citation present");
+        assert_eq!(sc.axis, Axis::ProteinDescription);
+        assert_eq!(sc.section, SpecSection::SubstitutionConsequence);
+
+        // A string mismatch on the cited axis routes to spec_overridden, not FAIL.
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        t.record(
+            &case,
+            "NP_060138.1:p.(Glu14Ala)",
+            Ok("NP_060138.1:p.(Asp14Ala)".to_string()),
+        );
+        assert_eq!(t.spec_overridden.len(), 1);
+        assert!(t.fail.is_empty());
     }
 
     // (4) `record` PASSes when actual == expected, regardless of annotations.

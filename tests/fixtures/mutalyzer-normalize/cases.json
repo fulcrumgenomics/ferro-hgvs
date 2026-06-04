@@ -2633,9 +2633,14 @@
           "NG_009299.1(NP_002465.1):p.(Leu1432Arg)"
         ]
       ],
-      "protein_description": "NG_009299.1(NP_060138.1):p.(Gln14ProfsTer68)",
+      "protein_description": "NP_060138.1:p.(Glu14Ala)",
       "rna_description": "NG_009299.1(NM_017668.3):r.(41a>c)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS §Substitution (no frameshift)",
+        "note": "A single-base coding substitution preserves length and reading frame, so its protein consequence is a missense, never a frameshift (substitution.md:5; frameshift.md:18). ferro's NM_017668.3 CDS translates to NP_060138.1 (MEDSGKTFSSEEEEAN...; residue 14 = Glu, verified against the canonical RefSeq record NP_060138.1) so c.41A>C gives the in-frame missense NP_060138.1:p.(Glu14Ala) (bare NP_ per the protein-reference convention). mutalyzer's NG_009299.1(NP_060138.1):p.(Gln14ProfsTer68) reconstructs the transcript from the NG_009299.1 embedding (this case is tagged 'reverse strand sequence'); its Gln14 contradicts the very protein accession NP_060138.1 it cites, and a substitution-frameshift is invalid against a fixed reference. ferro's value is the spec-correct one."
+      }
     },
     {
       "keywords": [],
