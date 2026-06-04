@@ -479,6 +479,11 @@ enum Commands {
         #[arg(long)]
         clinvar: Option<PathBuf>,
 
+        /// Newline-delimited accession list to validate against authoritative
+        /// GenBank records, writing canonical_overrides.json (issue #520)
+        #[arg(long)]
+        validate_canonical: Option<PathBuf>,
+
         /// Dry run - show what would be downloaded without downloading
         #[arg(long)]
         dry_run: bool,
@@ -761,6 +766,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             force,
             patterns,
             clinvar,
+            validate_canonical,
             dry_run,
         } => run_prepare(
             &output_dir,
@@ -772,6 +778,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             force,
             patterns.as_deref(),
             clinvar.as_deref(),
+            validate_canonical.as_deref(),
             dry_run,
         ),
         Commands::Check { reference } => run_check(&reference),
@@ -2775,6 +2782,7 @@ fn run_prepare(
     force: bool,
     patterns: Option<&Path>,
     clinvar: Option<&Path>,
+    validate_canonical: Option<&Path>,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::prepare::{prepare_references, PrepareConfig};
@@ -2791,6 +2799,7 @@ fn run_prepare(
         skip_existing: !force,
         clinvar_file: clinvar.map(|p| p.to_path_buf()),
         patterns_file: patterns.map(|p| p.to_path_buf()),
+        validate_canonical_accessions: validate_canonical.map(|p| p.to_path_buf()),
         dry_run,
     };
 

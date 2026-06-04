@@ -51,6 +51,10 @@ pub struct PrepareConfig {
     pub clinvar_file: Option<PathBuf>,
     /// Plain text pattern file to extract missing accessions from
     pub patterns_file: Option<PathBuf>,
+    /// Newline-delimited file of exact versioned accessions to validate against
+    /// their authoritative GenBank records, writing a canonical-overrides file
+    /// (issue #520). `None` skips the canonical-validation stage.
+    pub validate_canonical_accessions: Option<PathBuf>,
     /// Dry run - show what would be fetched without fetching
     pub dry_run: bool,
 }
@@ -69,6 +73,7 @@ impl Default for PrepareConfig {
             skip_existing: true,
             clinvar_file: None,
             patterns_file: None,
+            validate_canonical_accessions: None,
             dry_run: false,
         }
     }
@@ -490,6 +495,23 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             if metadata_path.exists() {
                 manifest.legacy_genbank_metadata = Some(metadata_path);
             }
+        }
+    }
+
+    // Canonical-record validation: fetch authoritative GenBank records for the
+    // requested accessions and write the canonical-overrides file (issue #520).
+    if let Some(ref acc_file) = config.validate_canonical_accessions {
+        eprintln!("\n=== Validating against authoritative GenBank records ===");
+        let accessions = read_accession_list(acc_file)?;
+        let out = config.output_dir.join("canonical_overrides.json");
+        let written = fetch_canonical_overrides(&accessions, &out, config.dry_run)?;
+        if !config.dry_run && written > 0 {
+            manifest.canonical_overrides = Some(out.clone());
+            eprintln!(
+                "  Wrote {} canonical override records to {}",
+                written,
+                out.display()
+            );
         }
     }
 
@@ -1302,6 +1324,103 @@ pub fn fetch_legacy_versions(
     eprintln!("  Metadata written to: {}", metadata_path.display());
 
     Ok(fetched)
+}
+
+/// Read a newline-delimited accession list, trimming whitespace and skipping
+/// blank lines and `#` comments.
+fn read_accession_list(path: &Path) -> Result<Vec<String>, FerroError> {
+    let text = std::fs::read_to_string(path).map_err(|e| FerroError::Io {
+        msg: format!("Failed to read accession list {}: {}", path.display(), e),
+    })?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        // Upper-case so a lowercase entry (`nm_012459.2`) doesn't false-reject:
+        // efetch is case-insensitive and returns the canonical upper-case
+        // `VERSION`, which the version-match guard compares against exactly.
+        .map(str::to_uppercase)
+        .collect())
+}
+
+/// Fetch authoritative GenBank records for `accessions` and write a
+/// canonical-overrides JSON to `output`, returning the number of records
+/// written.
+///
+/// Reuses the same NCBI efetch (`rettype=gb`) + 100 ms rate-limit pattern as
+/// [`fetch_legacy_versions`]; record parsing and assembly (including the
+/// requested-vs-fetched version check) are delegated to
+/// [`build_canonical_overrides`](crate::reference::authoritative::build_canonical_overrides).
+pub fn fetch_canonical_overrides(
+    accessions: &[String],
+    output: &Path,
+    dry_run: bool,
+) -> Result<usize, FerroError> {
+    use crate::reference::authoritative::build_canonical_overrides;
+
+    if accessions.is_empty() {
+        return Ok(0);
+    }
+    if dry_run {
+        eprintln!(
+            "  [dry run] Would validate {} accessions against authoritative GenBank records",
+            accessions.len()
+        );
+        return Ok(0);
+    }
+
+    eprintln!(
+        "  Fetching {} authoritative GenBank records for canonical validation...",
+        accessions.len()
+    );
+    let pb = ProgressBar::new(accessions.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("    [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+
+    let (overrides, failed) = build_canonical_overrides(accessions, |acc| {
+        pb.set_message(acc.to_string());
+        let url = format!(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={}&rettype=gb&retmode=text",
+            acc
+        );
+        let result = Command::new("curl").args(["-s", "-L", &url]).output();
+        pb.inc(1);
+        std::thread::sleep(std::time::Duration::from_millis(100)); // NCBI rate limit
+        let out = result.ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        (out.status.success() && text.contains("LOCUS")).then_some(text)
+    });
+    pb.finish_and_clear();
+
+    // Don't leave an orphan empty file (and an unreferenced manifest entry) when
+    // every accession failed; that mirrors the empty-input path which writes
+    // nothing. Still report the failures below.
+    if !overrides.is_empty() {
+        let json = overrides.to_json().map_err(|e| FerroError::Io {
+            msg: format!("Failed to serialize canonical overrides: {e}"),
+        })?;
+        std::fs::write(output, json).map_err(|e| FerroError::Io {
+            msg: format!("Failed to write {}: {}", output.display(), e),
+        })?;
+    }
+
+    if !failed.is_empty() {
+        eprintln!(
+            "  Warning: {} accessions could not be validated (fetch/parse/version mismatch):",
+            failed.len()
+        );
+        for acc in failed.iter().take(5) {
+            eprintln!("    {}", acc);
+        }
+        if failed.len() > 5 {
+            eprintln!("    ... and {} more", failed.len() - 5);
+        }
+    }
+    Ok(overrides.len())
 }
 
 /// Detect patterns file from ferro reference directory.

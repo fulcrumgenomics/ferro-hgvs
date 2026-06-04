@@ -51,6 +51,12 @@ pub struct ReferenceManifest {
     /// Legacy GenBank metadata JSON (CDS coordinates, gene names)
     #[serde(default)]
     pub legacy_genbank_metadata: Option<PathBuf>,
+    /// Canonical-overrides JSON: authoritative `(cds_start, cds_end, protein_id,
+    /// tx_length)` per exact accession version, fetched by
+    /// `ferro prepare --validate-canonical`. Consumed by the canonical-record
+    /// validation / correction path (issue #520).
+    #[serde(default)]
+    pub canonical_overrides: Option<PathBuf>,
     /// Total number of transcripts
     pub transcript_count: usize,
     /// List of available accession prefixes
@@ -79,6 +85,7 @@ impl Default for ReferenceManifest {
             legacy_transcripts_metadata: None,
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
+            canonical_overrides: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
             reference_dir: PathBuf::new(),
@@ -213,6 +220,7 @@ impl ReferenceManifest {
             &self.legacy_transcripts_metadata,
             &self.legacy_genbank_fasta,
             &self.legacy_genbank_metadata,
+            &self.canonical_overrides,
         ]
         .into_iter()
         .flatten()
@@ -244,6 +252,7 @@ impl ReferenceManifest {
             &mut self.legacy_transcripts_metadata,
             &mut self.legacy_genbank_fasta,
             &mut self.legacy_genbank_metadata,
+            &mut self.canonical_overrides,
         ] {
             if let Some(p) = o.as_mut() {
                 f(p);
@@ -325,6 +334,7 @@ mod tests {
             reference_dir: ref_path.clone(),
             transcript_fastas: vec![ref_path.join("transcripts.fa")],
             cdot_json: Some(ref_path.join("cdot.json")),
+            canonical_overrides: Some(ref_path.join("canonical_overrides.json")),
             ..Default::default()
         };
 
@@ -335,6 +345,11 @@ mod tests {
             PathBuf::from("transcripts.fa")
         );
         assert_eq!(manifest.cdot_json, Some(PathBuf::from("cdot.json")));
+        assert_eq!(
+            manifest.canonical_overrides,
+            Some(PathBuf::from("canonical_overrides.json")),
+            "canonical_overrides must be normalized to a relative path"
+        );
     }
 
     #[test]
@@ -348,6 +363,7 @@ mod tests {
             reference_dir: ref_path.clone(),
             transcript_fastas: vec![PathBuf::from("transcripts.fa")],
             cdot_json: Some(PathBuf::from("cdot.json")),
+            canonical_overrides: Some(PathBuf::from("canonical_overrides.json")),
             ..Default::default()
         };
 
@@ -358,6 +374,11 @@ mod tests {
             ref_path.join("transcripts.fa")
         );
         assert_eq!(manifest.cdot_json, Some(ref_path.join("cdot.json")));
+        assert_eq!(
+            manifest.canonical_overrides,
+            Some(ref_path.join("canonical_overrides.json")),
+            "canonical_overrides must be resolved to an absolute path"
+        );
     }
 
     #[test]
@@ -406,6 +427,7 @@ mod tests {
             legacy_transcripts_metadata: Some(ref_dir.join("legacy.json")),
             legacy_genbank_fasta: Some(ref_dir.join("genbank.fa")),
             legacy_genbank_metadata: Some(ref_dir.join("genbank.json")),
+            canonical_overrides: None,
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: ref_dir.to_path_buf(),
