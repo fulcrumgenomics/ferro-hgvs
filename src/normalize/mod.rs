@@ -822,38 +822,6 @@ impl NormalizeResult {
     }
 }
 
-/// Resolve a genomic position to a concrete 1-based base, mapping telomere
-/// markers to reference boundaries:
-/// - `pter` -> 1 (first nucleotide),
-/// - `qter` -> reference length (last nucleotide),
-/// - `cen`  -> `Ok(None)` (a centromere is an assembly-annotated region, not a
-///   sequence-derivable base),
-/// - a plain (non-special) position -> its own `base`.
-///
-/// A `qter` whose reference length is unavailable also yields `Ok(None)` so the
-/// caller can fall back to canonicalization (matches the "no sequence -> minimal
-/// notation" philosophy). The caller distinguishes the two `None` cases by
-/// re-inspecting `pos.special`: `Some(Cen)` is a structural failure (warn/reject),
-/// any other `None` is an environment gap (silent fallback).
-///
-/// Precondition: offset-carrying positions are bailed out by the caller before
-/// this is called; this function does not inspect `pos.offset`.
-// Will be called by normalize_genome in the next task (Task 2).
-#[allow(dead_code)]
-fn resolve_special_genome_pos<P: ReferenceProvider>(
-    pos: &GenomePos,
-    accession: &str,
-    provider: &P,
-) -> Result<Option<u64>, FerroError> {
-    match pos.special {
-        None => Ok(Some(pos.base)),
-        Some(SpecialPosition::Pter) => Ok(Some(1)),
-        // Length unavailable -> graceful None (caller canonicalizes).
-        Some(SpecialPosition::Qter) => Ok(provider.get_sequence_length(accession).ok()),
-        Some(SpecialPosition::Cen) => Ok(None),
-    }
-}
-
 /// Main normalizer struct
 pub struct Normalizer<P: ReferenceProvider> {
     provider: P,
@@ -8382,6 +8350,68 @@ mod tests {
         assert!(
             format!("{}", result.unwrap()).contains("qter"),
             "unresolved qter should be returned verbatim"
+        );
+    }
+
+    #[test]
+    fn genome_pter_resolves_and_shifts() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NG_012337.1", format!("TTT{}", "ACGT".repeat(50)));
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NG_012337.1:g.pterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NG_012337.1:g.3del",
+            "pter del must resolve+shift to g.3del"
+        );
+    }
+
+    #[test]
+    fn genome_qter_resolves_to_last_base() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        let seq = format!("{}G", "ACGT".repeat(50)); // length 201, last base 'G'
+        provider.add_genomic_sequence("NC_TEST.2", seq);
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.2:g.qterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NC_TEST.2:g.201del",
+            "qter del must resolve to the last base"
+        );
+    }
+
+    #[test]
+    fn genome_whole_span_pter_qter_short_circuits() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.3", "ACGT".repeat(50)); // length 200
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.3:g.pter_qterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NC_TEST.3:g.1_200del",
+            "whole-span pter_qter must render concrete span"
+        );
+    }
+
+    #[test]
+    fn genome_cen_emits_warning_not_silent() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.4", "ACGT".repeat(50));
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.4:g.cendel").unwrap();
+        let result = n.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(format!("{}", result.result), "NC_TEST.4:g.cendel");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| format!("{w}").contains("centromere")),
+            "cen must emit a visible warning, got {:?}",
+            result.warnings
         );
     }
 }
