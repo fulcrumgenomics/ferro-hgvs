@@ -35,7 +35,9 @@ use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, Sequence};
 use crate::hgvs::interval::{Interval, ProtInterval};
-use crate::hgvs::location::{AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, TxPos};
+use crate::hgvs::location::{
+    AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
+};
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
@@ -799,6 +801,38 @@ impl NormalizeResult {
         self.warnings
             .iter()
             .any(|w| matches!(w, NormalizationWarning::RefSeqMismatch { .. }))
+    }
+}
+
+/// Resolve a genomic position to a concrete 1-based base, mapping telomere
+/// markers to reference boundaries:
+/// - `pter` -> 1 (first nucleotide),
+/// - `qter` -> reference length (last nucleotide),
+/// - `cen`  -> `Ok(None)` (a centromere is an assembly-annotated region, not a
+///   sequence-derivable base),
+/// - a plain (non-special) position -> its own `base`.
+///
+/// A `qter` whose reference length is unavailable also yields `Ok(None)` so the
+/// caller can fall back to canonicalization (matches the "no sequence -> minimal
+/// notation" philosophy). The caller distinguishes the two `None` cases by
+/// re-inspecting `pos.special`: `Some(Cen)` is a structural failure (warn/reject),
+/// any other `None` is an environment gap (silent fallback).
+///
+/// Precondition: offset-carrying positions are bailed out by the caller before
+/// this is called; this function does not inspect `pos.offset`.
+// Will be called by normalize_genome in the next task (Task 2).
+#[allow(dead_code)]
+fn resolve_special_genome_pos<P: ReferenceProvider>(
+    pos: &GenomePos,
+    accession: &str,
+    provider: &P,
+) -> Result<Option<u64>, FerroError> {
+    match pos.special {
+        None => Ok(Some(pos.base)),
+        Some(SpecialPosition::Pter) => Ok(Some(1)),
+        // Length unavailable -> graceful None (caller canonicalizes).
+        Some(SpecialPosition::Qter) => Ok(provider.get_sequence_length(accession).ok()),
+        Some(SpecialPosition::Cen) => Ok(None),
     }
 }
 
@@ -7935,6 +7969,78 @@ mod tests {
         assert_eq!(
             (s2.as_str(), rs2, re2, b2.left, b2.right),
             (seq, 3, 5, 2, 7)
+        );
+    }
+
+    #[test]
+    fn resolve_special_genome_pos_maps_markers() {
+        use crate::hgvs::location::{GenomePos, SpecialPosition};
+        use crate::reference::MockProvider;
+
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", "A".repeat(500));
+
+        // pter -> 1 (no length lookup needed).
+        let pter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Pter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&pter, "NC_TEST.1", &provider).unwrap(),
+            Some(1)
+        );
+
+        // qter -> contig length.
+        let qter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Qter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&qter, "NC_TEST.1", &provider).unwrap(),
+            Some(500)
+        );
+
+        // cen -> None (structurally unresolvable).
+        let cen = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Cen),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&cen, "NC_TEST.1", &provider).unwrap(),
+            None
+        );
+
+        // Plain position -> its own base.
+        let plain = GenomePos {
+            base: 42,
+            special: None,
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&plain, "NC_TEST.1", &provider).unwrap(),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn resolve_special_genome_pos_qter_without_length_is_none() {
+        use crate::hgvs::location::{GenomePos, SpecialPosition};
+        use crate::reference::MockProvider;
+
+        // Provider has no contig registered -> get_sequence_length errors ->
+        // graceful Ok(None), not an Err.
+        let provider = MockProvider::new();
+        let qter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Qter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&qter, "NC_MISSING.1", &provider).unwrap(),
+            None
         );
     }
 
