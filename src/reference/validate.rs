@@ -43,6 +43,7 @@
 //!   version (e.g. `NM_012459.2`) is invisible offline; the authoritative tier
 //!   catches it via the CDS / protein_id comparison.
 
+use crate::backtranslate::codon::{Codon, CodonTable};
 use crate::error::FerroError;
 use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
 use crate::reference::provider::ReferenceProvider;
@@ -84,6 +85,15 @@ pub enum AnomalyKind {
     /// record (e.g. `NM_012459.2` served with `NP_036591.3` instead of the
     /// canonical `NP_036591.2`).
     AuthoritativeProteinIdMismatch,
+    /// Translating the served CDS does not reproduce the canonical protein
+    /// sequence. Catches base-level non-canonical sequences that the
+    /// coordinate/length/protein_id comparisons miss (e.g. a same-length CDS
+    /// with point edits). Advisory — the standard codon table cannot model
+    /// selenocysteine (`TGA`) recoding or alternative start codons, so it has
+    /// the same biological false-positive classes as the offline codon checks
+    /// (the obvious selenoprotein readthrough case is suppressed; see
+    /// [`validate_translation_against_protein`]).
+    TranslationMismatch,
 }
 
 /// How much confidence an anomaly carries that the record is genuinely corrupt.
@@ -541,6 +551,136 @@ pub fn apply_canonical_overrides(
     }
 
     corrections
+}
+
+/// The protein produced by translating a CDS, plus whether translation stopped
+/// on a `TGA` codon specifically. Only `TGA` is recoded as selenocysteine, so
+/// the caller needs to distinguish a `TGA` stop (candidate Sec readthrough)
+/// from a `TAA`/`TAG` stop (a true nonsense codon) — see
+/// [`validate_translation_against_protein`].
+struct TranslatedCds {
+    /// One-letter amino-acid string, with the terminating stop omitted.
+    protein: String,
+    /// Whether translation terminated on an in-frame `TGA` (as opposed to
+    /// `TAA`/`TAG`, or running off the end of the CDS).
+    terminated_by_tga: bool,
+}
+
+/// Translate a CDS byte slice to a one-letter amino-acid string, stopping at
+/// the first stop codon (the stop is not emitted). Returns `None` if any codon
+/// is ambiguous/unparseable (`N`/IUPAC) — one ambiguous codon aborts the whole
+/// translation so the caller skips the comparison rather than reporting a
+/// spurious mismatch.
+///
+/// The returned [`TranslatedCds`] also records whether the terminating stop was
+/// `TGA` (the only stop recoded as selenocysteine), so the caller can suppress
+/// Sec readthrough without also suppressing a `TAA`/`TAG` nonsense edit at the
+/// same site.
+///
+/// Lowercase / soft-masked bases are fine: `Codon::parse_bytes` → `Base::from_char`
+/// upper-cases each base, so no pre-upper-casing is needed here (unlike the
+/// string-based offline codon checks). A trailing partial (<3 nt) codon is
+/// dropped — an in-range CDS is expected to be a triplet (the offline
+/// `CdsNotTriplet` check guards that separately).
+fn translate_cds_bytes(cds: &[u8]) -> Option<TranslatedCds> {
+    let table = CodonTable::standard();
+    let mut protein = String::with_capacity(cds.len() / 3);
+    for chunk in cds.chunks(3) {
+        if chunk.len() < 3 {
+            break; // trailing partial codon
+        }
+        let codon = Codon::parse_bytes(chunk)?;
+        if table.is_stop(&codon) {
+            return Some(TranslatedCds {
+                protein,
+                terminated_by_tga: chunk.eq_ignore_ascii_case(b"TGA"),
+            });
+        }
+        protein.push(table.amino_acid_for(&codon)?.to_one_letter());
+    }
+    Some(TranslatedCds {
+        protein,
+        terminated_by_tga: false,
+    })
+}
+
+/// Compare the protein obtained by translating the served CDS against the
+/// canonical protein sequence, returning an [`AnomalyKind::TranslationMismatch`]
+/// (`Advisory`) anomaly when they differ.
+///
+/// This is the base-level (strategy-B) check: the coordinate / length /
+/// protein_id comparisons in [`validate_against_authoritative`] can all agree
+/// while the served *bases* still translate to the wrong protein (a same-length
+/// CDS with point edits). Supplying `canonical_protein` requires the
+/// authoritative `NP_` sequence — i.e. protein-FASTA ingestion, the data edge
+/// not covered here.
+///
+/// Biological adjustments so canonical RefSeq records don't false-positive:
+/// - the first residue is forced to `M` (translation initiation installs Met
+///   regardless of the start codon; canonical `NP_` always begins with `M`);
+/// - the obvious **selenocysteine readthrough** case is suppressed — the
+///   standard table stops at an in-frame `TGA`, so a selenoprotein translates
+///   to a prefix ending exactly where the canonical protein has a `U` (Sec);
+///   that specific shape returns `None` rather than a mismatch.
+///
+/// The anomaly is `Advisory`, not `Corruption`: the standard codon table cannot
+/// model every recoding/alternative-start case, so a residual mismatch is a
+/// review signal, not proof of corruption.
+///
+/// Returns `None` (no anomaly) when the record is non-coding, has no sequence,
+/// has out-of-range CDS bounds, or the CDS contains ambiguous codons that can't
+/// be translated.
+pub fn validate_translation_against_protein(
+    tx: &Transcript,
+    canonical_protein: &str,
+) -> Option<TranscriptAnomaly> {
+    let (cds_start, cds_end) = (tx.cds_start?, tx.cds_end?);
+    let seq = tx.sequence.as_deref()?;
+    let bytes = seq.as_bytes();
+    if cds_start == 0 || cds_end < cds_start || cds_end as usize > bytes.len() {
+        return None;
+    }
+    let TranslatedCds {
+        mut protein,
+        terminated_by_tga,
+    } = translate_cds_bytes(&bytes[(cds_start as usize - 1)..(cds_end as usize)])?;
+    // Translation initiation installs Met regardless of the start codon, so the
+    // canonical NP_ always begins with M; mirror that to avoid a position-1
+    // false positive on alternative (CTG/GTG/…) start codons.
+    if !protein.is_empty() {
+        protein.replace_range(0..1, "M");
+    }
+    let translated = protein;
+
+    // Canonical `NP_` sequences carry no trailing stop; tolerate a stray `*`.
+    let canonical = canonical_protein.trim_end_matches('*');
+    if translated == canonical {
+        return None;
+    }
+
+    // Selenocysteine readthrough: the standard table stops at the first
+    // in-frame TGA, so a selenoprotein translates to a prefix that ends exactly
+    // where the canonical protein has a `U` (Sec). Suppress that expected case,
+    // but only when the terminating codon was actually `TGA` — a `TAA`/`TAG`
+    // stop at the same position is a genuine nonsense edit, not Sec recoding,
+    // and must still be flagged.
+    if terminated_by_tga
+        && canonical.starts_with(&translated)
+        && canonical.as_bytes().get(translated.len()) == Some(&b'U')
+    {
+        return None;
+    }
+
+    Some(TranscriptAnomaly::new(
+        &tx.id,
+        AnomalyKind::TranslationMismatch,
+        AnomalyConfidence::Advisory,
+        format!(
+            "translated served CDS ({} aa) does not match the canonical protein ({} aa)",
+            translated.len(),
+            canonical.len()
+        ),
+    ))
 }
 
 /// Whether `codon` is the canonical start codon `ATG` (case-insensitive).
@@ -1063,5 +1203,77 @@ mod tests {
             (Some(1), Some(9)),
             "no half-correction"
         );
+    }
+
+    // --- translation comparison (phase 4) -----------------------------------
+
+    #[test]
+    fn translation_matches_canonical_protein() {
+        // ATG|TGG|TAA → "MW" + stop.
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_tolerates_trailing_stop_in_canonical() {
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW*").is_none());
+    }
+
+    #[test]
+    fn translation_mismatch_is_advisory() {
+        // Served translates to "MW" but the canonical protein is "MV" — a real
+        // residue divergence (not a prefix), reported as Advisory.
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        let found = validate_translation_against_protein(&tx, "MV").expect("mismatch");
+        assert_eq!(found.kind, AnomalyKind::TranslationMismatch);
+        assert_eq!(found.confidence, AnomalyConfidence::Advisory);
+    }
+
+    #[test]
+    fn translation_suppresses_selenocysteine_readthrough() {
+        // ATG|TGA|GGG|TAA: standard table stops at the in-frame TGA → "M".
+        // Canonical "MUG" has Sec (U) at the recoded position → suppressed.
+        let tx = coding_tx("ATGTGAGGGTAA", 1, 12);
+        assert!(
+            validate_translation_against_protein(&tx, "MUG").is_none(),
+            "a selenoprotein readthrough must not be flagged"
+        );
+    }
+
+    #[test]
+    fn translation_flags_non_tga_stop_before_selenocysteine() {
+        // ATG|TAA|GGG|TAA: the standard table stops at the in-frame TAA → "M",
+        // the same prefix the canonical selenoprotein "MUG" produces. But only
+        // TGA is recoded as selenocysteine; a TAA/TAG here is a genuine
+        // nonsense edit at the Sec site and must NOT be suppressed.
+        let tx = coding_tx("ATGTAAGGGTAA", 1, 12);
+        let found = validate_translation_against_protein(&tx, "MUG")
+            .expect("a non-TGA stop at a Sec site must be flagged, not suppressed");
+        assert_eq!(found.kind, AnomalyKind::TranslationMismatch);
+        assert_eq!(found.confidence, AnomalyConfidence::Advisory);
+    }
+
+    #[test]
+    fn translation_forces_initiator_met_for_alternative_start() {
+        // CTG|TGG|TAA translates to "LW"; forcing the initiator Met gives "MW",
+        // matching the canonical protein — no false position-1 mismatch.
+        let tx = coding_tx("CTGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_skipped_for_ambiguous_codons() {
+        // An `N`-containing codon can't be translated → skip (not a mismatch).
+        let tx = coding_tx("ATGNNGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_skipped_for_noncoding_record() {
+        let mut tx = coding_tx("ATGTGGTAA", 1, 9);
+        tx.cds_start = None;
+        tx.cds_end = None;
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
     }
 }
