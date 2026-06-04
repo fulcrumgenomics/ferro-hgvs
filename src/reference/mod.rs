@@ -3,6 +3,7 @@
 //! Provides traits and implementations for accessing reference sequence data.
 
 pub mod annotation;
+pub mod authoritative;
 pub mod fasta;
 pub mod loader;
 pub mod mock;
