@@ -1392,8 +1392,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // On the resolved-special path the reference length sizes both the
-        // whole-span short-circuit and the fetch clamp; query it once. If it is
-        // unavailable we cannot safely size the fetch -> canonicalize fallback.
+        // whole-span short-circuit and the fetch clamp. (A `qter` resolve above
+        // also queried the length; this is a second cheap in-memory index
+        // lookup, not I/O.) If it is unavailable we cannot safely size the
+        // fetch -> canonicalize fallback.
         let resolved_len = if had_special {
             match self.provider.get_sequence_length(&accession) {
                 Ok(len) => len,
