@@ -822,6 +822,38 @@ impl NormalizeResult {
     }
 }
 
+/// Resolve a genomic position to a concrete 1-based base, mapping telomere
+/// markers to reference boundaries:
+/// - `pter` -> 1 (first nucleotide),
+/// - `qter` -> reference length (last nucleotide),
+/// - `cen`  -> `Ok(None)` (a centromere is an assembly-annotated region, not a
+///   sequence-derivable base),
+/// - a plain (non-special) position -> its own `base`.
+///
+/// A `qter` whose reference length is unavailable also yields `Ok(None)` so the
+/// caller can fall back to canonicalization (matches the "no sequence -> minimal
+/// notation" philosophy). The caller distinguishes the two `None` cases by
+/// re-inspecting `pos.special`: `Some(Cen)` is a structural failure (warn/reject),
+/// any other `None` is an environment gap (silent fallback).
+///
+/// Precondition: offset-carrying positions are bailed out by the caller before
+/// this is called; this function does not inspect `pos.offset`.
+// Will be called by normalize_genome in the next task (Task 2).
+#[allow(dead_code)]
+fn resolve_special_genome_pos<P: ReferenceProvider>(
+    pos: &GenomePos,
+    accession: &str,
+    provider: &P,
+) -> Result<Option<u64>, FerroError> {
+    match pos.special {
+        None => Ok(Some(pos.base)),
+        Some(SpecialPosition::Pter) => Ok(Some(1)),
+        // Length unavailable -> graceful None (caller canonicalizes).
+        Some(SpecialPosition::Qter) => Ok(provider.get_sequence_length(accession).ok()),
+        Some(SpecialPosition::Cen) => Ok(None),
+    }
+}
+
 /// Main normalizer struct
 pub struct Normalizer<P: ReferenceProvider> {
     provider: P,
