@@ -961,6 +961,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // In strict mode, reject an unresolvable `cen` position (W4005). A
+        // centromere is an assembly-annotated region with no sequence-derivable
+        // base, so `normalize_genome` cannot place it and emits the
+        // `UnresolvableSpecialPosition` warning. The registry declares
+        // `warn_accept()` (Strict → Reject); promote it here rather than
+        // silently echoing the input. See #488.
+        if self.config.should_reject_unresolvable_centromere() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::UnresolvableSpecialPosition { accession, marker } => {
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}:g.{marker} — '{marker}' is an assembly-annotated \
+                             region with no sequence-derivable coordinate and cannot be \
+                             normalized (UnresolvableCentromere / W4005)"
+                        ),
+                    })
+                }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         Ok(result.result)
     }
 
@@ -8281,6 +8304,33 @@ mod tests {
             "NC_PASTEND.1:g.1_5000del",
             "past-end span is echoed verbatim (shuffle cannot shift past the fetched window)"
         );
+    }
+
+    #[test]
+    fn genome_cen_strict_mode_rejects() {
+        use crate::error_handling::ErrorMode;
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.5", "ACGT".repeat(50));
+
+        // Strict mode promotes the unresolvable-cen warning to an error
+        // instead of silently echoing the input.
+        let strict = Normalizer::with_config(
+            provider.clone(),
+            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
+        );
+        let v = parse_hgvs("NC_TEST.5:g.cendel").unwrap();
+        let result = strict.normalize(&v);
+        assert!(
+            matches!(result, Err(FerroError::InvalidCoordinates { .. })),
+            "strict mode must reject unresolvable cen, got {result:?}"
+        );
+
+        // Lenient (default) mode accepts and preserves the input.
+        let lenient = Normalizer::new(provider);
+        let v2 = parse_hgvs("NC_TEST.5:g.cendel").unwrap();
+        let out = lenient.normalize(&v2).expect("lenient accepts cen");
+        assert_eq!(format!("{out}"), "NC_TEST.5:g.cendel");
     }
 
     #[test]

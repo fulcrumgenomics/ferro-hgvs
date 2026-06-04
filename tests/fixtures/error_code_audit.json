@@ -470,6 +470,14 @@
       "spec_section_notes": "Strict rejects via FerroError::InvalidCoordinates; lenient emits W4004 and short-circuits normalize() to the canonical variant (no further shifting); silent skips the check entirely. Wired in normalize_cds via check_cds_pos_past_end and in normalize_tx via check_tx_pos_past_end before each needs_normalization short-circuit, so substitutions and indels both get checked on both axes. Uses Transcript::cds_length()/utr3_length()/utr5_length() and sequence_length() so the bound source-of-truth lives in one place. Covers c.<N> against CDS length (bound_kind cds-end), c.*<N> against the post-CDS transcript suffix (transcript-end), c.-<N> against the 5'UTR length (5utr-start, #348), and n.<N> against full transcript length (transcript-end, #347). Intronic offsets remain out of scope."
     },
     {
+      "code": "W4005",
+      "description": "UnresolvableCentromere — a `cen` genomic position cannot be resolved to a concrete coordinate (a centromere is an assembly-annotated region, not a sequence-derivable base), so it cannot be normalized. `pter`/`qter` resolve to the first/last nucleotide and do normalize. See #488.",
+      "spec_section": "recommendations/general.md: `cen` indicates the centromere of a chromosome; `pter`/`qter` indicate the first/last nucleotide of a chromosome",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
+      "status": "enforced",
+      "spec_section_notes": "Emitted by normalize_genome when a genomic position is `cen`: pter resolves to base 1 and qter to the reference length (both normalize), but cen has no sequence-derivable coordinate. The NormalizationWarning::UnresolvableSpecialPosition is emitted unconditionally; strict mode promotes it to FerroError::InvalidCoordinates via should_reject_unresolvable_centromere(), while lenient/silent preserve the input. Mitochondrial/circular references intentionally do not resolve telomere markers (normalize_mt bails). c./n. telomere markers and cross-reference insert endpoints are out of scope (Phase 2/3)."
+    },
+    {
       "code": "W5001",
       "description": "RefSeqMismatch — stated reference base mismatches actual reference (warning sibling of E3002).",
       "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
