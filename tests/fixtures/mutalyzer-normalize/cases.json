@@ -44,8 +44,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444insGAT"
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsIleSer)",
-      "to_test": true
+      "protein_description": "NP_000068.1:p.(Met54delinsIleSer)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Mid-codon in-frame insertion (ATC after c.161, within Met54's codon): ATG AT|ATC|G GGC → ATA(Ile) TCG(Ser) GGC(Gly), so Met54 changes and Ser is added → p.(Met54delinsIleSer), a delins not a clean insertion (#511). ferro's prediction now matches mutalyzer; it differs only by the genomic-context wrapper — bare NP_ per #483/#495 is the spec-correct reference form."
+      }
     },
     {
       "keywords": [
@@ -63,11 +68,16 @@
           "NG_007485.1(NP_478102.2):p.(Asp68_Gly69insIle)"
         ]
       ],
-      "protein_description": "NG_007485.1(NP_000068.1):p.(Met54delinsIleSer)",
+      "protein_description": "NP_000068.1:p.(Met54delinsIleSer)",
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+3443_616+3444insGAT"
       ],
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Bracket-form sibling of NG_007485.1(NM_000077.4):c.161_162insATC; same mid-codon in-frame insertion → p.(Met54delinsIleSer) (delins, #511). Matches mutalyzer modulo the bare-NP_ wrapper (#483/#495)."
+      }
     },
     {
       "keywords": [
@@ -3516,8 +3526,13 @@
       "input": "NM_003002.4:c.169_170insATA",
       "normalized": "NM_003002.4:c.169_170insATA",
       "rna_description": "NM_003002.4:r.(169_170insaua)",
-      "protein_description": "NM_003002.4(NP_002993.1):p.(Ser57delinsTyrThr)",
-      "to_test": true
+      "protein_description": "NP_002993.1:p.(Ser57delinsTyrThr)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Mid-codon in-frame insertion (ATA after c.169, within Ser57's codon): TCT → T|ATA|CT → TAT(Tyr) ACT(Thr) GGC(Gly), so Ser57 changes and Thr is added → p.(Ser57delinsTyrThr), a delins not a clean insertion (#511). Matches mutalyzer modulo the bare-NP_ wrapper (#483/#495)."
+      }
     },
     {
       "keywords": [
