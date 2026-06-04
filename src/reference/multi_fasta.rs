@@ -28,6 +28,7 @@ use log::warn;
 
 use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
+use crate::reference::authoritative::CanonicalOverrides;
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
 
@@ -89,6 +90,8 @@ pub struct MultiFastaProvider {
     cdot_mapper: Option<CdotMapper>,
     /// Supplemental CDS info for transcripts not in cdot
     supplemental_cds: SupplementalCdsInfo,
+    /// Authoritative canonical overrides (issue #520), loaded from the manifest.
+    canonical_overrides: CanonicalOverrides,
 }
 
 impl MultiFastaProvider {
@@ -160,6 +163,7 @@ impl MultiFastaProvider {
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
+            canonical_overrides: CanonicalOverrides::default(),
         })
     }
 
@@ -191,6 +195,7 @@ impl MultiFastaProvider {
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
+            canonical_overrides: CanonicalOverrides::default(),
         })
     }
 
@@ -382,6 +387,28 @@ impl MultiFastaProvider {
             }
         }
 
+        // Canonical overrides (issue #520): load the authoritative-overrides
+        // file and reconcile it into the cdot metadata so both the served
+        // transcript and the projection path see the corrected CDS/protein.
+        if let Some(overrides_ref) = manifest.get("canonical_overrides").and_then(|v| v.as_str()) {
+            let path = resolve_path(overrides_ref);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match CanonicalOverrides::from_json(&text) {
+                    Ok(ov) => {
+                        eprintln!("Loaded {} canonical override records", ov.len());
+                        provider.canonical_overrides = ov;
+                        provider.reconcile_cdot_with_overrides();
+                    }
+                    Err(e) => eprintln!("Warning: Failed to parse canonical overrides: {}", e),
+                },
+                Err(e) => eprintln!(
+                    "Warning: Failed to read canonical overrides {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+
         Ok(provider)
     }
 
@@ -448,6 +475,7 @@ impl MultiFastaProvider {
             aliases: build_chromosome_aliases(),
             cdot_mapper: Some(cdot_mapper),
             supplemental_cds: SupplementalCdsInfo::default(),
+            canonical_overrides: CanonicalOverrides::default(),
         })
     }
 
@@ -876,7 +904,96 @@ impl MultiFastaProvider {
     /// issue #332: when the input carries an NG/NC `genomic_context`, the
     /// caller passes the inferred build so the transcript's `chromosome` is
     /// populated against the correct alignment.
+    /// Apply any loaded canonical overrides to a freshly-built transcript,
+    /// correcting its CDS/protein metadata in place (issue #520). No-op when no
+    /// overrides are loaded. Called at the single [`get_transcript_on_build`]
+    /// chokepoint so every served transcript — lenient, strict, or
+    /// variant-aware — is corrected before it is cached/translated.
+    fn apply_canonical_overrides_to(&self, tx: &mut Transcript) {
+        if !self.canonical_overrides.is_empty() {
+            crate::reference::validate::apply_canonical_overrides(tx, &self.canonical_overrides);
+        }
+    }
+
+    /// Reconcile the cdot mapper's parallel CDS/`protein` with the canonical
+    /// overrides, so the projection path — which reads cdot's fields
+    /// preferentially over the served `Transcript` — also sees the corrected
+    /// values. Only reconciles a fully-coding authoritative record whose
+    /// served FASTA length matches (so the coordinates apply); authoritative
+    /// 1-based bounds are converted to cdot's 0-based start / 0-based-exclusive
+    /// end convention.
+    ///
+    /// Scope: gated on a FASTA index entry, so a transcript served only via
+    /// cdot-genome synthesis (no FASTA entry, the #331 path) is NOT reconciled
+    /// here even though the served-`Transcript` path
+    /// ([`apply_canonical_overrides_to`]) may still correct it. The corpus
+    /// targets (#520) are FASTA-backed, so this gap affects only
+    /// synthesis-backed transcripts; closing it (gating on the cdot exon-sum
+    /// length when no FASTA entry exists) is left as a follow-up.
+    fn reconcile_cdot_with_overrides(&mut self) {
+        use crate::data::cdot::CdotTranscript;
+        if self.cdot_mapper.is_none() {
+            return;
+        }
+        // Compute corrections under immutable borrows, then apply them.
+        let mut corrections: Vec<(String, CdotTranscript)> = Vec::new();
+        {
+            let cdot = self.cdot_mapper.as_ref().unwrap();
+            for (acc, auth) in &self.canonical_overrides.records {
+                let (Some(cds_start), Some(cds_end), Some(protein)) =
+                    (auth.cds_start, auth.cds_end, auth.protein_id.as_ref())
+                else {
+                    continue; // not fully coding → don't half-correct
+                };
+                // 1-based start → 0-based; guard against a degenerate `0` start
+                // (unsigned underflow) from a malformed overrides file.
+                let Some(cds_start_0based) = cds_start.checked_sub(1) else {
+                    continue;
+                };
+                // Served FASTA length must match the authoritative length, else
+                // the coordinates index a different sequence.
+                if self.index.get(acc).map(|e| e.length) != Some(auth.tx_length) {
+                    continue;
+                }
+                // Require an *exact* cdot record for `acc`: `get_transcript`
+                // version-falls-back to a sibling, and cloning that sibling
+                // under `acc` would carry over the wrong exon alignment / contig
+                // metadata. Only reconcile when cdot holds this exact version.
+                if cdot.has_transcript_exact(acc) {
+                    let existing = cdot
+                        .get_transcript(acc)
+                        .expect("exact cdot presence checked above");
+                    corrections.push((
+                        acc.clone(),
+                        CdotTranscript {
+                            cds_start: Some(cds_start_0based), // 1-based incl → 0-based incl
+                            cds_end: Some(cds_end),            // 1-based incl == 0-based excl
+                            protein: Some(protein.clone()),
+                            ..existing.clone()
+                        },
+                    ));
+                }
+            }
+        }
+        let cdot = self.cdot_mapper.as_mut().unwrap();
+        for (acc, rec) in corrections {
+            cdot.add_transcript(acc, rec);
+        }
+    }
+
+    /// Build a transcript and apply canonical overrides — the single chokepoint
+    /// every public entry point funnels through.
     fn get_transcript_on_build(
+        &self,
+        id: &str,
+        build_hint: Option<&str>,
+    ) -> Result<Transcript, FerroError> {
+        let mut tx = self.get_transcript_on_build_inner(id, build_hint)?;
+        self.apply_canonical_overrides_to(&mut tx);
+        Ok(tx)
+    }
+
+    fn get_transcript_on_build_inner(
         &self,
         id: &str,
         build_hint: Option<&str>,
@@ -1149,6 +1266,11 @@ impl MultiFastaProvider {
     ///
     /// The lenient `get_transcript` and the [`ReferenceProvider`] trait impl
     /// are unchanged.
+    ///
+    /// Canonical overrides (#520) still apply: strict resolution is about the
+    /// version-exactness of the served *bases*, while a canonical override
+    /// corrects CDS/`protein` *metadata* on the exact-version record — the two
+    /// are orthogonal, so a strict caller still gets the canonical metadata.
     pub fn get_transcript_strict(&self, id: &str) -> Result<Transcript, FerroError> {
         if !self.has_transcript_exact(id) {
             return Err(FerroError::TranscriptVersionNotExact {
@@ -2527,5 +2649,218 @@ mod tests {
         // ...but a FASTA sibling (.2) shadows it on the read path, so .1 is not
         // reachable at its exact version.
         assert!(!provider.has_transcript_version_exact("NM_TEST.1"));
+    }
+
+    // --- canonical-override wiring (issue #520, edge 2) ---------------------
+
+    #[test]
+    fn get_transcript_applies_canonical_override() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        // FASTA-only transcript (9 nt); the override supplies the canonical CDS
+        // + protein. get_transcript must return the corrected metadata.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+
+        let tx = provider.get_transcript("NM_OV.2").unwrap();
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn reconcile_cdot_converts_authoritative_to_cdot_coords() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::Strand;
+
+        // FASTA transcript (9 nt) + a cdot record with the WRONG CDS/protein.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_OV.2".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "chr1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 0, 9]],
+                cds_start: Some(2), // wrong
+                cds_end: Some(6),   // wrong
+                gene_id: None,
+                protein: Some("NP_WRONG.9".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1), // authoritative 1-based
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+
+        provider.reconcile_cdot_with_overrides();
+
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_OV.2")
+            .unwrap();
+        // 1-based start 1 → cdot 0-based 0; end 9 unchanged (0-based exclusive).
+        assert_eq!(rec.cds_start, Some(0));
+        assert_eq!(rec.cds_end, Some(9));
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn reconcile_cdot_skips_on_length_mismatch() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::Strand;
+        // Served FASTA is 9 nt but the authoritative length is 99 → the
+        // coordinates don't apply; cdot must be left untouched.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_OV.2".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "chr1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 0, 9]],
+                cds_start: Some(2),
+                cds_end: Some(6),
+                gene_id: None,
+                protein: Some("NP_WRONG.9".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 99, // mismatch
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+
+        provider.reconcile_cdot_with_overrides();
+
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_OV.2")
+            .unwrap();
+        assert_eq!(rec.cds_start, Some(2), "length mismatch → cdot untouched");
+        assert_eq!(rec.protein.as_deref(), Some("NP_WRONG.9"));
+    }
+
+    #[test]
+    fn reconcile_cdot_requires_exact_version_not_sibling() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::Strand;
+        // FASTA carries NM_OV.2 (9 nt). cdot has only the .4 SIBLING (different
+        // contig/exons). An override for .2 must NOT clone the .4 record under
+        // .2: `get_transcript` version-falls-back to .4, but reconcile requires
+        // an *exact* .2 cdot record, so it leaves cdot untouched.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_OV.4".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "chrSIBLING".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 0, 9]],
+                cds_start: Some(2),
+                cds_end: Some(6),
+                gene_id: None,
+                protein: Some("NP_SIB.4".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+
+        provider.reconcile_cdot_with_overrides();
+
+        // No exact .2 in cdot → nothing written under .2.
+        assert!(
+            !provider
+                .cdot_mapper()
+                .unwrap()
+                .has_transcript_exact("NM_OV.2"),
+            "a sibling-only cdot record must not be cloned under the exact version"
+        );
+        // The .4 sibling is left untouched.
+        let sib = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_OV.4")
+            .unwrap();
+        assert_eq!(sib.contig, "chrSIBLING");
+        assert_eq!(sib.protein.as_deref(), Some("NP_SIB.4"));
+    }
+
+    #[test]
+    fn get_transcript_strict_also_applies_canonical_override() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        // The exact version is in the FASTA index, so strict succeeds; the
+        // override must still be applied (orthogonal to version-exactness).
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+        let tx = provider.get_transcript_strict("NM_OV.2").unwrap();
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn get_transcript_for_variant_applies_canonical_override() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        // A bare-NM_ coding variant routes through get_transcript_for_variant's
+        // no-parent branch → the wrapper → override applied.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+        });
+        provider.canonical_overrides = ov;
+        let variant = crate::parse_hgvs("NM_OV.2:c.4C>A").unwrap();
+        let tx = provider.get_transcript_for_variant(&variant).unwrap();
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
     }
 }
