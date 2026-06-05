@@ -830,6 +830,39 @@ pub struct Normalizer<P: ReferenceProvider> {
     config: NormalizeConfig,
 }
 
+/// Resolve a special `c.` position to a concrete [`CdsPos`] using the transcript's
+/// CDS structure. `pter` maps to transcript position 1 projected into c. coords;
+/// `qter` maps to the last transcript position projected into c. coords; `cen` returns
+/// `Ok(None)` (a centromere has no coordinate on a transcript); a plain (non-special)
+/// position is returned as-is inside `Some`.
+///
+/// Returns `Ok(None)` when the projection cannot be computed (non-coding / missing
+/// CDS metadata) so the caller can fall back to canonicalization. The caller can
+/// distinguish `cen` (warn/reject) from a projection gap by re-inspecting
+/// `pos.special`.
+// Not yet wired into normalize_cds (Task 4); suppress dead-code lint until then.
+#[allow(dead_code)]
+fn resolve_special_cds_pos(
+    pos: &CdsPos,
+    transcript: &crate::reference::transcript::Transcript,
+) -> Result<Option<CdsPos>, FerroError> {
+    use crate::convert::mapper::CoordinateMapper;
+    use crate::hgvs::location::{SpecialPosition, TxPos};
+
+    let special = match pos.special {
+        None => return Ok(Some(*pos)),
+        Some(s) => s,
+    };
+    let tx_pos = match special {
+        SpecialPosition::Pter => TxPos::new(1),
+        SpecialPosition::Qter => TxPos::new(transcript.sequence_length() as i64),
+        SpecialPosition::Cen => return Ok(None),
+    };
+    let mapper = CoordinateMapper::new(transcript);
+    // A projection error (non-coding / missing CDS) is a graceful fallback.
+    Ok(mapper.tx_to_cds(&tx_pos).ok())
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Create a new normalizer with the given reference provider
     pub fn new(provider: P) -> Self {
@@ -8360,6 +8393,81 @@ mod tests {
         assert!(
             format!("{}", result.unwrap()).contains("qter"),
             "unresolved qter should be returned verbatim"
+        );
+    }
+
+    #[test]
+    fn resolve_special_cds_pos_maps_markers() {
+        use crate::hgvs::location::CdsPos;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // 5'UTR = 61 (cds_start=62), CDS 62..=124, sequence length 200 -> qter c.*(200-124)=c.*76.
+        let tx = Transcript::new(
+            "NM_TEST.1".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        );
+        let pter = resolve_special_cds_pos(&CdsPos::pter(), &tx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(format!("{pter}"), "-61");
+        let qter = resolve_special_cds_pos(&CdsPos::qter(), &tx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(format!("{qter}"), "*76");
+        assert_eq!(resolve_special_cds_pos(&CdsPos::cen(), &tx).unwrap(), None);
+        let plain = CdsPos::new(42);
+        assert_eq!(resolve_special_cds_pos(&plain, &tx).unwrap(), Some(plain));
+    }
+
+    #[test]
+    fn resolve_special_cds_pos_boundary_branches() {
+        use crate::hgvs::location::CdsPos;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // No 5'UTR (cds_start=1) -> pter -> c.1; no 3'UTR (cds_end=L=100) -> qter -> c.100.
+        let tx = Transcript::new(
+            "NM_NOUTR.1".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(25),
+            Some(1),
+            Some(100),
+            vec![Exon::new(1, 1, 100)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                resolve_special_cds_pos(&CdsPos::pter(), &tx)
+                    .unwrap()
+                    .unwrap()
+            ),
+            "1"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                resolve_special_cds_pos(&CdsPos::qter(), &tx)
+                    .unwrap()
+                    .unwrap()
+            ),
+            "100"
         );
     }
 }
