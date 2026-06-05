@@ -1,14 +1,23 @@
-//! Offline structural validation of transcript reference records.
+//! Validation of transcript reference records (issue #520).
 //!
-//! These checks are **self-contained**: they look only at a single
-//! [`Transcript`]'s own sequence, CDS coordinates, and exon alignment, with no
-//! network access and no authoritative external record. They catch a class of
-//! reference-data corruption where the served bases and the alignment/CDS
-//! metadata disagree, or the CDS does not translate as a sane open reading
-//! frame.
+//! Two tiers, both reporting [`TranscriptAnomaly`] tagged with an
+//! [`AnomalyConfidence`]:
 //!
-//! Scope (issue #520, phase 0): this is the cheap, offline tier. Anomalies are
-//! tagged with an [`AnomalyConfidence`]:
+//! 1. **Offline structural** ([`validate_transcript_record`]) — self-contained
+//!    checks over a single [`Transcript`]'s own sequence, CDS coordinates, and
+//!    exon alignment; no network, no external record.
+//! 2. **Authoritative comparison** ([`validate_against_authoritative`]) —
+//!    compares the served transcript's length, CDS bounds, and paired protein
+//!    against the canonical RefSeq record for the exact accession version (an
+//!    [`AuthoritativeRecord`], parsed from GenBank in
+//!    [`crate::reference::authoritative`]). This is the precise tier that
+//!    catches the mis-pairing / non-canonical-length cases the offline tier
+//!    cannot (e.g. `NM_012459.2` paired with `NP_036591.3`; `NM_000193.2`
+//!    served at 4650 nt vs the canonical 1576 nt).
+//!
+//! ## Offline structural tier
+//!
+//! Anomalies are tagged:
 //!
 //! - **`Corruption`** — high-confidence structural problems: the served
 //!   sequence is *shorter* than the exon alignment needs (missing bases), the
@@ -21,19 +30,21 @@
 //!   start codons, stop-codon readthrough exists, and `partial` RefSeq records
 //!   legitimately lack a start or stop. Treat these as "review", not proof.
 //!
-//! Deliberately out of scope here:
+//! Deliberately out of scope for the **offline** tier (handled by the
+//! authoritative tier instead):
 //!
-//! - A served sequence *longer* than the alignment is **not** flagged — a
-//!   poly-A tail or unaligned 3' bases routinely make the transcript FASTA
-//!   longer than the genome-derived exon alignment. Detecting an
-//!   implausibly-long sequence precisely (e.g. issue #505's `NM_000193.2`,
-//!   served ~3× too long) needs the authoritative transcript length, which is
-//!   the authoritative-comparison phase, not this offline tier.
-//! - A sequence that is internally consistent but non-canonical or mis-paired
-//!   to the wrong protein version (e.g. `NM_012459.2`) — also a later phase,
-//!   since it requires the authoritative RefSeq record for the exact version.
+//! - A served sequence *longer* than the exon alignment is **not** flagged
+//!   offline — a poly-A tail or unaligned 3' bases routinely make the
+//!   transcript FASTA longer than the genome-derived alignment. The precise
+//!   over-length check (e.g. `NM_000193.2`) lives in
+//!   [`validate_against_authoritative`], which compares against the canonical
+//!   transcript length.
+//! - A sequence internally consistent but mis-paired to the wrong protein
+//!   version (e.g. `NM_012459.2`) is invisible offline; the authoritative tier
+//!   catches it via the CDS / protein_id comparison.
 
 use crate::error::FerroError;
+use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
 
@@ -64,6 +75,15 @@ pub enum AnomalyKind {
     /// The record failed to load from the provider for a reason other than
     /// "not found" (e.g. degenerate coordinates rejected during construction).
     LoadError,
+    /// The served transcript length disagrees with the authoritative RefSeq
+    /// record for the exact accession version.
+    AuthoritativeLengthMismatch,
+    /// The served CDS coordinates disagree with the authoritative record.
+    AuthoritativeCdsMismatch,
+    /// The served paired protein accession disagrees with the authoritative
+    /// record (e.g. `NM_012459.2` served with `NP_036591.3` instead of the
+    /// canonical `NP_036591.2`).
+    AuthoritativeProteinIdMismatch,
 }
 
 /// How much confidence an anomaly carries that the record is genuinely corrupt.
@@ -269,6 +289,115 @@ pub fn validate_transcripts<P: ReferenceProvider>(
             Err(FerroError::ReferenceNotFound { .. }) => {} // unknown accession: not our concern
             Err(e) => anomalies.push(TranscriptAnomaly::new(
                 id,
+                AnomalyKind::LoadError,
+                AnomalyConfidence::Corruption,
+                format!("transcript failed to load: {e}"),
+            )),
+        }
+    }
+    anomalies
+}
+
+/// Compare a served transcript against the authoritative RefSeq record for its
+/// exact accession version, returning a [`TranscriptAnomaly`] for each
+/// disagreement.
+///
+/// Unlike the offline structural checks ([`validate_transcript_record`]), these
+/// are precise: the authoritative record is the canonical truth for the exact
+/// version, so a disagreement is high-confidence corruption (`Corruption`). All
+/// comparisons are in **1-based** coordinates (the served `Transcript`'s CDS is
+/// already 1-based; the [`AuthoritativeRecord`] is 1-based by construction).
+///
+/// Checks:
+/// - **length**: served sequence length vs `tx_length`;
+/// - **CDS**: served `(cds_start, cds_end)` vs the authoritative bounds;
+/// - **protein_id**: served paired protein vs the authoritative `/protein_id`.
+///
+/// CDS and protein_id are compared only when **both** sides carry the value. A
+/// served `None` is deliberately NOT treated as a "non-coding / no-protein vs
+/// coding" mismatch: the provider commonly leaves these fields unpopulated for
+/// reasons unrelated to corruption (e.g. the cdot-synthesis path sets
+/// `protein_id: None`), so flagging a presence difference would be
+/// false-positive-prone. A presence-aware check belongs to a richer
+/// authoritative ingestion, not this comparison.
+pub fn validate_against_authoritative(
+    tx: &Transcript,
+    auth: &AuthoritativeRecord,
+) -> Vec<TranscriptAnomaly> {
+    let mut anomalies = Vec::new();
+    let id = &tx.id;
+
+    if let Some(seq) = tx.sequence.as_deref() {
+        let served = seq.len() as u64;
+        if served != auth.tx_length {
+            anomalies.push(TranscriptAnomaly::new(
+                id,
+                AnomalyKind::AuthoritativeLengthMismatch,
+                AnomalyConfidence::Corruption,
+                format!(
+                    "served sequence is {served} nt but the authoritative record \
+                     {} is {} nt",
+                    auth.accession, auth.tx_length
+                ),
+            ));
+        }
+    }
+
+    // Both sides are 1-based inclusive. `Transcript.cds_end` needs no
+    // conversion from cdot because cdot's 0-based *exclusive* end is
+    // numerically identical to a 1-based inclusive end (see cdot.rs and
+    // multi_fasta.rs CDS construction); the authoritative `cds_end` is the
+    // GenBank `a..b` value, also 1-based inclusive.
+    if let (Some(ts), Some(te), Some(as_), Some(ae)) =
+        (tx.cds_start, tx.cds_end, auth.cds_start, auth.cds_end)
+    {
+        if (ts, te) != (as_, ae) {
+            anomalies.push(TranscriptAnomaly::new(
+                id,
+                AnomalyKind::AuthoritativeCdsMismatch,
+                AnomalyConfidence::Corruption,
+                format!(
+                    "served CDS {ts}..{te} (1-based) disagrees with the authoritative \
+                     {as_}..{ae}"
+                ),
+            ));
+        }
+    }
+
+    if let (Some(tp), Some(ap)) = (tx.protein_id.as_deref(), auth.protein_id.as_deref()) {
+        if tp != ap {
+            anomalies.push(TranscriptAnomaly::new(
+                id,
+                AnomalyKind::AuthoritativeProteinIdMismatch,
+                AnomalyConfidence::Corruption,
+                format!("served protein {tp} disagrees with the authoritative {ap}"),
+            ));
+        }
+    }
+
+    anomalies
+}
+
+/// Validate every transcript named in `overrides` against its authoritative
+/// record, pulling the served transcript from `provider`.
+///
+/// As in [`validate_transcripts`], an accession the provider does not have is
+/// skipped (`ReferenceNotFound`); any other load error surfaces as a
+/// [`AnomalyKind::LoadError`] anomaly. The skip is deliberate even though we
+/// hold authoritative data for the accession: "we have the canonical record
+/// but the reference does not ship this transcript" is an inventory/coverage
+/// concern for the prepare/check layer, not a corruption of a served record.
+pub fn validate_against_overrides<P: ReferenceProvider>(
+    provider: &P,
+    overrides: &CanonicalOverrides,
+) -> Vec<TranscriptAnomaly> {
+    let mut anomalies = Vec::new();
+    for (accession, auth) in &overrides.records {
+        match provider.get_transcript(accession) {
+            Ok(tx) => anomalies.extend(validate_against_authoritative(&tx, auth)),
+            Err(FerroError::ReferenceNotFound { .. }) => {}
+            Err(e) => anomalies.push(TranscriptAnomaly::new(
+                accession,
                 AnomalyKind::LoadError,
                 AnomalyConfidence::Corruption,
                 format!("transcript failed to load: {e}"),
@@ -530,5 +659,132 @@ mod tests {
         assert_eq!(kinds(&found), vec![AnomalyKind::LoadError]);
         assert_eq!(found[0].transcript_id, "NM_BROKEN.1");
         assert_eq!(found[0].confidence, AnomalyConfidence::Corruption);
+    }
+
+    // --- authoritative comparison (phase 2) ---------------------------------
+
+    fn auth(
+        accession: &str,
+        tx_length: u64,
+        cds: Option<(u64, u64)>,
+        protein: Option<&str>,
+    ) -> AuthoritativeRecord {
+        AuthoritativeRecord {
+            accession: accession.to_string(),
+            tx_length,
+            cds_start: cds.map(|(s, _)| s),
+            cds_end: cds.map(|(_, e)| e),
+            protein_id: protein.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn authoritative_match_yields_no_anomalies() {
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+        let a = auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1"));
+        assert!(validate_against_authoritative(&tx, &a).is_empty());
+    }
+
+    #[test]
+    fn authoritative_protein_and_cds_mismatch_are_corruption() {
+        // NM_012459.2 shape: served pairs the short isoform (NP_036591.3, CDS
+        // 34..285); the authoritative record is NP_036591.2, CDS 31..327.
+        let s = "A".repeat(327);
+        let mut tx = coding_tx(&s, 34, 285);
+        tx.protein_id = Some("NP_036591.3".to_string());
+        let a = auth("NM_012459.2", 327, Some((31, 327)), Some("NP_036591.2"));
+        let found = validate_against_authoritative(&tx, &a);
+        let ks = kinds(&found);
+        assert!(
+            ks.contains(&AnomalyKind::AuthoritativeCdsMismatch),
+            "got {ks:?}"
+        );
+        assert!(
+            ks.contains(&AnomalyKind::AuthoritativeProteinIdMismatch),
+            "got {ks:?}"
+        );
+        assert!(found
+            .iter()
+            .all(|x| x.confidence == AnomalyConfidence::Corruption));
+    }
+
+    #[test]
+    fn authoritative_length_mismatch_is_flagged() {
+        // NM_000193.2 shape: served 4650 nt vs authoritative 1576 nt.
+        let s = "A".repeat(4650);
+        let mut tx = coding_tx(&s, 342, 1730);
+        tx.protein_id = Some("NP_000184.1".to_string());
+        let a = auth("NM_000193.2", 1576, Some((152, 1540)), Some("NP_000184.1"));
+        let ks = kinds(&validate_against_authoritative(&tx, &a));
+        assert!(
+            ks.contains(&AnomalyKind::AuthoritativeLengthMismatch),
+            "got {ks:?}"
+        );
+        assert!(
+            ks.contains(&AnomalyKind::AuthoritativeCdsMismatch),
+            "got {ks:?}"
+        );
+    }
+
+    #[test]
+    fn validate_against_overrides_pulls_served_transcript_from_provider() {
+        use crate::reference::mock::MockProvider;
+        let mut provider = MockProvider::new();
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_WRONG.9".to_string());
+        provider.add_transcript(tx);
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_RIGHT.1")));
+        ov.insert(auth("NM_ABSENT.1", 100, Some((1, 99)), Some("NP_ABSENT.1"))); // skipped
+
+        let found = validate_against_overrides(&provider, &ov);
+        assert_eq!(
+            kinds(&found),
+            vec![AnomalyKind::AuthoritativeProteinIdMismatch]
+        );
+        assert_eq!(found[0].transcript_id, "NM_TEST.1");
+    }
+
+    #[test]
+    fn missing_served_protein_or_cds_is_not_a_presence_mismatch() {
+        // A served record that leaves protein_id/CDS unpopulated must NOT be
+        // flagged against a coding authoritative record (a provider `None`
+        // means "not populated", not "non-coding").
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = None;
+        tx.cds_start = None;
+        tx.cds_end = None;
+        let a = auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1"));
+        assert!(
+            validate_against_authoritative(&tx, &a).is_empty(),
+            "presence-only differences must not be flagged"
+        );
+    }
+
+    #[test]
+    fn coordinate_only_served_record_skips_length_check() {
+        // No served sequence → length check skipped despite a differing length.
+        let tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_X.1".to_string()),
+            exons: vec![Exon::new(1, 1, 9)],
+            ..Default::default()
+        };
+        let a = auth("NM_TEST.1", 9999, Some((1, 9)), Some("NP_X.1"));
+        assert!(validate_against_authoritative(&tx, &a).is_empty());
+    }
+
+    #[test]
+    fn validate_against_overrides_surfaces_non_not_found_load_errors() {
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_BROKEN.1", 9, Some((1, 9)), Some("NP_X.1")));
+        let found = validate_against_overrides(&FailingProvider, &ov);
+        assert_eq!(kinds(&found), vec![AnomalyKind::LoadError]);
+        assert_eq!(found[0].transcript_id, "NM_BROKEN.1");
     }
 }
