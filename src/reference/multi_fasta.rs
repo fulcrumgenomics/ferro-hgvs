@@ -955,13 +955,13 @@ impl MultiFastaProvider {
     /// 1-based bounds are converted to cdot's 0-based start / 0-based-exclusive
     /// end convention.
     ///
-    /// Scope: gated on a FASTA index entry, so a transcript served only via
-    /// cdot-genome synthesis (no FASTA entry, the #331 path) is NOT reconciled
-    /// here even though the served-`Transcript` path
-    /// ([`apply_canonical_overrides_to`]) may still correct it. The corpus
-    /// targets (#520) are FASTA-backed, so this gap affects only
-    /// synthesis-backed transcripts; closing it (gating on the cdot exon-sum
-    /// length when no FASTA entry exists) is left as a follow-up.
+    /// Reconciles when the coordinates will index canonical bases: either the
+    /// served FASTA already has the authoritative length, OR the override
+    /// carries the canonical `sequence` (so the served bases are replaced on
+    /// read — this also covers a cdot-synthesis-only transcript with no FASTA
+    /// entry). A length-only FASTA match with no carried `sequence` still gates
+    /// on the FASTA index length. (cdot exons themselves are not rewritten —
+    /// the same exon-staleness caveat as the served-`Transcript` correction.)
     fn reconcile_cdot_with_overrides(&mut self) {
         use crate::data::cdot::CdotTranscript;
         if self.cdot_mapper.is_none() {
@@ -982,9 +982,12 @@ impl MultiFastaProvider {
                 let Some(cds_start_0based) = cds_start.checked_sub(1) else {
                     continue;
                 };
-                // Served FASTA length must match the authoritative length, else
-                // the coordinates index a different sequence.
-                if self.index.get(acc).map(|e| e.length) != Some(auth.tx_length) {
+                // Reconcile when the coordinates will apply to canonical bases:
+                // either the served FASTA already has the authoritative length,
+                // or the override carries the canonical `sequence` (so the
+                // served transcript's bases are replaced on read).
+                let served_matches = self.index.get(acc).map(|e| e.length) == Some(auth.tx_length);
+                if !served_matches && auth.sequence.is_none() {
                     continue;
                 }
                 if let Some(existing) = cdot.get_transcript(acc) {
@@ -2648,6 +2651,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2688,6 +2692,7 @@ mod tests {
             cds_start: Some(1), // authoritative 1-based
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2735,6 +2740,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2762,6 +2768,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
         let tx = provider.get_transcript_strict("NM_OV.2").unwrap();
@@ -2782,6 +2789,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
         let variant = crate::parse_hgvs("NM_OV.2:c.4C>A").unwrap();
@@ -2830,6 +2838,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_T.1".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 

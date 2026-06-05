@@ -43,6 +43,13 @@ pub struct AuthoritativeRecord {
     /// `NP_036591.2`). `None` for a non-coding record or one without the
     /// qualifier.
     pub protein_id: Option<String>,
+    /// The canonical transcript bases (upper-cased `ORIGIN` sequence). When
+    /// present, the correction path can *replace* a served non-canonical
+    /// sequence (the wrong-sequence class, e.g. `NM_000193.2`) and detect a
+    /// same-length-but-edited sequence — not just flag a length mismatch.
+    /// Optional because carrying full sequences enlarges the overrides file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
 }
 
 /// Parse the authoritative facts out of a single GenBank flat-file record.
@@ -67,7 +74,9 @@ pub fn parse_authoritative_genbank(genbank: &str) -> Option<AuthoritativeRecord>
     let mut cds_start: Option<u64> = None;
     let mut cds_end: Option<u64> = None;
     let mut protein_id: Option<String> = None;
-    let mut tx_length: u64 = 0;
+    // The full transcript bases, accumulated (upper-cased) from the ORIGIN
+    // block; `tx_length` is derived from it.
+    let mut sequence = String::new();
 
     let mut in_origin = false;
     // True while reading the `CDS` feature's qualifier lines (so a stray
@@ -95,9 +104,12 @@ pub fn parse_authoritative_genbank(genbank: &str) -> Option<AuthoritativeRecord>
             if line.starts_with("//") {
                 break;
             }
-            // Sequence lines: "        1 acgtacgt acgt...". Count alphabetic
-            // bases only (the leading number and spaces are not sequence).
-            tx_length += line.bytes().filter(|b| b.is_ascii_alphabetic()).count() as u64;
+            // Sequence lines: "        1 acgtacgt acgt...". Keep alphabetic
+            // bases only (the leading residue number and spaces are not
+            // sequence), upper-cased.
+            for b in line.bytes().filter(u8::is_ascii_alphabetic) {
+                sequence.push(b.to_ascii_uppercase() as char);
+            }
             continue;
         }
 
@@ -152,15 +164,16 @@ pub fn parse_authoritative_genbank(genbank: &str) -> Option<AuthoritativeRecord>
     }
 
     let accession = accession?;
-    if tx_length == 0 {
+    if sequence.is_empty() {
         return None;
     }
     Some(AuthoritativeRecord {
         accession,
-        tx_length,
+        tx_length: sequence.len() as u64,
         cds_start,
         cds_end,
         protein_id,
+        sequence: Some(sequence),
     })
 }
 
@@ -337,6 +350,11 @@ ORIGIN
         assert_eq!(rec.cds_start, Some(4));
         assert_eq!(rec.cds_end, Some(30));
         assert_eq!(rec.protein_id.as_deref(), Some("NP_036591.2"));
+        // The full ORIGIN bases are captured, upper-cased.
+        assert_eq!(
+            rec.sequence.as_deref(),
+            Some("ACGATGGCAGAGCTGTAAGGCCACGAGCCT")
+        );
     }
 
     #[test]
@@ -498,6 +516,7 @@ ORIGIN
             cds_start: Some(31),
             cds_end: Some(327),
             protein_id: Some("NP_036591.2".to_string()),
+            sequence: None,
         });
         assert_eq!(ov.len(), 1);
         let json = ov.to_json().unwrap();
@@ -507,6 +526,26 @@ ORIGIN
             back.get("NM_012459.2")
                 .and_then(|r| r.protein_id.as_deref()),
             Some("NP_036591.2")
+        );
+    }
+
+    #[test]
+    fn canonical_overrides_roundtrips_a_record_with_sequence() {
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_X.1".to_string(),
+            tx_length: 4,
+            cds_start: Some(1),
+            cds_end: Some(3),
+            protein_id: Some("NP_X.1".to_string()),
+            sequence: Some("ACGT".to_string()),
+        });
+        let json = ov.to_json().unwrap();
+        let back = CanonicalOverrides::from_json(&json).unwrap();
+        assert_eq!(back, ov);
+        assert_eq!(
+            back.get("NM_X.1").and_then(|r| r.sequence.as_deref()),
+            Some("ACGT")
         );
     }
 
