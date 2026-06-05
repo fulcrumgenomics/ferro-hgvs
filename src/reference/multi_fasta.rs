@@ -955,13 +955,14 @@ impl MultiFastaProvider {
     /// 1-based bounds are converted to cdot's 0-based start / 0-based-exclusive
     /// end convention.
     ///
-    /// Reconciles when the coordinates will index canonical bases: either the
-    /// served FASTA already has the authoritative length, OR the override
-    /// carries the canonical `sequence` (so the served bases are replaced on
-    /// read — this also covers a cdot-synthesis-only transcript with no FASTA
-    /// entry). A length-only FASTA match with no carried `sequence` still gates
-    /// on the FASTA index length. (cdot exons themselves are not rewritten —
-    /// the same exon-staleness caveat as the served-`Transcript` correction.)
+    /// Reconciles when the coordinates will index canonical bases. The served
+    /// length is the FASTA index length when the transcript is FASTA-backed,
+    /// else the cdot exon-alignment length (for a cdot-synthesis-only transcript
+    /// with no FASTA entry). It reconciles when that length matches the
+    /// authoritative length, OR when the override carries the canonical
+    /// `sequence` (the served bases are replaced on read regardless). (cdot
+    /// exons themselves are not rewritten — the same exon-staleness caveat as
+    /// the served-`Transcript` correction.)
     fn reconcile_cdot_with_overrides(&mut self) {
         use crate::data::cdot::CdotTranscript;
         if self.cdot_mapper.is_none() {
@@ -982,12 +983,31 @@ impl MultiFastaProvider {
                 let Some(cds_start_0based) = cds_start.checked_sub(1) else {
                     continue;
                 };
-                // Reconcile when the coordinates will apply to canonical bases:
-                // either the served FASTA already has the authoritative length,
-                // or the override carries the canonical `sequence` (so the
-                // served transcript's bases are replaced on read).
-                let served_matches = self.index.get(acc).map(|e| e.length) == Some(auth.tx_length);
-                if !served_matches && auth.sequence.is_none() {
+                // Reconcile when the coordinates will apply to canonical bases.
+                // The served length is the FASTA index length if the transcript
+                // is FASTA-backed, else — for a cdot-synthesis-only transcript
+                // with no FASTA entry — the length the read path actually
+                // produces via `synthesize_transcript_from_cdot`: the summed exon
+                // *genomic* span (`genomic_end - genomic_start`, i.e. `e[1] -
+                // e[0]`). The raw `max(tx_end)` can disagree with that served
+                // length when an exon's genomic and transcript spans differ, so
+                // `apply_canonical_overrides` would gate on a length the server
+                // never produced. Empty exons → `None` (synthesis errors), so
+                // reconciliation is skipped. Proceed when the length matches the
+                // authoritative length, or when the override carries the
+                // canonical `sequence` (the served bases are replaced on read
+                // regardless).
+                let served_len = self.index.get(acc).map(|e| e.length).or_else(|| {
+                    cdot.get_transcript(acc).and_then(|t| {
+                        if t.exons.is_empty() {
+                            None
+                        } else {
+                            Some(t.exons.iter().map(|e| e[1].saturating_sub(e[0])).sum())
+                        }
+                    })
+                });
+                let length_matches = served_len == Some(auth.tx_length);
+                if !length_matches && auth.sequence.is_none() {
                     continue;
                 }
                 // Require an *exact* cdot record for `acc`: `get_transcript`
@@ -1332,6 +1352,14 @@ impl MultiFastaProvider {
         use crate::reference::validate::validate_translation_against_protein;
         let mut anomalies = Vec::new();
         for (tx_id, protein_acc) in pairs {
+            // Only validate when we serve this *exact* transcript version.
+            // `get_transcript` version-falls-back to a sibling (or synthesizes
+            // from cdot), and translating those bases against the canonical
+            // protein would raise false `TranslationMismatch` anomalies for a
+            // version we don't actually serve (the #505 wrong-attribution guard).
+            if !self.has_transcript_version_exact(tx_id) {
+                continue;
+            }
             let Ok(tx) = self.get_transcript(tx_id) else {
                 continue;
             };
@@ -3004,5 +3032,215 @@ mod tests {
         let found = provider.validate_translations(&[("NM_T.1".to_string(), "NP_T.1".to_string())]);
         assert_eq!(found.len(), 1, "translated MW vs canonical MV → mismatch");
         assert_eq!(found[0].kind, AnomalyKind::TranslationMismatch);
+    }
+
+    #[test]
+    fn validate_translations_skips_non_version_exact_sibling() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::Strand;
+        // FASTA ships only the .4 sibling (bases translate "MW"); a request for
+        // .2 is served the .4 bases via resolve_name's version-strip, so .2 is
+        // NOT version-exact. cdot gives .4 a CDS so the served transcript is
+        // coding and *would* mismatch the canonical "MV" — but translation
+        // validation must SKIP a non-version-exact accession rather than
+        // attribute the sibling's bases to the requested version (#505).
+        let (mut provider, _kept) =
+            build_provider_with_transcripts(&[("NM_T.4", "ATGTGGTAA"), ("NP_T.1", "MV")]);
+        let np = provider.index.get("NP_T.1").unwrap().clone();
+        provider.protein_index.insert("NP_T.1".to_string(), np);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_T.4".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "NC_X.1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 1, 9]],
+                cds_start: Some(0), // 0-based → served 1-based 1
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_T.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        // Precondition: the .4 sibling shadows .2, so .2 is not version-exact.
+        assert!(!provider.has_transcript_version_exact("NM_T.2"));
+        // Control: served .2 bases would translate to a mismatch if validated.
+        let served = provider.get_transcript("NM_T.2").unwrap();
+        assert_eq!(served.cds_start, Some(1), "sibling served as coding");
+        // The non-version-exact request must be skipped → no anomaly.
+        let found = provider.validate_translations(&[("NM_T.2".to_string(), "NP_T.1".to_string())]);
+        assert!(
+            found.is_empty(),
+            "non-version-exact sibling must be skipped, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn reconcile_cdot_uses_exon_sum_for_synthesis_only_transcript() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::Strand;
+        // NM_SYNTH.1 has NO FASTA entry (only the genome contig is indexed); cdot
+        // carries it with exon tx_end=9 → exon-sum length 9, matching the
+        // authoritative length. With no carried `sequence`, reconciliation must
+        // still fire via the cdot exon-sum gate.
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_SYNTH.1".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "NC_TEST.1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 0, 9]],
+                cds_start: Some(2), // wrong
+                cds_end: Some(6),   // wrong
+                gene_id: None,
+                protein: Some("NP_WRONG.9".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_SYNTH.1".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+            sequence: None, // no carried sequence → exon-sum gate must fire
+        });
+        provider.canonical_overrides = ov;
+
+        provider.reconcile_cdot_with_overrides();
+
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_SYNTH.1")
+            .unwrap();
+        assert_eq!(rec.cds_start, Some(0)); // reconciled (1-based 1 → 0-based 0)
+        assert_eq!(rec.cds_end, Some(9));
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
+    /// Build a synthesis-only provider (genome contig only, no transcript FASTA)
+    /// with one cdot record for `acc` given its exons + (wrong) CDS/protein.
+    #[cfg(test)]
+    fn synth_provider_with_cdot(
+        acc: &str,
+        exons: Vec<[u64; 4]>,
+    ) -> (MultiFastaProvider, tempfile::TempDir) {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::Strand;
+        let (mut provider, kept) = build_provider_with_test_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            acc.to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "NC_TEST.1".to_string(),
+                strand: Strand::Plus,
+                exons,
+                cds_start: Some(2), // wrong
+                cds_end: Some(6),   // wrong
+                gene_id: None,
+                protein: Some("NP_WRONG.9".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        (provider, kept)
+    }
+
+    fn coding_override(
+        acc: &str,
+        tx_length: u64,
+    ) -> crate::reference::authoritative::CanonicalOverrides {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: acc.to_string(),
+            tx_length,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
+        });
+        ov
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_multi_exon_uses_genomic_span() {
+        // Two exons with genomic spans 5 (0..5) and 4 (10..14) → summed genomic
+        // span 9 == authoritative length → reconcile. (Here the genomic span and
+        // raw max tx_end coincide; the next test pins the case where they don't.)
+        let (mut provider, _kept) =
+            synth_provider_with_cdot("NM_MX.1", vec![[0, 5, 0, 5], [10, 14, 5, 9]]);
+        provider.canonical_overrides = coding_override("NM_MX.1", 9);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_MX.1")
+            .unwrap();
+        assert_eq!(rec.cds_start, Some(0));
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_uses_served_length_not_raw_tx_end() {
+        // A cdot exon whose genomic span (12 bases, 0..12) exceeds its transcript
+        // extent (tx_end 9) — the served bases come from the genomic span, so
+        // `synthesize_transcript_from_cdot` produces a 12 nt sequence. The
+        // authoritative length 12 therefore matches the *served* length, and
+        // reconciliation must fire. Keying off the raw max tx_end (9) instead
+        // would wrongly skip, gating on a length the server never produced.
+        let (mut provider, _kept) = synth_provider_with_cdot("NM_GSPAN.1", vec![[0, 12, 0, 9]]);
+        provider.canonical_overrides = coding_override("NM_GSPAN.1", 12);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_GSPAN.1")
+            .unwrap();
+        assert_eq!(
+            rec.cds_start,
+            Some(0),
+            "served (genomic-span) length 12 matches the override → reconcile"
+        );
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_length_mismatch_skips() {
+        // cdot exon max tx_end 9 but authoritative length 100, no sequence → skip.
+        let (mut provider, _kept) = synth_provider_with_cdot("NM_MM.1", vec![[0, 9, 0, 9]]);
+        provider.canonical_overrides = coding_override("NM_MM.1", 100);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_MM.1")
+            .unwrap();
+        assert_eq!(rec.cds_start, Some(2), "length mismatch → cdot untouched");
+        assert_eq!(rec.protein.as_deref(), Some("NP_WRONG.9"));
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_empty_exons_skips() {
+        // No exons → max() is None → no length match → skip (no panic).
+        let (mut provider, _kept) = synth_provider_with_cdot("NM_EX.1", vec![]);
+        provider.canonical_overrides = coding_override("NM_EX.1", 9);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_EX.1")
+            .unwrap();
+        assert_eq!(rec.cds_start, Some(2), "empty exons → cdot untouched");
     }
 }
