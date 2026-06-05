@@ -370,6 +370,17 @@ enum SpecSection {
     /// `p.(Met1?)` is the spec-correct value (#504, #512).
     #[serde(rename = "HGVS protein initiation codon (Met1?)")]
     ProteinInitiationCodon,
+    /// HGVS transcript flanking — on a genomic-reference `c.` description
+    /// (`NG_`/`NC_`/`LRG_`), `pter`/`qter` denote the genomic parent's terminus,
+    /// a 5'/3' transcript-flank position. HGVS does **not** permit numbering
+    /// flank nucleotides in `c.` coordinates (`background/numbering.md`
+    /// transcript-flanking; `background/refseq.md` L46; the flank-numbering
+    /// proposal was rejected, `consultation/open-issues.md` — "Use `NC_…:g.…`
+    /// **and not** `NC_…(NM_…):c.-N-uM`"). ferro leaves the input verbatim and
+    /// refuses the flank `c.` coordinate (#488 Phase 2b); mutalyzer's
+    /// `c.-5059del` extrapolates into the flank, which HGVS forbids.
+    #[serde(rename = "HGVS §Transcript flanking (not c.-numberable)")]
+    TranscriptFlankNotNumberable,
 }
 
 impl SpecSection {
@@ -383,6 +394,9 @@ impl SpecSection {
             SpecSection::RefSeqGeneSelector => "HGVS §RefSeqGene transcript selection",
             SpecSection::SubstitutionConsequence => "HGVS §Substitution (no frameshift)",
             SpecSection::ProteinInitiationCodon => "HGVS protein initiation codon (Met1?)",
+            SpecSection::TranscriptFlankNotNumberable => {
+                "HGVS §Transcript flanking (not c.-numberable)"
+            }
         }
     }
 }
