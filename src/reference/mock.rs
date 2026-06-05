@@ -3,7 +3,7 @@
 use crate::error::FerroError;
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -14,6 +14,12 @@ pub struct MockProvider {
     proteins: HashMap<String, String>,
     /// Genomic sequences keyed by contig name
     genomic_sequences: HashMap<String, String>,
+    /// Transcript ids this provider should report as *not* version-exact from
+    /// [`ReferenceProvider::has_transcript_version_exact`]. Lets tests exercise
+    /// the protein path's cross-version gate (#505) without a full FASTA/cdot
+    /// manifest. Empty by default, so an unconfigured mock reports every
+    /// transcript as version-exact (matching the trait default).
+    non_version_exact: HashSet<String>,
 }
 
 impl MockProvider {
@@ -23,7 +29,15 @@ impl MockProvider {
             transcripts: HashMap::new(),
             proteins: HashMap::new(),
             genomic_sequences: HashMap::new(),
+            non_version_exact: HashSet::new(),
         }
+    }
+
+    /// Mark `id` as not available at its exact requested version, so
+    /// [`ReferenceProvider::has_transcript_version_exact`] returns `false` for
+    /// it. Simulates a reference that only carries a sibling version's bases.
+    pub fn mark_non_version_exact(&mut self, id: impl Into<String>) {
+        self.non_version_exact.insert(id.into());
     }
 
     /// Load reference data from a JSON file.
@@ -79,6 +93,7 @@ impl MockProvider {
             transcripts: map,
             proteins,
             genomic_sequences,
+            non_version_exact: HashSet::new(),
         })
     }
 
@@ -440,6 +455,10 @@ impl ReferenceProvider for MockProvider {
             .map(|s| s.len() as u64)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
+
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        !self.non_version_exact.contains(id)
+    }
 }
 
 #[cfg(test)]
@@ -489,6 +508,24 @@ mod tests {
         let provider = MockProvider::with_test_data();
         assert!(provider.has_transcript("NM_000088.3"));
         assert!(!provider.has_transcript("NONEXISTENT"));
+    }
+
+    #[test]
+    fn boxed_provider_forwards_has_transcript_version_exact() {
+        // The protein gate (#505) is consulted through the provider type the
+        // production CLI/benchmark paths use: `Box<dyn ReferenceProvider>`. If
+        // the blanket boxed impl does not forward `has_transcript_version_exact`,
+        // it silently falls through to the trait default `true` and the gate is
+        // inert in production. Pin the forwarding here.
+        let mut inner = MockProvider::new();
+        inner.mark_non_version_exact("NM_TEST.1");
+        let boxed: Box<dyn ReferenceProvider> = Box::new(inner);
+        assert!(
+            !boxed.has_transcript_version_exact("NM_TEST.1"),
+            "boxed provider must forward to the inner provider's verdict (false), \
+             not the trait default (true)"
+        );
+        assert!(boxed.has_transcript_version_exact("NM_OTHER.1"));
     }
 
     #[test]

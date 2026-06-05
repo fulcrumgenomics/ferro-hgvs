@@ -601,6 +601,15 @@ impl ReferenceProvider for CachedFastaProvider {
         self.inner.get_transcript(id)
     }
 
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        // Delegate to the inner provider so the protein version-exact gate
+        // (#505) reflects the underlying verdict rather than the trait default
+        // `true`. Inert today (the inner `FastaProvider` keeps the default),
+        // but forwarding here prevents a silently-dropped gate if it ever
+        // gains the override.
+        self.inner.has_transcript_version_exact(id)
+    }
+
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
         // Create cache key
         let key = (id.to_string(), start, end);

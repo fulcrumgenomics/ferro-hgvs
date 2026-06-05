@@ -1026,6 +1026,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let Some(prot_acc) = prot_acc else {
             return Ok(None);
         };
+        // Issue #505: protein prediction below reads this transcript's CDS
+        // bases directly and translates them. If the reference only carries a
+        // *different* version of the transcript (a silent version-strip
+        // substitution), those bases may pair with a different CDS/exon
+        // structure, so the prediction would be wrong yet attributed to the
+        // requested version. Decline to predict rather than emit a wrong
+        // protein — this gates *all* downstream prediction, including the
+        // initiation-codon short-circuit below, whose CDS positions are
+        // likewise mapped against the requested-version transcript. The
+        // predicate still permits exact-version cdot-genome synthesis — it
+        // rejects only cross-version substitution.
+        if !self.provider.has_transcript_version_exact(transcript_id) {
+            return Ok(None);
+        }
         // An initiation-codon-affecting edit short-circuits to `p.(Met1?)`
         // here, before edit-type dispatch, so boundary-spanning edits whose
         // 5' end is in the 5'UTR (which the per-edit paths reject via their
@@ -3775,6 +3789,36 @@ mod tests {
         // c.4C>A: codon 2 CGC(Arg) → AGC(Ser) ⇒ p.(Arg2Ser).
         let protein = proj.protein.expect("protein should be predicted");
         assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_declines_protein_when_transcript_not_version_exact() {
+        // Issue #505: the protein path reads the transcript's CDS bases
+        // directly. When the reference only carries a *different* version of
+        // the requested transcript (a silent version-strip substitution),
+        // translating those bases would emit a wrong protein attributed to the
+        // requested version. The protein path must decline to predict rather
+        // than lie. The non-protein axes (coding) are unaffected.
+        let (projector, mut provider) = make_test_provider_and_projector();
+        // Same input as `project_bare_nm_substitution_predicts_protein_without_genome`,
+        // but the provider now reports NM_TEST.1 as not available at the exact
+        // requested version (e.g. only a sibling version's bases are present).
+        provider.mark_non_version_exact("NM_TEST.1");
+        let vp = VariantProjector::new(projector, provider);
+        let variant = make_coding_variant("NM_TEST.1", None);
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("projection should still succeed; only protein prediction declines");
+        assert!(
+            proj.protein.is_none(),
+            "protein must be declined for a non-version-exact transcript, got {:?}",
+            proj.protein
+        );
+        // The protein-only gate must not suppress the coding axis.
+        assert!(
+            proj.coding.is_some(),
+            "coding form should still be present despite the protein gate"
+        );
     }
 
     #[test]
