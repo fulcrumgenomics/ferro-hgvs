@@ -449,6 +449,17 @@ pub enum NormalizationWarning {
         marker: String,
     },
 
+    /// A telomere marker on a genomic-reference `c.` description denotes a
+    /// transcript-flank position not numberable in `c.` (#488 Phase 2b).
+    /// Code: `TRANSCRIPT_FLANK_NOT_DESCRIBABLE`.
+    #[allow(dead_code)] // constructed in Phase 2b Task 2
+    TranscriptFlankNotDescribable {
+        /// Accession of the reference (the NG/LRG/NC-parent c. accession).
+        accession: String,
+        /// The marker, "pter" or "qter".
+        marker: String,
+    },
+
     /// `apply_canonical_split` was unable to canonicalize because the
     /// reference window returned by the provider did not span the same
     /// number of bytes as the HGVS interval. Per HGVS spec
@@ -564,6 +575,7 @@ impl NormalizationWarning {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
             Self::UnresolvableSpecialPosition { .. } => "UNRESOLVABLE_SPECIAL_POSITION",
+            Self::TranscriptFlankNotDescribable { .. } => "TRANSCRIPT_FLANK_NOT_DESCRIBABLE",
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
@@ -620,6 +632,12 @@ impl std::fmt::Display for NormalizationWarning {
                 "{accession}: '{marker}' — centromere/telomere marker cannot be \
                  resolved to a coordinate without assembly annotation; input preserved verbatim \
                  (UnresolvableSpecialPosition)"
+            ),
+            Self::TranscriptFlankNotDescribable { accession, marker } => write!(
+                f,
+                "{accession}: '{marker}' on a genomic-reference c. description denotes a 5'/3' \
+                 transcript-flank position, which HGVS does not permit numbering in c. coordinates; \
+                 use the genomic g. form (TranscriptFlankNotDescribable / W4006)"
             ),
             Self::CanonicalSplitSkipped {
                 accession,
@@ -1011,6 +1029,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             "{accession}: '{marker}' is an assembly-annotated region with no \
                              sequence-derivable coordinate and cannot be normalized \
                              (UnresolvableCentromere / W4005)"
+                        ),
+                    })
+                }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // In strict mode, reject a telomere marker that resolves to a
+        // transcript-flank position on a genomic-reference c. (W4006). The
+        // flank is not numberable in c. per HGVS numbering.md; #488 Phase 2b.
+        if self.config.should_reject_transcript_flank() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::TranscriptFlankNotDescribable { accession, marker } => {
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}: '{marker}' on a genomic-reference c. denotes a 5'/3' \
+                             transcript-flank position, not numberable in c. (HGVS numbering.md \
+                             transcript-flanking); use the genomic g. form \
+                             (TranscriptFlankNotDescribable / W4006)"
                         ),
                     })
                 }

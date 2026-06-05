@@ -247,6 +247,18 @@ impl NormalizeConfig {
     pub fn should_reject_unresolvable_centromere(&self) -> bool {
         self.unresolvable_centromere_action().should_reject()
     }
+
+    /// Get the resolved action for `TranscriptFlankNotDescribable` (W4006).
+    pub fn transcript_flank_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::TranscriptFlankNotDescribable)
+    }
+
+    /// Returns true if a telomere marker resolving to a transcript-flank
+    /// position on a genomic-reference c. should be rejected (strict default).
+    pub fn should_reject_transcript_flank(&self) -> bool {
+        self.transcript_flank_action().should_reject()
+    }
 }
 
 #[cfg(test)]
