@@ -429,7 +429,10 @@ pub fn span_len_from_cds_interval(interval: &crate::hgvs::interval::CdsInterval)
     // `CDS_BASE_UNKNOWN == 0 && !utr3`. The parser rejects `c.0` (#269)
     // but programmatic construction can produce this shape, so guard
     // explicitly to avoid emitting `Some(1)` for a placeholder.
-    if start.is_unknown() || end.is_unknown() {
+    // Special positions (pter/qter/cen) also carry `base == 0` but with
+    // `special.is_some()`; they must be skipped too — mirroring the
+    // `span_len_from_genome_interval` guard below.
+    if start.is_unknown() || start.is_special() || end.is_unknown() || end.is_special() {
         return None;
     }
     // Intronic-offset positions have no base-only span.
@@ -971,5 +974,59 @@ mod tests {
         let effect = predict_cds_effect("deletion", false, true, &cds_pos);
         assert_eq!(effect.name, "frameshift_variant");
         assert_eq!(effect.impact, "HIGH");
+    }
+
+    // -------------------------------------------------------------------------
+    // span_len_from_cds_interval: special position guards (pter/qter/cen)
+    // -------------------------------------------------------------------------
+
+    /// A `pter` start endpoint makes the span uncomputable: `is_special()` must
+    /// cause `span_len_from_cds_interval` to return `None`, not `Some(1)`.
+    #[test]
+    fn span_len_cds_interval_pter_start_returns_none() {
+        use crate::hgvs::interval::CdsInterval;
+        let interval = CdsInterval::new(CdsPos::pter(), CdsPos::new(50));
+        assert_eq!(
+            span_len_from_cds_interval(&interval),
+            None,
+            "pter start is special — span must be None"
+        );
+    }
+
+    /// A `qter` end endpoint must also return `None`.
+    #[test]
+    fn span_len_cds_interval_qter_end_returns_none() {
+        use crate::hgvs::interval::CdsInterval;
+        let interval = CdsInterval::new(CdsPos::new(1), CdsPos::qter());
+        assert_eq!(
+            span_len_from_cds_interval(&interval),
+            None,
+            "qter end is special — span must be None"
+        );
+    }
+
+    /// A `cen` position at either end must return `None`.
+    #[test]
+    fn span_len_cds_interval_cen_returns_none() {
+        use crate::hgvs::interval::CdsInterval;
+        let interval = CdsInterval::new(CdsPos::cen(), CdsPos::new(10));
+        assert_eq!(
+            span_len_from_cds_interval(&interval),
+            None,
+            "cen start is special — span must be None"
+        );
+    }
+
+    /// Sanity check: a normal interval still computes correctly after the new
+    /// guard is added (regression guard for the fix).
+    #[test]
+    fn span_len_cds_interval_normal_interval_unaffected() {
+        use crate::hgvs::interval::CdsInterval;
+        let interval = CdsInterval::new(CdsPos::new(10), CdsPos::new(19));
+        assert_eq!(
+            span_len_from_cds_interval(&interval),
+            Some(10),
+            "normal CDS interval should still compute span correctly"
+        );
     }
 }

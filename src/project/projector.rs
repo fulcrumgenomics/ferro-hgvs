@@ -622,9 +622,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // 2. Reject `?` position sentinels explicitly — these have base == 0
         //    and no offset, which would otherwise propagate into the genomic
         //    mapper as a meaningless coordinate.
-        if start_cds.is_unknown() || end_cds.is_unknown() {
+        if start_cds.is_unknown()
+            || start_cds.is_special()
+            || end_cds.is_unknown()
+            || end_cds.is_special()
+        {
             return Err(FerroError::UnsupportedProjection {
-                reason: "project_to_genomic cannot resolve `?` position sentinels".to_string(),
+                reason: "project_to_genomic cannot resolve `?` or special (pter/qter/cen) \
+                         position sentinels"
+                    .to_string(),
             });
         }
 
@@ -1169,9 +1175,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // through above; without this guard `base <= 0` would misclassify it as
         // 5'UTR and return `Ok`. Reject it here to match the
         // `project_to_genomic` contract (#508 review).
-        if cds_start.is_unknown() || cds_end.is_unknown() {
+        if cds_start.is_unknown()
+            || cds_start.is_special()
+            || cds_end.is_unknown()
+            || cds_end.is_special()
+        {
             return Err(FerroError::UnsupportedProjection {
-                reason: "cannot resolve `?` position sentinels on direct c.→p. projection"
+                reason: "cannot resolve `?` or special (pter/qter/cen) position sentinels on \
+                         direct c.→p. projection"
                     .to_string(),
             });
         }
@@ -3301,6 +3312,66 @@ mod tests {
 
         // -- 15: intronic offset on non-coding transcript → unsupported (#332) -
 
+        // -- special positions (pter/qter/cen) in project_to_genomic ----------
+
+        /// A `pter` CDS position is special (base==0, special.is_some()): it must
+        /// not slip past the `is_unknown()` guard and then fail with "Invalid CDS
+        /// position: 0". The extended guard must catch it as `UnsupportedProjection`.
+        #[test]
+        fn project_to_genomic_special_pter_returns_unsupported() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1").with_genomic_context(ng_parent("TEST", 1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::pter()),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Cds(cds);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("pter position must not project to genomic");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected UnsupportedProjection for pter position, got: {:?}",
+                err
+            );
+        }
+
+        /// A `qter` endpoint must be rejected with the same error.
+        #[test]
+        fn project_to_genomic_special_qter_returns_unsupported() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1").with_genomic_context(ng_parent("TEST", 1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(CdsPos::new(1), CdsPos::qter()),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Cds(cds);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("qter position must not project to genomic");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected UnsupportedProjection for qter position, got: {:?}",
+                err
+            );
+        }
+
         /// Pins the deferred-to-#332 limitation: intronic offsets on `n.`
         /// (non-coding) inputs return `UnsupportedProjection` with a reason
         /// that references #332. If/when #332 lands and the runner is wired
@@ -4139,5 +4210,70 @@ mod tests {
             .map(|p| p.to_string())
             .expect("a start-codon substitution must predict a protein");
         assert_eq!(p, "NP_UTR5.1:p.(Met1?)");
+    }
+
+    // -------------------------------------------------------------------------
+    // Direct c.→p. path: special positions (pter/qter/cen) must be rejected
+    // as UnsupportedProjection — not silently mis-classified as 5'UTR because
+    // `base == 0` satisfies `cds_start.base <= 0`.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn project_bare_nm_special_pter_is_unsupported_not_5utr() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A `pter` CDS position has `base == 0` and `special == Some(Pter)`.
+        // Without the `is_special()` guard, `cds_start.base <= 0` evaluates to
+        // `true` and the variant is silently classified as 5'UTR, producing a
+        // wrong protein consequence. The guard must reject it as
+        // `UnsupportedProjection` (#488).
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::pter()),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let err = vp
+            .project_normalized(&variant, "NM_TEST.1")
+            .expect_err("pter sentinel must not project as 5'UTR");
+        assert!(
+            matches!(err, FerroError::UnsupportedProjection { .. }),
+            "pter sentinel should be UnsupportedProjection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn project_bare_nm_special_qter_is_unsupported() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // `qter` endpoint: base == 0, special == Some(Qter). Same bug path as
+        // pter — must be rejected rather than silently misclassified.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(1), CdsPos::qter()),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let err = vp
+            .project_normalized(&variant, "NM_TEST.1")
+            .expect_err("qter sentinel must not project as UTR");
+        assert!(
+            matches!(err, FerroError::UnsupportedProjection { .. }),
+            "qter sentinel should be UnsupportedProjection, got {err:?}"
+        );
     }
 }
