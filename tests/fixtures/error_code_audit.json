@@ -478,6 +478,14 @@
       "spec_section_notes": "Emitted by normalize_genome when a genomic position is `cen`: pter resolves to base 1 and qter to the reference length (both normalize), but cen has no sequence-derivable coordinate. The NormalizationWarning::UnresolvableSpecialPosition is emitted unconditionally; strict mode promotes it to FerroError::InvalidCoordinates via should_reject_unresolvable_centromere(), while lenient/silent preserve the input. Mitochondrial/circular references intentionally do not resolve telomere markers (normalize_mt bails). c./n. telomere markers and cross-reference insert endpoints are out of scope (Phase 2/3)."
     },
     {
+      "code": "W4006",
+      "description": "TranscriptFlankNotDescribable — pter/qter on a genomic-reference c. description (NG_/NC_/LRG_) denotes a 5'/3' transcript-flank position, not numberable in c. coordinates. See #488.",
+      "spec_section": "background/numbering.md: it is not allowed to describe variants in nucleotides beyond the boundaries of a transcript reference sequence; the flank-numbering proposal was rejected (consultation/open-issues.md)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/numbering/",
+      "status": "enforced",
+      "spec_section_notes": "Emitted by normalize_cds when a c. variant whose accession has a genomic_context (NG/NC/LRG parent) carries a pter/qter marker. The NormalizationWarning::TranscriptFlankNotDescribable is emitted; strict mode promotes it to FerroError::InvalidCoordinates via should_reject_transcript_flank(), lenient/silent preserve the input. The genomic g. form is the spec-correct description for these positions."
+    },
+    {
       "code": "W5001",
       "description": "RefSeqMismatch — stated reference base mismatches actual reference (warning sibling of E3002).",
       "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
