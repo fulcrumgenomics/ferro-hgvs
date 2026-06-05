@@ -41,6 +41,19 @@ pub(crate) fn predict_indel_protein(
         return Ok(build_initiator_unknown(protein_accession, transcript));
     }
 
+    // An HGVS insertion `c.A_(A+1)insX` is anchored at A, with the inserted bases
+    // in the gap immediately 3' of A. Callers pass the literal `A_(A+1)` interval,
+    // but the indel machinery treats an insertion's span as the single anchor
+    // position A (the gap after it). Collapse the end to the start so the inserted
+    // bases land between A and A+1; without this, `build_mutated_cds_with_ref`
+    // splices them one position too far 3' (after A+1), spuriously preserving the
+    // flanking codon's residue and yielding a clean `ins` where a mid-codon
+    // insertion must be a `delins` (#511). Other edits keep their `[A,B]` span.
+    let cds_pos_end = if matches!(edit, NaEdit::Insertion { .. }) {
+        cds_pos_start
+    } else {
+        cds_pos_end
+    };
     // 1. The reference CDS + translation are pre-computed by the caller (and
     //    cached on `VariantProjector` so fan-out across many indels on the
     //    same transcript doesn't re-translate (or re-read+re-uppercase) the
@@ -811,6 +824,25 @@ mod tests {
         let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
         assert_eq!(s, "NP_TEST.1:p.(Met1_Arg2insGly)");
+    }
+
+    /// A mid-codon in-frame insertion that disrupts the flanking codon's residue
+    /// must be a delins, not a clean insertion (#511). Uses the real caller's
+    /// `A_(A+1)` interval convention (`cds_pos_end == cds_pos_start + 1`).
+    ///
+    /// CDS "ATGATGGGCTAA" = Met-Met-Gly-Stop. Insert "ATC" at c.5_6 (between the
+    /// 2nd and 3rd base of Met2's codon): ATG AT|ATC|G GGC TAA → ATG ATA TCG GGC
+    /// TAA → Met-Ile-Ser-Gly. So Met2 changes to Ile and Ser is added (Gly3
+    /// preserved) → p.(Met2delinsIleSer), NOT the spurious p.(Met2_Gly3insIle).
+    #[test]
+    fn ins_mid_codon_disrupting_flanking_residue_is_delins() {
+        let t = tx("ATGATGGGCTAA", 1, 12);
+        let seq: crate::hgvs::edit::Sequence = "ATC".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 5, 6, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met2delinsIleSer)");
     }
 
     #[test]
