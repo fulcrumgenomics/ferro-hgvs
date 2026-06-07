@@ -5,6 +5,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferro_hgvs::hgvs::parser::parse_hgvs_fast;
+use ferro_hgvs::reference::{Exon, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
 // =============================================================================
@@ -160,31 +161,127 @@ fn bench_parsing_throughput(c: &mut Criterion) {
 // Normalization benchmarks
 // =============================================================================
 
+/// `with_test_data()` plus a genome-mapped contig and two intron-bearing
+/// transcripts (one per strand), so `g.` and intronic normalization run on
+/// the real path. Uses only reference APIs present since v0.4.0, so this
+/// file overlays onto every release tag during the sweep.
+fn enriched_provider() -> MockProvider {
+    use ferro_hgvs::reference::transcript::{GenomeBuild, ManeStatus};
+    let mut p = MockProvider::with_test_data();
+
+    // Plus-strand, two-exon coding transcript with a real intron, mapped to
+    // NC_000001.11. Exon1 genome[1000,1009] tx[1,10]; intron genome[1010,1999];
+    // exon2 genome[2000,2009] tx[11,20]. CDS tx[1,18].
+    p.add_transcript(Transcript::new(
+        "NM_INTR.1".to_string(),
+        Some("INTRGENE".to_string()),
+        Strand::Plus,
+        Some("ATGCGCAAAGGGTAACCC".to_string()), // 18 bp
+        Some(1),
+        Some(18),
+        vec![
+            Exon::with_genomic(1, 1, 10, 1000, 1009),
+            Exon::with_genomic(2, 11, 20, 2000, 2009),
+        ],
+        Some("NC_000001.11".to_string()),
+        Some(1000),
+        Some(2009),
+        GenomeBuild::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+
+    // Minus-strand counterpart for the #497 minus-strand intronic shuffle path.
+    // On minus strand exons are listed 5'→3' in transcript coordinates, but
+    // their genomic coords are reversed: exon1 (tx 1..10) maps to genome 2000..2009,
+    // exon2 (tx 11..20) maps to genome 1000..1009.
+    p.add_transcript(Transcript::new(
+        "NM_INTRM.1".to_string(),
+        Some("INTRGENM".to_string()),
+        Strand::Minus,
+        Some("ATGCGCAAAGGGTAACCC".to_string()),
+        Some(1),
+        Some(18),
+        vec![
+            Exon::with_genomic(1, 1, 10, 2000, 2009),
+            Exon::with_genomic(2, 11, 20, 1000, 1009),
+        ],
+        Some("NC_000001.11".to_string()),
+        Some(1000),
+        Some(2009),
+        GenomeBuild::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+
+    // Genomic sequence for NC_000001.11: 999 N's + exon1 + 990 N intron +
+    // exon2 + 100 N's, so positions 1000..2009 carry the modeled bases.
+    let prefix = "N".repeat(999);
+    let exon1 = "ATGCGCAAAG"; // genome 1000..1009
+    let intron = "N".repeat(990); // genome 1010..1999
+    let exon2 = "GGTAACCCNN"; // genome 2000..2009
+    let suffix = "N".repeat(100);
+    p.add_genomic_sequence(
+        "NC_000001.11",
+        format!("{prefix}{exon1}{intron}{exon2}{suffix}"),
+    );
+    p
+}
+
 /// Benchmark normalization performance for different variant types
 fn bench_normalization(c: &mut Criterion) {
-    let provider = MockProvider::with_test_data();
+    let provider = enriched_provider();
     let normalizer = Normalizer::new(provider);
 
     let test_cases = vec![
+        // c. plus-strand (NM_000088.3, NM_888888.1 for 3'-shift dup)
         ("c.sub", "NM_000088.3:c.10A>G"),
         ("c.del", "NM_000088.3:c.10del"),
         ("c.del_range", "NM_000088.3:c.10_15del"),
-        ("c.dup", "NM_000088.3:c.10dup"),
         ("c.ins", "NM_000088.3:c.10_11insATG"),
-        ("g.sub", "NC_000001.11:g.12345A>G"),
-        ("g.del", "NC_000001.11:g.12345del"),
-        ("p.sub", "NP_000079.2:p.Val10Glu"),
+        ("c.delins", "NM_000088.3:c.10_12delinsAT"),
+        ("c.inv", "NM_000088.3:c.10_15inv"),
+        ("c.dup", "NM_000088.3:c.10dup"),
+        ("c.dup_3shift", "NM_888888.1:c.8dup"),
+        // c. minus-strand (NM_999999.1)
+        ("c.sub_minus", "NM_999999.1:c.5A>G"),
+        ("c.del_minus", "NM_999999.1:c.5del"),
+        ("c.ins_minus", "NM_999999.1:c.5_6insAT"),
+        // c. intronic (enriched fixture; #497 shuffle path)
+        ("c.intronic_plus_del", "NM_INTR.1:c.10+2del"),
+        ("c.intronic_minus_del", "NM_INTRM.1:c.10+2del"),
+        // protein (NP_000079.2: M1, R97, V600)
+        ("p.sub", "NP_000079.2:p.Val600Glu"),
+        ("p.del", "NP_000079.2:p.Val600del"),
+        ("p.fs", "NP_000079.2:p.Arg97fs"),
+        ("p.fsTer", "NP_000079.2:p.Arg97fsTer15"),
+        // g. (enriched fixture, NC_000001.11)
+        ("g.sub", "NC_000001.11:g.1000A>G"),
+        ("g.del", "NC_000001.11:g.1001del"),
+        ("g.ins", "NC_000001.11:g.1001_1002insTT"),
+        ("g.delins", "NC_000001.11:g.1001_1003delinsTT"),
+        ("g.inv", "NC_000001.11:g.1001_1003inv"),
     ];
 
-    let mut group = c.benchmark_group("normalization");
+    // Guard: every case must parse AND normalize on the real path. A case
+    // that errors here (bad coordinate, missing accession) would otherwise be
+    // timed on the error path. Fail loud.
+    for (name, s) in &test_cases {
+        let v = parse_hgvs(s).unwrap_or_else(|e| panic!("normalize bench {name:?} parse: {e}"));
+        normalizer
+            .normalize(&v)
+            .unwrap_or_else(|e| panic!("normalize bench {name:?} ({s:?}) errored: {e}"));
+    }
 
-    for (name, variant_str) in test_cases {
+    let mut group = c.benchmark_group("normalization");
+    for (name, variant_str) in &test_cases {
         let variant = parse_hgvs(variant_str).unwrap();
-        group.bench_function(name, |b| {
+        group.bench_function(*name, |b| {
             b.iter(|| normalizer.normalize(black_box(&variant)))
         });
     }
-
     group.finish();
 }
 
