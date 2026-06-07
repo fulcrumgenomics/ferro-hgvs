@@ -455,6 +455,11 @@ enum Commands {
         #[arg(long)]
         no_transcripts: bool,
 
+        /// Also download companion protein FASTAs (~2GB) for the canonical
+        /// translation check (issue #520); off by default
+        #[arg(long)]
+        proteins: bool,
+
         /// Skip cdot transcript metadata
         #[arg(long)]
         no_cdot: bool,
@@ -760,6 +765,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_dir,
             genome,
             no_transcripts,
+            proteins,
             no_cdot,
             no_refseqgene,
             no_lrg,
@@ -772,6 +778,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &output_dir,
             &genome,
             no_transcripts,
+            proteins,
             no_cdot,
             no_refseqgene,
             no_lrg,
@@ -2776,6 +2783,7 @@ fn run_prepare(
     output_dir: &Path,
     genome: &str,
     no_transcripts: bool,
+    proteins: bool,
     no_cdot: bool,
     no_refseqgene: bool,
     no_lrg: bool,
@@ -2790,6 +2798,7 @@ fn run_prepare(
     let config = PrepareConfig {
         output_dir: output_dir.to_path_buf(),
         download_transcripts: !no_transcripts,
+        download_proteins: proteins,
         download_genome: genome == "grch38" || genome == "all",
         download_genome_grch37: genome == "grch37" || genome == "all",
         download_refseqgene: !no_refseqgene,

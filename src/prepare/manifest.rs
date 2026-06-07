@@ -14,6 +14,10 @@ pub struct ReferenceManifest {
     pub prepared_at: String,
     /// Transcript FASTA files
     pub transcript_fastas: Vec<PathBuf>,
+    /// Protein FASTA files (`*.protein.faa`, NP_/XP_ accessions) for the
+    /// translated-CDS-vs-canonical-protein check (issue #520).
+    #[serde(default)]
+    pub protein_fastas: Vec<PathBuf>,
     /// GRCh38 genome FASTA file (if downloaded)
     pub genome_fasta: Option<PathBuf>,
     /// GRCh37 genome FASTA file (if downloaded)
@@ -72,6 +76,7 @@ impl Default for ReferenceManifest {
             // Empty string by default; `save()` populates this with the current time.
             prepared_at: String::new(),
             transcript_fastas: Vec::new(),
+            protein_fastas: Vec::new(),
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
@@ -203,6 +208,7 @@ impl ReferenceManifest {
         for p in self
             .transcript_fastas
             .iter()
+            .chain(self.protein_fastas.iter())
             .chain(self.refseqgene_fastas.iter())
             .chain(self.lrg_fastas.iter())
             .chain(self.lrg_xmls.iter())
@@ -233,6 +239,7 @@ impl ReferenceManifest {
     fn for_each_path_mut(&mut self, mut f: impl FnMut(&mut PathBuf)) {
         for v in [
             &mut self.transcript_fastas,
+            &mut self.protein_fastas,
             &mut self.refseqgene_fastas,
             &mut self.lrg_fastas,
             &mut self.lrg_xmls,
@@ -293,6 +300,7 @@ impl ReferenceManifest {
     fn deduplicate_paths(&mut self) {
         for v in [
             &mut self.transcript_fastas,
+            &mut self.protein_fastas,
             &mut self.refseqgene_fastas,
             &mut self.lrg_fastas,
             &mut self.lrg_xmls,
@@ -333,6 +341,7 @@ mod tests {
         let mut manifest = ReferenceManifest {
             reference_dir: ref_path.clone(),
             transcript_fastas: vec![ref_path.join("transcripts.fa")],
+            protein_fastas: vec![ref_path.join("proteins.faa")],
             cdot_json: Some(ref_path.join("cdot.json")),
             canonical_overrides: Some(ref_path.join("canonical_overrides.json")),
             ..Default::default()
@@ -343,6 +352,11 @@ mod tests {
         assert_eq!(
             manifest.transcript_fastas[0],
             PathBuf::from("transcripts.fa")
+        );
+        assert_eq!(
+            manifest.protein_fastas[0],
+            PathBuf::from("proteins.faa"),
+            "protein_fastas must be normalized to a relative path"
         );
         assert_eq!(manifest.cdot_json, Some(PathBuf::from("cdot.json")));
         assert_eq!(
@@ -362,6 +376,7 @@ mod tests {
         let mut manifest = ReferenceManifest {
             reference_dir: ref_path.clone(),
             transcript_fastas: vec![PathBuf::from("transcripts.fa")],
+            protein_fastas: vec![PathBuf::from("proteins.faa")],
             cdot_json: Some(PathBuf::from("cdot.json")),
             canonical_overrides: Some(PathBuf::from("canonical_overrides.json")),
             ..Default::default()
@@ -372,6 +387,11 @@ mod tests {
         assert_eq!(
             manifest.transcript_fastas[0],
             ref_path.join("transcripts.fa")
+        );
+        assert_eq!(
+            manifest.protein_fastas[0],
+            ref_path.join("proteins.faa"),
+            "protein_fastas must be resolved to an absolute path"
         );
         assert_eq!(manifest.cdot_json, Some(ref_path.join("cdot.json")));
         assert_eq!(
@@ -389,6 +409,11 @@ mod tests {
                 PathBuf::from("a.fa"),
                 PathBuf::from("b.fa"),
             ],
+            protein_fastas: vec![
+                PathBuf::from("q.faa"),
+                PathBuf::from("p.faa"),
+                PathBuf::from("q.faa"),
+            ],
             lrg_fastas: vec![PathBuf::from("lrg.fa"), PathBuf::from("lrg.fa")],
             ..Default::default()
         };
@@ -398,6 +423,10 @@ mod tests {
         assert_eq!(
             manifest.transcript_fastas,
             vec![PathBuf::from("a.fa"), PathBuf::from("b.fa")]
+        );
+        assert_eq!(
+            manifest.protein_fastas,
+            vec![PathBuf::from("p.faa"), PathBuf::from("q.faa")]
         );
         assert_eq!(manifest.lrg_fastas, vec![PathBuf::from("lrg.fa")]);
     }
@@ -414,6 +443,7 @@ mod tests {
         let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
             transcript_fastas: vec![ref_dir.join("transcripts.fa")],
+            protein_fastas: Vec::new(),
             genome_fasta: Some(ref_dir.join("genome.fa")),
             genome_grch37_fasta: Some(ref_dir.join("genome37.fa")),
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],

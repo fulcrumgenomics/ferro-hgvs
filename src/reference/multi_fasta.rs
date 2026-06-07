@@ -92,6 +92,8 @@ pub struct MultiFastaProvider {
     supplemental_cds: SupplementalCdsInfo,
     /// Authoritative canonical overrides (issue #520), loaded from the manifest.
     canonical_overrides: CanonicalOverrides,
+    /// Protein FASTA index (NP_/XP_ accessions) for get_protein_sequence (#520).
+    protein_index: HashMap<String, FastaIndexEntry>,
 }
 
 impl MultiFastaProvider {
@@ -164,6 +166,7 @@ impl MultiFastaProvider {
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
+            protein_index: HashMap::new(),
         })
     }
 
@@ -196,6 +199,7 @@ impl MultiFastaProvider {
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
+            protein_index: HashMap::new(),
         })
     }
 
@@ -387,6 +391,33 @@ impl MultiFastaProvider {
             }
         }
 
+        // Protein FASTAs (issue #520, edge 3): index NP_/XP_ sequences for
+        // get_protein_sequence — the translated-CDS-vs-canonical-protein check.
+        if let Some(protein_paths) = manifest.get("protein_fastas").and_then(|v| v.as_array()) {
+            for p in protein_paths.iter().filter_map(|v| v.as_str()) {
+                let path = resolve_path(p);
+                let fai = PathBuf::from(format!("{}.fai", path.display()));
+                if !path.exists() || !fai.exists() {
+                    eprintln!(
+                        "Warning: protein FASTA or its .fai is missing: {}",
+                        path.display()
+                    );
+                    continue;
+                }
+                match load_fai_index(&path, &fai) {
+                    Ok(idx) => provider.protein_index.extend(idx),
+                    Err(e) => eprintln!(
+                        "Warning: Failed to index protein FASTA {}: {}",
+                        path.display(),
+                        e
+                    ),
+                }
+            }
+            if !provider.protein_index.is_empty() {
+                eprintln!("Loaded {} protein sequences", provider.protein_index.len());
+            }
+        }
+
         // Canonical overrides (issue #520): load the authoritative-overrides
         // file and reconcile it into the cdot metadata so both the served
         // transcript and the projection path see the corrected CDS/protein.
@@ -476,6 +507,7 @@ impl MultiFastaProvider {
             cdot_mapper: Some(cdot_mapper),
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
+            protein_index: HashMap::new(),
         })
     }
 
@@ -923,13 +955,13 @@ impl MultiFastaProvider {
     /// 1-based bounds are converted to cdot's 0-based start / 0-based-exclusive
     /// end convention.
     ///
-    /// Scope: gated on a FASTA index entry, so a transcript served only via
-    /// cdot-genome synthesis (no FASTA entry, the #331 path) is NOT reconciled
-    /// here even though the served-`Transcript` path
-    /// ([`apply_canonical_overrides_to`]) may still correct it. The corpus
-    /// targets (#520) are FASTA-backed, so this gap affects only
-    /// synthesis-backed transcripts; closing it (gating on the cdot exon-sum
-    /// length when no FASTA entry exists) is left as a follow-up.
+    /// Reconciles when the coordinates will index canonical bases: either the
+    /// served FASTA already has the authoritative length, OR the override
+    /// carries the canonical `sequence` (so the served bases are replaced on
+    /// read — this also covers a cdot-synthesis-only transcript with no FASTA
+    /// entry). A length-only FASTA match with no carried `sequence` still gates
+    /// on the FASTA index length. (cdot exons themselves are not rewritten —
+    /// the same exon-staleness caveat as the served-`Transcript` correction.)
     fn reconcile_cdot_with_overrides(&mut self) {
         use crate::data::cdot::CdotTranscript;
         if self.cdot_mapper.is_none() {
@@ -950,9 +982,12 @@ impl MultiFastaProvider {
                 let Some(cds_start_0based) = cds_start.checked_sub(1) else {
                     continue;
                 };
-                // Served FASTA length must match the authoritative length, else
-                // the coordinates index a different sequence.
-                if self.index.get(acc).map(|e| e.length) != Some(auth.tx_length) {
+                // Reconcile when the coordinates will apply to canonical bases:
+                // either the served FASTA already has the authoritative length,
+                // or the override carries the canonical `sequence` (so the
+                // served transcript's bases are replaced on read).
+                let served_matches = self.index.get(acc).map(|e| e.length) == Some(auth.tx_length);
+                if !served_matches && auth.sequence.is_none() {
                     continue;
                 }
                 // Require an *exact* cdot record for `acc`: `get_transcript`
@@ -1283,6 +1318,34 @@ impl MultiFastaProvider {
         // FASTA-backed branch and never the cdot-synthesis fallback.
         self.get_transcript_on_build(id, None)
     }
+
+    /// Run the translated-CDS-vs-canonical-protein check (#520, the strategy-B
+    /// depth tier) for each `(transcript_id, protein_accession)` pair, fetching
+    /// the served transcript and the canonical protein from this provider's
+    /// ingested protein FASTAs. Pairs whose transcript or protein is
+    /// unavailable are skipped — translation validation is best-effort
+    /// defense-in-depth, and protein data may not be ingested.
+    pub fn validate_translations(
+        &self,
+        pairs: &[(String, String)],
+    ) -> Vec<crate::reference::validate::TranscriptAnomaly> {
+        use crate::reference::validate::validate_translation_against_protein;
+        let mut anomalies = Vec::new();
+        for (tx_id, protein_acc) in pairs {
+            let Ok(tx) = self.get_transcript(tx_id) else {
+                continue;
+            };
+            // `0, u64::MAX` fetches the full protein (the index read clamps the
+            // end to the sequence length).
+            let Ok(protein) = self.get_protein_sequence(protein_acc, 0, u64::MAX) else {
+                continue;
+            };
+            if let Some(anomaly) = validate_translation_against_protein(&tx, &protein) {
+                anomalies.push(anomaly);
+            }
+        }
+        anomalies
+    }
 }
 
 impl ReferenceProvider for MultiFastaProvider {
@@ -1429,6 +1492,30 @@ impl ReferenceProvider for MultiFastaProvider {
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         self.sequence_length(id)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+    }
+
+    fn get_protein_sequence(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        // Exact versioned lookup only (no base-accession fallback) — a protein
+        // accession is version-specific and callers supply versioned accessions.
+        // (`MockProvider` does an unversioned fallback for testing; this
+        // provider deliberately does not.)
+        let entry = self.protein_index.get(accession).ok_or_else(|| {
+            FerroError::ProteinReferenceNotAvailable {
+                accession: accession.to_string(),
+                start,
+                end,
+            }
+        })?;
+        self.get_sequence_from_index(entry, start, end)
+    }
+
+    fn has_protein_data(&self) -> bool {
+        !self.protein_index.is_empty()
     }
 }
 
@@ -2666,6 +2753,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2706,6 +2794,7 @@ mod tests {
             cds_start: Some(1), // authoritative 1-based
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2753,6 +2842,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2800,6 +2890,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
 
@@ -2836,6 +2927,7 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
         let tx = provider.get_transcript_strict("NM_OV.2").unwrap();
@@ -2856,11 +2948,61 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(9),
             protein_id: Some("NP_OV.2".to_string()),
+            sequence: None,
         });
         provider.canonical_overrides = ov;
         let variant = crate::parse_hgvs("NM_OV.2:c.4C>A").unwrap();
         let tx = provider.get_transcript_for_variant(&variant).unwrap();
         assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
         assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
+    }
+
+    // --- protein FASTA ingestion (issue #520, edge 3) -----------------------
+
+    #[test]
+    fn get_protein_sequence_reads_from_protein_index() {
+        // build a FASTA entry, then move it into the protein index (a real file
+        // on disk backs it, so get_sequence_from_index can read it).
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NP_TEST.1", "MWAPLE")]);
+        let entry = provider.index.get("NP_TEST.1").unwrap().clone();
+        provider
+            .protein_index
+            .insert("NP_TEST.1".to_string(), entry);
+
+        assert!(provider.has_protein_data());
+        // `0, u64::MAX` fetches the full protein (read clamps end to length).
+        assert_eq!(
+            provider
+                .get_protein_sequence("NP_TEST.1", 0, u64::MAX)
+                .unwrap(),
+            "MWAPLE"
+        );
+        assert!(provider.get_protein_sequence("NP_NOPE.9", 0, 10).is_err());
+    }
+
+    #[test]
+    fn validate_translations_flags_mismatch_end_to_end() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::validate::AnomalyKind;
+        // NM_T.1 = ATG|TGG|TAA → "MW"; the canonical protein NP_T.1 = "MV".
+        let (mut provider, _kept) =
+            build_provider_with_transcripts(&[("NM_T.1", "ATGTGGTAA"), ("NP_T.1", "MV")]);
+        let np = provider.index.get("NP_T.1").unwrap().clone();
+        provider.protein_index.insert("NP_T.1".to_string(), np);
+        // The override gives NM_T.1 its CDS so the served transcript is coding.
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_T.1".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_T.1".to_string()),
+            sequence: None,
+        });
+        provider.canonical_overrides = ov;
+
+        let found = provider.validate_translations(&[("NM_T.1".to_string(), "NP_T.1".to_string())]);
+        assert_eq!(found.len(), 1, "translated MW vs canonical MV → mismatch");
+        assert_eq!(found[0].kind, AnomalyKind::TranslationMismatch);
     }
 }

@@ -176,6 +176,10 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
         eprintln!("  cdot metadata (GRCh37): not available");
     }
 
+    if !manifest.protein_fastas.is_empty() {
+        eprintln!("  Protein FASTA files: {}", manifest.protein_fastas.len());
+    }
+
     if let Some(ref overrides) = manifest.canonical_overrides {
         eprintln!("  Canonical overrides: {}", overrides.display());
     }
@@ -227,6 +231,7 @@ mod tests {
         let mut manifest = ReferenceManifest {
             prepared_at: "2024-01-01T00:00:00Z".to_string(),
             transcript_fastas: vec![transcript_fasta.clone()],
+            protein_fastas: Vec::new(),
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
