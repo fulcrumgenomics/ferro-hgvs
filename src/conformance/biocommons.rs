@@ -9,6 +9,10 @@
 use serde::Deserialize;
 
 use super::schema::{validate_cluster_refs, Cluster};
+use super::summary::{DispositionKind, MemberRow, SummaryModel};
+
+/// Corpus title used as the generated summary's heading and model title.
+pub const CORPUS_TITLE: &str = "biocommons-normalize";
 
 /// Top-level corpus document: metadata header plus the case list.
 #[derive(Debug, Deserialize)]
@@ -43,6 +47,54 @@ impl Fixture {
     /// entry (orphan clusters are allowed). See [`validate_cluster_refs`].
     pub fn validate_clusters(&self) -> Result<(), String> {
         validate_cluster_refs(&self.clusters, self.cluster_refs())
+    }
+
+    /// Flatten this corpus into the corpus-agnostic summary model. Every
+    /// biocommons divergence is on the `normalized` axis and carries the
+    /// recorded `ferro_output`.
+    pub fn to_summary(&self) -> SummaryModel {
+        let rows = self
+            .cases
+            .iter()
+            .filter_map(|case| {
+                let d = case.disposition.as_ref()?;
+                let (kind, ferro_output, tracking_issue, cluster) = match d {
+                    Disposition::AcceptedDivergence {
+                        ferro_output,
+                        cluster,
+                        ..
+                    } => (
+                        DispositionKind::AcceptedDivergence,
+                        Some(ferro_output.clone()),
+                        None,
+                        cluster.clone(),
+                    ),
+                    Disposition::KnownBug {
+                        ferro_output,
+                        tracking_issue,
+                        cluster,
+                    } => (
+                        DispositionKind::KnownBug,
+                        Some(ferro_output.clone()),
+                        Some(*tracking_issue),
+                        cluster.clone(),
+                    ),
+                };
+                Some(MemberRow {
+                    cluster,
+                    input: case.input.clone(),
+                    axis: "normalized".to_string(),
+                    kind,
+                    ferro_output,
+                    tracking_issue,
+                })
+            })
+            .collect();
+        SummaryModel {
+            title: CORPUS_TITLE.to_string(),
+            clusters: self.clusters.clone(),
+            rows,
+        }
     }
 }
 
@@ -146,6 +198,16 @@ mod tests {
         let fixture = parse(clusters, disp);
         assert_eq!(fixture.cluster_refs(), vec![("X", "panic")]);
         assert!(fixture.validate_clusters().is_ok());
+
+        let summary = fixture.to_summary();
+        assert_eq!(summary.title, "biocommons-normalize");
+        assert_eq!(summary.rows.len(), 1);
+        let row = &summary.rows[0];
+        assert_eq!(row.kind, DispositionKind::KnownBug);
+        assert_eq!(row.axis, "normalized");
+        assert_eq!(row.ferro_output.as_deref(), Some("Z"));
+        assert_eq!(row.tracking_issue, Some(472));
+        assert_eq!(row.cluster.as_deref(), Some("panic"));
     }
 
     #[test]

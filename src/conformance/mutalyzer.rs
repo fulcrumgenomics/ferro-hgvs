@@ -11,6 +11,10 @@
 use serde::Deserialize;
 
 use super::schema::{validate_cluster_refs, Cluster};
+use super::summary::{DispositionKind, MemberRow, SummaryModel};
+
+/// Corpus title used as the generated summary's heading and model title.
+pub const CORPUS_TITLE: &str = "mutalyzer-normalize";
 
 /// Top-level corpus document: metadata header plus the case list.
 #[derive(Debug, Deserialize)]
@@ -57,6 +61,60 @@ impl Fixture {
     /// entry (orphan clusters are allowed). See [`validate_cluster_refs`].
     pub fn validate_clusters(&self) -> Result<(), String> {
         validate_cluster_refs(&self.clusters, self.cluster_refs())
+    }
+
+    /// Flatten this corpus into the corpus-agnostic summary model. mutalyzer
+    /// dispositions carry no `ferro_output`, so that column is always absent.
+    pub fn to_summary(&self) -> SummaryModel {
+        let mut rows = Vec::new();
+        for case in &self.cases {
+            let input = case.input.as_str();
+            if let Some(d) = &case.accepted_divergence {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::AcceptedDivergence,
+                    ferro_output: None,
+                    tracking_issue: None,
+                });
+            }
+            if let Some(d) = &case.known_bug {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::KnownBug,
+                    ferro_output: None,
+                    tracking_issue: Some(d.tracking_issue),
+                });
+            }
+            if let Some(d) = &case.improvement {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::Improvement,
+                    ferro_output: None,
+                    tracking_issue: Some(d.tracking_issue),
+                });
+            }
+            if let Some(d) = &case.spec_citation {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::SpecCitation,
+                    ferro_output: None,
+                    tracking_issue: None,
+                });
+            }
+        }
+        SummaryModel {
+            title: CORPUS_TITLE.to_string(),
+            clusters: self.clusters.clone(),
+            rows,
+        }
     }
 }
 
@@ -449,6 +507,22 @@ mod tests {
         refs.sort();
         assert_eq!(refs, vec![("A", "sel"), ("B", "np")]);
         assert!(fixture.validate_clusters().is_ok());
+
+        let summary = fixture.to_summary();
+        assert_eq!(summary.title, "mutalyzer-normalize");
+        assert_eq!(summary.rows.len(), 2);
+        let imp = summary
+            .rows
+            .iter()
+            .find(|r| r.kind == DispositionKind::Improvement)
+            .expect("improvement row");
+        assert_eq!(imp.tracking_issue, Some(500));
+        assert_eq!(imp.axis, "normalized");
+        assert_eq!(imp.cluster.as_deref(), Some("sel"));
+        assert!(summary
+            .rows
+            .iter()
+            .any(|r| r.kind == DispositionKind::SpecCitation));
     }
 
     #[test]

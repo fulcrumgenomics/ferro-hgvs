@@ -13,5 +13,6 @@
 pub mod biocommons;
 pub mod mutalyzer;
 pub mod schema;
+pub mod summary;
 
 pub use schema::{validate_cluster_refs, Cluster};
