@@ -10,6 +10,8 @@
 
 use serde::Deserialize;
 
+use super::schema::{validate_cluster_refs, Cluster};
+
 /// Top-level corpus document: metadata header plus the case list.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -19,7 +21,43 @@ pub struct Fixture {
     pub source_commit: String,
     pub license: String,
     pub refreshed_at: String,
+    /// Root-cause cluster taxonomy referenced by the per-disposition `cluster`
+    /// field. Optional so a corpus with no taxonomy still parses.
+    #[serde(default)]
+    pub clusters: Vec<Cluster>,
     pub cases: Vec<Case>,
+}
+
+impl Fixture {
+    /// Every `(input, cluster_id)` pair referenced by a disposition `cluster`.
+    pub fn cluster_refs(&self) -> Vec<(&str, &str)> {
+        let mut refs = Vec::new();
+        for case in &self.cases {
+            let input = case.input.as_str();
+            for cluster in [
+                case.accepted_divergence
+                    .as_ref()
+                    .and_then(|d| d.cluster.as_deref()),
+                case.known_bug.as_ref().and_then(|d| d.cluster.as_deref()),
+                case.improvement.as_ref().and_then(|d| d.cluster.as_deref()),
+                case.spec_citation
+                    .as_ref()
+                    .and_then(|d| d.cluster.as_deref()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                refs.push((input, cluster));
+            }
+        }
+        refs
+    }
+
+    /// Validate that every disposition `cluster` ref resolves to a registry
+    /// entry (orphan clusters are allowed). See [`validate_cluster_refs`].
+    pub fn validate_clusters(&self) -> Result<(), String> {
+        validate_cluster_refs(&self.clusters, self.cluster_refs())
+    }
 }
 
 /// One corpus case: an input plus the expected output on each axis and any
@@ -177,6 +215,10 @@ pub struct AcceptedDivergence {
     /// Optional human-readable note expanding on the policy.
     #[serde(default)]
     pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry), grouping this
+    /// divergence under a cross-case pattern in the generated summary.
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 /// Known-bug annotation. When attached to a `Case`, the corpus runner
@@ -202,6 +244,10 @@ pub struct KnownBug {
     /// Optional human-readable note.
     #[serde(default)]
     pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry), grouping this
+    /// divergence under a cross-case pattern in the generated summary.
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 /// Tracked-improvement annotation. When attached to a `Case`, the corpus
@@ -238,6 +284,10 @@ pub struct Improvement {
     /// Optional human-readable note.
     #[serde(default)]
     pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry), grouping this
+    /// divergence under a cross-case pattern in the generated summary.
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 /// Closed enum of HGVS spec section identifiers cited from `cases.json`.
@@ -360,8 +410,66 @@ pub struct SpecCitation {
     /// Optional human-readable note expanding on the citation.
     #[serde(default)]
     pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry), grouping this
+    /// divergence under a cross-case pattern in the generated summary.
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: &str =
+        r#""description":"t","source":"t","source_commit":"t","license":"t","refreshed_at":"t""#;
+
+    fn parse(clusters: &str, cases: &str) -> Fixture {
+        let json = format!("{{{BASE},\"clusters\":[{clusters}],\"cases\":[{cases}]}}");
+        serde_json::from_str(&json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn cluster_refs_collects_every_disposition_kind() {
+        let clusters = r#"
+            {"id":"sel","title":"RefSeqGene selector","spec_section":"background/refseq.md"},
+            {"id":"np","title":"bare NP","spec_section":"protein"}
+        "#;
+        let cases = r#"
+            {"input":"A","improvement":{"axis":"normalized","tracking_issue":500,
+              "section":"HGVS §RefSeqGene transcript selection","cluster":"sel"}},
+            {"input":"B","spec_citation":{"axis":"protein_description",
+              "section":"HGVS protein reference (bare NP)","cluster":"np"}}
+        "#;
+        let fixture = parse(clusters, cases);
+        let mut refs = fixture.cluster_refs();
+        refs.sort();
+        assert_eq!(refs, vec![("A", "sel"), ("B", "np")]);
+        assert!(fixture.validate_clusters().is_ok());
+    }
+
+    #[test]
+    fn dangling_disposition_cluster_ref_is_rejected() {
+        let clusters = r#"{"id":"np","title":"bare NP","spec_section":"protein"}"#;
+        let cases = r#"
+            {"input":"B","spec_citation":{"axis":"protein_description",
+              "section":"HGVS protein reference (bare NP)","cluster":"missing"}}
+        "#;
+        let err = parse(clusters, cases)
+            .validate_clusters()
+            .expect_err("a dangling disposition cluster ref must be rejected");
+        assert!(err.contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn dispositions_without_clusters_are_ok() {
+        let cases = r#"{"input":"A","improvement":{"axis":"normalized",
+            "tracking_issue":500,"section":"HGVS §RefSeqGene transcript selection"}}"#;
+        let fixture = parse("", cases);
+        assert!(fixture.cluster_refs().is_empty());
+        assert!(fixture.validate_clusters().is_ok());
+    }
 }

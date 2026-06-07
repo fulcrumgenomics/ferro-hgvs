@@ -562,6 +562,7 @@ mod classify_outcome_tests {
             reason: "spec-correct per HGVS edit-type priority".to_string(),
             spec_citation: None,
             ferro_output: ferro_output.to_string(),
+            cluster: None,
         }
     }
 
@@ -569,6 +570,7 @@ mod classify_outcome_tests {
         Disposition::KnownBug {
             tracking_issue: 999,
             ferro_output: ferro_output.to_string(),
+            cluster: None,
         }
     }
 

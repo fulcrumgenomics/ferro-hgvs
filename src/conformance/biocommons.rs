@@ -8,6 +8,8 @@
 
 use serde::Deserialize;
 
+use super::schema::{validate_cluster_refs, Cluster};
+
 /// Top-level corpus document: metadata header plus the case list.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -18,7 +20,30 @@ pub struct Fixture {
     pub biocommons_upstream: String,
     pub license: String,
     pub refreshed_at: String,
+    /// Root-cause cluster taxonomy referenced by the per-disposition `cluster`
+    /// field. Optional so a corpus with no taxonomy still parses.
+    #[serde(default)]
+    pub clusters: Vec<Cluster>,
     pub cases: Vec<Case>,
+}
+
+impl Fixture {
+    /// Every `(input, cluster_id)` pair referenced by a disposition `cluster`.
+    pub fn cluster_refs(&self) -> Vec<(&str, &str)> {
+        self.cases
+            .iter()
+            .filter_map(|case| {
+                let cluster = case.disposition.as_ref()?.cluster()?;
+                Some((case.input.as_str(), cluster))
+            })
+            .collect()
+    }
+
+    /// Validate that every disposition `cluster` ref resolves to a registry
+    /// entry (orphan clusters are allowed). See [`validate_cluster_refs`].
+    pub fn validate_clusters(&self) -> Result<(), String> {
+        validate_cluster_refs(&self.clusters, self.cluster_refs())
+    }
 }
 
 /// One corpus case: an input, the expected normalized form (or error), the
@@ -70,6 +95,9 @@ pub enum Disposition {
         spec_citation: Option<String>,
         /// The exact output ferro is expected to produce.
         ferro_output: String,
+        /// Root-cause cluster id (see the corpus `clusters` registry).
+        #[serde(default)]
+        cluster: Option<String>,
     },
     /// ferro is wrong; xfail until fixed. If ferro starts matching biocommons
     /// the harness fails (XPASS) so the annotation and the fixed row are
@@ -79,5 +107,62 @@ pub enum Disposition {
         tracking_issue: u64,
         /// The (incorrect) output ferro currently produces.
         ferro_output: String,
+        /// Root-cause cluster id (see the corpus `clusters` registry).
+        #[serde(default)]
+        cluster: Option<String>,
     },
+}
+
+impl Disposition {
+    /// The root-cause cluster id this disposition references, if any.
+    pub fn cluster(&self) -> Option<&str> {
+        match self {
+            Disposition::AcceptedDivergence { cluster, .. }
+            | Disposition::KnownBug { cluster, .. } => cluster.as_deref(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(clusters: &str, disposition: &str) -> Fixture {
+        let json = format!(
+            r#"{{"description":"t","source":"t","source_commit":"t",
+                 "biocommons_upstream":"t","license":"t","refreshed_at":"t",
+                 "clusters":[{clusters}],
+                 "cases":[{{"input":"X","normalized":"Y","shuffle_direction":"3prime",
+                   "cross_boundaries":false,"source_function":"t","disposition":{disposition}}}]}}"#
+        );
+        serde_json::from_str(&json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn cluster_ref_resolves_to_registry() {
+        let clusters = r#"{"id":"panic","title":"overflow panic","spec_section":"x"}"#;
+        let disp =
+            r#"{"kind":"known_bug","tracking_issue":472,"ferro_output":"Z","cluster":"panic"}"#;
+        let fixture = parse(clusters, disp);
+        assert_eq!(fixture.cluster_refs(), vec![("X", "panic")]);
+        assert!(fixture.validate_clusters().is_ok());
+    }
+
+    #[test]
+    fn dangling_cluster_ref_is_rejected() {
+        let disp =
+            r#"{"kind":"known_bug","tracking_issue":472,"ferro_output":"Z","cluster":"missing"}"#;
+        let err = parse("", disp)
+            .validate_clusters()
+            .expect_err("a dangling cluster ref must be rejected");
+        assert!(err.contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn disposition_without_cluster_is_ok() {
+        let disp = r#"{"kind":"known_bug","tracking_issue":472,"ferro_output":"Z"}"#;
+        let fixture = parse("", disp);
+        assert!(fixture.cluster_refs().is_empty());
+        assert!(fixture.validate_clusters().is_ok());
+    }
 }

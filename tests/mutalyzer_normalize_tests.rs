@@ -1212,6 +1212,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 policy: Policy::GeneSymbolSelector121,
                 note: None,
+                cluster: None,
             }),
             None,
         );
@@ -1238,6 +1239,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 policy: Policy::GeneSymbolSelector121,
                 note: None,
+                cluster: None,
             }),
             None,
         );
@@ -1262,6 +1264,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 policy: Policy::GeneSymbolSelector121,
                 note: None,
+                cluster: None,
             }),
             None,
         );
@@ -1299,6 +1302,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 section: SpecSection::Prioritization,
                 note: None,
+                cluster: None,
             }),
         );
         t.record(&case, "X", Ok("Y".to_string()));
@@ -1323,6 +1327,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 section: SpecSection::Prioritization,
                 note: None,
+                cluster: None,
             }),
         );
         t.record(&case, "X", Err("normalize: panic boom".to_string()));
@@ -1346,6 +1351,7 @@ mod comparator_tests {
                 axis: Axis::Errors,
                 section: SpecSection::Prioritization,
                 note: None,
+                cluster: None,
             }),
         );
         t.record(&case, "X", Ok("Y".to_string()));
@@ -1368,6 +1374,7 @@ mod comparator_tests {
                     axis: Axis::Normalized,
                     policy: Policy::GeneSymbolSelector121,
                     note: None,
+                    cluster: None,
                 }),
                 None,
             ),
@@ -1382,6 +1389,7 @@ mod comparator_tests {
                     axis: Axis::Normalized,
                     section: SpecSection::Prioritization,
                     note: None,
+                    cluster: None,
                 }),
             ),
             "X",
@@ -1411,11 +1419,13 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 policy: Policy::GeneSymbolSelector121,
                 note: None,
+                cluster: None,
             }),
             Some(SpecCitation {
                 axis: Axis::Normalized,
                 section: SpecSection::Prioritization,
                 note: None,
+                cluster: None,
             }),
         );
         t.record(&case, "X", Ok("Y".to_string()));
@@ -1458,6 +1468,7 @@ mod comparator_tests {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.pass, 0);
@@ -1476,6 +1487,7 @@ mod comparator_tests {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Ok("X".to_string()));
         assert_eq!(t.pass, 0);
@@ -1497,6 +1509,7 @@ mod comparator_tests {
                 axis: Axis::Normalized,
                 policy: Policy::GeneSymbolSelector121,
                 note: None,
+                cluster: None,
             }),
             None,
         );
@@ -1519,6 +1532,7 @@ mod comparator_tests {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Err("normalize: panic boom".to_string()));
         assert_eq!(t.pass, 0);
@@ -1586,6 +1600,7 @@ mod comparator_tests {
             tracking_issue: 500,
             section: SpecSection::RefSeqGeneSelector,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.pass, 0);
@@ -1606,6 +1621,7 @@ mod comparator_tests {
             tracking_issue: 500,
             section: SpecSection::RefSeqGeneSelector,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Ok("X".to_string()));
         assert_eq!(t.pass, 0);
@@ -1626,6 +1642,7 @@ mod comparator_tests {
             tracking_issue: 500,
             section: SpecSection::RefSeqGeneSelector,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.pass, 0);
@@ -1647,6 +1664,7 @@ mod comparator_tests {
             tracking_issue: 500,
             section: SpecSection::RefSeqGeneSelector,
             note: None,
+            cluster: None,
         });
         t.record(&case, "X", Err("normalize: panic boom".to_string()));
         assert_eq!(t.pass, 0);
