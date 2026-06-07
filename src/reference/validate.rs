@@ -43,6 +43,7 @@
 //!   version (e.g. `NM_012459.2`) is invisible offline; the authoritative tier
 //!   catches it via the CDS / protein_id comparison.
 
+use crate::backtranslate::codon::{Codon, CodonTable};
 use crate::error::FerroError;
 use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
 use crate::reference::provider::ReferenceProvider;
@@ -84,6 +85,15 @@ pub enum AnomalyKind {
     /// record (e.g. `NM_012459.2` served with `NP_036591.3` instead of the
     /// canonical `NP_036591.2`).
     AuthoritativeProteinIdMismatch,
+    /// Translating the served CDS does not reproduce the canonical protein
+    /// sequence. Catches base-level non-canonical sequences that the
+    /// coordinate/length/protein_id comparisons miss (e.g. a same-length CDS
+    /// with point edits). Advisory — the standard codon table cannot model
+    /// selenocysteine (`TGA`) recoding or alternative start codons, so it has
+    /// the same biological false-positive classes as the offline codon checks
+    /// (the obvious selenoprotein readthrough case is suppressed; see
+    /// [`validate_translation_against_protein`]).
+    TranslationMismatch,
 }
 
 /// How much confidence an anomaly carries that the record is genuinely corrupt.
@@ -170,9 +180,21 @@ pub fn validate_transcript_record(tx: &Transcript) -> Vec<TranscriptAnomaly> {
     }
 
     // --- CDS open-reading-frame sanity --------------------------------------
-    let (Some(cds_start), Some(cds_end)) = (tx.cds_start, tx.cds_end) else {
-        // Non-coding (no CDS): only the length check applies.
-        return anomalies;
+    // Only a fully-absent CDS `(None, None)` is the legitimate non-coding case.
+    // A half-populated pair is structurally incomplete and must be flagged as
+    // corruption rather than silently passing as non-coding.
+    let (cds_start, cds_end) = match (tx.cds_start, tx.cds_end) {
+        (Some(start), Some(end)) => (start, end),
+        (None, None) => return anomalies,
+        (start, end) => {
+            anomalies.push(TranscriptAnomaly::new(
+                &tx.id,
+                AnomalyKind::CdsOutOfRange,
+                AnomalyConfidence::Corruption,
+                format!("CDS bounds are incomplete: start={start:?}, end={end:?}"),
+            ));
+            return anomalies;
+        }
     };
 
     // `cds_start`/`cds_end` are 1-based inclusive transcript coordinates. The
@@ -348,10 +370,8 @@ pub fn validate_against_authoritative(
     // numerically identical to a 1-based inclusive end (see cdot.rs and
     // multi_fasta.rs CDS construction); the authoritative `cds_end` is the
     // GenBank `a..b` value, also 1-based inclusive.
-    if let (Some(ts), Some(te), Some(as_), Some(ae)) =
-        (tx.cds_start, tx.cds_end, auth.cds_start, auth.cds_end)
-    {
-        if (ts, te) != (as_, ae) {
+    match (tx.cds_start, tx.cds_end, auth.cds_start, auth.cds_end) {
+        (Some(ts), Some(te), Some(as_), Some(ae)) if (ts, te) != (as_, ae) => {
             anomalies.push(TranscriptAnomaly::new(
                 id,
                 AnomalyKind::AuthoritativeCdsMismatch,
@@ -362,6 +382,18 @@ pub fn validate_against_authoritative(
                 ),
             ));
         }
+        // A served record with exactly one CDS bound set is structurally
+        // incomplete: surface corruption instead of passing clean because the
+        // four-`Some` arm failed to match.
+        (Some(_), None, _, _) | (None, Some(_), _, _) => {
+            anomalies.push(TranscriptAnomaly::new(
+                id,
+                AnomalyKind::CdsOutOfRange,
+                AnomalyConfidence::Corruption,
+                "served CDS bounds are incomplete".to_string(),
+            ));
+        }
+        _ => {}
     }
 
     if let (Some(tp), Some(ap)) = (tx.protein_id.as_deref(), auth.protein_id.as_deref()) {
@@ -405,6 +437,286 @@ pub fn validate_against_overrides<P: ReferenceProvider>(
         }
     }
     anomalies
+}
+
+/// A single correction applied to (or required for) a served transcript when
+/// reconciling it with the authoritative record.
+///
+/// `#[non_exhaustive]`: later phases may add correction kinds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Correction {
+    /// The CDS bounds were overridden from the authoritative record.
+    CdsCorrected {
+        /// The served `(cds_start, cds_end)` before correction.
+        from: (Option<u64>, Option<u64>),
+        /// The authoritative 1-based inclusive `(cds_start, cds_end)`.
+        to: (u64, u64),
+    },
+    /// The paired protein accession was overridden from the authoritative record.
+    ProteinIdCorrected {
+        /// The served `protein_id` before correction.
+        from: Option<String>,
+        /// The authoritative `protein_id`.
+        to: String,
+    },
+    /// The served sequence length disagrees with the authoritative record, so
+    /// CDS/protein were **not** overridden — the authoritative coordinates
+    /// index a different-length sequence. The served *bases* themselves need
+    /// re-ingestion from the canonical record, which [`CanonicalOverrides`]
+    /// does not carry.
+    SequenceReingestionRequired {
+        /// Served sequence length.
+        served: u64,
+        /// Authoritative transcript length.
+        authoritative: u64,
+    },
+}
+
+/// Reconcile a served transcript's CDS/protein metadata with the authoritative
+/// record for its exact accession version, mutating `tx` in place and returning
+/// the corrections applied.
+///
+/// This fixes the **metadata-mismatch** class (e.g. `NM_012459.2`, whose served
+/// `.2` bases are canonical but whose cdot CDS/`protein_id` point at the `.3`
+/// short isoform): the CDS bounds and `protein_id` are overridden from the
+/// authoritative record so downstream protein prediction translates the
+/// canonical reading frame.
+///
+/// It deliberately does **not** touch the bases. When the served length
+/// disagrees with the authoritative length (the **wrong-sequence** class, e.g.
+/// `NM_000193.2` served at 4650 nt vs the canonical 1576), the authoritative
+/// coordinates do not apply to the served sequence, so no override is made and
+/// a [`Correction::SequenceReingestionRequired`] is reported instead — fixing
+/// that case needs the authoritative *bases*, which the overrides file does not
+/// carry. The served length is the sequence byte length, or, for a
+/// coordinate-only record, the exon-sum length.
+///
+/// CDS and `protein_id` are corrected **together or not at all**: a corrected
+/// reading frame paired with a stale protein label (or vice versa) is more
+/// misleading than no correction, so the override is applied only when the
+/// authoritative record carries the full coding triple (both CDS bounds *and* a
+/// `protein_id`).
+///
+/// # Limitations
+///
+/// - **Same-length-but-edited** sequences are not detected: length equality is
+///   a proxy for base identity (the overrides carry no checksum), so a
+///   canonical-length sequence with point edits passes through as if canonical.
+/// - This corrects only the served [`Transcript`]. The projection path also
+///   reads the **cdot mapper's** parallel `protein`/CDS fields and prefers them,
+///   so for full effect the wiring must reconcile the cdot record too (or route
+///   projection through the corrected transcript).
+/// - **Ordering contract:** call this on a freshly loaded transcript *before*
+///   it is cached or translated. Mutating an already-translated transcript
+///   would leave a cached reference translation (the projector's
+///   `ref_protein_cache`) stale.
+///
+/// Returns an empty vec when there is no override for `tx.id` or nothing needs
+/// changing.
+pub fn apply_canonical_overrides(
+    tx: &mut Transcript,
+    overrides: &CanonicalOverrides,
+) -> Vec<Correction> {
+    let Some(auth) = overrides.get(&tx.id) else {
+        return Vec::new();
+    };
+    // `overrides` is file-backed: a hand-edited / corrupt entry whose embedded
+    // accession disagrees with its map key would rewrite this record with
+    // another accession's metadata. Trust the override only when it self-reports
+    // the accession we looked it up by.
+    if auth.accession != tx.id {
+        return Vec::new();
+    }
+    let mut corrections = Vec::new();
+
+    // Served length: sequence byte length, else the exon-sum length for a
+    // coordinate-only record. If the served length disagrees with the
+    // authoritative length, the authoritative CDS coordinates index a
+    // different-length sequence — applying them would corrupt the reading
+    // frame (and could place `cds_end` out of range). Report that the sequence
+    // needs re-ingestion and leave the record untouched.
+    let served_len = tx.sequence.as_deref().map(|s| s.len() as u64).or_else(|| {
+        let sum: u64 = tx
+            .exons
+            .iter()
+            .map(|e| e.end.saturating_sub(e.start) + 1)
+            .sum();
+        (sum > 0).then_some(sum)
+    });
+    if let Some(served) = served_len {
+        if served != auth.tx_length {
+            corrections.push(Correction::SequenceReingestionRequired {
+                served,
+                authoritative: auth.tx_length,
+            });
+            return corrections;
+        }
+    }
+
+    // All-or-nothing for the coding triple: only override when the authoritative
+    // record is fully coding (CDS bounds + protein_id present).
+    let (Some(as_), Some(ae), Some(ap)) =
+        (auth.cds_start, auth.cds_end, auth.protein_id.as_deref())
+    else {
+        return corrections;
+    };
+
+    // Reject structurally-impossible CDS bounds before mutating: require
+    // `1 <= cds_start <= cds_end <= tx_length`. A malformed override past the
+    // sequence length would index out of range and corrupt translation.
+    if as_ == 0 || ae < as_ || ae > auth.tx_length {
+        return corrections;
+    }
+
+    if (tx.cds_start, tx.cds_end) != (Some(as_), Some(ae)) {
+        corrections.push(Correction::CdsCorrected {
+            from: (tx.cds_start, tx.cds_end),
+            to: (as_, ae),
+        });
+        tx.cds_start = Some(as_);
+        tx.cds_end = Some(ae);
+    }
+
+    if tx.protein_id.as_deref() != Some(ap) {
+        corrections.push(Correction::ProteinIdCorrected {
+            from: tx.protein_id.clone(),
+            to: ap.to_string(),
+        });
+        tx.protein_id = Some(ap.to_string());
+    }
+
+    corrections
+}
+
+/// The protein produced by translating a CDS, plus whether translation stopped
+/// on a `TGA` codon specifically. Only `TGA` is recoded as selenocysteine, so
+/// the caller needs to distinguish a `TGA` stop (candidate Sec readthrough)
+/// from a `TAA`/`TAG` stop (a true nonsense codon) — see
+/// [`validate_translation_against_protein`].
+struct TranslatedCds {
+    /// One-letter amino-acid string, with the terminating stop omitted.
+    protein: String,
+    /// Whether translation terminated on an in-frame `TGA` (as opposed to
+    /// `TAA`/`TAG`, or running off the end of the CDS).
+    terminated_by_tga: bool,
+}
+
+/// Translate a CDS byte slice to a one-letter amino-acid string, stopping at
+/// the first stop codon (the stop is not emitted). Returns `None` if any codon
+/// is ambiguous/unparseable (`N`/IUPAC) — one ambiguous codon aborts the whole
+/// translation so the caller skips the comparison rather than reporting a
+/// spurious mismatch.
+///
+/// The returned [`TranslatedCds`] also records whether the terminating stop was
+/// `TGA` (the only stop recoded as selenocysteine), so the caller can suppress
+/// Sec readthrough without also suppressing a `TAA`/`TAG` nonsense edit at the
+/// same site.
+///
+/// Lowercase / soft-masked bases are fine: `Codon::parse_bytes` → `Base::from_char`
+/// upper-cases each base, so no pre-upper-casing is needed here (unlike the
+/// string-based offline codon checks). A trailing partial (<3 nt) codon is
+/// dropped — an in-range CDS is expected to be a triplet (the offline
+/// `CdsNotTriplet` check guards that separately).
+fn translate_cds_bytes(cds: &[u8]) -> Option<TranslatedCds> {
+    let table = CodonTable::standard();
+    let mut protein = String::with_capacity(cds.len() / 3);
+    for chunk in cds.chunks(3) {
+        if chunk.len() < 3 {
+            break; // trailing partial codon
+        }
+        let codon = Codon::parse_bytes(chunk)?;
+        if table.is_stop(&codon) {
+            return Some(TranslatedCds {
+                protein,
+                terminated_by_tga: chunk.eq_ignore_ascii_case(b"TGA"),
+            });
+        }
+        protein.push(table.amino_acid_for(&codon)?.to_one_letter());
+    }
+    Some(TranslatedCds {
+        protein,
+        terminated_by_tga: false,
+    })
+}
+
+/// Compare the protein obtained by translating the served CDS against the
+/// canonical protein sequence, returning an [`AnomalyKind::TranslationMismatch`]
+/// (`Advisory`) anomaly when they differ.
+///
+/// This is the base-level (strategy-B) check: the coordinate / length /
+/// protein_id comparisons in [`validate_against_authoritative`] can all agree
+/// while the served *bases* still translate to the wrong protein (a same-length
+/// CDS with point edits). Supplying `canonical_protein` requires the
+/// authoritative `NP_` sequence — i.e. protein-FASTA ingestion, the data edge
+/// not covered here.
+///
+/// Biological adjustments so canonical RefSeq records don't false-positive:
+/// - the first residue is forced to `M` (translation initiation installs Met
+///   regardless of the start codon; canonical `NP_` always begins with `M`);
+/// - the obvious **selenocysteine readthrough** case is suppressed — the
+///   standard table stops at an in-frame `TGA`, so a selenoprotein translates
+///   to a prefix ending exactly where the canonical protein has a `U` (Sec);
+///   that specific shape returns `None` rather than a mismatch.
+///
+/// The anomaly is `Advisory`, not `Corruption`: the standard codon table cannot
+/// model every recoding/alternative-start case, so a residual mismatch is a
+/// review signal, not proof of corruption.
+///
+/// Returns `None` (no anomaly) when the record is non-coding, has no sequence,
+/// has out-of-range CDS bounds, or the CDS contains ambiguous codons that can't
+/// be translated.
+pub fn validate_translation_against_protein(
+    tx: &Transcript,
+    canonical_protein: &str,
+) -> Option<TranscriptAnomaly> {
+    let (cds_start, cds_end) = (tx.cds_start?, tx.cds_end?);
+    let seq = tx.sequence.as_deref()?;
+    let bytes = seq.as_bytes();
+    if cds_start == 0 || cds_end < cds_start || cds_end as usize > bytes.len() {
+        return None;
+    }
+    let TranslatedCds {
+        mut protein,
+        terminated_by_tga,
+    } = translate_cds_bytes(&bytes[(cds_start as usize - 1)..(cds_end as usize)])?;
+    // Translation initiation installs Met regardless of the start codon, so the
+    // canonical NP_ always begins with M; mirror that to avoid a position-1
+    // false positive on alternative (CTG/GTG/…) start codons.
+    if !protein.is_empty() {
+        protein.replace_range(0..1, "M");
+    }
+    let translated = protein;
+
+    // Canonical `NP_` sequences carry no trailing stop; tolerate a stray `*`.
+    let canonical = canonical_protein.trim_end_matches('*');
+    if translated == canonical {
+        return None;
+    }
+
+    // Selenocysteine readthrough: the standard table stops at the first
+    // in-frame TGA, so a selenoprotein translates to a prefix that ends exactly
+    // where the canonical protein has a `U` (Sec). Suppress that expected case,
+    // but only when the terminating codon was actually `TGA` — a `TAA`/`TAG`
+    // stop at the same position is a genuine nonsense edit, not Sec recoding,
+    // and must still be flagged.
+    if terminated_by_tga
+        && canonical.starts_with(&translated)
+        && canonical.as_bytes().get(translated.len()) == Some(&b'U')
+    {
+        return None;
+    }
+
+    Some(TranscriptAnomaly::new(
+        &tx.id,
+        AnomalyKind::TranslationMismatch,
+        AnomalyConfidence::Advisory,
+        format!(
+            "translated served CDS ({} aa) does not match the canonical protein ({} aa)",
+            translated.len(),
+            canonical.len()
+        ),
+    ))
 }
 
 /// Whether `codon` is the canonical start codon `ATG` (case-insensitive).
@@ -540,6 +852,30 @@ mod tests {
         let found = validate_transcript_record(&coding_tx("ATGAAATAA", 1, 99));
         assert_eq!(kinds(&found), vec![AnomalyKind::CdsOutOfRange]);
         assert_eq!(found[0].confidence, AnomalyConfidence::Corruption);
+    }
+
+    #[test]
+    fn half_populated_cds_bounds_are_corruption() {
+        // Only (None, None) is the legitimate non-coding case. A record with
+        // exactly one CDS bound set is structurally incomplete and must be
+        // flagged rather than silently treated as non-coding.
+        for (start, end) in [(Some(1), None), (None, Some(9))] {
+            let tx = Transcript {
+                id: "NM_TEST.1".to_string(),
+                sequence: Some("ATGAAATAA".to_string()),
+                cds_start: start,
+                cds_end: end,
+                exons: vec![Exon::new(1, 1, 9)],
+                ..Default::default()
+            };
+            let found = validate_transcript_record(&tx);
+            assert_eq!(
+                kinds(&found),
+                vec![AnomalyKind::CdsOutOfRange],
+                "start={start:?} end={end:?}"
+            );
+            assert_eq!(found[0].confidence, AnomalyConfidence::Corruption);
+        }
     }
 
     #[test]
@@ -786,5 +1122,275 @@ mod tests {
         let found = validate_against_overrides(&FailingProvider, &ov);
         assert_eq!(kinds(&found), vec![AnomalyKind::LoadError]);
         assert_eq!(found[0].transcript_id, "NM_BROKEN.1");
+    }
+
+    #[test]
+    fn authoritative_half_populated_served_cds_is_corruption() {
+        // A served record with only one CDS bound set is incomplete; the
+        // authoritative comparison must surface corruption rather than passing
+        // clean because the four-`Some` `if let` failed to match.
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.cds_end = None;
+        let a = auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1"));
+        let ks = kinds(&validate_against_authoritative(&tx, &a));
+        assert!(ks.contains(&AnomalyKind::CdsOutOfRange), "got {ks:?}");
+    }
+
+    // --- correction (phase 3) -----------------------------------------------
+
+    #[test]
+    fn correction_overrides_cds_and_protein_when_sequence_is_canonical_length() {
+        // NM_012459.2 shape: canonical-length bases but cdot points at the
+        // short isoform. Metadata is corrected in place.
+        let s = "A".repeat(327);
+        let mut tx = coding_tx(&s, 34, 285);
+        tx.id = "NM_012459.2".to_string();
+        tx.protein_id = Some("NP_036591.3".to_string());
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth(
+            "NM_012459.2",
+            327,
+            Some((31, 327)),
+            Some("NP_036591.2"),
+        ));
+
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections.contains(&Correction::CdsCorrected {
+            from: (Some(34), Some(285)),
+            to: (31, 327),
+        }));
+        assert!(corrections.contains(&Correction::ProteinIdCorrected {
+            from: Some("NP_036591.3".to_string()),
+            to: "NP_036591.2".to_string(),
+        }));
+        // Mutation applied.
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(31), Some(327)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_036591.2"));
+    }
+
+    #[test]
+    fn correction_requires_reingestion_when_sequence_length_is_wrong() {
+        // NM_000193.2 shape: served bases are the wrong length, so authoritative
+        // coordinates do not apply — no override, re-ingestion reported.
+        let s = "A".repeat(4650);
+        let mut tx = coding_tx(&s, 342, 1730);
+        tx.id = "NM_000193.2".to_string();
+        tx.protein_id = Some("NP_000184.1".to_string());
+
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth(
+            "NM_000193.2",
+            1576,
+            Some((152, 1540)),
+            Some("NP_000184.1"),
+        ));
+
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert_eq!(
+            corrections,
+            vec![Correction::SequenceReingestionRequired {
+                served: 4650,
+                authoritative: 1576,
+            }]
+        );
+        // Untouched: coordinates for the canonical 1576 nt would be wrong here.
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(342), Some(1730)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_000184.1"));
+    }
+
+    #[test]
+    fn correction_is_noop_when_already_canonical_or_no_override() {
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+
+        // No override entry for this accession.
+        assert!(apply_canonical_overrides(&mut tx, &CanonicalOverrides::default()).is_empty());
+
+        // Override that already matches → no corrections.
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1")));
+        assert!(apply_canonical_overrides(&mut tx, &ov).is_empty());
+    }
+
+    #[test]
+    fn correction_applies_to_coordinate_only_record_via_exon_sum_length() {
+        // No sequence; the exon-sum length (9) matches the authoritative length.
+        let mut tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OLD.1".to_string()),
+            exons: vec![Exon::new(1, 1, 9)],
+            ..Default::default()
+        };
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((4, 9)), Some("NP_NEW.2")));
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections
+            .iter()
+            .any(|c| matches!(c, Correction::CdsCorrected { .. })));
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(4), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_NEW.2"));
+    }
+
+    #[test]
+    fn correction_requires_reingestion_for_coordinate_only_length_mismatch() {
+        // No sequence; the exon-sum length (9) disagrees with the authoritative
+        // length (100) → re-ingestion required, record untouched.
+        let mut tx = Transcript {
+            id: "NM_TEST.1".to_string(),
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_OLD.1".to_string()),
+            exons: vec![Exon::new(1, 1, 9)],
+            ..Default::default()
+        };
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 100, Some((1, 99)), Some("NP_NEW.2")));
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert_eq!(
+            corrections,
+            vec![Correction::SequenceReingestionRequired {
+                served: 9,
+                authoritative: 100,
+            }]
+        );
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+    }
+
+    #[test]
+    fn correction_skips_partial_authoritative_coding_triple() {
+        // Authoritative has CDS but no protein_id → all-or-nothing: nothing is
+        // overridden (a corrected CDS with a stale protein label is misleading).
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((4, 9)), None));
+        assert!(apply_canonical_overrides(&mut tx, &ov).is_empty());
+        assert_eq!(
+            (tx.cds_start, tx.cds_end),
+            (Some(1), Some(9)),
+            "no half-correction"
+        );
+    }
+
+    #[test]
+    fn correction_rejects_override_with_mismatched_accession() {
+        // A file-backed override whose map key disagrees with its embedded
+        // accession (a hand-edited / corrupt overrides file) must not rewrite
+        // the served record with another accession's metadata.
+        let json = r#"{
+            "schema_version": 1,
+            "records": {
+                "NM_TEST.1": {
+                    "accession": "NM_OTHER.9",
+                    "tx_length": 9,
+                    "cds_start": 4,
+                    "cds_end": 9,
+                    "protein_id": "NP_OTHER.9"
+                }
+            }
+        }"#;
+        let ov = CanonicalOverrides::from_json(json).unwrap();
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+        assert!(
+            apply_canonical_overrides(&mut tx, &ov).is_empty(),
+            "mismatched-accession override must be rejected"
+        );
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_X.1"));
+    }
+
+    #[test]
+    fn correction_rejects_out_of_range_authoritative_cds_bounds() {
+        // A malformed override whose CDS bounds fall outside `1..=tx_length`
+        // (here `cds_end` 99 > tx_length 9) must not be applied — installing it
+        // would index past the sequence and corrupt downstream translation.
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.protein_id = Some("NP_X.1".to_string());
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(auth("NM_TEST.1", 9, Some((1, 99)), Some("NP_NEW.2")));
+        assert!(
+            apply_canonical_overrides(&mut tx, &ov).is_empty(),
+            "out-of-range CDS override must be rejected"
+        );
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_X.1"));
+    }
+
+    // --- translation comparison (phase 4) -----------------------------------
+
+    #[test]
+    fn translation_matches_canonical_protein() {
+        // ATG|TGG|TAA → "MW" + stop.
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_tolerates_trailing_stop_in_canonical() {
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW*").is_none());
+    }
+
+    #[test]
+    fn translation_mismatch_is_advisory() {
+        // Served translates to "MW" but the canonical protein is "MV" — a real
+        // residue divergence (not a prefix), reported as Advisory.
+        let tx = coding_tx("ATGTGGTAA", 1, 9);
+        let found = validate_translation_against_protein(&tx, "MV").expect("mismatch");
+        assert_eq!(found.kind, AnomalyKind::TranslationMismatch);
+        assert_eq!(found.confidence, AnomalyConfidence::Advisory);
+    }
+
+    #[test]
+    fn translation_suppresses_selenocysteine_readthrough() {
+        // ATG|TGA|GGG|TAA: standard table stops at the in-frame TGA → "M".
+        // Canonical "MUG" has Sec (U) at the recoded position → suppressed.
+        let tx = coding_tx("ATGTGAGGGTAA", 1, 12);
+        assert!(
+            validate_translation_against_protein(&tx, "MUG").is_none(),
+            "a selenoprotein readthrough must not be flagged"
+        );
+    }
+
+    #[test]
+    fn translation_flags_non_tga_stop_before_selenocysteine() {
+        // ATG|TAA|GGG|TAA: the standard table stops at the in-frame TAA → "M",
+        // the same prefix the canonical selenoprotein "MUG" produces. But only
+        // TGA is recoded as selenocysteine; a TAA/TAG here is a genuine
+        // nonsense edit at the Sec site and must NOT be suppressed.
+        let tx = coding_tx("ATGTAAGGGTAA", 1, 12);
+        let found = validate_translation_against_protein(&tx, "MUG")
+            .expect("a non-TGA stop at a Sec site must be flagged, not suppressed");
+        assert_eq!(found.kind, AnomalyKind::TranslationMismatch);
+        assert_eq!(found.confidence, AnomalyConfidence::Advisory);
+    }
+
+    #[test]
+    fn translation_forces_initiator_met_for_alternative_start() {
+        // CTG|TGG|TAA translates to "LW"; forcing the initiator Met gives "MW",
+        // matching the canonical protein — no false position-1 mismatch.
+        let tx = coding_tx("CTGTGGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_skipped_for_ambiguous_codons() {
+        // An `N`-containing codon can't be translated → skip (not a mismatch).
+        let tx = coding_tx("ATGNNGTAA", 1, 9);
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    #[test]
+    fn translation_skipped_for_noncoding_record() {
+        let mut tx = coding_tx("ATGTGGTAA", 1, 9);
+        tx.cds_start = None;
+        tx.cds_end = None;
+        assert!(validate_translation_against_protein(&tx, "MW").is_none());
     }
 }
