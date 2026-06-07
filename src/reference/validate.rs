@@ -583,7 +583,11 @@ pub fn apply_canonical_overrides(
         }
         None => {
             // Served length: sequence byte length, else the exon-sum length for
-            // a coordinate-only record.
+            // a coordinate-only record. The exon-sum branch assumes the 1-based
+            // *inclusive* `Transcript` exon convention (`end - start + 1`); it is
+            // reached only when `tx.sequence` is `None`, which a sequence-bearing
+            // (FASTA-backed or cdot-synthesized) transcript never is — so the
+            // synthesize path's 0-based exon coordinates don't flow through here.
             let served_len = tx.sequence.as_deref().map(|s| s.len() as u64).or_else(|| {
                 let sum: u64 = tx
                     .exons
