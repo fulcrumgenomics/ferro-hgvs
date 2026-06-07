@@ -1,5 +1,7 @@
 //! Projection benchmarks (v0.6.0+ subsystem). Establishes a HEAD baseline.
 //! Run with: cargo bench --bench projection
+//!
+//! VERSION FLOOR: v0.6.0 — HEAD BASELINE target (NOT swept). The project module is new in v0.6.0. Run: cargo bench --bench projection
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ferro_hgvs::data::cdot::{CdotMapper, CdotTranscript};

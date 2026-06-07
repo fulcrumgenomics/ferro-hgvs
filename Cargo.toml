@@ -211,6 +211,10 @@ harness = false
 name = "projection"
 harness = false
 
+[[bench]]
+name = "baseline_head"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1
