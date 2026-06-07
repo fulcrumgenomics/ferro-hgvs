@@ -180,9 +180,21 @@ pub fn validate_transcript_record(tx: &Transcript) -> Vec<TranscriptAnomaly> {
     }
 
     // --- CDS open-reading-frame sanity --------------------------------------
-    let (Some(cds_start), Some(cds_end)) = (tx.cds_start, tx.cds_end) else {
-        // Non-coding (no CDS): only the length check applies.
-        return anomalies;
+    // Only a fully-absent CDS `(None, None)` is the legitimate non-coding case.
+    // A half-populated pair is structurally incomplete and must be flagged as
+    // corruption rather than silently passing as non-coding.
+    let (cds_start, cds_end) = match (tx.cds_start, tx.cds_end) {
+        (Some(start), Some(end)) => (start, end),
+        (None, None) => return anomalies,
+        (start, end) => {
+            anomalies.push(TranscriptAnomaly::new(
+                &tx.id,
+                AnomalyKind::CdsOutOfRange,
+                AnomalyConfidence::Corruption,
+                format!("CDS bounds are incomplete: start={start:?}, end={end:?}"),
+            ));
+            return anomalies;
+        }
     };
 
     // `cds_start`/`cds_end` are 1-based inclusive transcript coordinates. The
@@ -358,10 +370,8 @@ pub fn validate_against_authoritative(
     // numerically identical to a 1-based inclusive end (see cdot.rs and
     // multi_fasta.rs CDS construction); the authoritative `cds_end` is the
     // GenBank `a..b` value, also 1-based inclusive.
-    if let (Some(ts), Some(te), Some(as_), Some(ae)) =
-        (tx.cds_start, tx.cds_end, auth.cds_start, auth.cds_end)
-    {
-        if (ts, te) != (as_, ae) {
+    match (tx.cds_start, tx.cds_end, auth.cds_start, auth.cds_end) {
+        (Some(ts), Some(te), Some(as_), Some(ae)) if (ts, te) != (as_, ae) => {
             anomalies.push(TranscriptAnomaly::new(
                 id,
                 AnomalyKind::AuthoritativeCdsMismatch,
@@ -372,6 +382,18 @@ pub fn validate_against_authoritative(
                 ),
             ));
         }
+        // A served record with exactly one CDS bound set is structurally
+        // incomplete: surface corruption instead of passing clean because the
+        // four-`Some` arm failed to match.
+        (Some(_), None, _, _) | (None, Some(_), _, _) => {
+            anomalies.push(TranscriptAnomaly::new(
+                id,
+                AnomalyKind::CdsOutOfRange,
+                AnomalyConfidence::Corruption,
+                "served CDS bounds are incomplete".to_string(),
+            ));
+        }
+        _ => {}
     }
 
     if let (Some(tp), Some(ap)) = (tx.protein_id.as_deref(), auth.protein_id.as_deref()) {
@@ -833,6 +855,30 @@ mod tests {
     }
 
     #[test]
+    fn half_populated_cds_bounds_are_corruption() {
+        // Only (None, None) is the legitimate non-coding case. A record with
+        // exactly one CDS bound set is structurally incomplete and must be
+        // flagged rather than silently treated as non-coding.
+        for (start, end) in [(Some(1), None), (None, Some(9))] {
+            let tx = Transcript {
+                id: "NM_TEST.1".to_string(),
+                sequence: Some("ATGAAATAA".to_string()),
+                cds_start: start,
+                cds_end: end,
+                exons: vec![Exon::new(1, 1, 9)],
+                ..Default::default()
+            };
+            let found = validate_transcript_record(&tx);
+            assert_eq!(
+                kinds(&found),
+                vec![AnomalyKind::CdsOutOfRange],
+                "start={start:?} end={end:?}"
+            );
+            assert_eq!(found[0].confidence, AnomalyConfidence::Corruption);
+        }
+    }
+
+    #[test]
     fn cds_extending_past_exon_alignment_is_corruption() {
         // The served sequence is legitimately longer than the exon-alignment
         // extent (poly-A / unaligned 3' tail, which is NOT flagged on its own),
@@ -1076,6 +1122,18 @@ mod tests {
         let found = validate_against_overrides(&FailingProvider, &ov);
         assert_eq!(kinds(&found), vec![AnomalyKind::LoadError]);
         assert_eq!(found[0].transcript_id, "NM_BROKEN.1");
+    }
+
+    #[test]
+    fn authoritative_half_populated_served_cds_is_corruption() {
+        // A served record with only one CDS bound set is incomplete; the
+        // authoritative comparison must surface corruption rather than passing
+        // clean because the four-`Some` `if let` failed to match.
+        let mut tx = coding_tx("ATGAAATAA", 1, 9);
+        tx.cds_end = None;
+        let a = auth("NM_TEST.1", 9, Some((1, 9)), Some("NP_X.1"));
+        let ks = kinds(&validate_against_authoritative(&tx, &a));
+        assert!(ks.contains(&AnomalyKind::CdsOutOfRange), "got {ks:?}");
     }
 
     // --- correction (phase 3) -----------------------------------------------
