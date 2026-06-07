@@ -47,7 +47,7 @@ use crate::backtranslate::codon::{Codon, CodonTable};
 use crate::error::FerroError;
 use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
 use crate::reference::provider::ReferenceProvider;
-use crate::reference::transcript::Transcript;
+use crate::reference::transcript::{Exon, Transcript};
 
 /// The kind of structural anomaly found in a transcript record.
 ///
@@ -460,11 +460,20 @@ pub enum Correction {
         /// The authoritative `protein_id`.
         to: String,
     },
-    /// The served sequence length disagrees with the authoritative record, so
-    /// CDS/protein were **not** overridden — the authoritative coordinates
-    /// index a different-length sequence. The served *bases* themselves need
-    /// re-ingestion from the canonical record, which [`CanonicalOverrides`]
-    /// does not carry.
+    /// The served bases were **replaced** with the authoritative sequence — the
+    /// served sequence was the wrong length, or a same-length edit. Only
+    /// possible when the override carries the canonical `sequence`.
+    SequenceCorrected {
+        /// Served sequence length before correction (0 if coordinate-only).
+        from: u64,
+        /// Authoritative sequence length.
+        to: u64,
+    },
+    /// The served sequence length disagrees with the authoritative record AND
+    /// the override carries no canonical `sequence` to replace it with, so
+    /// CDS/protein were **not** overridden (the coordinates index a
+    /// different-length sequence). Fetch the canonical bases (carry `sequence`
+    /// in the overrides) to make this correctable.
     SequenceReingestionRequired {
         /// Served sequence length.
         served: u64,
@@ -483,14 +492,16 @@ pub enum Correction {
 /// authoritative record so downstream protein prediction translates the
 /// canonical reading frame.
 ///
-/// It deliberately does **not** touch the bases. When the served length
-/// disagrees with the authoritative length (the **wrong-sequence** class, e.g.
-/// `NM_000193.2` served at 4650 nt vs the canonical 1576), the authoritative
-/// coordinates do not apply to the served sequence, so no override is made and
-/// a [`Correction::SequenceReingestionRequired`] is reported instead — fixing
-/// that case needs the authoritative *bases*, which the overrides file does not
-/// carry. The served length is the sequence byte length, or, for a
-/// coordinate-only record, the exon-sum length.
+/// It also fixes the **wrong-sequence** class (e.g. `NM_000193.2` served at
+/// 4650 nt vs the canonical 1576) when the override carries the canonical
+/// `sequence`: the served bases are replaced ([`Correction::SequenceCorrected`])
+/// — this also catches a same-length-but-edited sequence (byte comparison, not
+/// just length). When the override carries **no** `sequence` and the served
+/// length disagrees with the authoritative length, the coordinates can't be
+/// applied safely, so nothing is overridden and a
+/// [`Correction::SequenceReingestionRequired`] is reported instead (carry the
+/// canonical bases to make it correctable). The served length is the sequence
+/// byte length, or, for a coordinate-only record, the exon-sum length.
 ///
 /// CDS and `protein_id` are corrected **together or not at all**: a corrected
 /// reading frame paired with a stale protein label (or vice versa) is more
@@ -500,9 +511,13 @@ pub enum Correction {
 ///
 /// # Limitations
 ///
-/// - **Same-length-but-edited** sequences are not detected: length equality is
-///   a proxy for base identity (the overrides carry no checksum), so a
-///   canonical-length sequence with point edits passes through as if canonical.
+/// - **Same-length-but-edited** sequences are only caught when the override
+///   carries the canonical `sequence` (byte comparison); without it, length
+///   equality is the only proxy and a same-length edit passes as canonical.
+/// - Replacing the bases does **not** rewrite the exon structure (the
+///   authoritative exon layout isn't carried). Protein prediction reads the CDS
+///   bases via `cds_start`/`cds_end`, so it is correct; genomic projection on a
+///   sequence-corrected transcript may be inconsistent with the stale exons.
 /// - This corrects only the served [`Transcript`]. The projection path also
 ///   reads the **cdot mapper's** parallel `protein`/CDS fields and prefers them,
 ///   so for full effect the wiring must reconcile the cdot record too (or route
@@ -530,27 +545,62 @@ pub fn apply_canonical_overrides(
     }
     let mut corrections = Vec::new();
 
-    // Served length: sequence byte length, else the exon-sum length for a
-    // coordinate-only record. If the served length disagrees with the
-    // authoritative length, the authoritative CDS coordinates index a
-    // different-length sequence — applying them would corrupt the reading
-    // frame (and could place `cds_end` out of range). Report that the sequence
-    // needs re-ingestion and leave the record untouched.
-    let served_len = tx.sequence.as_deref().map(|s| s.len() as u64).or_else(|| {
-        let sum: u64 = tx
-            .exons
-            .iter()
-            .map(|e| e.end.saturating_sub(e.start) + 1)
-            .sum();
-        (sum > 0).then_some(sum)
-    });
-    if let Some(served) = served_len {
-        if served != auth.tx_length {
-            corrections.push(Correction::SequenceReingestionRequired {
-                served,
-                authoritative: auth.tx_length,
+    // Sequence reconciliation:
+    // - If the override carries canonical bases, replace a non-canonical served
+    //   sequence (wrong-length OR same-length-but-edited) so the authoritative
+    //   coordinates apply to the right bases.
+    // - Otherwise fall back to the length gate: only proceed when the served
+    //   length matches the authoritative length (the coordinates would
+    //   otherwise index a different-length sequence); if not, report that the
+    //   canonical bases need to be carried/re-ingested and stop.
+    match auth.sequence.as_deref() {
+        Some(canonical) => {
+            // Compare case-insensitively: a soft-masked (lowercase) served
+            // sequence that is otherwise canonical is NOT a real edit, so don't
+            // report a spurious correction. Only genuine base differences (or a
+            // length difference) trigger a replacement.
+            let differs = tx
+                .sequence
+                .as_deref()
+                .is_none_or(|s| !s.eq_ignore_ascii_case(canonical));
+            if differs {
+                let from = tx.sequence.as_deref().map_or(0, |s| s.len() as u64);
+                let to = canonical.len() as u64;
+                corrections.push(Correction::SequenceCorrected { from, to });
+                tx.sequence = Some(canonical.to_string());
+                // A length-changing replacement leaves the exon structure (which
+                // tiled the old length) stale — e.g. it would trip the offline
+                // `LengthMismatch` check (served shorter than the exon extent).
+                // The authoritative exon layout isn't carried, and was wrong for
+                // a wrong-length record anyway, so collapse to a single exon
+                // spanning the corrected transcript (mRNA is contiguous in
+                // transcript space). Genomic projection on such a record is
+                // already out of scope (see the doc caveat).
+                if from != to {
+                    tx.exons = vec![Exon::new(1, 1, to)];
+                }
+            }
+        }
+        None => {
+            // Served length: sequence byte length, else the exon-sum length for
+            // a coordinate-only record.
+            let served_len = tx.sequence.as_deref().map(|s| s.len() as u64).or_else(|| {
+                let sum: u64 = tx
+                    .exons
+                    .iter()
+                    .map(|e| e.end.saturating_sub(e.start) + 1)
+                    .sum();
+                (sum > 0).then_some(sum)
             });
-            return corrections;
+            if let Some(served) = served_len {
+                if served != auth.tx_length {
+                    corrections.push(Correction::SequenceReingestionRequired {
+                        served,
+                        authoritative: auth.tx_length,
+                    });
+                    return corrections;
+                }
+            }
         }
     }
 
@@ -1011,6 +1061,7 @@ mod tests {
             cds_start: cds.map(|(s, _)| s),
             cds_end: cds.map(|(_, e)| e),
             protein_id: protein.map(str::to_string),
+            sequence: None,
         }
     }
 
@@ -1197,6 +1248,101 @@ mod tests {
         // Untouched: coordinates for the canonical 1576 nt would be wrong here.
         assert_eq!((tx.cds_start, tx.cds_end), (Some(342), Some(1730)));
         assert_eq!(tx.protein_id.as_deref(), Some("NP_000184.1"));
+    }
+
+    #[test]
+    fn correction_replaces_wrong_length_sequence_when_canonical_present() {
+        // Wrong-sequence class WITH canonical bases carried: the served 12 nt is
+        // replaced by the canonical 9 nt, then CDS/protein applied.
+        let mut tx = coding_tx("ATGAAATAAGGG", 1, 12);
+        tx.id = "NM_X.2".to_string();
+        tx.protein_id = Some("NP_OLD.1".to_string());
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_X.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_NEW.2".to_string()),
+            sequence: Some("ATGAAATAA".to_string()),
+        });
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections
+            .iter()
+            .any(|c| matches!(c, Correction::SequenceCorrected { from: 12, to: 9 })));
+        assert_eq!(tx.sequence.as_deref(), Some("ATGAAATAA"));
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_NEW.2"));
+    }
+
+    #[test]
+    fn correction_replaces_same_length_edited_sequence() {
+        // Same length (9) but a point edit vs canonical → replaced (byte
+        // comparison, not just length).
+        let mut tx = coding_tx("ATGCAATAA", 1, 9);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_TEST.1".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_X.1".to_string()),
+            sequence: Some("ATGAAATAA".to_string()),
+        });
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(corrections
+            .iter()
+            .any(|c| matches!(c, Correction::SequenceCorrected { from: 9, to: 9 })));
+        assert_eq!(tx.sequence.as_deref(), Some("ATGAAATAA"));
+    }
+
+    #[test]
+    fn sequence_corrected_transcript_has_no_self_inflicted_length_mismatch() {
+        // Served 12 nt (exons tile [1,12]); canonical is 9 nt. After correction
+        // the sequence is 9 nt; the offline length check must NOT flag a
+        // LengthMismatch (the exons are collapsed to the corrected length).
+        let mut tx = coding_tx("ATGAAATAAGGG", 1, 9);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_TEST.1".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_X.1".to_string()),
+            sequence: Some("ATGAAATAA".to_string()),
+        });
+        apply_canonical_overrides(&mut tx, &ov);
+        assert_eq!(tx.sequence.as_deref(), Some("ATGAAATAA"));
+        let anomalies = validate_transcript_record(&tx);
+        assert!(
+            !anomalies
+                .iter()
+                .any(|a| a.kind == AnomalyKind::LengthMismatch),
+            "sequence-corrected transcript must not self-trip LengthMismatch: {anomalies:?}"
+        );
+    }
+
+    #[test]
+    fn lowercase_served_sequence_is_not_spuriously_corrected() {
+        // Served bases are canonical except for case (soft-masked); this must
+        // NOT be reported as a SequenceCorrected.
+        let mut tx = coding_tx("atgaaataa", 1, 9);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_TEST.1".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_X.1".to_string()),
+            sequence: Some("ATGAAATAA".to_string()),
+        });
+        let corrections = apply_canonical_overrides(&mut tx, &ov);
+        assert!(
+            !corrections
+                .iter()
+                .any(|c| matches!(c, Correction::SequenceCorrected { .. })),
+            "case-only difference must not be a SequenceCorrected: {corrections:?}"
+        );
     }
 
     #[test]
