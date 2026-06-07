@@ -1502,6 +1502,7 @@ fn run_prepare_tool(
                 skip_existing: !force,
                 clinvar_file: None,
                 patterns_file: None,
+                validate_canonical_accessions: None,
                 dry_run: false,
             };
             let manifest = prepare_references(&config)?;

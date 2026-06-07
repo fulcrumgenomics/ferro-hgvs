@@ -3099,6 +3099,7 @@ impl PyPrepareConfig {
                 skip_existing,
                 clinvar_file: None,
                 patterns_file: None,
+                validate_canonical_accessions: None,
                 dry_run,
             },
         }
