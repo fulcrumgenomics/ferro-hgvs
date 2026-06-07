@@ -203,16 +203,16 @@ NC_012920.1:g.3243A>G	NC_012920.1:g.3243A>G
 NC_012920.1:m.3243A>G	NC_012920.1:m.3243A>G
 NG_012337.1(NM_003002.2):c.[273_274insT;274G>T;274_275insA]	NG_012337.1(NM_003002.2):c.274delinsTTA
 NG_012337.1(NM_003002.2):c.[273_274insT;274G>T;274_275insA]	NG_012337.1(NM_003002.2):c.274delinsTTA
-NG_012337.1(NM_003002.2):c.pterdel	parse error: Parse error at position 25: Failed to parse variant: Error(Error { input: "pterdel", code: Tag })
+NG_012337.1(NM_003002.2):c.pterdel	NG_012337.1(NM_003002.2):c.pterdel
 NG_012337.1:g.pterdel	NG_012337.1:g.pterdel
-NG_012337.1(NM_003002.2):c.qterdel	parse error: Parse error at position 25: Failed to parse variant: Error(Error { input: "qterdel", code: Tag })
-NM_003002.2:c.pterdel	parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: "pterdel", code: Tag })
-NM_003002.2:c.qterdel	parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: "qterdel", code: Tag })
+NG_012337.1(NM_003002.2):c.qterdel	NG_012337.1(NM_003002.2):c.qterdel
+NM_003002.2:c.pterdel	NM_003002.2:c.pterdel
+NM_003002.2:c.qterdel	NM_003002.2:c.qterdel
 LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.pter_-51'
 LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.*835_qter'
 LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
-LRG_24t1:c.pter_qterdelinspter_qter	parse error: Parse error at position 9: Failed to parse variant: Error(Error { input: "pter_qterdelinspter_qter", code: Tag })
-LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]	parse error: Parse error at position 9: Failed to parse variant: Error(Error { input: "pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]", code: Tag })
+LRG_24t1:c.pter_qterdelinspter_qter	parse error: Parse error at position 26: Unexpected trailing characters: 'pter_qter'
+LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]	parse error: Parse error at position 23: Unexpected trailing characters: 'ins[pter_qter;NM_003002.2:c.*835_qter]'
 NG_012337.1(NM_003002.2):c.[274=;275del]	NG_012337.1(NM_003002.2):c.[274=;275del]
 NG_012337.1(NM_003002.2):c.[274del;275=]	NG_012337.1(NM_003002.2):c.[274del;275=]
 NG_012337.1:g.4917GC[5]	NG_012337.1:g.4917GC[5]

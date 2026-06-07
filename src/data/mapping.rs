@@ -420,6 +420,7 @@ impl CoordinateMapper {
                             base: -offset,
                             offset: None,
                             utr3: false,
+                            special: None,
                         },
                         info,
                     ))
@@ -431,6 +432,7 @@ impl CoordinateMapper {
                             base: pos,
                             offset: None,
                             utr3: false,
+                            special: None,
                         },
                         info,
                     ))
@@ -446,6 +448,7 @@ impl CoordinateMapper {
                             base: last_cds_pos,
                             offset: Some(offset),
                             utr3: true,
+                            special: None,
                         },
                         info,
                     ))
@@ -527,6 +530,7 @@ impl CoordinateMapper {
                                     base: -utr_offset,
                                     offset: Some(offset),
                                     utr3: false,
+                                    special: None,
                                 },
                                 info,
                             ))
@@ -538,6 +542,7 @@ impl CoordinateMapper {
                                     base: pos,
                                     offset: Some(offset),
                                     utr3: false,
+                                    special: None,
                                 },
                                 info,
                             ))
@@ -552,6 +557,7 @@ impl CoordinateMapper {
                                     base: last_cds_pos,
                                     offset: Some(utr_offset + offset),
                                     utr3: true,
+                                    special: None,
                                 },
                                 info,
                             ))
@@ -636,6 +642,7 @@ mod tests {
                     base: 1,
                     offset: None,
                     utr3: false,
+                    special: None,
                 },
             )
             .unwrap();
@@ -658,6 +665,7 @@ mod tests {
                     base: 51,
                     offset: None,
                     utr3: false,
+                    special: None,
                 },
             )
             .unwrap();
@@ -679,6 +687,7 @@ mod tests {
                     base: -10,
                     offset: None,
                     utr3: false,
+                    special: None,
                 },
             )
             .unwrap();
@@ -739,6 +748,7 @@ mod tests {
                 base: 1,
                 offset: None,
                 utr3: false,
+                special: None,
             },
         );
 

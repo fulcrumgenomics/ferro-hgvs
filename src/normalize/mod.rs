@@ -100,10 +100,12 @@ fn intron_length_at_tx_boundary(
 /// Note on the `base == 0` arm: `c.0` is rejected by the parser at
 /// `src/hgvs/parser/position.rs` (per #269), and the caller
 /// `check_cds_pos_past_end` short-circuits via `pos.is_unknown()` before
-/// this helper sees `CdsPos { base: 0, utr3: false }`. The arm is dead
-/// code in the W4004 path; kept here for parity with
-/// `Normalizer::cds_to_tx_pos` so this helper remains a drop-in
-/// replacement if a future caller needs it outside the bounds check.
+/// this helper sees `CdsPos { base: 0, utr3: false }`. Special positions
+/// (pter/qter/cen, which also carry `base == 0`) are similarly skipped by
+/// the caller before reaching this helper. The arm is dead code in the
+/// W4004 path; kept here for parity with `Normalizer::cds_to_tx_pos` so
+/// this helper remains a drop-in replacement if a future caller needs it
+/// outside the bounds check.
 fn cds_pos_to_tx_boundary(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
@@ -161,8 +163,8 @@ fn check_cds_pos_past_end(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
 ) -> Option<NormalizationWarning> {
-    // Unknown positions can't be bounds-checked.
-    if pos.is_unknown() {
+    // Unknown positions and special markers (pter/qter/cen) can't be bounds-checked.
+    if pos.is_unknown() || pos.is_special() {
         return None;
     }
     // Intronic-offset bound check (#392). Requires both the c.→tx
@@ -615,7 +617,7 @@ impl std::fmt::Display for NormalizationWarning {
             ),
             Self::UnresolvableSpecialPosition { accession, marker } => write!(
                 f,
-                "{accession}:g.{marker} — centromere/telomere marker '{marker}' cannot be \
+                "{accession}: '{marker}' — centromere/telomere marker cannot be \
                  resolved to a coordinate without assembly annotation; input preserved verbatim \
                  (UnresolvableSpecialPosition)"
             ),
@@ -828,6 +830,40 @@ pub struct Normalizer<P: ReferenceProvider> {
     config: NormalizeConfig,
 }
 
+/// Resolve a special `c.` position to a concrete [`CdsPos`] using the transcript's
+/// CDS structure. `pter` maps to transcript position 1 projected into c. coords;
+/// `qter` maps to the last transcript position projected into c. coords; `cen` returns
+/// `Ok(None)` (a centromere has no coordinate on a transcript); a plain (non-special)
+/// position is returned as-is inside `Some`.
+///
+/// Returns `Ok(None)` when the projection cannot be computed (non-coding / missing
+/// CDS metadata) so the caller can fall back to canonicalization. The caller can
+/// distinguish `cen` (warn/reject) from a projection gap by re-inspecting
+/// `pos.special`.
+fn resolve_special_cds_pos(
+    pos: &CdsPos,
+    transcript: &crate::reference::transcript::Transcript,
+) -> Result<Option<CdsPos>, FerroError> {
+    use crate::convert::mapper::CoordinateMapper;
+    use crate::hgvs::location::{SpecialPosition, TxPos};
+
+    let special = match pos.special {
+        None => return Ok(Some(*pos)),
+        Some(s) => s,
+    };
+    let tx_pos = match special {
+        SpecialPosition::Pter => TxPos::new(1),
+        // NOTE: `sequence_length()` is the transcript-coordinate space that
+        // `tx_to_cds` consumes — it counts mRNA bases (exon-sum fallback when
+        // no cached sequence) so qter maps to the last exonic base, not past it.
+        SpecialPosition::Qter => TxPos::new(transcript.sequence_length() as i64),
+        SpecialPosition::Cen => return Ok(None),
+    };
+    let mapper = CoordinateMapper::new(transcript);
+    // A projection error (non-coding / missing CDS) is a graceful fallback.
+    Ok(mapper.tx_to_cds(&tx_pos).ok())
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Create a new normalizer with the given reference provider
     pub fn new(provider: P) -> Self {
@@ -972,9 +1008,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 NormalizationWarning::UnresolvableSpecialPosition { accession, marker } => {
                     Some(FerroError::InvalidCoordinates {
                         msg: format!(
-                            "{accession}:g.{marker} — '{marker}' is an assembly-annotated \
-                             region with no sequence-derivable coordinate and cannot be \
-                             normalized (UnresolvableCentromere / W4005)"
+                            "{accession}: '{marker}' is an assembly-annotated region with no \
+                             sequence-derivable coordinate and cannot be normalized \
+                             (UnresolvableCentromere / W4005)"
                         ),
                     })
                 }
@@ -1548,6 +1584,77 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ),
             };
             return self.normalize_cds(&new_variant);
+        }
+
+        // Resolve telomere/centromere markers (pter/qter) to concrete CdsPos
+        // BEFORE the bounds gate; recurse so the normal pipeline sees concrete
+        // positions. `cen` (unresolvable) takes the W4005 path. (#488 Phase 2)
+        let start_special = variant
+            .loc_edit
+            .location
+            .start
+            .inner()
+            .map(|p| p.is_special())
+            .unwrap_or(false);
+        let end_special = variant
+            .loc_edit
+            .location
+            .end
+            .inner()
+            .map(|p| p.is_special())
+            .unwrap_or(false);
+        if start_special || end_special {
+            let acc = variant.accession.transcript_accession();
+            // `cen` has no numberable CDS coordinate, so it is unresolvable with
+            // or without transcript metadata. Surface W4005 up front, before the
+            // transcript lookup — otherwise a missing transcript silently
+            // swallows it and strict mode wrongly accepts `c.cendel`. (#488)
+            let is_cen = |p: Option<&CdsPos>| {
+                matches!(p.and_then(|p| p.special), Some(SpecialPosition::Cen))
+            };
+            if is_cen(variant.loc_edit.location.start.inner())
+                || is_cen(variant.loc_edit.location.end.inner())
+            {
+                return Ok((
+                    HV::Cds(self.canonicalize_cds_variant(variant)),
+                    vec![NormalizationWarning::UnresolvableSpecialPosition {
+                        accession: acc.clone(),
+                        marker: "cen".to_string(),
+                    }],
+                ));
+            }
+            let transcript = match self.provider.get_transcript(&acc).ok() {
+                Some(t) => t,
+                None => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
+            };
+            let start_in = variant.loc_edit.location.start.inner();
+            let end_in = variant.loc_edit.location.end.inner();
+            let rs = start_in
+                .map(|p| resolve_special_cds_pos(p, &transcript))
+                .transpose()?;
+            let re = end_in
+                .map(|p| resolve_special_cds_pos(p, &transcript))
+                .transpose()?;
+            match (rs, re) {
+                (Some(Some(s)), Some(Some(e))) => {
+                    let new_variant = CdsVariant {
+                        accession: variant.accession.clone(),
+                        gene_symbol: variant.gene_symbol.clone(),
+                        loc_edit: LocEdit::with_uncertainty(
+                            Interval::new(s, e),
+                            variant.loc_edit.edit.clone(),
+                        ),
+                    };
+                    return self.normalize_cds(&new_variant);
+                }
+                _ => {
+                    // A pter/qter bound did not project (e.g. a non-coding
+                    // transcript with no CDS frame). `cen` was already handled
+                    // and returned above, so this is a pure projection gap:
+                    // preserve the input verbatim with no warning.
+                    return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![]));
+                }
+            }
         }
 
         // Bounds check: `c.<N>` where N exceeds the CDS length, or `c.*<N>` where
@@ -5288,18 +5395,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 base: pos as i64 - cds_start as i64,
                 offset: None,
                 utr3: false,
+                special: None,
             })
         } else if pos > end {
             Ok(CdsPos {
                 base: (pos - end) as i64,
                 offset: None,
                 utr3: true,
+                special: None,
             })
         } else {
             Ok(CdsPos {
                 base: (pos - cds_start + 1) as i64,
                 offset: None,
                 utr3: false,
+                special: None,
             })
         }
     }
@@ -7016,6 +7126,7 @@ mod tests {
             base: -5,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 10, Some(50));
         assert!(result.is_ok());
@@ -7031,6 +7142,7 @@ mod tests {
             base: 5,
             offset: None,
             utr3: true,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 10, Some(50));
         assert!(result.is_ok());
@@ -7047,6 +7159,7 @@ mod tests {
             base: 10,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 5, Some(50));
         assert!(result.is_ok());
@@ -7859,6 +7972,7 @@ mod tests {
             base: -6,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
         assert!(
@@ -7880,6 +7994,7 @@ mod tests {
             base: -3,
             offset: None,
             utr3: false,
+            special: None,
         };
         let result = normalizer.cds_to_tx_pos(&pos, 5, Some(38));
         assert_eq!(result.unwrap(), 2);
@@ -8350,6 +8465,232 @@ mod tests {
         assert!(
             format!("{}", result.unwrap()).contains("qter"),
             "unresolved qter should be returned verbatim"
+        );
+    }
+
+    #[test]
+    fn resolve_special_cds_pos_maps_markers() {
+        use crate::hgvs::location::CdsPos;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // 5'UTR = 61 (cds_start=62), CDS 62..=124, sequence length 200 -> qter c.*(200-124)=c.*76.
+        let tx = Transcript::new(
+            "NM_TEST.1".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        );
+        let pter = resolve_special_cds_pos(&CdsPos::pter(), &tx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(format!("{pter}"), "-61");
+        let qter = resolve_special_cds_pos(&CdsPos::qter(), &tx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(format!("{qter}"), "*76");
+        assert_eq!(resolve_special_cds_pos(&CdsPos::cen(), &tx).unwrap(), None);
+        let plain = CdsPos::new(42);
+        assert_eq!(resolve_special_cds_pos(&plain, &tx).unwrap(), Some(plain));
+    }
+
+    #[test]
+    fn resolve_special_cds_pos_boundary_branches() {
+        use crate::hgvs::location::CdsPos;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // No 5'UTR (cds_start=1) -> pter -> c.1; no 3'UTR (cds_end=L=100) -> qter -> c.100.
+        let tx = Transcript::new(
+            "NM_NOUTR.1".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(25),
+            Some(1),
+            Some(100),
+            vec![Exon::new(1, 1, 100)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                resolve_special_cds_pos(&CdsPos::pter(), &tx)
+                    .unwrap()
+                    .unwrap()
+            ),
+            "1"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                resolve_special_cds_pos(&CdsPos::qter(), &tx)
+                    .unwrap()
+                    .unwrap()
+            ),
+            "100"
+        );
+    }
+
+    #[test]
+    fn cds_pter_qter_resolve_and_normalize() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.1".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let n = Normalizer::new(provider);
+        let out = format!(
+            "{}",
+            n.normalize(&parse_hgvs("NM_TEST.1:c.pterdel").unwrap())
+                .unwrap()
+        );
+        assert!(
+            out.contains("c.-"),
+            "pter del resolves into the 5'UTR, got {out}"
+        );
+        let out2 = format!(
+            "{}",
+            n.normalize(&parse_hgvs("NM_TEST.1:c.qterdel").unwrap())
+                .unwrap()
+        );
+        assert!(
+            out2.contains("c.*"),
+            "qter del resolves into the 3'UTR, got {out2}"
+        );
+    }
+
+    #[test]
+    fn cds_cen_strict_rejects_lenient_accepts() {
+        use crate::error_handling::ErrorMode;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.2".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let strict = Normalizer::with_config(
+            provider.clone(),
+            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
+        );
+        assert!(
+            matches!(
+                strict.normalize(&parse_hgvs("NM_TEST.2:c.cendel").unwrap()),
+                Err(FerroError::InvalidCoordinates { .. })
+            ),
+            "strict rejects c.cen",
+        );
+        let lenient = Normalizer::new(provider);
+        let out = format!(
+            "{}",
+            lenient
+                .normalize(&parse_hgvs("NM_TEST.2:c.cendel").unwrap())
+                .unwrap()
+        );
+        assert!(out.contains("cen"), "lenient preserves c.cen, got {out}");
+    }
+
+    #[test]
+    fn cds_cen_emits_warning_even_without_transcript() {
+        use crate::error_handling::ErrorMode;
+        use crate::normalize::NormalizationWarning;
+        // The provider has NO record for this accession, so `get_transcript`
+        // fails. `cen` is structurally unresolvable regardless of transcript
+        // availability, so the W4005 warning must still surface (and strict mode
+        // reject) rather than silently canonicalizing the input away.
+        let provider = crate::reference::MockProvider::new();
+        let lenient = Normalizer::new(provider.clone());
+        let diag = lenient
+            .normalize_with_diagnostics(&parse_hgvs("NM_ABSENT.1:c.cendel").unwrap())
+            .expect("lenient must not error on an absent-transcript c.cen");
+        assert!(
+            diag.warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::UnresolvableSpecialPosition { .. })),
+            "absent-transcript c.cen must still emit W4005, got {:?}",
+            diag.warnings
+        );
+        let strict = Normalizer::with_config(
+            provider,
+            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
+        );
+        assert!(
+            matches!(
+                strict.normalize(&parse_hgvs("NM_ABSENT.1:c.cendel").unwrap()),
+                Err(FerroError::InvalidCoordinates { .. })
+            ),
+            "strict mode must reject an absent-transcript c.cen",
+        );
+    }
+
+    #[test]
+    fn cds_pter_minus_strand_resolves() {
+        // `c.` coordinates are transcript-intrinsic, so `pter` maps to transcript
+        // position 1 regardless of strand; this guards against any future
+        // strand-dependent regression in the resolve path.
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_MINUS.1".into(),
+            Some("T".into()),
+            Strand::Minus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let n = Normalizer::new(provider);
+        let out = format!(
+            "{}",
+            n.normalize(&parse_hgvs("NM_MINUS.1:c.pterdel").unwrap())
+                .unwrap()
+        );
+        assert!(
+            out.contains("c.-"),
+            "minus-strand pter still resolves into the 5'UTR, got {out}"
         );
     }
 }
