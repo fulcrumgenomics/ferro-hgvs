@@ -1,31 +1,27 @@
-//! Regression / convention pin for issue #291: the r.-axis used by
-//! `fetch_ref_for_canonical_split`, `normalize_na_edit` (via
-//! `normalize_rna::map_in`/`map_out`), and `simple_rna_pos` is
-//! **transcript-1-relative** for positive non-UTR bases in this codebase,
-//! NOT CDS-relative.
+//! Convention pin for the r.-axis used by `fetch_ref_for_canonical_split`,
+//! `normalize_na_edit` (via `normalize_rna::map_in`/`map_out`), and
+//! `simple_rna_pos`: on a coding transcript `r.` is **CDS-relative** — the
+//! same axis as `c.` — so `r.N` maps to tx `cds_start + N - 1` and `r.123`
+//! relates to `c.123` (HGVS `background/numbering.md` L58/L61).
 //!
-//! Issue #291 was filed based on a claim that "RNA shares the CDS-relative
-//! coordinate axis"; investigation showed the claim is incorrect. The r.
-//! arm of `fetch_ref_for_canonical_split` is internally consistent with the
-//! rest of the r. normalization path: `r.N` for `N > 0` and non-UTR maps
-//! directly to tx index `N`, and only `r.*N`/`r.-N` (UTR) translate through
-//! `cds_start` / `cds_end` via `rna_to_tx_pos`.
+//! History: #291 was filed to make r. CDS-relative; PR #304 instead pinned
+//! the then-current **transcript-1-relative** behavior as a "convention",
+//! deciding on internal-consistency grounds without checking the spec.
+//! **#469 corrected this** — r. is CDS-relative — and these tests were
+//! rewritten to assert the spec-correct axis, superseding PR #304's pin.
 //!
-//! These tests pin the convention with a fixture that has a non-trivial
-//! 5'UTR (`cds_start = 100`) so the tx-1 axis and a hypothetical
-//! CDS-relative axis yield distinct, easily-distinguishable outputs.
-//!
-//! Closes #291. Follow-up audit to PR #275.
+//! The fixture has a non-trivial 5'UTR (`cds_start = 100`) so the
+//! CDS-relative axis and the old tx-1 axis yield distinct, easily
+//! distinguishable outputs.
 //!
 //! Related pins:
 //! - `tests/issue_163_rna_utr3_flag.rs` (UTR `*N` translation via cds_end)
 //! - `tests/issue_233_rna_cds_consistency.rs` (r./c. Display parity across
-//!   edit shapes — relies on the tx-1 axis being internally consistent
-//!   for matched-position pairs)
+//!   edit shapes)
+//! - `tests/rna_coding_consistency.rs` (r./c. CDS-relative parity, #469)
 //! - `src/normalize/mod.rs::test_normalize_rna_deletion_shifts_3prime`
-//!   (the `r.14del` → `r.15del` shift uses tx-1 indices; the result
-//!   halts at the exon-1 right edge per the HGVS exon-junction
-//!   exception — see PR #374 / issue #334)
+//!   (the `r.10del` → `r.11del` shift, CDS-relative; the result halts at the
+//!   exon-1 right edge per the HGVS exon-junction exception — PR #374 / #334)
 
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
@@ -114,103 +110,63 @@ fn normalize_to_string(input: &str) -> String {
     format!("{}", normalized)
 }
 
-/// Pins that `normalize_na_edit` (via `normalize_rna::map_in`) reads byte
-/// `seq[hgvs_pos - 1]` for positive non-UTR `r.` bases — the tx-1
-/// convention. `r.10` → tx 10 = `G`, surrounded by `C`'s, so no 3'-shift.
-/// On the way out, `map_out` sees tx 10 < cds_start (100) and canonicalizes
-/// the position into 5'UTR notation: tx 10 → `r.{10 - 100}` = `r.-90`.
-///
-/// Two facets of the tx-1 convention are pinned by this one assertion:
-/// 1. `map_in` for positive non-UTR `r.N` maps directly to tx `N` (no
-///    `cds_start` offset) — otherwise the read byte would be tx 109 = `G`
-///    inside the 22-base G-run at tx 109..=130 and the deletion would shift
-///    3' to tx 130, producing `r.31del` or similar.
-/// 2. `map_out` honors the actual transcript region: tx 10 is in 5'UTR
-///    (since `cds_start = 100`), so it must come back out as `r.-90`, not
-///    as `r.10`. This is the asymmetry that makes the convention robust —
-///    the input notation `r.10` is interpreted as tx 10 regardless of
-///    whether tx 10 happens to be inside the CDS, but the canonical output
-///    uses the appropriate region marker.
+/// `r.` is CDS-relative on a coding transcript (#469): `r.10` = `c.10` =
+/// tx `cds_start + 10 - 1` = tx 109, the first base of the 22-base G-run at
+/// tx 109..=130. The deletion 3'-shifts through the run to tx 130, which
+/// `map_out` emits CDS-relative as `r.{130 - cds_start + 1}` = `r.31`.
+/// (Under the superseded tx-1 pin from PR #304 this read tx 10 — an isolated
+/// G in the 5'UTR — and emitted `r.-90del`.)
 #[test]
-fn rna_positive_nonutr_uses_tx1_axis_no_shift() {
+fn rna_positive_cds_base_is_cds_relative() {
     assert_eq!(
         normalize_to_string("NM_TESTCDS100.1:r.10del"),
-        "NM_TESTCDS100.1:r.-90del",
-        "r.10 must read tx 10 (tx-1 axis), not tx 109 (CDS-rel); since tx \
-         10 lies in the 5'UTR (cds_start = 100), map_out re-emits as r.-90"
+        "NM_TESTCDS100.1:r.31del",
+        "r.10 must read tx 109 (= c.10, CDS-relative) and shift 3' through \
+         the G-run to tx 130 = r.31"
     );
 }
 
-/// Pins that `normalize_na_edit`'s 3'-shift loop uses tx-1 indices on the
-/// way in AND `map_out` re-emits the raw tx index (NOT a CDS-relative
-/// translation) for positions inside the CDS-proper window. `r.110` → tx
-/// 110 inside the G-run at tx 109..=130, shifts 3' to tx 130. tx 130 lies
-/// in CDS (`100 <= 130 <= 180`), so `map_out` returns `r.130` verbatim, not
-/// `r.{130 - cds_start + 1}` = `r.31`.
-///
-/// Under a hypothetical CDS-relative axis, `r.110` would map to tx 209,
-/// which is past the 200-base transcript end — `map_in` would return `None`
-/// and normalization would fall back to the input, yielding `r.110del`
-/// unchanged. The output here (`r.130del`, a distinct shifted position) is
-/// only reachable under the tx-1 convention.
+/// The CDS-relative axis means `r.N` and `c.N` are the same position, so a
+/// shifting edit normalizes identically across the two coordinate systems
+/// (modulo alphabet). `c.10del` on this fixture shifts the same G-run to
+/// tx 130 = `c.31`, the c. twin of `r.10del` → `r.31del` above (#469).
 #[test]
-fn rna_positive_nonutr_shift_uses_tx1_axis() {
+fn rna_and_cds_numbering_agree() {
     assert_eq!(
-        normalize_to_string("NM_TESTCDS100.1:r.110del"),
-        "NM_TESTCDS100.1:r.130del",
-        "r.110del must shift 3' through the tx 109..=130 G-run to r.130del \
-         (proves both map_in and map_out skip cds_start translation for \
-         positive non-UTR bases)"
+        normalize_to_string("NM_TESTCDS100.1:c.10del"),
+        "NM_TESTCDS100.1:c.31del",
+        "c.10 == r.10 (both CDS-relative); shifts through the G-run to c.31, \
+         the c. twin of the r.31del pinned above"
     );
 }
 
-/// Pins that `r.1` (the lowest positive non-UTR base) is treated as tx 1,
-/// NOT as `cds_start = 100`. tx 1 = `C` at the start of a 9-base C-run;
-/// `r.1del` shifts 3' through the run to tx 9. tx 9 lies in 5'UTR (since
-/// `cds_start = 100`), so `map_out` re-emits as `r.{9 - 100}` = `r.-91`.
-///
-/// Under a hypothetical CDS-relative axis, `r.1` → tx 100 = `C` at the
-/// start of a different 9-base C-run (tx 100..=108); the shift would land
-/// at tx 108 and `map_out` would emit `r.108del` (since 100 <= 108 <= 180
-/// is CDS-proper). The tx-1 convention's `r.-91del` is unambiguously
-/// distinguishable from the hypothetical CDS-rel `r.108del`.
+/// `r.1` is the first coding base = `cds_start` = tx 100 (#469), at the
+/// start of the 9-base C-run tx 100..=108. `r.1del` 3'-shifts through the
+/// run to tx 108, emitted CDS-relative as `r.{108 - cds_start + 1}` = `r.9`.
+/// (Under the superseded tx-1 pin, `r.1` was tx 1 and this emitted
+/// `r.-91del`.)
 #[test]
-fn rna_first_positive_base_is_tx1_not_cds_start() {
+fn rna_first_coding_base_maps_to_cds_start() {
     assert_eq!(
         normalize_to_string("NM_TESTCDS100.1:r.1del"),
-        "NM_TESTCDS100.1:r.-91del",
-        "r.1del must shift through the tx 1..=9 C-run; tx 9 lies in 5'UTR \
-         so map_out re-emits as r.-91 (proves r.1 maps to tx 1, not to \
-         cds_start)"
+        "NM_TESTCDS100.1:r.9del",
+        "r.1 must map to cds_start (tx 100); the C-run shift lands at tx 108 \
+         = r.9 (proves r.1 == c.1 == cds_start, not tx 1)"
     );
 }
 
-/// Pins that `fetch_ref_for_canonical_split` reads the r. ref window from
-/// the tx-1 axis (NOT through `cds_start`). The variant below is a
-/// 3-base `delins` whose ref slice lands inside the CDS-interior G-run
-/// (tx 109..=130). Under the tx-1 convention, the ref bytes are `GGG`
-/// and the alt `ccu` (normalized to `CCT`) decomposes as `[Inv(0,2),
-/// Sub@2 G>U]` via `decompose_delins`'s revcomp scan — the resulting
-/// canonical split renders as a `[..inv;..g>u]` cis-allele.
-///
-/// Under the hypothetical CDS-relative axis, `r.109_111` would index
-/// tx `(100 + 109 - 2)..(100 + 111 - 1)` = tx 207..210, which is past
-/// the 200-base transcript end. `fetch_ref_for_canonical_split` would
-/// return `None`, `apply_canonical_split` would short-circuit to the
-/// un-split variant, and Display would emit the input shape unchanged
-/// (`r.109_111delinsccu`). The two outputs are mechanically
-/// distinguishable, so the assertion below pins the tx-1 axis at the
-/// canonical-split entry point even though the parse, normalize, and
-/// Display layers are all unchanged from the simpler `del` cases above.
+/// Pins that `fetch_ref_for_canonical_split` reads the r. ref window
+/// CDS-relative (through `cds_start`, exactly like the `c.` arm — #469).
+/// The 3-base `delins` below targets `r.10_12` = tx 109..=111 = the `GGG`
+/// at the start of the CDS-interior G-run; alt `ccu` (→ `CCT`) decomposes
+/// via the revcomp scan into `[Inv; Sub g>u]`, rendering as a cis-allele.
 #[test]
-fn rna_canonical_split_fetch_uses_tx1_axis() {
-    let out = normalize_to_string("NM_TESTCDS100.1:r.109_111delinsccu");
+fn rna_canonical_split_fetch_is_cds_relative() {
+    let out = normalize_to_string("NM_TESTCDS100.1:r.10_12delinsccu");
     assert_eq!(
-        out, "NM_TESTCDS100.1:r.[109_110inv;111g>u]",
-        "fetch_ref_for_canonical_split must slice tx 108..111 (= GGG) for \
-         r.109_111 — not tx 207..210 (out-of-range under a hypothetical \
-         CDS-relative axis); the inv + sub split is only reachable when \
-         the slice actually contains the CDS-interior G-run"
+        out, "NM_TESTCDS100.1:r.[10_11inv;12g>u]",
+        "fetch_ref_for_canonical_split must slice tx 109..=111 (= GGG) for \
+         r.10_12 via cds_start, mirroring the c. arm"
     );
 }
 

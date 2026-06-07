@@ -115,19 +115,14 @@ fn rna_utr3_dup_preserves_star_flag() {
 
 #[test]
 fn rna_mixed_cds_utr3_del_shifts_into_utr() {
-    // Mixed-interval: start in CDS (r.50 = last C of CDS, tx 50), end in
-    // 3'UTR (r.*1 = A, tx 51). Deletion of "CA" can 3'-shift one position
-    // because tx 52 ('C') equals the first deleted byte; the new range
-    // [tx 51, tx 52] = "AC" lies entirely in the 3'UTR, so the canonical
-    // output must use `*1_*2` notation.
-    //
-    // Regression for per-endpoint translation: under the previous
-    // interval-wide `needs_cds_translation` flag, r.50 was rerouted
-    // through `rna_to_tx_pos` (yielding tx 60) just because the other
-    // endpoint was UTR, producing a reversed range that silently
-    // returned the input unchanged.
+    // Mixed-interval: start in CDS, end in 3'UTR. `r.` is CDS-relative
+    // (== `c.`, #469) with cds_start = 11, so the last CDS base (tx 50) is
+    // `r.40` (= c.40), and `r.*1` = tx 51 = 'A'. Deletion of "CA" (tx 50_51)
+    // can 3'-shift one position because tx 52 ('C') equals the first deleted
+    // byte; the new range [tx 51, tx 52] = "AC" lies entirely in the 3'UTR,
+    // so the canonical output must use `*1_*2` notation.
     assert_eq!(
-        normalize_to_string("NM_TESTUTR.1:r.50_*1del"),
+        normalize_to_string("NM_TESTUTR.1:r.40_*1del"),
         "NM_TESTUTR.1:r.*1_*2del",
     );
 }
