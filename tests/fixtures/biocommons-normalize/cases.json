@@ -5,6 +5,20 @@
   "biocommons_upstream": "https://github.com/biocommons/hgvs",
   "license": "Apache-2.0",
   "refreshed_at": "2026-05-19",
+  "clusters": [
+    {
+      "id": "boundary-spanning-del-accepted",
+      "title": "Boundary-spanning del/delins accepted (5'UTR/CDS, CDS/3'UTR)",
+      "spec_section": "recommendations/general.md, DNA/deletion.md",
+      "note": "Per the #253 audit, HGVS v21 does not forbid a boundary-spanning del with cross_boundaries=false; ferro accepts and is spec-compatible (e.g. NM_001166478.1:c.59_61del). A terminal accepted divergence from biocommons. Member rows are pending manifest-backed seeding (#325)."
+    },
+    {
+      "id": "spanning-dup-canonicalization",
+      "title": "Spanning-dup canonicalization across the c.-1/c.1 boundary",
+      "spec_section": "recommendations/DNA/duplication.md (edit-type priority)",
+      "note": "Per #404, an insertion spanning the CDS-start boundary canonicalizes to a spanning dup by edit-type priority (e.g. NM_000051.3:c.-2_-1insCA). An accepted divergence; member rows are pending manifest-backed seeding (#325)."
+    }
+  ],
   "cases": [
     {
       "input": "NG_029146.1:g.6494delG",
