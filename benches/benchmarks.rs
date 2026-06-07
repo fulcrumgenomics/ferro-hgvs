@@ -46,7 +46,36 @@ fn bench_parsing(c: &mut Criterion) {
         ("r.sub", "NM_000088.3:r.100a>g"),
         // Ensembl
         ("enst.sub", "ENST00000357033:c.100A>G"),
+        // --- coverage gap-fills (churned grammar) ---
+        ("m.sub", "NC_012920.1:m.8993T>G"),
+        ("allele_cis", "NC_000001.11:g.[100A>G;200del]"),
+        ("allele_trans", "NC_000001.11:g.[100A>G];[200del]"),
+        ("c.compound_repeat", "NM_000088.3:c.5GA[10]"),
+        ("c.uncertain", "NM_000088.3:c.(100_200)del"),
+        ("p.predicted", "NP_000079.2:p.(Val600Glu)"),
+        ("p.three_letter", "NP_000079.2:p.Val600Glufs*15"),
+        ("c.utr3", "NM_000088.3:c.*5A>G"),
+        ("c.utr5", "NM_000088.3:c.-5A>G"),
+        ("c.deep_intronic", "NM_000088.3:c.100+2000A>G"),
+        (
+            "g.long_ins",
+            "NC_000001.11:g.100_101insATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCAT",
+        ),
+        (
+            "g.delins_long",
+            "NC_000001.11:g.100_120delinsACGTACGTACGTACGTACGT",
+        ),
     ];
+
+    // Guard: every benched string must actually parse. A typo or grammar
+    // drift that turns a case into a parse error would otherwise be timed
+    // on the error path and silently misreport. Fail loud instead.
+    for (name, v) in &variants {
+        assert!(
+            parse_hgvs(v).is_ok(),
+            "parsing bench case {name:?} ({v:?}) did not parse"
+        );
+    }
 
     let mut group = c.benchmark_group("parsing");
 
