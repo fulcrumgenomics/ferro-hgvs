@@ -1467,23 +1467,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
             resolve_special_genome_pos(end_pos, &accession, &self.provider)?,
         ) {
             (Some(s), Some(e)) => (s, e),
-            // Unresolved: `cen` is structurally unresolvable (surface a warning
-            // so it is not silently echoed); a length-less qter/pter is an
-            // environment gap (silent canonicalize fallback).
+            // Unresolved. `cen` is a structural *refusal*: preserve the input
+            // verbatim (do not rewrite the edit body) and surface W4005 so it is
+            // not silently echoed. A length-less qter/pter is instead an
+            // environment gap — a genuine resolution attempt that fell back, so
+            // it takes the silent canonicalize path.
             _ => {
-                let warnings = if matches!(start_pos.special, Some(SpecialPosition::Cen))
+                if matches!(start_pos.special, Some(SpecialPosition::Cen))
                     || matches!(end_pos.special, Some(SpecialPosition::Cen))
                 {
-                    vec![NormalizationWarning::UnresolvableSpecialPosition {
-                        accession: accession.clone(),
-                        marker: "cen".to_string(),
-                    }]
-                } else {
-                    vec![]
-                };
+                    return Ok((
+                        HV::Genome(variant.clone()),
+                        vec![NormalizationWarning::UnresolvableSpecialPosition {
+                            accession: accession.clone(),
+                            marker: "cen".to_string(),
+                        }],
+                    ));
+                }
                 return Ok((
                     HV::Genome(self.canonicalize_genome_variant(variant)),
-                    warnings,
+                    vec![],
                 ));
             }
         };
@@ -1680,8 +1683,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             if is_cen(variant.loc_edit.location.start.inner())
                 || is_cen(variant.loc_edit.location.end.inner())
             {
+                // Structural refusal: preserve the input verbatim (don't rewrite
+                // the edit body) and surface W4005. `canonicalize_cds_variant`
+                // would normalize the edit (e.g. drop an explicit `delA` base).
                 return Ok((
-                    HV::Cds(self.canonicalize_cds_variant(variant)),
+                    HV::Cds(variant.clone()),
                     vec![NormalizationWarning::UnresolvableSpecialPosition {
                         accession: acc.clone(),
                         marker: "cen".to_string(),
@@ -8447,6 +8453,34 @@ mod tests {
     }
 
     #[test]
+    fn genome_cen_refusal_preserves_edit_body_verbatim() {
+        use crate::normalize::NormalizationWarning;
+        use crate::reference::MockProvider;
+        // The W4005 cen refusal must echo the input byte-for-byte, including an
+        // explicit deleted base. `canonicalize_genome_variant` would rewrite the
+        // edit body, so the refusal path must preserve the original variant.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.4", "ACGT".repeat(50));
+        let n = Normalizer::new(provider);
+        let input = "NC_TEST.4:g.cendelA";
+        let v = parse_hgvs(input).unwrap();
+        let result = n.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(
+            format!("{}", result.result),
+            input,
+            "cen refusal must preserve the explicit deleted base verbatim"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::UnresolvableSpecialPosition { .. })),
+            "must still emit W4005, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
     fn genome_mixed_special_plain_past_end_matches_plain_path() {
         use crate::reference::MockProvider;
         // Regression for the PR #526 review concern (CodeRabbit): a mixed
@@ -8721,6 +8755,38 @@ mod tests {
                 Err(FerroError::InvalidCoordinates { .. })
             ),
             "strict mode must reject an absent-transcript c.cen",
+        );
+    }
+
+    #[test]
+    fn cds_cen_refusal_preserves_edit_body_verbatim() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // The c. cen refusal must echo the input byte-for-byte, including an
+        // explicit deleted base — `canonicalize_cds_variant` would rewrite the
+        // edit body, so the refusal path must preserve the original variant.
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.2".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let input = "NM_TEST.2:c.cendelA";
+        let v = parse_hgvs(input).unwrap();
+        let out = format!("{}", Normalizer::new(provider).normalize(&v).unwrap());
+        assert_eq!(
+            out, input,
+            "c. cen refusal must preserve the explicit deleted base verbatim"
         );
     }
 
