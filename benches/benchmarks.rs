@@ -7,6 +7,9 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use ferro_hgvs::hgvs::parser::parse_hgvs_fast;
 use ferro_hgvs::reference::{Exon, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use flate2::read::GzDecoder;
+use serde::Deserialize;
+use std::io::Read;
 
 // =============================================================================
 // Parsing benchmarks
@@ -115,45 +118,59 @@ fn bench_parsing_by_length(c: &mut Criterion) {
 // Throughput benchmarks
 // =============================================================================
 
-/// Benchmark parsing throughput (variants per second)
+#[derive(Deserialize)]
+struct BulkFixture {
+    test_cases: Vec<BulkCase>,
+}
+#[derive(Deserialize)]
+struct BulkCase {
+    input: String,
+}
+
+/// Load up to `limit` HGVS strings from the 500k ClinVar corpus. The path is
+/// taken from `FERRO_BENCH_CORPUS` (absolute path, set by the sweep so all
+/// tags read identical input) and falls back to the in-tree fixture.
+fn load_corpus(limit: usize) -> Vec<String> {
+    let path = std::env::var("FERRO_BENCH_CORPUS")
+        .unwrap_or_else(|_| "tests/fixtures/bulk/clinvar_hgvs_500k.json.gz".to_string());
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(), // bench reports empty corpus; see guard below
+    };
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .expect("decompress corpus");
+    let fixture: BulkFixture = serde_json::from_slice(&buf).expect("parse corpus json");
+    fixture
+        .test_cases
+        .into_iter()
+        .take(limit)
+        .map(|c| c.input)
+        .collect()
+}
+
+/// Parse throughput over a real ClinVar corpus slice (decoded once, outside
+/// the timed loop).
 fn bench_parsing_throughput(c: &mut Criterion) {
-    let variants: Vec<&str> = vec![
-        "NC_000001.11:g.12345A>G",
-        "NM_000088.3:c.459A>G",
-        "NM_000088.3:c.100+5G>A",
-        "NP_000079.2:p.Val600Glu",
-        "NC_000001.11:g.100del",
-        "NM_000088.3:c.100_102dup",
-        "NC_000001.11:g.100_101insATG",
-        "NP_000079.2:p.Val600fs",
-    ];
+    const N: usize = 50_000;
+    let corpus = load_corpus(N);
+    assert!(
+        !corpus.is_empty(),
+        "throughput corpus empty: set FERRO_BENCH_CORPUS or ensure \
+         tests/fixtures/bulk/clinvar_hgvs_500k.json.gz exists (git lfs)"
+    );
 
     let mut group = c.benchmark_group("throughput");
-
-    // Batch of 100 variants
-    group.throughput(Throughput::Elements(100));
-    group.bench_function("parse_100", |b| {
+    group.throughput(Throughput::Elements(corpus.len() as u64));
+    group.sample_size(10); // each iter parses N strings; keep wall-time sane
+    group.bench_function("parse_corpus", |b| {
         b.iter(|| {
-            for _ in 0..100 / variants.len() + 1 {
-                for variant in &variants {
-                    let _ = parse_hgvs(black_box(variant));
-                }
+            for s in &corpus {
+                let _ = parse_hgvs(black_box(s));
             }
         })
     });
-
-    // Batch of 1000 variants
-    group.throughput(Throughput::Elements(1000));
-    group.bench_function("parse_1000", |b| {
-        b.iter(|| {
-            for _ in 0..1000 / variants.len() + 1 {
-                for variant in &variants {
-                    let _ = parse_hgvs(black_box(variant));
-                }
-            }
-        })
-    });
-
     group.finish();
 }
 
