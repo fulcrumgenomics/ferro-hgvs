@@ -2294,6 +2294,9 @@ pub enum PyErrorType {
     // 41 is W4005 UnresolvableCentromere — `cen` has no sequence-derivable
     // coordinate; strict mode rejects, lenient/silent preserve (#488).
     UnresolvableCentromere = 41,
+    // 42 is W4006 TranscriptFlankNotDescribable — pter/qter on a genomic-reference
+    // c. denotes a 5'/3' transcript-flank position, not c.-numberable (#488).
+    TranscriptFlankNotDescribable = 42,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2342,6 +2345,7 @@ impl From<ErrorType> for PyErrorType {
                 PyErrorType::NonConformantBracketCardinality
             }
             ErrorType::UnresolvableCentromere => PyErrorType::UnresolvableCentromere,
+            ErrorType::TranscriptFlankNotDescribable => PyErrorType::TranscriptFlankNotDescribable,
         }
     }
 }
@@ -2392,6 +2396,7 @@ impl From<PyErrorType> for ErrorType {
                 ErrorType::NonConformantBracketCardinality
             }
             PyErrorType::UnresolvableCentromere => ErrorType::UnresolvableCentromere,
+            PyErrorType::TranscriptFlankNotDescribable => ErrorType::TranscriptFlankNotDescribable,
         }
     }
 }

@@ -352,6 +352,15 @@ pub enum ErrorType {
     /// sibling `VariantExceedsReference`). See #488.
     UnresolvableCentromere,
 
+    /// A `pter`/`qter` telomere marker on a genomic-reference `c.` description
+    /// (e.g. `NG_012337.1(NM_003002.2):c.pterdel`) denotes a 5'/3'
+    /// transcript-flank position. HGVS does not permit numbering flanking
+    /// nucleotides in `c.` coordinates (the flank-numbering proposal was
+    /// rejected; see `background/numbering.md` and `consultation/open-issues.md`).
+    /// Strict mode rejects with `FerroError::InvalidCoordinates`; lenient/silent
+    /// modes preserve the input. Use the genomic `g.` form instead. See #488.
+    TranscriptFlankNotDescribable,
+
     /// A `c.`, `c.*N`, `c.-N`, or `n.` position lies past the bound of
     /// its coordinate sub-axis:
     ///   - `c.<N>` past `cds_end - cds_start + 1`
@@ -451,6 +460,7 @@ impl ErrorType {
             ErrorType::OverlapConflictingEdits => "W5002",
             ErrorType::VariantExceedsReference => "W5003",
             ErrorType::UnresolvableCentromere => "W4005",
+            ErrorType::TranscriptFlankNotDescribable => "W4006",
             ErrorType::NonConformantBracketCardinality => "W3026",
         }
     }
@@ -505,6 +515,7 @@ impl ErrorType {
         ErrorType::OverlapConflictingEdits,
         ErrorType::VariantExceedsReference,
         ErrorType::UnresolvableCentromere,
+        ErrorType::TranscriptFlankNotDescribable,
     ];
 
     /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
@@ -585,6 +596,9 @@ impl ErrorType {
             }
             ErrorType::UnresolvableCentromere => {
                 "centromere position cannot be resolved without assembly annotation"
+            }
+            ErrorType::TranscriptFlankNotDescribable => {
+                "transcript-flank position not numberable in coding (c.) coordinates"
             }
             ErrorType::PositionPastEnd => "position lies past CDS-end or transcript-end",
             ErrorType::OverlapConflictingEdits => {
@@ -669,6 +683,7 @@ impl ErrorType {
             // and we cannot conjure missing bases.
             ErrorType::VariantExceedsReference => false,
             ErrorType::UnresolvableCentromere => false,
+            ErrorType::TranscriptFlankNotDescribable => false,
             // Past-end positions cannot be auto-corrected — there's no safe
             // way to guess the intended canonical position.
             ErrorType::PositionPastEnd => false,
@@ -749,6 +764,10 @@ impl ErrorType {
             ErrorType::UnresolvableCentromere => (
                 "NC_000001.11:g.cendel (centromere has no sequence-derivable base)",
                 "(no auto-correct)",
+            ),
+            ErrorType::TranscriptFlankNotDescribable => (
+                "NG_012337.1(NM_003002.2):c.pterdel",
+                "(no auto-correct; use the genomic g. form)",
             ),
             ErrorType::PositionPastEnd => ("c.946G>C (CDS length 945)", "(no auto-correct)"),
             ErrorType::OverlapConflictingEdits => (
@@ -1176,6 +1195,7 @@ mod tests {
             ErrorType::OverlapConflictingEdits,
             ErrorType::VariantExceedsReference,
             ErrorType::UnresolvableCentromere,
+            ErrorType::TranscriptFlankNotDescribable,
             ErrorType::NonConformantBracketCardinality,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1224,6 +1244,7 @@ mod tests {
                 | ErrorType::OverlapConflictingEdits
                 | ErrorType::VariantExceedsReference
                 | ErrorType::UnresolvableCentromere
+                | ErrorType::TranscriptFlankNotDescribable
                 | ErrorType::NonConformantBracketCardinality => {}
             }
             assert!(

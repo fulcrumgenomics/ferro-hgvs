@@ -1341,6 +1341,28 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W4006",
+        CodeInfo {
+            code: "W4006",
+            name: "TranscriptFlankNotDescribable",
+            summary:
+                "Telomere marker on a genomic-reference c. denotes a transcript-flank position.",
+            explanation: "On a genomic reference (NG_/NC_/LRG_) c. description, `pter`/`qter` \
+                denote the genomic parent's terminus, which lies in the 5'/3' transcript flank — \
+                beyond the transcript's terminal exons. HGVS does not permit numbering flanking \
+                nucleotides in c. coordinates (background/numbering.md transcript-flanking; the \
+                flank-numbering proposal was rejected, see consultation/open-issues.md). Strict \
+                mode rejects; lenient/silent preserve the input. Use the genomic g. form instead.",
+            category: CodeCategory::Position,
+            bad_examples: &["NG_012337.1(NM_003002.2):c.pterdel"],
+            good_examples: &["NG_012337.1:g.pterdel (genomic form)"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
+            related_codes: &["W4005"],
+        },
+    );
+
     // --- Semantic Warnings (W5xxx) ---
 
     map.insert(

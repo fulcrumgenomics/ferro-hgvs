@@ -3208,9 +3208,14 @@
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.pterdel",
-      "normalized": "NG_012337.1(NM_003002.2):c.-5059del",
+      "normalized": "NG_012337.1(NM_003002.2):c.pterdel",
       "genomic": "NG_012337.1:g.3del",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Transcript flanking (not c.-numberable)",
+        "note": "pter on a genomic-reference c. denotes the 5' transcript flank — the genomic parent's terminus at g.1 of NG_012337.1, whose deletion 3'-shifts within the leading T-run to the g.3del asserted on the genomic axis above — which HGVS does not permit numbering in c. (background/refseq.md L46; consultation/open-issues.md). ferro refuses and leaves the input verbatim; mutalyzer's c.-5059del extrapolates into the flank. The genomic axis (g.3del) is a separate gap ferro does not yet emit — tracked as a follow-up; it stays in baseline-failures/genomic.txt."
+      }
     },
     {
       "keywords": [],
@@ -3221,9 +3226,14 @@
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.qterdel",
-      "normalized": "NG_012337.1(NM_003002.2):c.*2824del",
+      "normalized": "NG_012337.1(NM_003002.2):c.qterdel",
       "genomic": "NG_012337.1:g.15948del",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Transcript flanking (not c.-numberable)",
+        "note": "qter on a genomic-reference c. denotes the 3' transcript flank (g.15948 of NG_012337.1), which HGVS does not permit numbering in c. (background/refseq.md L46; consultation/open-issues.md). ferro refuses and leaves the input verbatim; mutalyzer's c.*2824del extrapolates into the flank. The genomic axis (g.15948del) is a separate gap ferro does not yet emit — tracked as a follow-up; it stays in baseline-failures/genomic.txt."
+      }
     },
     {
       "keywords": [],

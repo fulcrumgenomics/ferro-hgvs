@@ -449,6 +449,16 @@ pub enum NormalizationWarning {
         marker: String,
     },
 
+    /// A telomere marker on a genomic-reference `c.` description denotes a
+    /// transcript-flank position not numberable in `c.` (#488 Phase 2b).
+    /// Code: `TRANSCRIPT_FLANK_NOT_DESCRIBABLE`.
+    TranscriptFlankNotDescribable {
+        /// Accession of the reference (the NG/LRG/NC-parent c. accession).
+        accession: String,
+        /// The marker, "pter" or "qter".
+        marker: String,
+    },
+
     /// `apply_canonical_split` was unable to canonicalize because the
     /// reference window returned by the provider did not span the same
     /// number of bytes as the HGVS interval. Per HGVS spec
@@ -564,6 +574,7 @@ impl NormalizationWarning {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
             Self::UnresolvableSpecialPosition { .. } => "UNRESOLVABLE_SPECIAL_POSITION",
+            Self::TranscriptFlankNotDescribable { .. } => "TRANSCRIPT_FLANK_NOT_DESCRIBABLE",
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
@@ -620,6 +631,12 @@ impl std::fmt::Display for NormalizationWarning {
                 "{accession}: '{marker}' — centromere/telomere marker cannot be \
                  resolved to a coordinate without assembly annotation; input preserved verbatim \
                  (UnresolvableSpecialPosition)"
+            ),
+            Self::TranscriptFlankNotDescribable { accession, marker } => write!(
+                f,
+                "{accession}: '{marker}' on a genomic-reference c. description denotes a 5'/3' \
+                 transcript-flank position, which HGVS does not permit numbering in c. coordinates; \
+                 use the genomic g. form (TranscriptFlankNotDescribable / W4006)"
             ),
             Self::CanonicalSplitSkipped {
                 accession,
@@ -1011,6 +1028,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             "{accession}: '{marker}' is an assembly-annotated region with no \
                              sequence-derivable coordinate and cannot be normalized \
                              (UnresolvableCentromere / W4005)"
+                        ),
+                    })
+                }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // In strict mode, reject a telomere marker that resolves to a
+        // transcript-flank position on a genomic-reference c. (W4006). The
+        // flank is not numberable in c. per HGVS numbering.md; #488 Phase 2b.
+        if self.config.should_reject_transcript_flank() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::TranscriptFlankNotDescribable { accession, marker } => {
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}: '{marker}' on a genomic-reference c. denotes a 5'/3' \
+                             transcript-flank position, not numberable in c. (HGVS numbering.md \
+                             transcript-flanking); use the genomic g. form \
+                             (TranscriptFlankNotDescribable / W4006)"
                         ),
                     })
                 }
@@ -1429,23 +1467,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
             resolve_special_genome_pos(end_pos, &accession, &self.provider)?,
         ) {
             (Some(s), Some(e)) => (s, e),
-            // Unresolved: `cen` is structurally unresolvable (surface a warning
-            // so it is not silently echoed); a length-less qter/pter is an
-            // environment gap (silent canonicalize fallback).
+            // Unresolved. `cen` is a structural *refusal*: preserve the input
+            // verbatim (do not rewrite the edit body) and surface W4005 so it is
+            // not silently echoed. A length-less qter/pter is instead an
+            // environment gap — a genuine resolution attempt that fell back, so
+            // it takes the silent canonicalize path.
             _ => {
-                let warnings = if matches!(start_pos.special, Some(SpecialPosition::Cen))
+                if matches!(start_pos.special, Some(SpecialPosition::Cen))
                     || matches!(end_pos.special, Some(SpecialPosition::Cen))
                 {
-                    vec![NormalizationWarning::UnresolvableSpecialPosition {
-                        accession: accession.clone(),
-                        marker: "cen".to_string(),
-                    }]
-                } else {
-                    vec![]
-                };
+                    return Ok((
+                        HV::Genome(variant.clone()),
+                        vec![NormalizationWarning::UnresolvableSpecialPosition {
+                            accession: accession.clone(),
+                            marker: "cen".to_string(),
+                        }],
+                    ));
+                }
                 return Ok((
                     HV::Genome(self.canonicalize_genome_variant(variant)),
-                    warnings,
+                    vec![],
                 ));
             }
         };
@@ -1604,6 +1645,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
             .map(|p| p.is_special())
             .unwrap_or(false);
         if start_special || end_special {
+            // Phase 2b (#488): on a genomic-reference (NG_/NC_/LRG_) c. description,
+            // pter/qter denote the genomic parent's terminus, in the 5'/3' transcript
+            // flank — not numberable in c. per HGVS numbering.md (the flank-numbering
+            // proposal was rejected, open-issues.md). Refuse: leave verbatim + emit
+            // W4006 (strict mode rejects in the normalize() wrapper). Read
+            // genomic_context from the ORIGINAL accession before transcript_accession()
+            // strips it. Only pter/qter (not cen) hit this branch.
+            if variant.accession.genomic_context.is_some() {
+                let marker_of = |p: Option<&CdsPos>| match p.and_then(|p| p.special) {
+                    Some(SpecialPosition::Pter) => Some("pter"),
+                    Some(SpecialPosition::Qter) => Some("qter"),
+                    _ => None,
+                };
+                if let Some(marker) = marker_of(variant.loc_edit.location.start.inner())
+                    .or_else(|| marker_of(variant.loc_edit.location.end.inner()))
+                {
+                    let warnings = vec![NormalizationWarning::TranscriptFlankNotDescribable {
+                        accession: format!("{}", variant.accession),
+                        marker: marker.to_string(),
+                    }];
+                    // Refusal is verbatim: preserve the original c. variant
+                    // exactly. `canonicalize_cds_variant` rewrites edit bodies
+                    // (e.g. an explicit `delA` loses its deleted base), which
+                    // would break the W4006 leave-as-is contract.
+                    return Ok((HV::Cds(variant.clone()), warnings));
+                }
+            }
             let acc = variant.accession.transcript_accession();
             // `cen` has no numberable CDS coordinate, so it is unresolvable with
             // or without transcript metadata. Surface W4005 up front, before the
@@ -1615,8 +1683,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             if is_cen(variant.loc_edit.location.start.inner())
                 || is_cen(variant.loc_edit.location.end.inner())
             {
+                // Structural refusal: preserve the input verbatim (don't rewrite
+                // the edit body) and surface W4005. `canonicalize_cds_variant`
+                // would normalize the edit (e.g. drop an explicit `delA` base).
                 return Ok((
-                    HV::Cds(self.canonicalize_cds_variant(variant)),
+                    HV::Cds(variant.clone()),
                     vec![NormalizationWarning::UnresolvableSpecialPosition {
                         accession: acc.clone(),
                         marker: "cen".to_string(),
@@ -8382,6 +8453,34 @@ mod tests {
     }
 
     #[test]
+    fn genome_cen_refusal_preserves_edit_body_verbatim() {
+        use crate::normalize::NormalizationWarning;
+        use crate::reference::MockProvider;
+        // The W4005 cen refusal must echo the input byte-for-byte, including an
+        // explicit deleted base. `canonicalize_genome_variant` would rewrite the
+        // edit body, so the refusal path must preserve the original variant.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.4", "ACGT".repeat(50));
+        let n = Normalizer::new(provider);
+        let input = "NC_TEST.4:g.cendelA";
+        let v = parse_hgvs(input).unwrap();
+        let result = n.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(
+            format!("{}", result.result),
+            input,
+            "cen refusal must preserve the explicit deleted base verbatim"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::UnresolvableSpecialPosition { .. })),
+            "must still emit W4005, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
     fn genome_mixed_special_plain_past_end_matches_plain_path() {
         use crate::reference::MockProvider;
         // Regression for the PR #526 review concern (CodeRabbit): a mixed
@@ -8660,6 +8759,38 @@ mod tests {
     }
 
     #[test]
+    fn cds_cen_refusal_preserves_edit_body_verbatim() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // The c. cen refusal must echo the input byte-for-byte, including an
+        // explicit deleted base — `canonicalize_cds_variant` would rewrite the
+        // edit body, so the refusal path must preserve the original variant.
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_TEST.2".into(),
+            Some("T".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let input = "NM_TEST.2:c.cendelA";
+        let v = parse_hgvs(input).unwrap();
+        let out = format!("{}", Normalizer::new(provider).normalize(&v).unwrap());
+        assert_eq!(
+            out, input,
+            "c. cen refusal must preserve the explicit deleted base verbatim"
+        );
+    }
+
+    #[test]
     fn cds_pter_minus_strand_resolves() {
         // `c.` coordinates are transcript-intrinsic, so `pter` maps to transcript
         // position 1 regardless of strand; this guards against any future
@@ -8691,6 +8822,135 @@ mod tests {
         assert!(
             out.contains("c.-"),
             "minus-strand pter still resolves into the 5'UTR, got {out}"
+        );
+    }
+
+    #[test]
+    fn cds_ng_parent_pter_refused_not_misresolved() {
+        use crate::error_handling::ErrorMode;
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_003002.2".into(),
+            Some("SDHD".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let v = parse_hgvs("NG_012337.1(NM_003002.2):c.pterdel").unwrap();
+
+        // Lenient: left verbatim (NOT c.-61), with the W4006 warning.
+        let lenient = Normalizer::new(provider.clone());
+        let r = lenient.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(
+            format!("{}", r.result),
+            "NG_012337.1(NM_003002.2):c.pterdel",
+            "NG-parent pter must stay verbatim, not c.-61"
+        );
+        assert!(
+            r.warnings.iter().any(|w| matches!(
+                w,
+                NormalizationWarning::TranscriptFlankNotDescribable { .. }
+            )),
+            "must emit W4006, got {:?}",
+            r.warnings
+        );
+
+        // Strict: rejects.
+        let strict = Normalizer::with_config(
+            provider,
+            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
+        );
+        assert!(
+            matches!(
+                strict.normalize(&v),
+                Err(FerroError::InvalidCoordinates { .. })
+            ),
+            "strict rejects NG-parent flank pter"
+        );
+    }
+
+    #[test]
+    fn cds_ng_parent_pter_refusal_preserves_edit_body_verbatim() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        // The W4006 refusal must echo the ORIGINAL c. variant byte-for-byte,
+        // including an explicit deleted base. `canonicalize_cds_variant` would
+        // rewrite the edit body (dropping the `A` from `delA`), so the refusal
+        // path must clone the input, not canonicalize it.
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_003002.2".into(),
+            Some("SDHD".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let input = "NG_012337.1(NM_003002.2):c.pterdelA";
+        let v = parse_hgvs(input).unwrap();
+        let lenient = Normalizer::new(provider);
+        let r = lenient.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(
+            format!("{}", r.result),
+            input,
+            "refusal must preserve the explicit deleted base verbatim"
+        );
+        assert!(
+            r.warnings.iter().any(|w| matches!(
+                w,
+                NormalizationWarning::TranscriptFlankNotDescribable { .. }
+            )),
+            "must still emit W4006, got {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn cds_bare_transcript_pter_still_resolves() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        let mut provider = crate::reference::MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_003002.2".into(),
+            Some("SDHD".into()),
+            Strand::Plus,
+            "ACGT".repeat(50),
+            Some(62),
+            Some(124),
+            vec![Exon::new(1, 1, 200)],
+            None,
+            None,
+            None,
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let n = Normalizer::new(provider);
+        let out = format!(
+            "{}",
+            n.normalize(&parse_hgvs("NM_003002.2:c.pterdel").unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            out, "NM_003002.2:c.-61del",
+            "bare NM_ pter still resolves to the transcript boundary"
         );
     }
 }
