@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Five-tag A/B sweep of the portable microbench suite (benches/benchmarks.rs).
+# Five-tag A/B sweep of the v0.4.0-SWEPT microbench target (benches/benchmarks.rs).
 # Overlays the current branch's benchmarks.rs onto each tag, runs cargo bench
 # with a per-tag criterion baseline into a shared target dir, then critcmp.
 #
-# Projection (benches/projection.rs) is NOT swept — run it at HEAD only:
-#   cargo bench --bench projection
+# Only `benchmarks` is swept (it is v0.4.0-clean: compiles + resolves at every tag).
+# The HEAD-baseline targets cover post-v0.4.0 features and are NOT swept — run at HEAD:
+#   cargo bench --bench baseline_head   # enriched g./intronic normalize, correctors, trans-allele
+#   cargo bench --bench projection      # g→c projection (v0.6.0+)
+# See scripts/perf/README.md for the full version-floor contract.
 #
 # Prereqs: critcmp (cargo install critcmp), git lfs (corpus), a quiet machine.
 set -euo pipefail
