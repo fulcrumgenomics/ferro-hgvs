@@ -122,6 +122,7 @@ fn bench_parsing_by_length(c: &mut Criterion) {
 struct BulkFixture {
     test_cases: Vec<BulkCase>,
 }
+
 #[derive(Deserialize)]
 struct BulkCase {
     input: String,
@@ -188,12 +189,12 @@ fn enriched_provider() -> MockProvider {
 
     // Plus-strand, two-exon coding transcript with a real intron, mapped to
     // NC_000001.11. Exon1 genome[1000,1009] tx[1,10]; intron genome[1010,1999];
-    // exon2 genome[2000,2009] tx[11,20]. CDS tx[1,18].
+    // exon2 genome[2000,2009] tx[11,20]. CDS tx[1,18]; tx[19,20] is a 2-nt 3'UTR tail.
     p.add_transcript(Transcript::new(
         "NM_INTR.1".to_string(),
         Some("INTRGENE".to_string()),
         Strand::Plus,
-        Some("ATGCGCAAAGGGTAACCC".to_string()), // 18 bp
+        Some("ATGCGCAAAGGGTAACCCNN".to_string()), // 20 bp (18 bp CDS + 2 nt 3'UTR tail)
         Some(1),
         Some(18),
         vec![
@@ -217,7 +218,7 @@ fn enriched_provider() -> MockProvider {
         "NM_INTRM.1".to_string(),
         Some("INTRGENM".to_string()),
         Strand::Minus,
-        Some("ATGCGCAAAGGGTAACCC".to_string()),
+        Some("ATGCGCAAAGGGTAACCCNN".to_string()), // 20 bp (18 bp CDS + 2 nt 3'UTR tail)
         Some(1),
         Some(18),
         vec![
@@ -496,7 +497,7 @@ fn consecutive_subs_allele(n: usize) -> String {
     s
 }
 
-/// Build non-adjacent subs (5 nt apart): worst case for the adjacency loop —
+/// Build non-adjacent subs (stride 5 (positions 1000, 1005, 1010, …)): worst case for the adjacency loop —
 /// every pair is checked and rejected.
 fn non_adjacent_subs_allele(n: usize) -> String {
     let mut s = String::from("NC_000001.11:g.[");
@@ -530,6 +531,8 @@ fn non_adjacent_delins_allele(n: usize) -> String {
 }
 
 fn bench_allele_scaling(c: &mut Criterion) {
+    // Uses MockProvider::new() (no sequences), so this measures allele-merge
+    // scaling, not sequence-dependent 3' shift.
     let normalizer = Normalizer::new(MockProvider::new());
     let mut group = c.benchmark_group("allele_scaling");
 
@@ -558,6 +561,10 @@ fn bench_allele_scaling(c: &mut Criterion) {
 /// Parse-path timing for inputs that exercise the W30xx correction/diagnostic
 /// machinery (swapped positions, dup/del soft-prohibition suffix forms).
 fn bench_correctors(c: &mut Criterion) {
+    // These inputs exercise the W30xx correction/diagnostic machinery:
+    //   swapped_positions (W3026): Ok-with-warning in WarnCorrect mode, Err in Reject mode.
+    //   dup_count_suffix / del_seq_suffix / dup_seq_suffix: Ok-with-warning under the lenient default.
+    // We time the full parse path regardless of Ok/Err — that is intentional, so there is no is_ok guard.
     let cases = vec![
         ("swapped_positions", "NC_000001.11:g.200_100del"),
         ("dup_count_suffix", "NM_000088.3:c.100_102dup3"),
