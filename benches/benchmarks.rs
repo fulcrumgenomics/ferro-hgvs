@@ -538,6 +538,24 @@ fn bench_allele_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Parse-path timing for inputs that exercise the W30xx correction/diagnostic
+/// machinery (swapped positions, dup/del soft-prohibition suffix forms).
+fn bench_correctors(c: &mut Criterion) {
+    let cases = vec![
+        ("swapped_positions", "NC_000001.11:g.200_100del"),
+        ("dup_count_suffix", "NM_000088.3:c.100_102dup3"),
+        ("del_seq_suffix", "NM_000088.3:c.100delA"),
+        ("dup_seq_suffix", "NM_000088.3:c.100_102dupATG"),
+    ];
+    let mut group = c.benchmark_group("correctors");
+    for (name, input) in &cases {
+        group.bench_with_input(BenchmarkId::new("parse", name), input, |b, v| {
+            b.iter(|| parse_hgvs(black_box(v)))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parsing,
@@ -550,6 +568,7 @@ criterion_group!(
     bench_fast_path,
     bench_error_handling,
     bench_allele_scaling,
+    bench_correctors,
 );
 
 criterion_main!(benches);
