@@ -35,7 +35,9 @@ use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, Sequence};
 use crate::hgvs::interval::{Interval, ProtInterval};
-use crate::hgvs::location::{AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, TxPos};
+use crate::hgvs::location::{
+    AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
+};
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
@@ -434,6 +436,17 @@ pub enum NormalizationWarning {
         edit_kinds: Vec<String>,
     },
 
+    /// A telomere/centromere marker could not be resolved to a concrete base.
+    /// Currently only `cen` (a centromere is an assembly-annotated region, not a
+    /// sequence-derivable nucleotide). The input is preserved verbatim.
+    /// Code: `UNRESOLVABLE_SPECIAL_POSITION`.
+    UnresolvableSpecialPosition {
+        /// Accession of the reference sequence.
+        accession: String,
+        /// The marker that could not be resolved, e.g. "cen".
+        marker: String,
+    },
+
     /// `apply_canonical_split` was unable to canonicalize because the
     /// reference window returned by the provider did not span the same
     /// number of bytes as the HGVS interval. Per HGVS spec
@@ -548,6 +561,7 @@ impl NormalizationWarning {
         match self {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
+            Self::UnresolvableSpecialPosition { .. } => "UNRESOLVABLE_SPECIAL_POSITION",
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
             Self::CrossAxisVariantNotShuffled { .. } => "CROSS_AXIS_VARIANT_NOT_SHUFFLED",
             Self::AxisClampApplied { .. } => "AXIS_CLAMP_APPLIED",
@@ -598,6 +612,12 @@ impl std::fmt::Display for NormalizationWarning {
                 coordinate_system,
                 location,
                 edit_kinds.join(", "),
+            ),
+            Self::UnresolvableSpecialPosition { accession, marker } => write!(
+                f,
+                "{accession}:g.{marker} — centromere/telomere marker '{marker}' cannot be \
+                 resolved to a coordinate without assembly annotation; input preserved verbatim \
+                 (UnresolvableSpecialPosition)"
             ),
             Self::CanonicalSplitSkipped {
                 accession,
@@ -941,6 +961,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // In strict mode, reject an unresolvable `cen` position (W4005). A
+        // centromere is an assembly-annotated region with no sequence-derivable
+        // base, so `normalize_genome` cannot place it and emits the
+        // `UnresolvableSpecialPosition` warning. The registry declares
+        // `warn_accept()` (Strict → Reject); promote it here rather than
+        // silently echoing the input. See #488.
+        if self.config.should_reject_unresolvable_centromere() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::UnresolvableSpecialPosition { accession, marker } => {
+                    Some(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "{accession}:g.{marker} — '{marker}' is an assembly-annotated \
+                             region with no sequence-derivable coordinate and cannot be \
+                             normalized (UnresolvableCentromere / W4005)"
+                        ),
+                    })
+                }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         Ok(result.result)
     }
 
@@ -1231,7 +1274,39 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         Ok(Some((new_variant, warning)))
     }
+}
 
+/// Resolve a genomic position to a concrete 1-based base, mapping telomere
+/// markers to reference boundaries:
+/// - `pter` -> 1 (first nucleotide),
+/// - `qter` -> reference length (last nucleotide),
+/// - `cen`  -> `Ok(None)` (a centromere is an assembly-annotated region, not a
+///   sequence-derivable base),
+/// - a plain (non-special) position -> its own `base`.
+///
+/// A `qter` whose reference length is unavailable also yields `Ok(None)` so the
+/// caller can fall back to canonicalization (matches the "no sequence -> minimal
+/// notation" philosophy). The caller distinguishes the two `None` cases by
+/// re-inspecting `pos.special`: `Some(Cen)` is a structural failure (warn/reject),
+/// any other `None` is an environment gap (silent fallback).
+///
+/// Precondition: offset-carrying positions are bailed out by the caller before
+/// this is called; this function does not inspect `pos.offset`.
+fn resolve_special_genome_pos<P: ReferenceProvider>(
+    pos: &GenomePos,
+    accession: &str,
+    provider: &P,
+) -> Result<Option<u64>, FerroError> {
+    match pos.special {
+        None => Ok(Some(pos.base)),
+        Some(SpecialPosition::Pter) => Ok(Some(1)),
+        // Length unavailable -> graceful None (caller canonicalizes).
+        Some(SpecialPosition::Qter) => Ok(provider.get_sequence_length(accession).ok()),
+        Some(SpecialPosition::Cen) => Ok(None),
+    }
+}
+
+impl<P: ReferenceProvider> Normalizer<P> {
     /// Normalize a genomic variant
     fn normalize_genome(
         &self,
@@ -1298,37 +1373,102 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         };
 
-        // Decorated genome positions (pter/qter/cen, encoded as a `base == 0`
-        // sentinel, or offset-carrying) cannot be losslessly remapped through
-        // base-only window normalization: the `base == 0` would flow into
-        // `coords::hgvs_pos_to_index(0)` (a `pos - 1` conversion) and underflow,
-        // panicking with "attempt to subtract with overflow" (#488, e.g.
-        // `NG_012337.1:g.pterdel`), and rebuilding via `GenomePos::new` would
-        // silently drop the decoration. Mirror `normalize_mt`'s guard and fall
-        // back to minimal-notation cleanup. Resolving pter→1 / qter→contig-end
-        // so these actually 3'-shift (and demote their corpus rows) is a
-        // telomere-coordinate-resolution follow-up.
-        if start_pos.is_special()
-            || end_pos.is_special()
-            || start_pos.offset.is_some()
-            || end_pos.offset.is_some()
-        {
+        // Offset-carrying genome positions (uncertain `g.123+?`-style) have no
+        // resolution and cannot be losslessly remapped through base-only window
+        // normalization; bail to minimal-notation cleanup. (Telomere markers
+        // are handled by resolution just below — see #488 and the design doc.)
+        if start_pos.offset.is_some() || end_pos.offset.is_some() {
             return Ok((
                 HV::Genome(self.canonicalize_genome_variant(variant)),
                 vec![],
             ));
         }
 
-        let start = start_pos.base;
-        let end = end_pos.base;
+        // Resolve telomere markers (pter/qter) to concrete 1-based bases before
+        // the window math; `base == 0` sentinels would otherwise underflow
+        // `hgvs_pos_to_index` (#488). A plain position resolves to its own base.
+        let had_special = start_pos.is_special() || end_pos.is_special();
+        let (start, end) = match (
+            resolve_special_genome_pos(start_pos, &accession, &self.provider)?,
+            resolve_special_genome_pos(end_pos, &accession, &self.provider)?,
+        ) {
+            (Some(s), Some(e)) => (s, e),
+            // Unresolved: `cen` is structurally unresolvable (surface a warning
+            // so it is not silently echoed); a length-less qter/pter is an
+            // environment gap (silent canonicalize fallback).
+            _ => {
+                let warnings = if matches!(start_pos.special, Some(SpecialPosition::Cen))
+                    || matches!(end_pos.special, Some(SpecialPosition::Cen))
+                {
+                    vec![NormalizationWarning::UnresolvableSpecialPosition {
+                        accession: accession.clone(),
+                        marker: "cen".to_string(),
+                    }]
+                } else {
+                    vec![]
+                };
+                return Ok((
+                    HV::Genome(self.canonicalize_genome_variant(variant)),
+                    warnings,
+                ));
+            }
+        };
 
-        // Try to get transcript/sequence, fall back to minimal notation if not found
+        // On the resolved-special path the reference length sizes both the
+        // whole-span short-circuit and the fetch clamp. (A `qter` resolve above
+        // also queried the length; this is a second cheap in-memory index
+        // lookup, not I/O.) If it is unavailable we cannot safely size the
+        // fetch -> canonicalize fallback.
+        let resolved_len = if had_special {
+            match self.provider.get_sequence_length(&accession) {
+                Ok(len) => len,
+                Err(_) => {
+                    return Ok((
+                        HV::Genome(self.canonicalize_genome_variant(variant)),
+                        vec![],
+                    ))
+                }
+            }
+        } else {
+            0 // unused when !had_special
+        };
+
+        // Whole-contig span (e.g. g.pter_qterdel): fully anchored, cannot
+        // 3'-shift, and fetching the whole contig is pure waste. Render the
+        // resolved concrete form and return before any get_sequence call.
+        if had_special && start == 1 && end == resolved_len {
+            let resolved = GenomeVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::new(
+                    Interval::new(GenomePos::new(start), GenomePos::new(end)),
+                    edit.clone(),
+                ),
+            };
+            return Ok((
+                HV::Genome(self.canonicalize_genome_variant(&resolved)),
+                vec![],
+            ));
+        }
+
+        // Window-based fetch around the variant. `window_start`/`fetch_end` are
+        // 0-based half-open offsets into the contig even though they derive from
+        // 1-based `base`; the reconciliation `rel = base - window_start` then
+        // `hgvs_pos_to_index(rel) = rel - 1` is the same one the non-special
+        // path uses (do not "fix" this as a bug). On the resolved-special path
+        // clamp the upper bound to the contig length so the read is well-formed
+        // against providers that error on past-EOF reads (MockProvider); the
+        // ordinary path keeps the provider-clamped behavior byte-identical.
         let window_start = start.saturating_sub(self.config.window_size);
-        let seq_result = self.provider.get_sequence(
-            &accession,
-            window_start,
-            end.saturating_add(self.config.window_size),
-        );
+        let raw_end = end.saturating_add(self.config.window_size);
+        let fetch_end = if had_special {
+            raw_end.min(resolved_len)
+        } else {
+            raw_end
+        };
+        let seq_result = self
+            .provider
+            .get_sequence(&accession, window_start, fetch_end);
 
         let ref_seq = match seq_result {
             Ok(s) => s,
@@ -3473,6 +3613,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // remapping via `pos.base` and rebuilding with `GenomePos::new`
         // would silently drop the decoration. Fall back to minimal-
         // notation cleanup for these.
+        //
+        // Telomere/centromere markers are intentionally NOT resolved for
+        // mitochondrial (circular) references — `m.` has no telomeres, so
+        // pter/qter/cen are meaningless here; keep the deliberate bail-out
+        // rather than unifying with normalize_genome's resolver (#488).
         if start_pos.offset.is_some()
             || end_pos.offset.is_some()
             || start_pos.is_special()
@@ -7938,6 +8083,78 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolve_special_genome_pos_maps_markers() {
+        use crate::hgvs::location::{GenomePos, SpecialPosition};
+        use crate::reference::MockProvider;
+
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", "A".repeat(500));
+
+        // pter -> 1 (no length lookup needed).
+        let pter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Pter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&pter, "NC_TEST.1", &provider).unwrap(),
+            Some(1)
+        );
+
+        // qter -> contig length.
+        let qter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Qter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&qter, "NC_TEST.1", &provider).unwrap(),
+            Some(500)
+        );
+
+        // cen -> None (structurally unresolvable).
+        let cen = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Cen),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&cen, "NC_TEST.1", &provider).unwrap(),
+            None
+        );
+
+        // Plain position -> its own base.
+        let plain = GenomePos {
+            base: 42,
+            special: None,
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&plain, "NC_TEST.1", &provider).unwrap(),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn resolve_special_genome_pos_qter_without_length_is_none() {
+        use crate::hgvs::location::{GenomePos, SpecialPosition};
+        use crate::reference::MockProvider;
+
+        // Provider has no contig registered -> get_sequence_length errors ->
+        // graceful Ok(None), not an Err.
+        let provider = MockProvider::new();
+        let qter = GenomePos {
+            base: 0,
+            special: Some(SpecialPosition::Qter),
+            offset: None,
+        };
+        assert_eq!(
+            resolve_special_genome_pos(&qter, "NC_MISSING.1", &provider).unwrap(),
+            None
+        );
+    }
+
     // #488: a genomic variant whose position is a telomere/centromere marker
     // (`pter`/`qter`/`cen`) carries a `base == 0` sentinel. Before the guard in
     // `normalize_genome`, that 0 flowed into `coords::hgvs_pos_to_index(0)`
@@ -7950,35 +8167,189 @@ mod tests {
     fn genome_special_position_does_not_panic() {
         use crate::reference::MockProvider;
 
-        // A contig long enough that the window fetch (window_size = 100)
-        // succeeds, so normalization actually proceeds into the coordinate
-        // math that used to underflow — without sequence the path bails early
-        // and would mask the regression.
+        // Contig starts with "TTT" so that pter (→ base 1) 3'-shifts through
+        // the leading T-run; length = 3 + 200 = 203. Sequence registered so
+        // the 100-base window fetch succeeds and normalization reaches the
+        // coordinate math that used to underflow (#488).
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence("NC_000002.12", format!("TTT{}", "ACGT".repeat(50)));
         let normalizer = Normalizer::new(provider);
 
-        // Each marker, as both a single-position del and (for pter) a dup, must
-        // round-trip without panicking and keep its special marker.
-        for (input, marker) in [
-            ("NC_000002.12:g.pterdel", "pter"),
-            ("NC_000002.12:g.qterdel", "qter"),
-            ("NC_000002.12:g.cendel", "cen"),
-            ("NC_000002.12:g.pterdup", "pter"),
+        // pter and qter now resolve to concrete coordinates and are then
+        // 3'-shifted in the normal way. Observed outputs (not guessed):
+        //   pter del → base 1, shifts right through TTT → g.3del
+        //   qter del → base 203 (last base), no further right-shift → g.203del
+        for (input, expected) in [
+            ("NC_000002.12:g.pterdel", "NC_000002.12:g.3del"),
+            ("NC_000002.12:g.qterdel", "NC_000002.12:g.203del"),
         ] {
             let variant = parse_hgvs(input).expect("parse special-position genomic variant");
-            let result = normalizer.normalize(&variant);
-            assert!(
-                result.is_ok(),
-                "{input} must normalize without panicking, got {result:?}"
-            );
-            // Marker is preserved (no spec-correct telomere resolution yet),
-            // so the canonicalized output still renders the special position.
-            let output = format!("{}", result.unwrap());
-            assert!(
-                output.contains(marker),
-                "{input}: expected output to retain '{marker}', got '{output}'"
-            );
+            let out = format!("{}", normalizer.normalize(&variant).expect("normalize"));
+            assert_eq!(out, expected, "{input} should resolve to {expected}");
         }
+
+        // cen is structurally unresolvable: must not panic and must be
+        // preserved verbatim in the output.
+        let cen = parse_hgvs("NC_000002.12:g.cendel").expect("parse cen");
+        let cen_out = format!(
+            "{}",
+            normalizer
+                .normalize(&cen)
+                .expect("normalize cen — must not error")
+        );
+        assert!(
+            cen_out.contains("cen"),
+            "cen retained verbatim, got {cen_out}"
+        );
+    }
+
+    #[test]
+    fn genome_pter_resolves_and_shifts() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NG_012337.1", format!("TTT{}", "ACGT".repeat(50)));
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NG_012337.1:g.pterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NG_012337.1:g.3del",
+            "pter del must resolve+shift to g.3del"
+        );
+    }
+
+    #[test]
+    fn genome_qter_resolves_to_last_base() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        let seq = format!("{}G", "ACGT".repeat(50)); // length 201, last base 'G'
+        provider.add_genomic_sequence("NC_TEST.2", seq);
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.2:g.qterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NC_TEST.2:g.201del",
+            "qter del must resolve to the last base"
+        );
+    }
+
+    #[test]
+    fn genome_whole_span_pter_qter_short_circuits() {
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.3", "ACGT".repeat(50)); // length 200
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.3:g.pter_qterdel").unwrap();
+        let out = format!("{}", n.normalize(&v).unwrap());
+        assert_eq!(
+            out, "NC_TEST.3:g.1_200del",
+            "whole-span pter_qter must render concrete span"
+        );
+    }
+
+    #[test]
+    fn genome_cen_emits_warning_not_silent() {
+        use crate::normalize::NormalizationWarning;
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.4", "ACGT".repeat(50));
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_TEST.4:g.cendel").unwrap();
+        let result = n.normalize_with_diagnostics(&v).unwrap();
+        assert_eq!(format!("{}", result.result), "NC_TEST.4:g.cendel");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::UnresolvableSpecialPosition { .. })),
+            "cen must emit an UnresolvableSpecialPosition warning, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn genome_mixed_special_plain_past_end_matches_plain_path() {
+        use crate::reference::MockProvider;
+        // Regression for the PR #526 review concern (CodeRabbit): a mixed
+        // special/plain span like `g.pter_<past-end>del` resolves `pter` to base
+        // 1 while leaving the plain endpoint beyond the contig. The resulting
+        // relative end falls outside the fetched window, but `shuffle` guards
+        // every reference index (shuffle.rs: `ref_idx >= ref_seq.len()`), so the
+        // shift simply cannot advance — no panic, no out-of-bounds, and the
+        // variant is echoed verbatim. Crucially this is byte-identical to the
+        // equivalent plain-coordinate span: the special-position resolution adds
+        // no window-overflow misbehavior of its own. A special-only early-return
+        // (or clamping the endpoint to the contig length) would be either dead
+        // complexity or an active corruption of the user's past-end coordinate.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_PASTEND.1", "ACGT".repeat(50)); // length 200
+        let n = Normalizer::new(provider);
+
+        let special = parse_hgvs("NC_PASTEND.1:g.pter_5000del").expect("parse special past-end");
+        let special_out = n
+            .normalize(&special)
+            .expect("mixed special/plain past-end must not error or panic");
+
+        let plain = parse_hgvs("NC_PASTEND.1:g.1_5000del").expect("parse plain past-end");
+        let plain_out = n
+            .normalize(&plain)
+            .expect("plain past-end normalizes without error");
+
+        assert_eq!(
+            format!("{special_out}"),
+            format!("{plain_out}"),
+            "resolved-special past-end span must behave identically to its plain-coordinate equivalent"
+        );
+        assert_eq!(
+            format!("{special_out}"),
+            "NC_PASTEND.1:g.1_5000del",
+            "past-end span is echoed verbatim (shuffle cannot shift past the fetched window)"
+        );
+    }
+
+    #[test]
+    fn genome_cen_strict_mode_rejects() {
+        use crate::error_handling::ErrorMode;
+        use crate::reference::MockProvider;
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.5", "ACGT".repeat(50));
+
+        // Strict mode promotes the unresolvable-cen warning to an error
+        // instead of silently echoing the input.
+        let strict = Normalizer::with_config(
+            provider.clone(),
+            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
+        );
+        let v = parse_hgvs("NC_TEST.5:g.cendel").unwrap();
+        let result = strict.normalize(&v);
+        assert!(
+            matches!(result, Err(FerroError::InvalidCoordinates { .. })),
+            "strict mode must reject unresolvable cen, got {result:?}"
+        );
+
+        // Lenient (default) mode accepts and preserves the input.
+        let lenient = Normalizer::new(provider);
+        let v2 = parse_hgvs("NC_TEST.5:g.cendel").unwrap();
+        let out = lenient.normalize(&v2).expect("lenient accepts cen");
+        assert_eq!(format!("{out}"), "NC_TEST.5:g.cendel");
+    }
+
+    #[test]
+    fn genome_qter_without_length_canonicalizes_gracefully() {
+        use crate::reference::MockProvider;
+        // Provider has the contig genomic sequence NOT registered -> qter length
+        // is unavailable -> graceful canonicalize fallback (no panic, no error).
+        let provider = MockProvider::new();
+        let n = Normalizer::new(provider);
+        let v = parse_hgvs("NC_NONE.1:g.qterdel").unwrap();
+        let result = n.normalize(&v);
+        assert!(
+            result.is_ok(),
+            "length-less qter must not error/panic, got {result:?}"
+        );
+        // Marker preserved verbatim since it could not be resolved.
+        assert!(
+            format!("{}", result.unwrap()).contains("qter"),
+            "unresolved qter should be returned verbatim"
+        );
     }
 }

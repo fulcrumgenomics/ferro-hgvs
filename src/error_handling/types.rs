@@ -341,6 +341,17 @@ pub enum ErrorType {
     /// Closes-after: #355.
     VariantExceedsReference,
 
+    /// A telomere/centromere position marker could not be resolved to a
+    /// concrete coordinate. Currently only `cen`: a centromere is an
+    /// assembly-annotated region, not a nucleotide derivable from the
+    /// reference sequence, so ferro cannot place it. Strict mode rejects
+    /// with `FerroError::InvalidCoordinates`; lenient/silent modes preserve
+    /// the input, with the `UnresolvableSpecialPosition` warning surfaced by
+    /// `normalize_with_diagnostics` (emitted unconditionally — only the
+    /// strict-mode promotion is gated by mode, mirroring the `warn_accept()`
+    /// sibling `VariantExceedsReference`). See #488.
+    UnresolvableCentromere,
+
     /// A `c.`, `c.*N`, `c.-N`, or `n.` position lies past the bound of
     /// its coordinate sub-axis:
     ///   - `c.<N>` past `cds_end - cds_start + 1`
@@ -439,6 +450,7 @@ impl ErrorType {
             ErrorType::RefSeqMismatch => "W5001",
             ErrorType::OverlapConflictingEdits => "W5002",
             ErrorType::VariantExceedsReference => "W5003",
+            ErrorType::UnresolvableCentromere => "W4005",
             ErrorType::NonConformantBracketCardinality => "W3026",
         }
     }
@@ -492,6 +504,7 @@ impl ErrorType {
         ErrorType::RefSeqMismatch,
         ErrorType::OverlapConflictingEdits,
         ErrorType::VariantExceedsReference,
+        ErrorType::UnresolvableCentromere,
     ];
 
     /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
@@ -569,6 +582,9 @@ impl ErrorType {
             ErrorType::DelExplicitSeq => "deletion with explicit deleted sequence",
             ErrorType::VariantExceedsReference => {
                 "variant position range exceeds reference sequence"
+            }
+            ErrorType::UnresolvableCentromere => {
+                "centromere position cannot be resolved without assembly annotation"
             }
             ErrorType::PositionPastEnd => "position lies past CDS-end or transcript-end",
             ErrorType::OverlapConflictingEdits => {
@@ -652,6 +668,7 @@ impl ErrorType {
             // variant references positions past the provider's window
             // and we cannot conjure missing bases.
             ErrorType::VariantExceedsReference => false,
+            ErrorType::UnresolvableCentromere => false,
             // Past-end positions cannot be auto-corrected — there's no safe
             // way to guess the intended canonical position.
             ErrorType::PositionPastEnd => false,
@@ -728,6 +745,10 @@ impl ErrorType {
             ErrorType::VariantExceedsReference => (
                 "NG_032871.1:g.32476_53457delinsAATTAAGGTATA (ref shorter than 53457)",
                 "(no auto-correct; spec rejects per refseq.md \u{00A7}43)",
+            ),
+            ErrorType::UnresolvableCentromere => (
+                "NC_000001.11:g.cendel (centromere has no sequence-derivable base)",
+                "(no auto-correct)",
             ),
             ErrorType::PositionPastEnd => ("c.946G>C (CDS length 945)", "(no auto-correct)"),
             ErrorType::OverlapConflictingEdits => (
@@ -1154,6 +1175,7 @@ mod tests {
             ErrorType::RefSeqMismatch,
             ErrorType::OverlapConflictingEdits,
             ErrorType::VariantExceedsReference,
+            ErrorType::UnresolvableCentromere,
             ErrorType::NonConformantBracketCardinality,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1201,6 +1223,7 @@ mod tests {
                 | ErrorType::RefSeqMismatch
                 | ErrorType::OverlapConflictingEdits
                 | ErrorType::VariantExceedsReference
+                | ErrorType::UnresolvableCentromere
                 | ErrorType::NonConformantBracketCardinality => {}
             }
             assert!(

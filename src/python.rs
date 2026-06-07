@@ -2291,6 +2291,9 @@ pub enum PyErrorType {
     // allele bracket (c.[76A>C], p.[=]); brackets require >=2 cis members or
     // >=2 trans groups.
     NonConformantBracketCardinality = 40,
+    // 41 is W4005 UnresolvableCentromere — `cen` has no sequence-derivable
+    // coordinate; strict mode rejects, lenient/silent preserve (#488).
+    UnresolvableCentromere = 41,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2338,6 +2341,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::NonConformantBracketCardinality => {
                 PyErrorType::NonConformantBracketCardinality
             }
+            ErrorType::UnresolvableCentromere => PyErrorType::UnresolvableCentromere,
         }
     }
 }
@@ -2387,6 +2391,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::NonConformantBracketCardinality => {
                 ErrorType::NonConformantBracketCardinality
             }
+            PyErrorType::UnresolvableCentromere => ErrorType::UnresolvableCentromere,
         }
     }
 }

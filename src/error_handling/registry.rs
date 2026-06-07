@@ -1319,6 +1319,28 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W4005",
+        CodeInfo {
+            code: "W4005",
+            name: "UnresolvableCentromere",
+            summary: "Centromere position cannot be resolved to a coordinate.",
+            explanation: "The `cen` marker denotes a chromosome's centromere — an \
+                assembly-annotated region, not a nucleotide derivable from the reference \
+                sequence — so ferro cannot place it on a concrete coordinate to normalize. \
+                (`pter`/`qter` resolve to the first/last nucleotide and do normalize.) \
+                Strict mode rejects with FerroError::InvalidCoordinates; lenient/silent \
+                modes preserve the input, with the UnresolvableSpecialPosition warning \
+                surfaced by normalize_with_diagnostics. See #488.",
+            category: CodeCategory::Position,
+            bad_examples: &["NC_000001.11:g.cendel"],
+            good_examples: &["NC_000001.11:g.pterdel (pter resolves to base 1)"],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
+            related_codes: &["W4004"],
+        },
+    );
+
     // --- Semantic Warnings (W5xxx) ---
 
     map.insert(

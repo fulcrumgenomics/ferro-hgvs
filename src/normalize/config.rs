@@ -232,6 +232,21 @@ impl NormalizeConfig {
     pub fn should_reject_overlap_conflict(&self) -> bool {
         self.overlap_conflict_action().should_reject()
     }
+
+    /// Get the resolved action for `UnresolvableCentromere` (W4005).
+    pub fn unresolvable_centromere_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::UnresolvableCentromere)
+    }
+
+    /// Returns true if an unresolvable `cen` position should be rejected
+    /// (strict mode default). A centromere is an assembly-annotated region
+    /// with no sequence-derivable base, so it cannot be normalized; strict
+    /// mode promotes the `UnresolvableSpecialPosition` warning to an error
+    /// rather than silently echoing the input. See #488.
+    pub fn should_reject_unresolvable_centromere(&self) -> bool {
+        self.unresolvable_centromere_action().should_reject()
+    }
 }
 
 #[cfg(test)]

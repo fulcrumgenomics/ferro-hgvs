@@ -77,6 +77,9 @@ const NORMALIZATION_WARNING_TO_REGISTRY_NAME: &[(&str, &str)] = &[
     // underlying spec violation (variant exceeds the reference). Same
     // condition, two names.
     ("CanonicalSplitSkipped", "VariantExceedsReference"),
+    // W4005: the warning is generic over telomere/centromere markers; the
+    // registry/error name is specific to the only unresolvable one (cen).
+    ("UnresolvableSpecialPosition", "UnresolvableCentromere"),
 ];
 
 /// Scan [`EMISSION_SCAN_PATHS`] under `CARGO_MANIFEST_DIR` for distinct
