@@ -461,6 +461,83 @@ fn bench_error_handling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Build `g.[1000G>A;1001A>C;…]` — strictly consecutive subs that all collapse.
+fn consecutive_subs_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let (r, a) = match i % 3 {
+            0 => ('G', 'A'),
+            1 => ('A', 'C'),
+            _ => ('C', 'T'),
+        };
+        s.push_str(&format!("{}{}>{}", 1000 + i, r, a));
+    }
+    s.push(']');
+    s
+}
+
+/// Build non-adjacent subs (5 nt apart): worst case for the adjacency loop —
+/// every pair is checked and rejected.
+fn non_adjacent_subs_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let (r, a) = match i % 3 {
+            0 => ('G', 'A'),
+            1 => ('A', 'C'),
+            _ => ('C', 'T'),
+        };
+        s.push_str(&format!("{}{}>{}", 1000 + i * 5, r, a));
+    }
+    s.push(']');
+    s
+}
+
+/// Non-adjacent delins: worst case for the eager alt-clone in the merge loop.
+fn non_adjacent_delins_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let start = 1000 + i * 10;
+        s.push_str(&format!("{}_{}delinsACGTA", start, start + 4));
+    }
+    s.push(']');
+    s
+}
+
+fn bench_allele_scaling(c: &mut Criterion) {
+    let normalizer = Normalizer::new(MockProvider::new());
+    let mut group = c.benchmark_group("allele_scaling");
+
+    for n in [10usize, 100, 1000] {
+        for (label, input) in [
+            ("consecutive_subs", consecutive_subs_allele(n)),
+            ("non_adjacent_subs", non_adjacent_subs_allele(n)),
+            ("non_adjacent_delins", non_adjacent_delins_allele(n)),
+        ] {
+            // Guard: must parse + normalize on the real path.
+            let v = parse_hgvs(&input)
+                .unwrap_or_else(|e| panic!("allele bench {label} n={n} parse: {e}"));
+            normalizer
+                .normalize(&v)
+                .unwrap_or_else(|e| panic!("allele bench {label} n={n} normalize: {e}"));
+
+            group.throughput(Throughput::Elements(n as u64));
+            group.bench_with_input(BenchmarkId::new(label, n), &v, |b, v| {
+                b.iter(|| normalizer.normalize(black_box(v)))
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parsing,
@@ -472,6 +549,7 @@ criterion_group!(
     bench_clinical_variants,
     bench_fast_path,
     bench_error_handling,
+    bench_allele_scaling,
 );
 
 criterion_main!(benches);
