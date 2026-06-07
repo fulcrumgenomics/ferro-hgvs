@@ -23,8 +23,9 @@
 //!    are written to `/tmp/ferro-xfail/biocommons-normalized.{txt,tsv}` for
 //!    burn-down. Tests skip when the manifest is absent (e.g. CI).
 //!
-//! See `tests/fixtures/biocommons-normalize/failure-patterns.md` for the
-//! disposition of currently-known divergences.
+//! See `cases.json` (and the generated `failure-patterns.md` summary, produced
+//! by `examples/generate_conformance_summary`, never hand-maintained — #509)
+//! for the disposition of currently-known divergences.
 
 use ferro_hgvs::conformance::biocommons::{Case, Disposition, Fixture};
 use ferro_hgvs::error_handling::ErrorMode;

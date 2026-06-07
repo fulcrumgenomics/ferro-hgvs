@@ -17,10 +17,8 @@
 //!   NM_212556.2:c.1delinsCA   bio: c.1delinsCA   ferro: c.-1_1insC
 //!   NM_212556.2:c.2_3insCAT   bio: c.1delinsATCA ferro: c.-1_1insCAT
 //!
-//! Unifying spec rule (from `tests/fixtures/biocommons-normalize/
-//! failure-patterns.md` and HGVS §general "3'-rule applies to ALL
-//! descriptions" combined with the spec's per-axis coordinate
-//! treatment):
+//! Unifying spec rule (HGVS §general "3'-rule applies to ALL descriptions"
+//! combined with the spec's per-axis coordinate treatment):
 //!
 //!   A 5'-direction canonicalisation rewrite on a c.-axis variant may
 //!   not land *strictly* inside 5'UTR. When the rewrite cannot stay

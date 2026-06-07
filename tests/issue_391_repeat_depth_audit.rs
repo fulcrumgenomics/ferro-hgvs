@@ -24,7 +24,7 @@
 //! (`rules.rs:483`), the left-walk bound is `start >= u`
 //! (`rules.rs:478`) — both half-open shapes correct.
 //!
-//! The SVD-WG009 citation in #334 / `failure-patterns.md` row 9 was a
+//! The SVD-WG009 citation in #334 was a
 //! mis-attribution: SVD-WG009 retires the `con` (conversion) variant
 //! type (see `assets/hgvs-nomenclature/docs/consultation/SVD-WG009.md`)
 //! and has no bearing on repeat depth.

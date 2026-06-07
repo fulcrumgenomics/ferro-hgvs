@@ -16,8 +16,10 @@
 //!
 //! Each axis test also writes its current FAIL list to
 //! `/tmp/ferro-xfail/<axis>.{txt,tsv}` so contributors can regenerate the
-//! committed `baseline-failures/` snapshot or feed
-//! `tests/fixtures/mutalyzer-normalize/failure-patterns.md`.
+//! committed `baseline-failures/` snapshot. The
+//! `tests/fixtures/mutalyzer-normalize/failure-patterns.md` summary is
+//! *generated* from `cases.json` (see `examples/generate_conformance_summary`),
+//! never hand-maintained (#509).
 //!
 //! **Regression layer (CI-always):** `regression_under_mock_normalized` runs
 //! every `to_test` case with a `normalized` expectation through ferro under
@@ -358,8 +360,9 @@ impl AxisTally {
     fn finish(self) {
         // Write FAIL inputs (one per line) to /tmp/ferro-xfail/<axis>.txt and
         // (input \t diagnostic) pairs to /tmp/ferro-xfail/<axis>.tsv so the
-        // committed baseline-failures/<axis>.txt and failure-patterns.md can
-        // be regenerated from a single run.
+        // committed baseline-failures/<axis>.txt can be regenerated from a
+        // single run. (The failure-patterns.md summary is generated from
+        // cases.json instead — see examples/generate_conformance_summary.)
         let dir = Path::new(XFAIL_REPORT_DIR);
         let _ = fs::create_dir_all(dir);
         let report_path = dir.join(format!("{}.txt", self.axis));

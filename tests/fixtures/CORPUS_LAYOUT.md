@@ -16,7 +16,7 @@ tests/fixtures/<upstream>-normalize/
 │   └── ...
 ├── mock-pin/                  # ferro's current behavior under MockProvider
 │   └── normalized.txt         # one line per case: `<input>\t<ferro_output_or_error>`
-├── failure-patterns.md        # spec-arbitrated disposition + linked issues
+├── failure-patterns.md        # GENERATED summary (cluster taxonomy + tallies); never hand-edit
 └── NOTICE                     # upstream attribution + pinned SHA + refresh
 
 scripts/refresh-<upstream>-fixtures.py
@@ -131,17 +131,15 @@ is fixed.
 
 ### `failure-patterns.md`
 
-Free-form markdown grouping current FAILs into root-cause patterns,
-each tagged with disposition:
-- `ferro-bug` — file a follow-up issue, fix in a burn-down PR
-- `upstream-bug` — edit the expected output in `cases.json` with a
-  `spec_citation` note
-- `accepted-divergence` — ferro policy intentionally differs; record
-  reason
-- `spec-ambiguous` — HGVS spec doesn't arbitrate; document and accept
-
-Each disposition cross-references the HGVS spec section that arbitrates
-the case + any existing or to-be-filed ferro issues.
+**Generated** — never hand-edit. Produced by `cargo run --features dev
+--example generate_conformance_summary` as a derived view over the `cases.json`
+cluster taxonomy + per-case dispositions, and verified in CI with `-- --check`
+so it cannot drift (#509). It groups each tracked divergence under its
+root-cause cluster (title + HGVS spec citation) and emits per-axis disposition
+tallies. It deliberately carries **no** live FAIL count: that set is
+non-hermetic (it needs the reference manifest) and is emitted only by the
+nightly run. To change what it shows, edit the `clusters` registry or the
+disposition annotations in `cases.json` and regenerate.
 
 ### `NOTICE`
 
@@ -159,8 +157,10 @@ BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock
 # 4. Run with a manifest if you have one; diff /tmp/ferro-xfail/<axis>.txt
 #    against baseline-failures/<axis>.txt to identify new regressions or
 #    newly-fixed inputs.
-# 5. Commit cases.json + mock-pin/ + NOTICE together; commit baseline-failures
-#    + failure-patterns.md updates separately if applicable.
+# 5. Commit cases.json + mock-pin/ + NOTICE together; regenerate the GENERATED
+#    failure-patterns.md (example generate_conformance_summary) in the same PR
+#    as any cases.json disposition/cluster change; commit baseline-failures
+#    updates separately if applicable.
 ```
 
 ## Per-corpus extensions

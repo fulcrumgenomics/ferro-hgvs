@@ -1,51 +1,32 @@
-# `baseline-failures/<axis>.txt` — burn-down ledger
+# `baseline-failures/<axis>.txt` — live-divergence input lists
 
-Each file lists the `case.input` strings that, **as of the parent PR**, surface
-a divergence between ferro-hgvs and mutalyzer on that axis. The list is
-sorted + unique, one input per line.
+Each file lists the `case.input` strings that, as of the parent PR, surface a
+divergence between ferro-hgvs and mutalyzer on that axis (sorted + unique, one
+input per line).
 
-These files are **informational**, not used by the test runner. The runner
-(`tests/mutalyzer_normalize_tests.rs`) asserts strictly: any divergence fails
-the corresponding `axis_*` test. The baseline is the snapshot we hand to
-reviewers and the umbrella tracking issue so they can see precisely what is
-broken today and burn it down PR by PR.
+These files are **informational** — not read by the test runner or CI. The
+enforced gates are the per-case dispositions in `cases.json` (XPASS-guarded) and
+the `mock-pin/*.txt` regression pins. The committed live-FAIL set here is a
+**non-hermetic snapshot** (it can only be reproduced from a reference manifest);
+its principled retirement — seeding the untriaged rows into `cases.json` and
+deleting these snapshots — is tracked by #325 / #326.
 
-## When to update
+Do **not** hand-maintain counts in this directory. Per-axis disposition tallies
+are derived into the generated `../failure-patterns.md`
+(`cargo run --features dev --example generate_conformance_summary`); the live
+FAIL set is emitted only by the nightly manifest run (under `/tmp/ferro-xfail/`).
 
-A burn-down PR fixes some ferro-hgvs behaviour, demoting one or more inputs
-from "broken" to "passing". In the same PR:
+## Regenerating after a manifest run
 
-1. Run `cargo nextest run --features dev --test mutalyzer_normalize_tests`
-   on a dev box with the reference manifest.
-2. For each axis that now has fewer FAILs than the committed
-   `<axis>.txt`, regenerate it:
+A burn-down PR fixes ferro behaviour, demoting inputs from "broken" to
+"passing". On a dev box with the reference manifest:
 
-   ```bash
-   sort -u /tmp/ferro-xfail/<axis>.txt \
-     > tests/fixtures/mutalyzer-normalize/baseline-failures/<axis>.txt
-   ```
+```bash
+cargo nextest run --features dev --test mutalyzer_normalize_tests
+sort -u /tmp/ferro-xfail/<axis>.txt \
+  > tests/fixtures/mutalyzer-normalize/baseline-failures/<axis>.txt
+```
 
-3. Commit the smaller list alongside the `src/` fix.
-
-## When to regenerate the whole snapshot
-
-Only after an upstream refresh (`scripts/refresh-mutalyzer-fixtures.py
-refresh`), because new upstream cases would otherwise show up as
-unsynchronized new FAILs.
-
-## Per-axis counts (current snapshot)
-
-| Axis | FAILs |
-|---|---:|
-| `normalized` | 149 |
-| `genomic` | 120 |
-| `protein_description` | 71 |
-| `coding_protein_descriptions` | 51 |
-| `errors` | 57 |
-| `rna_description` | 16 |
-| `infos` | 22 |
-| `noncoding` | 8 |
-| **Total** | **494** |
-
-See `../failure-patterns.md` for root-cause grouping and the burn-down
-disposition per pattern.
+Regenerate the whole snapshot only after an upstream refresh
+(`scripts/refresh-mutalyzer-fixtures.py refresh`), because new upstream cases
+would otherwise show up as unsynchronized new FAILs.
