@@ -1176,10 +1176,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         {
             normalized.pop().unwrap()
         } else {
-            HgvsVariant::Allele(crate::hgvs::variant::AlleleVariant::new(
-                normalized,
-                allele.phase,
-            ))
+            let mut rebuilt = crate::hgvs::variant::AlleleVariant::new(normalized, allele.phase);
+            // Preserve the uncertainty wrapper `(...)` (e.g. the and/or
+            // group `c.(370A>C^372C>R)`) — rebuilding via `new` would
+            // otherwise drop it and re-render the group expanded.
+            rebuilt.uncertain = allele.uncertain;
+            HgvsVariant::Allele(rebuilt)
         };
 
         Ok((result, all_warnings))
@@ -7097,6 +7099,25 @@ mod tests {
             format!("{}", result),
             "NM_000088.3:c.[10A>G;20C>T]",
             "Allele display should use canonical compact form"
+        );
+    }
+
+    #[test]
+    fn test_normalize_preserves_uncertain_and_or_group() {
+        // An uncertainty-wrapped and/or group `(a^b)` must keep its `(...)`
+        // wrapper (and compact form) through normalization — normalize must
+        // not drop the `uncertain` flag when it rebuilds the allele.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_004006.2:c.(370A>C^372C>R)").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+
+        assert!(matches!(result, HgvsVariant::Allele(_)));
+        assert_eq!(
+            format!("{}", result),
+            "NM_004006.2:c.(370A>C^372C>R)",
+            "Uncertain and/or group must round-trip with its parens after normalize"
         );
     }
 

@@ -492,6 +492,9 @@ pub enum AllelePhase {
     /// Chimeric - different cell lines: var1//var2
     /// (two distinct cell populations in one individual)
     Chimeric,
+    /// And/or - alternatives joined by `^`: var1^var2
+    /// ("variant A and/or variant B"; HGVS general.md)
+    AndOr,
 }
 
 impl fmt::Display for AllelePhase {
@@ -502,6 +505,7 @@ impl fmt::Display for AllelePhase {
             AllelePhase::Unknown => write!(f, "unknown"),
             AllelePhase::Mosaic => write!(f, "mosaic"),
             AllelePhase::Chimeric => write!(f, "chimeric"),
+            AllelePhase::AndOr => write!(f, "and/or"),
         }
     }
 }
@@ -525,12 +529,31 @@ pub struct AlleleVariant {
     pub variants: Vec<HgvsVariant>,
     /// Phase relationship
     pub phase: AllelePhase,
+    /// Whether the whole allele group is wrapped in an uncertainty
+    /// marker `(...)` (predicted). Currently used by the and/or (`^`)
+    /// group, e.g. `c.(370A>C^372C>R)`. Defaults to `false`.
+    #[serde(default)]
+    pub uncertain: bool,
 }
 
 impl AlleleVariant {
     /// Create a new allele variant
     pub fn new(variants: Vec<HgvsVariant>, phase: AllelePhase) -> Self {
-        Self { variants, phase }
+        Self {
+            variants,
+            phase,
+            uncertain: false,
+        }
+    }
+
+    /// Create a new allele variant wrapped in an uncertainty marker
+    /// `(...)` (predicted), e.g. the and/or group `c.(370A>C^372C>R)`.
+    pub fn new_uncertain(variants: Vec<HgvsVariant>, phase: AllelePhase) -> Self {
+        Self {
+            variants,
+            phase,
+            uncertain: true,
+        }
     }
 
     /// Create a cis allele (same chromosome)
@@ -1169,6 +1192,43 @@ impl fmt::Display for AlleleVariant {
             }
             AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/"),
             AllelePhase::Chimeric => write_mosaic_or_chimeric(f, &self.variants, "//"),
+            AllelePhase::AndOr => {
+                if self.uncertain && use_compact_form(&self.variants) {
+                    // Uncertainty-wrapped, shared accession + coord type:
+                    // `ACC:c.(edit1^edit2)` — prefix once, then the
+                    // `^`-joined bare edits inside the parens.
+                    write_compact_prefix(f, &self.variants[0])?;
+                    write!(f, "(")?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "^")?;
+                        }
+                        v.fmt_loc_edit(f)?;
+                    }
+                    write!(f, ")")
+                } else if self.uncertain {
+                    // Uncertainty-wrapped but mixed references: wrap the
+                    // full-description join in parens — `(ACC1:c.A^ACC2:c.B)`.
+                    write!(f, "(")?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "^")?;
+                        }
+                        write!(f, "{}", v)?;
+                    }
+                    write!(f, ")")
+                } else {
+                    // And/or `^` join of full descriptions (possibly across
+                    // references): render each in full — `ACC1:c.A^ACC2:c.B`.
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "^")?;
+                        }
+                        write!(f, "{}", v)?;
+                    }
+                    Ok(())
+                }
+            }
         }
     }
 }

@@ -505,10 +505,7 @@ mod allele_branch {
                 substitution(Base::A, Base::G),
             ),
         };
-        let allele = AlleleVariant {
-            variants: vec![HgvsVariant::Cds(inner)],
-            phase: AllelePhase::Cis,
-        };
+        let allele = AlleleVariant::new(vec![HgvsVariant::Cds(inner)], AllelePhase::Cis);
         let result = converter
             .convert(&HgvsVariant::Allele(allele))
             .expect("single-inner allele must route through the inner conversion");
@@ -520,10 +517,7 @@ mod allele_branch {
         let tx = fixture_transcript();
         let provider = fixture_provider();
         let converter = HgvsToVcfConverter::new(&tx, &provider);
-        let allele = AlleleVariant {
-            variants: vec![],
-            phase: AllelePhase::Cis,
-        };
+        let allele = AlleleVariant::new(vec![], AllelePhase::Cis);
         let err = converter
             .convert(&HgvsVariant::Allele(allele))
             .expect_err("empty allele has nothing to encode in VCF");
@@ -559,10 +553,10 @@ mod allele_branch {
                 substitution(Base::T, Base::C),
             ),
         };
-        let allele = AlleleVariant {
-            variants: vec![HgvsVariant::Cds(inner1), HgvsVariant::Cds(inner2)],
-            phase: AllelePhase::Cis,
-        };
+        let allele = AlleleVariant::new(
+            vec![HgvsVariant::Cds(inner1), HgvsVariant::Cds(inner2)],
+            AllelePhase::Cis,
+        );
         // The converter may surface a ConversionError or successfully
         // emit only the first variant with a warning, depending on
         // the implementation's contract. Pin "either reject OR emit

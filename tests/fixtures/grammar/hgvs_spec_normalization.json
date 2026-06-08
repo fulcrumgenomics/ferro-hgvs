@@ -13,8 +13,8 @@
       "diverges": 135,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 333,
-      "preserved": 648
+      "parse-error": 330,
+      "preserved": 651
     },
     "by_coordinate_system": {
       "c": 464,
@@ -842,18 +842,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
-      "current": "parse error: Parse error at position 20: Unexpected trailing characters: '^NM_000558.3:c.424C>T'",
-      "spec_expected": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.1:c.5690",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Tag })",
       "spec_expected": "NM_004006.1:c.5690",
@@ -954,19 +942,6 @@
         "docs/recommendations/checklist.md"
       ],
       "working_group": "SVD-WG002",
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "c.(370A>C^372C>R)",
-      "input_prefixed": "NM_004006.2:c.(370A>C^372C>R)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(370A>C^372C>R)\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.(370A>C^372C>R)",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/general.md"
-      ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
@@ -3610,6 +3585,17 @@
       ]
     },
     {
+      "input": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
+      "current": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
+      "spec_expected": "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
       "input": "NM_000552.3:c.3675-45_3692",
       "current": "NM_000552.3:c.3675-45_3692",
       "spec_expected": "NM_000552.3:c.3675-45_3692",
@@ -4246,6 +4232,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/delins.md"
+      ]
+    },
+    {
+      "input": "c.(370A>C^372C>R)",
+      "input_prefixed": "NM_004006.2:c.(370A>C^372C>R)",
+      "current": "NM_004006.2:c.(370A>C^372C>R)",
+      "spec_expected": "NM_004006.2:c.(370A>C^372C>R)",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/general.md"
       ]
     },
     {
@@ -10806,7 +10804,7 @@
     },
     {
       "input": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Gly56Ala^Ser^Cys)\", code: Tag })",
+      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
       "spec_expected": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -10950,7 +10948,7 @@
     },
     {
       "input": "NP_003997.2:p.[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]\", code: Tag })",
+      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Asn158Asp)(;)(Asn158Ile)]\", code: Tag })",
       "spec_expected": "NP_003997.2:p.[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -11013,22 +11011,9 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "p.(Gly23GlufsTer7^Gly23CysfsTer26)",
-      "input_prefixed": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Gly23GlufsTer7^Gly23CysfsTer26)\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "p.(Gly719Ala^Ser)",
       "input_prefixed": "NP_003997.1:p.(Gly719Ala^Ser)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Gly719Ala^Ser)\", code: Tag })",
+      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
       "spec_expected": "NP_003997.1:p.(Gly719Ala^Ser)",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -11981,6 +11966,18 @@
       "input_prefixed": "NP_003997.1:p.(Gly23GlufsTer7)",
       "current": "NP_003997.1:p.(Gly23GlufsTer7)",
       "spec_expected": "NP_003997.1:p.(Gly23GlufsTer7)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
+      ]
+    },
+    {
+      "input": "p.(Gly23GlufsTer7^Gly23CysfsTer26)",
+      "input_prefixed": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
+      "current": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
+      "spec_expected": "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)",
       "status": "preserved",
       "coordinate_system": "p",
       "source_kind": "recommendation",
