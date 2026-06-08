@@ -905,7 +905,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// In strict mode (default), rejects variants with reference mismatches.
     /// Use `normalize_with_diagnostics` for lenient mode that corrects mismatches.
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
-        let result = self.normalize_with_diagnostics(variant)?;
+        // `normalize()` returns only the variant and inspects warnings; it
+        // discards the diagnostic `infos` axis. Call `normalize_core`
+        // directly and wrap with empty infos, so the hot path skips the
+        // per-call `detect_shuffle_infos` work (use `normalize_with_diagnostics`
+        // when infos are actually needed). Behavior is unchanged.
+        let (normalized, warnings) = self.normalize_core(variant)?;
+        let result = NormalizeResult::with_warnings(normalized, warnings);
 
         // In strict mode, reject if there were reference mismatches.
         if self.config.should_reject_ref_mismatch() {
@@ -1070,7 +1076,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<NormalizeResult, FerroError> {
-        let (result, warnings) = match variant {
+        let (result, warnings) = self.normalize_core(variant)?;
+        let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
+        Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
+    }
+
+    /// Core normalization: dispatch by variant kind and return the
+    /// normalized variant plus warnings, WITHOUT computing the diagnostic
+    /// `infos` axis. `normalize()` discards infos, so it calls this
+    /// directly to skip the per-call `detect_shuffle_infos` cost on the
+    /// hot path; `normalize_with_diagnostics` layers infos on top. The
+    /// (variant, warnings) output is identical to the previous inline match.
+    fn normalize_core(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        let result = match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
             // must be described with `m.` (#487). Coerce it to an `MtVariant`
             // — same accession/location/edit, only the coordinate system label
@@ -1106,9 +1127,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::NullAllele => (HV::NullAllele, vec![]),
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
         };
-
-        let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
-        Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
+        Ok(result)
     }
 
     /// Normalize an allele (compound) variant
