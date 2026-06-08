@@ -344,9 +344,12 @@ fn f18_star_glyph_normalizes_to_ter_on_protein() {
 /// from `*` stop by prefix.
 #[test]
 fn f18_star_as_3utr_position_on_c() {
+    // The point of this case is the `*41` 3'-UTR-relative position; the
+    // reference base must be a DNA base (`U` is RNA-only and rejected on a
+    // `c.` description — #486).
     pin_round_trip(
-        "NM_004006.2:c.*41U>A",
-        "NM_004006.2:c.*41U>A",
+        "NM_004006.2:c.*41T>A",
+        "NM_004006.2:c.*41T>A",
         "general.md:77 — * as 3'-UTR-relative position on c.",
     );
 }
