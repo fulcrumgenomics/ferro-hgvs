@@ -1754,14 +1754,49 @@ where
         } else if content == "?" {
             HgvsVariant::UnknownAllele
         } else {
-            let (final_remaining, variant) = parse_member(content)?;
-            if !final_remaining.trim().is_empty() {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    final_remaining,
-                    nom::error::ErrorKind::Tag,
-                )));
+            let scan = scan_allele_separators(content);
+            if scan.has_cis_separator && !scan.has_unknown_phase {
+                // A trans bracket whose content is itself a multi-variant
+                // cis group, e.g. `[296T>G;476T>C]` in `[a;b];[c]`
+                // (compound heterozygote). Parse each cis member and nest
+                // it as a `Cis` sub-allele member of the trans allele.
+                let mut cis_members = Vec::with_capacity(scan.members.len());
+                for member in scan.members {
+                    let member = member.trim();
+                    let (rest, v) = parse_member(member)?;
+                    if !rest.trim().is_empty() {
+                        return Err(nom::Err::Error(nom::error::Error::new(
+                            rest,
+                            nom::error::ErrorKind::Tag,
+                        )));
+                    }
+                    cis_members.push(v);
+                }
+                // HGVS DNA/alleles.md: the "not changed" `=` indication is
+                // used only when a single variant is identified per allele.
+                // Spelling the other allele's variant as `=` inside a
+                // multi-variant cis group is invalid (the spec flags
+                // `[2376G>C;3103=];[2376=;3103del]` as not correct). Reject a
+                // nested cis group that carries a position-identity member
+                // rather than accept the discouraged cross-spelled form.
+                // (The all-identity-allele edge `[a=;b=]` is deferred.)
+                if cis_members.iter().any(is_lhs_position_identity) {
+                    return Err(nom::Err::Error(nom::error::Error::new(
+                        content,
+                        nom::error::ErrorKind::Verify,
+                    )));
+                }
+                HgvsVariant::Allele(AlleleVariant::new(cis_members, AllelePhase::Cis))
+            } else {
+                let (final_remaining, variant) = parse_member(content)?;
+                if !final_remaining.trim().is_empty() {
+                    return Err(nom::Err::Error(nom::error::Error::new(
+                        final_remaining,
+                        nom::error::ErrorKind::Tag,
+                    )));
+                }
+                variant
             }
-            variant
         };
 
         variants.push(variant);

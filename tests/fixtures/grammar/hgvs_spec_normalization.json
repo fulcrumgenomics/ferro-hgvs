@@ -13,8 +13,8 @@
       "diverges": 135,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 333,
-      "preserved": 648
+      "parse-error": 332,
+      "preserved": 649
     },
     "by_coordinate_system": {
       "c": 464,
@@ -35,7 +35,7 @@
   "rows": [
     {
       "input": "LRG_199t1:c.[2376G>C;3103=];[2376=;3103del]",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \";3103=\", code: Tag })",
+      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"2376G>C;3103=\", code: Verify })",
       "spec_expected": null,
       "status": "correctly-rejected",
       "coordinate_system": "c",
@@ -250,7 +250,7 @@
     {
       "input": "c.[2376G>C;3103=];[2376=;3103del]",
       "input_prefixed": "NM_004006.2:c.[2376G>C;3103=];[2376=;3103del]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \";3103=\", code: Tag })",
+      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"2376G>C;3103=\", code: Verify })",
       "spec_expected": null,
       "status": "correctly-rejected",
       "coordinate_system": "c",
@@ -817,7 +817,7 @@
     },
     {
       "input": "LRG_199t1:c.[633A>G];[531_648=;961_1149=]",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \";961_1149=\", code: Tag })",
+      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"531_648=;961_1149=\", code: Verify })",
       "spec_expected": "LRG_199t1:c.[633A>G];[531_648=;961_1149=]",
       "status": "parse-error",
       "coordinate_system": "c",
@@ -891,20 +891,8 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \";476T>C;1083A>C\", code: Tag })",
-      "spec_expected": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
-      "status": "parse-error",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \";476T>C\", code: Tag })",
+      "current": "parse error: Parse error at position 38: Unexpected trailing characters: '(;)1083A>C'",
       "spec_expected": "NM_004006.2:c.[296T>G;476T>C];[476T>C](;)1083A>C",
       "status": "parse-error",
       "coordinate_system": "c",
@@ -4031,6 +4019,17 @@
       "input": "NM_004006.2:c.[2376G>C];[3103del]",
       "current": "NM_004006.2:c.[2376G>C];[3103del]",
       "spec_expected": "NM_004006.2:c.[2376G>C];[3103del]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "current": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
+      "spec_expected": "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]",
       "status": "preserved",
       "coordinate_system": "c",
       "source_kind": "recommendation",

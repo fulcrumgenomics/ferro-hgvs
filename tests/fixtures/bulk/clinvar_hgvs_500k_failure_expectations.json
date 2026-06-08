@@ -8,10 +8,6 @@
       "category": "spec_not_yet_supported",
       "reason": "Trans-phase compound `[a];[b]` with mosaic `=/` in each allele. Spec form per recommendations/DNA/alleles.md (compound) and deletion.md (mosaic `=/`)."
     },
-    "[trans_compound_with_internal_cis]": {
-      "category": "spec_not_yet_supported",
-      "reason": "Trans `[a];[b;c]` \u2014 first allele a single del, second allele a cis pair. Spec recommendations/DNA/alleles.md."
-    },
     "[malformed_compound_missing_semicolon]": {
       "category": "malformed_input",
       "reason": "Compound missing `;`."
@@ -28,7 +24,6 @@
   "expected_failures": {
     "NC_000005.9:g.(?_13922436_13923774del": "[malformed_unbalanced_paren_three_positions]",
     "NM_000090.3:c.[=/3426_3452del];[=/3440_3466del]": "[trans_compound_with_mosaic]",
-    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "[trans_compound_with_internal_cis]",
     "NM_020469.3:c.[297A>C;496del526=657C>T703G>A796C>A803G>C930G>A]": "[malformed_compound_missing_semicolon]",
     "NP_000081.1:p.Gly333_Lys350del+": "[trailing_plus_after_protein_del]",
     "LRG_135t1:c.8010+30insALU": "[single_position_insertion]"
