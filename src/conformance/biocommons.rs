@@ -79,6 +79,17 @@ impl Fixture {
                         Some(*tracking_issue),
                         cluster.clone(),
                     ),
+                    Disposition::Improvement {
+                        ferro_output,
+                        tracking_issue,
+                        cluster,
+                        ..
+                    } => (
+                        DispositionKind::Improvement,
+                        Some(ferro_output.clone()),
+                        Some(*tracking_issue),
+                        cluster.clone(),
+                    ),
                 };
                 Some(MemberRow {
                     cluster,
@@ -163,6 +174,26 @@ pub enum Disposition {
         #[serde(default)]
         cluster: Option<String>,
     },
+    /// ferro's output is valid HGVS but not the spec-*preferred* canonical
+    /// form; `normalize()` should converge on the preferred form once
+    /// `tracking_issue` lands. The middle disposition between
+    /// `AcceptedDivergence` (terminal policy — both forms equally spec-allowed)
+    /// and `KnownBug` (ferro is wrong). Like `KnownBug` it is an xfail and
+    /// XPASS-guarded — if ferro converges to biocommons the harness fails
+    /// loudly — but unlike `KnownBug` it requires a `section` citation
+    /// substantiating why ferro's current form is non-preferred. Mirrors the
+    /// mutalyzer `improvement` disposition (#501).
+    Improvement {
+        /// Issue tracking the convergence to the spec-preferred form.
+        tracking_issue: u64,
+        /// HGVS spec section establishing ferro's current form as non-preferred.
+        section: String,
+        /// The (spec-non-preferred) output ferro currently produces.
+        ferro_output: String,
+        /// Root-cause cluster id (see the corpus `clusters` registry).
+        #[serde(default)]
+        cluster: Option<String>,
+    },
 }
 
 impl Disposition {
@@ -170,7 +201,8 @@ impl Disposition {
     pub fn cluster(&self) -> Option<&str> {
         match self {
             Disposition::AcceptedDivergence { cluster, .. }
-            | Disposition::KnownBug { cluster, .. } => cluster.as_deref(),
+            | Disposition::KnownBug { cluster, .. }
+            | Disposition::Improvement { cluster, .. } => cluster.as_deref(),
         }
     }
 }
@@ -208,6 +240,25 @@ mod tests {
         assert_eq!(row.ferro_output.as_deref(), Some("Z"));
         assert_eq!(row.tracking_issue, Some(472));
         assert_eq!(row.cluster.as_deref(), Some("panic"));
+    }
+
+    #[test]
+    fn improvement_cluster_ref_and_summary_are_preserved() {
+        let clusters = r#"{"id":"pref","title":"preferred form","spec_section":"x"}"#;
+        let disp = r#"{"kind":"improvement","tracking_issue":503,"section":"HGVS §x",
+                       "ferro_output":"Z","cluster":"pref"}"#;
+        let fixture = parse(clusters, disp);
+        assert_eq!(fixture.cluster_refs(), vec![("X", "pref")]);
+        assert!(fixture.validate_clusters().is_ok());
+
+        let summary = fixture.to_summary();
+        assert_eq!(summary.rows.len(), 1);
+        let row = &summary.rows[0];
+        assert_eq!(row.kind, DispositionKind::Improvement);
+        assert_eq!(row.axis, "normalized");
+        assert_eq!(row.ferro_output.as_deref(), Some("Z"));
+        assert_eq!(row.tracking_issue, Some(503));
+        assert_eq!(row.cluster.as_deref(), Some("pref"));
     }
 
     #[test]

@@ -300,6 +300,8 @@ enum RecordOutcome {
     AcceptedDivergence,
     /// ferro diverges exactly as an annotated known bug (xfail).
     KnownBug,
+    /// ferro diverges exactly as an annotated tracked improvement (xfail).
+    Improvement,
     /// A failure that must break the suite.
     Fail(FailKind),
 }
@@ -312,6 +314,9 @@ enum FailKind {
     /// A `known_bug` row now matches biocommons — the bug appears fixed (XPASS);
     /// remove the annotation and demote the row.
     KnownBugFixed,
+    /// An `improvement` row now matches biocommons — ferro converged to the
+    /// spec-preferred form (XPASS); remove the annotation and demote the row.
+    ImprovementConverged,
     /// An `accepted_divergence` row now matches biocommons — the divergence is
     /// gone; remove the annotation.
     AcceptedDivergenceGone,
@@ -324,6 +329,7 @@ impl FailKind {
         match self {
             FailKind::Unannotated => "UNANNOTATED",
             FailKind::KnownBugFixed => "XPASS",
+            FailKind::ImprovementConverged => "XPASS",
             FailKind::AcceptedDivergenceGone => "XPASS",
             FailKind::AnnotationDrift => "DRIFT",
         }
@@ -359,6 +365,15 @@ fn classify_outcome(
                 RecordOutcome::Fail(FailKind::AnnotationDrift)
             }
         }
+        Some(Disposition::Improvement { ferro_output, .. }) => {
+            if matches_upstream {
+                RecordOutcome::Fail(FailKind::ImprovementConverged)
+            } else if actual_str == Some(ferro_output.as_str()) {
+                RecordOutcome::Improvement
+            } else {
+                RecordOutcome::Fail(FailKind::AnnotationDrift)
+            }
+        }
         Some(Disposition::AcceptedDivergence { ferro_output, .. }) => {
             if matches_upstream {
                 RecordOutcome::Fail(FailKind::AcceptedDivergenceGone)
@@ -379,6 +394,9 @@ struct AxisTally {
     accepted: usize,
     /// Annotated known bugs (xfail) still producing their recorded output.
     known_bug: usize,
+    /// Annotated tracked improvements (xfail) still producing their recorded
+    /// spec-non-preferred output.
+    improvement: usize,
     fail: Vec<(String, String)>,
     skipped: usize,
 }
@@ -390,6 +408,7 @@ impl AxisTally {
             pass: 0,
             accepted: 0,
             known_bug: 0,
+            improvement: 0,
             fail: Vec::new(),
             skipped: 0,
         }
@@ -406,6 +425,7 @@ impl AxisTally {
             RecordOutcome::Match => self.pass += 1,
             RecordOutcome::AcceptedDivergence => self.accepted += 1,
             RecordOutcome::KnownBug => self.known_bug += 1,
+            RecordOutcome::Improvement => self.improvement += 1,
             RecordOutcome::Fail(kind) => {
                 let got = match &actual {
                     Ok(s) => format!("got={s:?}"),
@@ -420,6 +440,13 @@ impl AxisTally {
                     ) => format!(
                         " — known_bug #{tracking_issue} now matches biocommons; the fix appears \
                          to have landed: remove the annotation and demote the row"
+                    ),
+                    (
+                        FailKind::ImprovementConverged,
+                        Some(Disposition::Improvement { tracking_issue, .. }),
+                    ) => format!(
+                        " — improvement #{tracking_issue} now matches biocommons; ferro converged \
+                         to the spec-preferred form: remove the annotation and demote the row"
                     ),
                     (
                         FailKind::AcceptedDivergenceGone,
@@ -458,12 +485,13 @@ impl AxisTally {
         let _ = fs::write(&tsv_path, &tsv);
 
         println!(
-            "{}: {} pass / {} accepted-divergence / {} known-bug / {} FAIL / {} skipped \
-             (FAIL inputs -> {})",
+            "{}: {} pass / {} accepted-divergence / {} known-bug / {} improvement / {} FAIL / \
+             {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
             self.accepted,
             self.known_bug,
+            self.improvement,
             self.fail.len(),
             self.skipped,
             report_path.display()
@@ -575,6 +603,15 @@ mod classify_outcome_tests {
         }
     }
 
+    fn improvement(ferro_output: &str) -> Disposition {
+        Disposition::Improvement {
+            tracking_issue: 500,
+            section: "HGVS §RefSeqGene transcript selection".to_string(),
+            ferro_output: ferro_output.to_string(),
+            cluster: None,
+        }
+    }
+
     #[test]
     fn no_disposition_match_is_match() {
         assert_eq!(
@@ -631,6 +668,47 @@ mod classify_outcome_tests {
     }
 
     #[test]
+    fn improvement_producing_recorded_output_is_improvement() {
+        // ferro still produces the recorded spec-non-preferred output →
+        // accounted xfail (tracked to convergence).
+        assert_eq!(
+            classify_outcome(
+                "c.12_13dup",
+                &ok("c.13_14dup"),
+                Some(&improvement("c.13_14dup"))
+            ),
+            RecordOutcome::Improvement
+        );
+    }
+
+    #[test]
+    fn improvement_now_matching_upstream_is_xpass_fail() {
+        // A converged improvement must fail loudly so it can't linger — the
+        // same XPASS keystone as known_bug.
+        assert_eq!(
+            classify_outcome(
+                "c.12_13dup",
+                &ok("c.12_13dup"),
+                Some(&improvement("c.13_14dup"))
+            ),
+            RecordOutcome::Fail(FailKind::ImprovementConverged)
+        );
+    }
+
+    #[test]
+    fn improvement_drifted_output_is_drift_fail() {
+        // ferro's output changed to a third value → annotation is stale.
+        assert_eq!(
+            classify_outcome(
+                "c.12_13dup",
+                &ok("c.11_12dup"),
+                Some(&improvement("c.13_14dup"))
+            ),
+            RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
+
+    #[test]
     fn accepted_divergence_producing_recorded_output_is_accepted() {
         assert_eq!(
             classify_outcome(
@@ -673,6 +751,18 @@ mod classify_outcome_tests {
         let err: Result<String, String> = Err("normalize error: boom".to_string());
         assert_eq!(
             classify_outcome("c.5dup", &err, Some(&known_bug("c.4_5dup"))),
+            RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
+
+    #[test]
+    fn improvement_error_is_drift_fail() {
+        // An annotated improvement that records a concrete ferro_output but now
+        // errors is drift — a normalize failure must not be silently absorbed
+        // into the improvement xfail bucket.
+        let err: Result<String, String> = Err("normalize error: boom".to_string());
+        assert_eq!(
+            classify_outcome("c.12_13dup", &err, Some(&improvement("c.13_14dup"))),
             RecordOutcome::Fail(FailKind::AnnotationDrift)
         );
     }
