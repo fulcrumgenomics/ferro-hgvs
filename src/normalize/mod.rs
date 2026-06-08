@@ -8133,11 +8133,15 @@ mod tests {
 
     #[test]
     fn test_normalize_no_cds_returns_unchanged() {
-        // An NR_ transcript with c. coordinates should not error
+        // A coding (`c.`) variant whose provider transcript record carries no
+        // CDS bounds (cds_start/cds_end = None) must normalize without error.
+        // Uses an NM_ accession so the c. coordinate system is valid (a c.
+        // description on a non-coding NR_/XR_ reference is rejected at parse,
+        // #486); the missing-CDS path is exercised via the provider record.
         let mut provider = MockProvider::new();
         use crate::reference::transcript::{Exon, Transcript};
         provider.add_transcript(Transcript {
-            id: "NR_001566.1".to_string(),
+            id: "NM_001566.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: crate::reference::transcript::Strand::Plus,
             sequence: Some("ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC".to_string()),
@@ -8157,8 +8161,8 @@ mod tests {
         });
         let normalizer = Normalizer::new(provider);
 
-        // c. variant on a non-coding transcript (no CDS)
-        let variant = parse_hgvs("NR_001566.1:c.10del").unwrap();
+        // c. variant whose transcript record carries no CDS bounds
+        let variant = parse_hgvs("NM_001566.1:c.10del").unwrap();
         let result = normalizer.normalize(&variant);
         assert!(
             result.is_ok(),

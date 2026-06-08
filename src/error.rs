@@ -33,6 +33,9 @@ pub enum ErrorCode {
     InvalidBase = 1007,
     /// Invalid amino acid
     InvalidAminoAcid = 1008,
+    /// Coordinate system incompatible with the reference type (e.g. `c.`/`g.`/`m.`/`o.`
+    /// on a non-coding RNA `NR_`/`XR_` accession)
+    CoordinateSystemMismatch = 1009,
 
     // Reference errors (E2xxx)
     /// Reference/transcript not found
@@ -116,6 +119,7 @@ impl ErrorCode {
             ErrorCode::UnexpectedChar => "unexpected character",
             ErrorCode::InvalidBase => "invalid nucleotide base",
             ErrorCode::InvalidAminoAcid => "invalid amino acid",
+            ErrorCode::CoordinateSystemMismatch => "coordinate system incompatible with reference",
             ErrorCode::ReferenceNotFound => "reference not found",
             ErrorCode::SequenceNotFound => "sequence not available",
             ErrorCode::ChromosomeNotFound => "chromosome not found",

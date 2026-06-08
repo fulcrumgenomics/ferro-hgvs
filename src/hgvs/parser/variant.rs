@@ -4310,16 +4310,32 @@ fn parse_single_variant(input: &str) -> Result<(&str, HgvsVariant), FerroError> 
                     });
                 }
             }
-        } else if acc_prefix == "NM"
-            || acc_prefix == "NR"
-            || acc_prefix == "XM"
-            || acc_prefix == "XR"
-        {
-            // Transcript accession - try parsing as c. without the prefix
+        } else if acc_prefix == "NM" || acc_prefix == "XM" {
+            // Coding transcript accession - infer c. without the prefix
             let prefixed = format!("c.{}", remaining);
             match parse_cds_variant(accession.clone(), gene_symbol.clone()).parse(&prefixed) {
                 Ok((rem, variant)) => {
                     let consumed = prefixed.len() - rem.len() - 2; // -2 for "c."
+                    Ok((&remaining[consumed..], variant))
+                }
+                Err(_) => {
+                    return Err(FerroError::Parse {
+                        pos: trimmed.len() - remaining.len(),
+                        msg: format!(
+                            "Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '{}'",
+                            remaining.chars().take(3).collect::<String>()
+                        ),
+                        diagnostic: None,
+                    });
+                }
+            }
+        } else if acc_prefix == "NR" || acc_prefix == "XR" {
+            // Non-coding RNA transcript accession - infer n. (a `c.` inference
+            // would be a coordinate-system mismatch on NR_/XR_; #486).
+            let prefixed = format!("n.{}", remaining);
+            match parse_tx_variant(accession.clone(), gene_symbol.clone()).parse(&prefixed) {
+                Ok((rem, variant)) => {
+                    let consumed = prefixed.len() - rem.len() - 2; // -2 for "n."
                     Ok((&remaining[consumed..], variant))
                 }
                 Err(_) => {
@@ -5903,7 +5919,48 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // insertion (HGVS DNA/insertion.md:95-101 Q&A — explicit "No"; #446).
     validate_no_point_insertion(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
+    // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
+    // ECOORDINATESYSTEMMISMATCH).
+    validate_coordinate_system(&variant)?;
+
     Ok(variant)
+}
+
+/// Reject a coordinate system that is incompatible with the reference type.
+///
+/// A non-coding RNA transcript (`NR_` / `XR_`) has no CDS and is not a genomic
+/// or mitochondrial reference, so a `c.`/`g.`/`m.`/`o.` description on it is a
+/// coordinate-system mismatch (mutalyzer's `ECOORDINATESYSTEMMISMATCH`). The
+/// only valid forms are `n.` (non-coding transcript) and `r.` (RNA), which are
+/// not matched here. The check walks `Allele` wrappers and inspects each leaf.
+fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
+    fn make_error(coord: &str) -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "the `{coord}` coordinate system is not valid on a non-coding RNA \
+                 (NR_/XR_) reference, which has no CDS and is not genomic; use \
+                 `n.` (non-coding) or `r.` (RNA)"
+            ),
+            Diagnostic::new().with_code(ErrorCode::CoordinateSystemMismatch),
+        )
+    }
+
+    match variant {
+        HgvsVariant::Cds(v) if v.accession.is_noncoding_rna() => return Err(make_error("c.")),
+        HgvsVariant::Genome(v) if v.accession.is_noncoding_rna() => return Err(make_error("g.")),
+        HgvsVariant::Mt(v) if v.accession.is_noncoding_rna() => return Err(make_error("m.")),
+        HgvsVariant::Circular(v) if v.accession.is_noncoding_rna() => return Err(make_error("o.")),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_coordinate_system(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Reject `dupins` edits per `DNA/duplication.md:92`:
