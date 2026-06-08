@@ -986,6 +986,15 @@ fn is_position_identity_lhs(variant: &HgvsVariant) -> bool {
         HgvsVariant::Rna(v) => edit_is_pos_identity(&v.loc_edit.edit),
         HgvsVariant::Mt(v) => edit_is_pos_identity(&v.loc_edit.edit),
         HgvsVariant::Circular(v) => edit_is_pos_identity(&v.loc_edit.edit),
+        // Protein position-bound identity (`p.Trp24=`) — the LHS of the
+        // protein `=/` compact mosaic form.
+        HgvsVariant::Protein(v) => matches!(
+            v.loc_edit.edit.inner(),
+            Some(crate::hgvs::edit::ProteinEdit::Identity {
+                whole_protein: false,
+                ..
+            })
+        ),
         _ => false,
     }
 }
@@ -1028,6 +1037,9 @@ fn intervals_match_for_compact_mosaic(a: &HgvsVariant, b: &HgvsVariant) -> bool 
         (HgvsVariant::Rna(x), HgvsVariant::Rna(y)) => x.loc_edit.location == y.loc_edit.location,
         (HgvsVariant::Mt(x), HgvsVariant::Mt(y)) => x.loc_edit.location == y.loc_edit.location,
         (HgvsVariant::Circular(x), HgvsVariant::Circular(y)) => {
+            x.loc_edit.location == y.loc_edit.location
+        }
+        (HgvsVariant::Protein(x), HgvsVariant::Protein(y)) => {
             x.loc_edit.location == y.loc_edit.location
         }
         _ => false,
@@ -1100,9 +1112,18 @@ fn write_bare_edit(f: &mut fmt::Formatter<'_>, variant: &HgvsVariant) -> fmt::Re
         HgvsVariant::Genome(v) => write!(f, "{}", v.loc_edit.edit),
         HgvsVariant::Cds(v) => write!(f, "{}", v.loc_edit.edit),
         HgvsVariant::Tx(v) => write!(f, "{}", v.loc_edit.edit),
-        HgvsVariant::Rna(v) => write!(f, "{}", v.loc_edit.edit),
+        // RNA renders nucleotides in lowercase per the HGVS spec. The bare
+        // edit must go through `to_rna_string()` — the plain `NaEdit`
+        // `Display` is uppercase and would corrupt the case here.
+        HgvsVariant::Rna(v) => match v.loc_edit.edit.inner() {
+            Some(edit) => write!(f, "{}", edit.to_rna_string()),
+            None => write!(f, "{}", v.loc_edit.edit),
+        },
         HgvsVariant::Mt(v) => write!(f, "{}", v.loc_edit.edit),
         HgvsVariant::Circular(v) => write!(f, "{}", v.loc_edit.edit),
+        // Protein substitution Display renders just the alternative AA, and
+        // del/dup render their keyword — exactly the bare-edit RHS shape.
+        HgvsVariant::Protein(v) => write!(f, "{}", v.loc_edit.edit),
         _ => write!(f, "{}", variant),
     }
 }

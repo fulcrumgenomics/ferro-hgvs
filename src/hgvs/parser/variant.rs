@@ -4875,6 +4875,54 @@ fn parse_compact_mosaic_rhs(
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::parser::edit::parse_na_edit;
 
+    // Protein LHS: `<acc>:p.<pos>=` identity (the `=/` somatic and/or
+    // form). The bare RHS is either a protein edit (`del`, `dup`,
+    // `delins…`) or a bare alternative amino acid (`Cys`); the latter
+    // forms a substitution inheriting the LHS reference amino acid and
+    // position.
+    if let HgvsVariant::Protein(lhs_p) = lhs {
+        use crate::hgvs::edit::ProteinEdit;
+        use crate::hgvs::parser::edit::parse_protein_edit;
+        use crate::hgvs::parser::position::parse_amino_acid;
+
+        // Eligible only for a position-bound protein identity LHS.
+        if !matches!(
+            lhs_p.loc_edit.edit.inner(),
+            Some(ProteinEdit::Identity {
+                whole_protein: false,
+                ..
+            })
+        ) {
+            return Ok(None);
+        }
+
+        // Prefer a fully-consumed protein edit (`del`/`dup`/`delins…`);
+        // otherwise treat a fully-consumed bare amino acid as the
+        // alternative of a substitution at the inherited position.
+        let prot_edit = match parse_protein_edit(rhs) {
+            Ok((rem, e)) if rem.trim().is_empty() => e,
+            _ => match parse_amino_acid(rhs) {
+                Ok((rem, alt)) if rem.trim().is_empty() => {
+                    // The reference AA comes from the LHS position (`Trp24`).
+                    let Some(ref_pos) = lhs_p.loc_edit.location.start.inner() else {
+                        return Ok(None);
+                    };
+                    ProteinEdit::Substitution {
+                        reference: ref_pos.aa,
+                        alternative: alt,
+                    }
+                }
+                _ => return Ok(None),
+            },
+        };
+
+        return Ok(Some(HgvsVariant::Protein(ProteinVariant {
+            accession: lhs_p.accession.clone(),
+            gene_symbol: lhs_p.gene_symbol.clone(),
+            loc_edit: LocEdit::new(lhs_p.loc_edit.location.clone(), prot_edit),
+        })));
+    }
+
     // Eligibility: LHS must carry a position-bound (not whole-entity)
     // identity edit on a NA coord system.
     let lhs_is_eligible = match lhs {

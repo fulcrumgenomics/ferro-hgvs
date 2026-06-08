@@ -10,11 +10,11 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 50,
-      "diverges": 135,
+      "diverges": 133,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 330,
-      "preserved": 651
+      "parse-error": 327,
+      "preserved": 656
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10779,18 +10779,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199p1:p.Trp24=/Cys",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'Cys'",
-      "spec_expected": "LRG_199p1:p.Trp24=/Cys",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:p.(Trp24=/Cys)",
       "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(Trp24=\", code: Tag })",
       "spec_expected": "LRG_199t1:p.(Trp24=/Cys)",
@@ -10842,30 +10830,6 @@
       "input": "NP_003997.1:p.(Val7=/dup)",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Val7=\", code: Tag })",
       "spec_expected": "NP_003997.1:p.(Val7=/dup)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/duplication.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.Val7=/del",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'del'",
-      "spec_expected": "NP_003997.1:p.Val7=/del",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.Val7=/dup",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found 'dup'",
-      "spec_expected": "NP_003997.1:p.Val7=/dup",
       "status": "parse-error",
       "coordinate_system": "p",
       "source_kind": "recommendation",
@@ -11189,6 +11153,17 @@
       ]
     },
     {
+      "input": "LRG_199p1:p.Trp24=/Cys",
+      "current": "LRG_199p1:p.Trp24=/Cys",
+      "spec_expected": "LRG_199p1:p.Trp24=/Cys",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/substitution.md"
+      ]
+    },
+    {
       "input": "LRG_199p1:p.Trp24Cys",
       "current": "LRG_199p1:p.Trp24Cys",
       "spec_expected": "LRG_199p1:p.Trp24Cys",
@@ -11388,6 +11363,28 @@
       "source_paths": [
         "docs/syntax.yaml",
         "tests/hgvs_spec_compliance_tests.rs (legacy)"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.Val7=/del",
+      "current": "NP_003997.1:p.Val7=/del",
+      "spec_expected": "NP_003997.1:p.Val7=/del",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/deletion.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.Val7=/dup",
+      "current": "NP_003997.1:p.Val7=/dup",
+      "spec_expected": "NP_003997.1:p.Val7=/dup",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/duplication.md"
       ]
     },
     {
@@ -12917,30 +12914,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.3:r.85=//u>c",
-      "current": "NM_004006.3:r.85=//U>C",
-      "spec_expected": "NM_004006.3:r.85=//u>c",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NM_004006.3:r.85=/u>c",
-      "current": "NM_004006.3:r.85=/U>C",
-      "spec_expected": "NM_004006.3:r.85=/u>c",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/substitution.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -14901,6 +14874,28 @@
       "input": "NM_004006.3:r.76a>c",
       "current": "NM_004006.3:r.76a>c",
       "spec_expected": "NM_004006.3:r.76a>c",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/substitution.md"
+      ]
+    },
+    {
+      "input": "NM_004006.3:r.85=//u>c",
+      "current": "NM_004006.3:r.85=//u>c",
+      "spec_expected": "NM_004006.3:r.85=//u>c",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/substitution.md"
+      ]
+    },
+    {
+      "input": "NM_004006.3:r.85=/u>c",
+      "current": "NM_004006.3:r.85=/u>c",
+      "spec_expected": "NM_004006.3:r.85=/u>c",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",

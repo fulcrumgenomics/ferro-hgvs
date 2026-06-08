@@ -56,10 +56,9 @@ fn compact_form_round_trips_across_coord_systems() {
         "NM_000088.3:c.85=//T>C",
         "NR_002196.2:n.100=/A>G",
         "NR_002196.2:n.100=//A>G",
-        // RNA: ferro normalizes case on Display (input lowercase / output
-        // uppercase is observed in the wider test suite).
-        "NR_002196.2:r.100=/A>G",
-        "NR_002196.2:r.100=//A>G",
+        // RNA renders nucleotides in lowercase per the HGVS spec.
+        "NR_002196.2:r.100=/a>g",
+        "NR_002196.2:r.100=//a>g",
         "NC_012920.1:m.3243=/A>G",
         "NC_012920.1:m.3243=//A>G",
         // Deletion — mosaic + chimeric.
@@ -84,6 +83,46 @@ fn compact_form_round_trips_across_coord_systems() {
             format!("{parsed}"),
             input,
             "round-trip mismatch for `{input}`"
+        );
+    }
+}
+
+/// Protein compact mosaic `<acc>:p.<pos>=/<edit>` (the `=/` somatic
+/// and/or form, HGVS general.md). The bare RHS is either an alternative
+/// amino acid (a substitution inheriting the LHS reference + position) or
+/// a bare protein edit (`del`, `dup`).
+#[test]
+fn protein_compact_mosaic_round_trips() {
+    for input in [
+        "LRG_199p1:p.Trp24=/Cys",
+        "NP_003997.1:p.Val7=/del",
+        "NP_003997.1:p.Val7=/dup",
+    ] {
+        let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("must parse `{input}`: {e}"));
+        assert!(
+            matches!(parsed, HgvsVariant::Allele(_)),
+            "expected Allele for `{input}`, got {parsed:?}"
+        );
+        assert_eq!(format!("{parsed}"), input, "round-trip for `{input}`");
+    }
+}
+
+/// RNA compact mosaic/chimeric forms must preserve lowercase bases on the
+/// bare-edit RHS — HGVS renders RNA in lowercase. Previously the bare-edit
+/// RHS routed through `NaEdit`'s uppercase `Display`, losing the RNA case.
+#[test]
+fn rna_compact_mosaic_chimeric_preserves_lowercase() {
+    for input in [
+        "NM_004006.3:r.85=/u>c",
+        "NM_004006.3:r.85=//u>c",
+        "NR_002196.2:r.100=/a>g",
+        "NR_002196.2:r.100=//a>g",
+    ] {
+        let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("must parse `{input}`: {e}"));
+        assert_eq!(
+            format!("{parsed}"),
+            input,
+            "RNA case round-trip for `{input}`"
         );
     }
 }
