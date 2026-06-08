@@ -61,6 +61,9 @@ impl ValidationResult {
 /// Returns a ValidationResult indicating whether the stated reference matches
 /// the actual sequence, and provides correction information if not.
 ///
+/// For `Delins`, the stated `deleted` bases (when present) are validated
+/// against the span; `deleted_length` (a count) is not checked.
+///
 /// # Arguments
 /// * `edit` - The edit to validate
 /// * `ref_seq` - The reference sequence (1-indexed, so position 1 is at index 0)
@@ -77,10 +80,17 @@ pub fn validate_reference(edit: &NaEdit, ref_seq: &[u8], start: u64, end: u64) -
                 ValidationResult::ok()
             }
         }
-        NaEdit::Delins { .. } => {
-            // Delins doesn't state the reference in standard HGVS
-            // (though some parsers extract it from formats like "delACinsGT")
-            ValidationResult::ok()
+        NaEdit::Delins { deleted, .. } => {
+            if let Some(seq) = deleted {
+                // Non-recommended `delACinsGT` form: ferro parses the stated
+                // deleted bases into `deleted`. Validate them against the
+                // reference span (#486) — mirrors the `Deletion` arm.
+                // `deleted_length` is a count, not bases, so it is not checked.
+                validate_sequence(seq.bases(), ref_seq, start, end)
+            } else {
+                // Recommended short form `delinsXXX`: no stated deleted bases.
+                ValidationResult::ok()
+            }
         }
         NaEdit::Duplication { sequence, .. } => {
             if let Some(seq) = sequence {
@@ -621,7 +631,7 @@ pub fn apply_validation_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hgvs::edit::Sequence;
+    use crate::hgvs::edit::{InsertedSequence, Sequence};
     use std::str::FromStr;
 
     #[test]
@@ -681,6 +691,62 @@ mod tests {
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
         assert!(result.valid); // No stated sequence to validate
+    }
+
+    #[test]
+    fn test_validate_delins_deleted_mismatch() {
+        // `c.1_3delGGGinsAT`: stated deleted "GGG" but ref is "ATG".
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
+            deleted: Some(Sequence::from_str("GGG").unwrap()),
+            deleted_length: None,
+        };
+        let ref_seq = b"ATGC";
+        let result = validate_reference(&edit, ref_seq, 1, 3);
+        assert!(!result.valid);
+        assert_eq!(result.stated_ref, Some("GGG".to_string()));
+        assert_eq!(result.actual_ref, Some("ATG".to_string()));
+    }
+
+    #[test]
+    fn test_validate_delins_deleted_match() {
+        // `c.1_3delATGinsAT`: stated deleted "ATG" matches ref "ATG".
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
+            deleted: Some(Sequence::from_str("ATG").unwrap()),
+            deleted_length: None,
+        };
+        let ref_seq = b"ATGC";
+        let result = validate_reference(&edit, ref_seq, 1, 3);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_delins_no_deleted() {
+        // Recommended short form `c.1_3delinsAT`: no stated deleted bases,
+        // nothing to validate even when the span content differs.
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
+            deleted: None,
+            deleted_length: None,
+        };
+        let ref_seq = b"ATGC";
+        let result = validate_reference(&edit, ref_seq, 1, 3);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_delins_length_not_validated() {
+        // `c.1_3del3insAT`: a deleted-length count (not bases) — it must not
+        // be validated as a sequence, even when the span content differs.
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
+            deleted: None,
+            deleted_length: Some(3),
+        };
+        let ref_seq = b"ATGC";
+        let result = validate_reference(&edit, ref_seq, 1, 3);
+        assert!(result.valid);
     }
 
     #[test]
