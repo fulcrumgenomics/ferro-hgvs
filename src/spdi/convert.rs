@@ -1609,13 +1609,10 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
 
 /// Returns true if `accession` is a known mitochondrial reference. Used
 /// by `spdi_to_hgvs` to emit `m.` instead of `g.` for these accessions
-/// (SPDI carries no coord-system tag).
+/// (SPDI carries no coord-system tag). Delegates to
+/// [`Accession::is_mitochondrial`], the single source for the accession list.
 fn is_mitochondrial_accession(accession: &Accession) -> bool {
-    let prefix: &str = accession.prefix.as_ref();
-    let number: &str = accession.number.as_ref();
-    // NC_012920 = human GRCh38 mitochondrion (rCRS).
-    // NC_001807 = older rCRS draft (deprecated but still seen).
-    matches!((prefix, number), ("NC", "012920") | ("NC", "001807"))
+    accession.is_mitochondrial()
 }
 
 /// Convert an SPDI variant to HGVS, using a reference provider to recover

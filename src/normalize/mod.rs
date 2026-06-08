@@ -1071,6 +1071,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &HgvsVariant,
     ) -> Result<NormalizeResult, FerroError> {
         let (result, warnings) = match variant {
+            // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
+            // must be described with `m.` (#487). Coerce it to an `MtVariant`
+            // — same accession/location/edit, only the coordinate system label
+            // differs — and normalize on the mito path. Parsing is unchanged
+            // (still yields `Genome`); the coercion happens only here.
+            HV::Genome(v) if v.accession.is_mitochondrial() => {
+                let mt = crate::hgvs::variant::MtVariant {
+                    accession: v.accession.clone(),
+                    gene_symbol: v.gene_symbol.clone(),
+                    loc_edit: v.loc_edit.clone(),
+                };
+                self.normalize_mt(&mt)?
+            }
             HV::Genome(v) => self.normalize_genome(v)?,
             HV::Cds(v) => self.normalize_cds(v)?,
             HV::Tx(v) => self.normalize_tx(v)?,

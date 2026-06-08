@@ -357,6 +357,18 @@ impl Accession {
         matches!(&*self.prefix, "NR" | "XR")
     }
 
+    /// Returns true if this is a known human mitochondrial reference accession.
+    ///
+    /// `NC_012920` is the GRCh38 rCRS mitochondrion; `NC_001807` is the older
+    /// (deprecated but still seen) rCRS draft. HGVS requires the `m.` coordinate
+    /// system for these accessions, so `normalize()` coerces a `g.` variant on
+    /// one of them to `m.`.
+    pub fn is_mitochondrial(&self) -> bool {
+        let prefix: &str = self.prefix.as_ref();
+        let number: &str = self.number.as_ref();
+        matches!((prefix, number), ("NC", "012920") | ("NC", "001807"))
+    }
+
     /// Full accession string without version
     pub fn base(&self) -> String {
         // Assembly/chromosome notation: GRCh37(chr23)
@@ -2550,6 +2562,24 @@ mod tests {
         // Not UniProt - number wrong length
         let wrong_length = Accession::new("P", "123", None);
         assert!(!wrong_length.is_uniprot());
+    }
+
+    #[test]
+    fn test_accession_is_mitochondrial() {
+        // GRCh38 rCRS mitochondrion
+        assert!(Accession::new("NC", "012920", Some(1)).is_mitochondrial());
+
+        // Deprecated rCRS draft
+        assert!(Accession::new("NC", "001807", Some(1)).is_mitochondrial());
+
+        // Version-agnostic — coercion keys off prefix+number, not version
+        assert!(Accession::new("NC", "012920", None).is_mitochondrial());
+
+        // Other NC accessions (e.g. chromosome 1) are not mitochondrial
+        assert!(!Accession::new("NC", "000001", Some(11)).is_mitochondrial());
+
+        // Same number, different prefix is not mitochondrial
+        assert!(!Accession::new("NM", "012920", Some(1)).is_mitochondrial());
     }
 
     #[test]
