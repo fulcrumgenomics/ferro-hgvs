@@ -409,6 +409,27 @@ impl ReferenceProvider for MockProvider {
         Ok(protein_seq[start..end].to_string())
     }
 
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        // Mirror the accession resolution in `get_protein_sequence`:
+        // exact (versioned or stored) match first, then an unversioned
+        // base-accession fallback, returning the stored length directly.
+        if let Some(seq) = self.proteins.get(accession) {
+            return Ok(seq.len() as u64);
+        }
+        if !accession.contains('.') {
+            for (key, seq) in &self.proteins {
+                if key.split('.').next().unwrap_or(key) == accession {
+                    return Ok(seq.len() as u64);
+                }
+            }
+        }
+        // An accession this provider cannot resolve maps to length `0`,
+        // matching the trait contract (the default probe leaves `lo = 0`
+        // for an unresolvable protein). Returning an error here would
+        // diverge from that contract.
+        Ok(0)
+    }
+
     fn has_protein_data(&self) -> bool {
         !self.proteins.is_empty()
     }
@@ -564,6 +585,27 @@ mod tests {
         );
         assert!(provider.has_genomic_data());
         assert_eq!(provider.get_genomic_sequence("chr1", 0, 4).unwrap(), "ACGT");
+    }
+
+    #[test]
+    fn test_get_protein_length_resolves_and_falls_back() {
+        let mut provider = MockProvider::new();
+        provider.add_protein("NP_TEST.1", "MAPLE");
+
+        // Exact (versioned) match returns the stored length.
+        assert_eq!(provider.get_protein_length("NP_TEST.1").unwrap(), 5);
+        // Unversioned base accession falls back to the versioned entry.
+        assert_eq!(provider.get_protein_length("NP_TEST").unwrap(), 5);
+    }
+
+    #[test]
+    fn test_get_protein_length_unresolvable_is_zero() {
+        // Contract: an accession the provider cannot resolve maps to a
+        // length of `0` (matching the trait's default probe semantics),
+        // NOT an error — otherwise `normalize()` is not behavior-preserving
+        // when a provider switches from the probe loop to this API.
+        let provider = MockProvider::with_test_data();
+        assert_eq!(provider.get_protein_length("NP_NONEXISTENT.1").unwrap(), 0);
     }
 
     #[test]

@@ -3201,61 +3201,28 @@ impl<P: ReferenceProvider> Normalizer<P> {
     }
 
     /// Discover the length of a protein via the `ReferenceProvider`
-    /// trait. The trait returns an out-of-range error rather than a
-    /// truncated string and has no separate length API, so we probe
-    /// with `get_protein_sequence(accession, 0, n)`.
+    /// trait's `get_protein_length` API.
     ///
-    /// Strategy: seed the upper probe at 64 KiB, which covers titin
-    /// (~35 kAA, the longest known human protein) and every realistic
-    /// protein. If 64 KiB already succeeds, walk up exponentially to a
-    /// 1 GiB safety cap. If the seed fails, the exact length is in
-    /// `[0, SEED)` — skip the exponential ramp and let the binary
-    /// search converge directly. Then binary-search between the last
-    /// known-good and first known-bad probes for the exact length.
+    /// The trait's default implementation derives the length by probing
+    /// `get_protein_sequence(accession, 0, n)` and binary-searching for
+    /// the largest accepted `n` (length-equals-largest-accepted-`n`
+    /// semantics), preserving the historical behavior. Providers that
+    /// store length metadata (e.g. `MockProvider`) override it to return
+    /// the length directly without cloning the sequence. Either way, an
+    /// empty protein or an accession the provider cannot resolve yields a
+    /// length of `0`.
+    ///
     /// Returns `None` for empty proteins or accessions the provider
     /// cannot resolve.
     fn discover_protein_length(&self, accession: &str) -> Option<u64> {
-        const SEED: u64 = 64 * 1024;
-        const CAP: u64 = 1 << 30;
-
-        let probe_ok = |n: u64| self.provider.get_protein_sequence(accession, 0, n).is_ok();
-
-        let (mut lo, mut hi) = if probe_ok(SEED) {
-            // Common case: the seed succeeded. Grow only if the protein
-            // is even longer (vanishingly rare).
-            let mut hi = SEED;
-            let mut lo = SEED;
-            while probe_ok(hi) {
-                lo = hi;
-                if hi >= CAP {
-                    break;
-                }
-                hi = hi.saturating_mul(2);
-            }
-            (lo, hi)
-        } else {
-            // Seed failed, so the exact length is in `[0, SEED)`.
-            // Hand `[0, SEED)` straight to the binary search below
-            // instead of re-doing a logarithmic exponential ramp from
-            // 1 (which would duplicate the work the failed seed
-            // already proved unnecessary). `lo = 0` is a valid lower
-            // bound — `probe_ok(0)` (empty slice) is accepted by the
-            // provider; only after the binary search converges to
-            // `lo = 0` do we conclude the protein is genuinely empty.
-            (0, SEED)
-        };
-        while lo + 1 < hi {
-            let mid = lo + (hi - lo) / 2;
-            if probe_ok(mid) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
+        // A length of `0` — an empty protein or an accession the provider
+        // cannot resolve — maps to `None`, matching the prior behavior. The
+        // `Err(_)` arm is defensive: the trait contract maps unresolvable
+        // accessions to `Ok(0)`, but a provider may still surface an error.
+        match self.provider.get_protein_length(accession) {
+            Ok(0) | Err(_) => None,
+            Ok(len) => Some(len),
         }
-        if lo == 0 {
-            return None;
-        }
-        Some(lo)
     }
 
     /// Validate that the amino acids in a protein variant match the reference
