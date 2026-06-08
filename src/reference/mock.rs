@@ -409,6 +409,27 @@ impl ReferenceProvider for MockProvider {
         Ok(protein_seq[start..end].to_string())
     }
 
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        // Mirror the accession resolution in `get_protein_sequence`:
+        // exact (versioned or stored) match first, then an unversioned
+        // base-accession fallback, returning the stored length directly.
+        if let Some(seq) = self.proteins.get(accession) {
+            return Ok(seq.len() as u64);
+        }
+        if !accession.contains('.') {
+            for (key, seq) in &self.proteins {
+                if key.split('.').next().unwrap_or(key) == accession {
+                    return Ok(seq.len() as u64);
+                }
+            }
+        }
+        Err(FerroError::ProteinReferenceNotAvailable {
+            accession: accession.to_string(),
+            start: 0,
+            end: 0,
+        })
+    }
+
     fn has_protein_data(&self) -> bool {
         !self.proteins.is_empty()
     }
