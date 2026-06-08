@@ -57,14 +57,16 @@ Five pillars. (1) and (2) are the high-value core and are independently shippabl
 Each case in `cases.json` carries, **per axis** (direction × cross), an explicit disposition instead of a bare line in a side file:
 
 - `match` *(default)* — ferro must equal the upstream `normalized` value. A mismatch fails the test.
-- `accepted_divergence { reason, spec_citation, ferro_output }` — ferro is intentionally different. The harness asserts ferro produces **exactly `ferro_output`** (the divergence is *pinned*, not merely "anything ≠ upstream"), and surfaces `reason` + `spec_citation` in failure output.
+- `accepted_divergence { reason, spec_citation, ferro_output }` — ferro is intentionally and **terminally** different (both forms are spec-allowed); ferro will not converge. The harness asserts ferro produces **exactly `ferro_output`** (the divergence is *pinned*, not merely "anything ≠ upstream"), and surfaces `reason` + `spec_citation` in failure output.
 - `known_bug { tracking_issue, ferro_output }` — ferro is wrong, xfail until fixed. The harness asserts ferro still produces the recorded buggy `ferro_output`.
+- `improvement { tracking_issue, section, ferro_output }` — ferro's output is valid HGVS but not the spec-*preferred* canonical form; `normalize()` should converge once `tracking_issue` lands. The middle disposition between `accepted_divergence` (terminal) and `known_bug` (wrong). Like `known_bug` it is an xfail and XPASS-guarded, but it requires a `section` citation substantiating why ferro's current form is non-preferred. (Added in #501 for mutalyzer; mirrored into the biocommons harness in #503.)
+- `spec_citation { section }` *(mutalyzer harness; documentary)* — records that the upstream expected value in `cases.json` was corrected to ferro's spec-correct value, with the `section` that arbitrates it. Has no effect on tally bucketing (the corrected expectation makes the case a normal `match`).
 
 The flat `baseline-failures/*.txt` file is deleted (or becomes a generated, checked view — §5).
 
 ### 2. XPASS detection — the self-correcting mechanism
 
-For a `known_bug` axis, if ferro's output **starts matching** the upstream `normalized` value (or stops matching the recorded buggy `ferro_output`), the harness **fails loudly**:
+For a `known_bug` or `improvement` axis, if ferro's output **starts matching** the upstream `normalized` value (or stops matching the recorded `ferro_output`), the harness **fails loudly**:
 
 > `known_bug for NM_001166478.1:c.36_37insTC (#473) now matches upstream — the bug appears fixed. Remove the annotation and demote the row.`
 
@@ -149,8 +151,10 @@ The loader **validates each annotation against these invariants before any compa
   | `match` *(default; may be implicit — an axis with no annotation is `match`)* | none | `reason`, `spec_citation`, `ferro_output`, `tracking_issue` (a `match` axis has no divergence to describe) |
   | `accepted_divergence` | `reason`, `spec_citation`, `ferro_output` | `tracking_issue` (an accepted divergence is not a bug and has no owning issue) |
   | `known_bug` | `tracking_issue`, `ferro_output` | `reason`, `spec_citation` (the tracking issue is the source of truth for the why) |
+  | `improvement` | `tracking_issue`, `section`, `ferro_output` | `reason` (the `section` + tracking issue substantiate it) |
+  | `spec_citation` *(documentary)* | `section` | `ferro_output`, `tracking_issue` (no divergence is pinned — the corrected expectation makes it a `match`) |
 
-- **Types.** `tracking_issue` is a positive integer; `ferro_output`, `reason`, `spec_citation`, and `upstream` are non-empty strings; `disposition` is one of the three enum values above.
+- **Types.** `tracking_issue` is a positive integer; `ferro_output`, `reason`, `spec_citation`, `section`, and `upstream` are non-empty strings; `disposition` is one of the enum values above.
 - **Reference identity.** Each case's `reference` block requires `accession` and `length`; `spot_check.pos` (if present) is a pure **1-based sequence offset** into the pinned reference window — an index into the reference bases, independent of the HGVS `input` text and its coordinate system (it is *not* an interpretation of HGVS expressions, intronic forms, or offset coordinates). It must satisfy `1 <= pos <= length`, and the window's bases must fit: `pos + len(bases) - 1 <= length`. The provider's underlying string is indexed `0`-based, so the loader reads from offset `pos - 1`. `spot_check.pos` and the HGVS coordinates in `input` are independent; they often coincide for simple coding cases — e.g. `pos: 36` aligns with `c.36_37insTC` — but `spot_check.pos` is never derived from or interpreted as an HGVS token.
 
 `AxisTally::record` becomes annotation-aware: it looks up the disposition for `(case, axis)`, **validates the case entry against the invariants above**, compares ferro's actual output against the right expectation, and classifies the result as pass / fail / **xpass** (the §2 loud failure) — surfacing any validation error distinctly from a comparison failure.
