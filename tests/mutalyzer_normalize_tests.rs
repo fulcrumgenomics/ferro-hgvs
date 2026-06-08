@@ -38,11 +38,12 @@ use ferro_hgvs::conformance::mutalyzer::{
     SpecSection,
 };
 use ferro_hgvs::data::projection::Projector;
+use ferro_hgvs::error_handling::{ErrorOverride, ErrorType};
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::{
-    parse_hgvs, FerroError, HgvsVariant, MultiFastaProvider, Normalizer, ReferenceProvider,
-    VariantProjector,
+    parse_hgvs, FerroError, HgvsVariant, MultiFastaProvider, NormalizeConfig, Normalizer,
+    ReferenceProvider, VariantProjector,
 };
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -755,10 +756,18 @@ fn axis_noncoding() {
 
 #[test]
 fn axis_errors() {
-    let Some(normalizer) = normalizer() else {
+    let Some(p) = provider() else {
         eprintln!("axis_errors: skipping — no manifest");
         return;
     };
+    // The errors axis asserts STRICT-mode behavior for reference mismatches:
+    // ferro's library default intentionally warn-corrects them (an accepted
+    // divergence from mutalyzer), so the default lenient `normalizer()` used by
+    // the other axes can never reproduce mutalyzer's ESEQUENCEMISMATCH /
+    // EREPEATMISMATCH rejections. Strict mode does. See #486 and the design doc.
+    let cfg = NormalizeConfig::new()
+        .with_error_override(ErrorType::RefSeqMismatch, ErrorOverride::Reject);
+    let normalizer = Normalizer::with_config(ArcProvider(p), cfg);
 
     let mut t = AxisTally::new(Axis::Errors);
     for case in &fixture().cases {
