@@ -9,14 +9,12 @@
 //! "`NM_004006.3:r.76a>c`" mirrors "`NM_004006.3:c.76A>C`".
 //!
 //! This file pins r./c. parity across edit types (sub, del, ins, dup,
-//! delins, inv, repeat) and 3'-shift behavior. It also audits the known
-//! divergence on coding transcripts where the start codon is not at
-//! transcript position 1: ferro currently treats `r.X` as transcript-
-//! relative (n.-style) rather than CDS-relative, so the audit cases here
-//! pin the *current* behavior with `// TODO #<issue>` markers so that a
-//! future fix is forced through this test surface.
+//! delins, inv, repeat) and 3'-shift behavior, including on coding
+//! transcripts where the start codon is not at transcript position 1.
+//! `r.X` is CDS-relative (== `c.X`) per HGVS numbering.md (#469), so r. and
+//! c. normalize identically (modulo alphabet) at every position.
 //!
-//! Tracking: #81 item E3.
+//! Tracking: #81 item E3; #469 (CDS-relative r. numbering).
 
 use ferro_hgvs::{parse_hgvs, HgvsVariant, MockProvider, Normalizer};
 
@@ -385,73 +383,19 @@ mod variant_arm_lock {
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT: cds_start > 1 divergence
+// cds_start > 1: r./c. CDS-relative parity (issue #469)
 //
 // On a coding transcript where the start codon is not at transcript
-// position 1 (here: NM_001234.1, cds_start=5), the HGVS spec says r.X and
-// c.X share the same CDS-relative numbering: r.10 and c.10 must point to
-// the *same* transcript base. ferro currently treats r.X as transcript-
-// relative (n.-style) — i.e. r.10 maps to transcript position 10, while
-// c.10 maps to transcript position 14 (cds_start + 10 - 1). The two
-// diverge by `cds_start - 1` bases when cds_start > 1.
-//
-// These tests pin the *current* behavior so a future fix is forced
-// through this surface. Tag with `// TODO #<follow-up>` when the
-// follow-up issue lands.
-//
-// TODO: file follow-up issue tracking r./c. CDS-relative numbering
-// reconciliation (item E3 audit), then update these tests to assert
-// the spec-correct equality.
+// position 1 (here: NM_001234.1, cds_start=5), HGVS numbering.md (L58/L61)
+// requires r.X and c.X to share the same CDS-relative numbering: r.10 and
+// c.10 point to the *same* transcript base (tx cds_start + 10 - 1 = 14).
+// #469 fixed ferro to honor this, superseding the transcript-1-relative pin
+// PR #304 added when it closed #291 on internal-consistency grounds without
+// checking the spec. These tests assert the parity.
 // ---------------------------------------------------------------------------
 
 mod cds_start_offset_audit {
     use super::*;
-
-    /// Pin current behavior: on NM_001234.1 (cds_start=5, 4 bp 5'UTR),
-    /// r.10 and c.10 do NOT currently produce the same edit. Per spec
-    /// they should — this test pins the divergence.
-    ///
-    /// Sequence: AAAAATGCCCAAGGGGGGGGGGGGGGGGGGGGGGGGGTAAAAAA
-    ///           ^^^^ ^                              ^      ^^^^^^
-    ///           5'UTR ATG (CDS start, c.1 = tx-pos 5)  TAA   3'UTR
-    ///
-    /// - c.10 maps to tx-pos 5 + 10 - 1 = 14 → 'G' (in homopolymer)
-    /// - r.10 (current code) maps to tx-pos 10 → 'C' (last C of CCC)
-    ///
-    /// These should be equal per spec; right now they are not.
-    #[test]
-    fn r_and_c_diverge_when_cds_start_gt_1() {
-        // Substitution at the same numeric position; pick a point where
-        // the underlying tx bases differ between the two interpretations.
-        // c.10 = tx-pos 14 = 'G'; r.10 (current) = tx-pos 10 = 'C'.
-        let c_out = normalize(provider(), "NM_001234.1:c.10G>A");
-        let r_out = normalize(provider(), "NM_001234.1:r.10c>a");
-
-        // Both succeed without error (no panic):
-        assert!(c_out.contains(":c."));
-        assert!(r_out.contains(":r."));
-
-        // Pin the current divergence: the reference base differs because
-        // the position interpretations differ. After the follow-up fix,
-        // this assertion should flip to `assert_eq!(body(&c_out), body(&r_out))`
-        // (modulo alphabet) and the explicit reference letters should
-        // either both be 'G/g' or both be 'C/c'.
-        // TODO #<follow-up>: replace this with parity equality.
-        let c_b = body(&c_out);
-        let r_b = body(&r_out);
-        // Strip alphabet to compare: c.→lowercase-rna-style.
-        assert_ne!(
-            c_to_r(&c_out)
-                .split_once(":r.")
-                .map(|(_, b)| b)
-                .unwrap_or(""),
-            r_b,
-            "current behavior diverges; replace this !=  with == once spec-parity is implemented \
-             (c.={c_out}, r.={r_out})"
-        );
-        // Sanity: both should be present.
-        assert!(!c_b.is_empty() && !r_b.is_empty());
-    }
 
     /// On a transcript where cds_start == 1, the two interpretations
     /// agree and the divergence vanishes. This complements the test above
@@ -464,6 +408,26 @@ mod cds_start_offset_audit {
         // c.→r. projection must match — they refer to the same tx base
         // because cds_start==1 collapses the ambiguity.
         assert_eq!(c_to_r(&c_out), r_out);
+    }
+
+    /// Issue #469: on a coding transcript with cds_start > 1, `r.X` must use
+    /// the same CDS-relative numbering as `c.X` (HGVS numbering.md: "r.123
+    /// relates to c.123"). A *shifting* edit at the same numeric position
+    /// must therefore normalize identically across r. and c. (modulo the
+    /// alphabet) — a substitution would not distinguish the axes since it
+    /// does not move. This supersedes the transcript-1-relative pin from
+    /// PR #304 (which closed #291 on internal-consistency grounds without
+    /// checking the spec).
+    #[test]
+    fn r_and_c_agree_when_cds_start_gt_1() {
+        let c_out = normalize(provider(), "NM_001234.1:c.10del");
+        let r_out = normalize(provider(), "NM_001234.1:r.10del");
+        assert_eq!(
+            c_to_r(&c_out),
+            r_out,
+            "r.10 must be CDS-relative (== c.10) on a cds_start>1 transcript (#469); \
+             c.={c_out}, r.={r_out}"
+        );
     }
 
     /// Pin that an r. query against a 5' UTR position (`r.-N`) parses

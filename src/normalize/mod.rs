@@ -3448,29 +3448,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Err(_) => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // Convert RNA positions to transcript-1 positions, deciding per
-        // endpoint. UTR (`r.*N`/`r.-N`) and non-positive bases need a CDS
-        // to translate; non-UTR positive bases map 1:1 to transcript-1
-        // indices and work without a CDS (mock providers used in tests
-        // often omit cds_start/end). Choosing per endpoint keeps mixed
-        // intervals like `r.50_*1del` from rerouting the positive end
-        // through `rna_to_tx_pos` — issue #163 follow-up.
+        // Convert RNA positions to transcript-1 positions.
         //
-        // Axis convention (pinned by `tests/issue_291_rna_axis_convention.rs`,
-        // closes #291): `r.` positive non-UTR bases are
-        // **transcript-1-relative**, NOT CDS-relative. `r.10` against a
-        // transcript with `cds_start = 100` maps to tx index 10, not tx 109.
-        // This is consistent across `fetch_ref_for_canonical_split`,
-        // `simple_rna_pos`, and `normalize_na_edit`. Only `r.*N`/`r.-N`
-        // (and base 0) translate through `cds_start`/`cds_end` via
-        // `rna_to_tx_pos`.
+        // Axis convention (#469, HGVS `background/numbering.md` L58/L61): on a
+        // **coding** transcript, `r.` shares `c.`'s **CDS-relative** numbering
+        // — `r.123` relates to `c.123` — so every region (`r.-N` 5'UTR, `r.N`
+        // CDS, `r.*N` 3'UTR) translates through `cds_start`/`cds_end` via
+        // `rna_to_tx_pos`, exactly like `c.`. `r.10` against `cds_start = 100`
+        // maps to tx 109 (== `c.10`), not tx 10. This supersedes the
+        // transcript-1-relative pin PR #304 added when closing #291 (made on
+        // internal-consistency grounds without checking the spec).
+        //
+        // When the transcript carries no CDS (coordinate-only / mock providers
+        // that omit cds_start/end), positive non-UTR bases fall back to
+        // transcript-1 indices and UTR positions can't be resolved.
         let cds_info = transcript.cds_start.zip(transcript.cds_end);
         let map_in = |pos: &crate::hgvs::location::RnaPos| -> Option<u64> {
-            if pos.utr3 || pos.base < 1 {
-                let (cds_start, cds_end) = cds_info?;
-                self.rna_to_tx_pos(pos, cds_start, Some(cds_end)).ok()
-            } else {
-                Some(pos.base as u64)
+            match cds_info {
+                Some((cds_start, cds_end)) => {
+                    self.rna_to_tx_pos(pos, cds_start, Some(cds_end)).ok()
+                }
+                None => {
+                    if pos.utr3 || pos.base < 1 {
+                        None
+                    } else {
+                        Some(pos.base as u64)
+                    }
+                }
             }
         };
         let tx_start = match map_in(start_pos) {
@@ -3518,25 +3522,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
-        // Convert each normalized tx position back independently, restoring
-        // UTR notation when the position falls outside the CDS. This catches
-        // both the original issue #163 case (UTR input shuffling within the
-        // UTR) and a positive-base input that shifts past `cds_end` during
-        // normalization. Without `cds_info` we keep the simple base-1 mapping.
-        //
-        // For positions that stay inside the CDS-proper window
-        // (`cds_start <= pos <= cds_end`), the tx index is emitted directly
-        // as `r.{pos}` — i.e. the transcript-1-relative axis is preserved on
-        // the way out, matching the convention enforced by `map_in` above.
-        // See `tests/issue_291_rna_axis_convention.rs` for the pin.
+        // Convert each normalized tx position back to a CDS-relative `r.`
+        // position via `tx_to_rna_pos`, which restores the correct region for
+        // every tx index: `r.-N` (5'UTR, `pos < cds_start`), `r.N` (CDS,
+        // `pos - cds_start + 1`), `r.*N` (3'UTR, `pos > cds_end`). This keeps
+        // the output axis CDS-relative (== `c.`) and symmetric with `map_in`
+        // (#469). Without `cds_info` (coordinate-only / mock) we keep the
+        // simple transcript-1 mapping.
         use crate::hgvs::location::RnaPos;
         let map_out = |pos: u64| -> Result<RnaPos, FerroError> {
-            if let Some((cds_start, cds_end)) = cds_info {
-                if pos < cds_start || pos > cds_end {
-                    return self.tx_to_rna_pos(pos, cds_start, Some(cds_end));
-                }
+            match cds_info {
+                Some((cds_start, cds_end)) => self.tx_to_rna_pos(pos, cds_start, Some(cds_end)),
+                None => Ok(RnaPos::new(pos as i64)),
             }
-            Ok(RnaPos::new(pos as i64))
         };
         let new_start = map_out(new_tx_start)?;
         let new_end = map_out(new_tx_end)?;
@@ -5662,12 +5660,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // discriminant check below is sufficient. The exception fires
         // inside `build_split_variants` for every embedded
         // `[Sub; Identity; Sub]` triplet whose endpoints share a codon.
-        // Caveat: the `r.` branch of `fetch_ref_for_canonical_split`
-        // does not translate the RNA axis through `cds_start`, so for
-        // transcripts with `cds_start > 1` the ref window can be
-        // mis-aligned. The codon-frame split path inherits that latent
-        // bug. See #291 — the fix is to apply `rna_to_tx_pos` (or
-        // equivalent) before reading bytes.
+        // The `r.` branch of `fetch_ref_for_canonical_split` translates
+        // the RNA axis through `cds_start` (`r.N` → 1-based tx pos
+        // `cds_start + N - 1`, falling back to transcript-1 when the
+        // transcript has no CDS), so its ref window is CDS-aligned and the
+        // codon-frame split path reads correctly for `cds_start > 1` (#469,
+        // superseding the latent #291 mis-alignment).
         let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_) | HgvsVariant::Rna(_));
         (
             build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware),
@@ -5746,27 +5744,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 bytes[s..e].to_vec()
             }
             HgvsVariant::Rna(r) => {
-                // `r.` positive non-UTR bases use the transcript-1-relative
-                // axis in this codebase (NOT CDS-relative): `r.N` for `N > 0`
-                // and non-UTR maps directly to tx index `N`. This matches the
-                // convention used by `simple_rna_pos`, `normalize_rna::map_in`/
-                // `map_out`, and `normalize_na_edit` for the r. arm.
-                // `simple_rna_pos` filters intronic positions, 3'-UTR
-                // positions (the `r.*N` form), and non-positive bases. It
-                // does NOT filter 5'-UTR positions because under the tx-1
-                // axis convention those have positive bases below
-                // `cds_start` and are themselves valid tx indices — the
-                // `hgvs_start - 1` slice against the full transcript
-                // sequence is therefore correct for any position reaching
-                // this arm (including tx-1 5'-UTR).
-                // Pinned by `tests/issue_291_rna_axis_convention.rs` (closes #291).
+                // `r.` shares c.'s CDS-relative numbering on a coding
+                // transcript (#469): `r.N` maps to 1-based tx pos
+                // `cds_start + N - 1`, exactly like the Cds arm above.
+                // `simple_rna_pos` has already filtered UTR (`r.*N`/`r.-N`,
+                // now a negative base) and intronic positions, so any position
+                // reaching this arm is a positive CDS-relative base. Without a
+                // CDS (coordinate-only / mock) fall back to transcript-1.
                 let tx = self
                     .provider
                     .get_transcript(&r.accession.transcript_accession())
                     .ok()?;
-                let s = (hgvs_start - 1) as usize;
-                let e = hgvs_end as usize;
                 let bytes = tx.sequence.as_deref()?.as_bytes();
+                let (s, e) = match tx.cds_start {
+                    Some(cds_start) => (
+                        cds_start.checked_add(hgvs_start)?.checked_sub(2)? as usize,
+                        cds_start.checked_add(hgvs_end)?.checked_sub(1)? as usize,
+                    ),
+                    None => ((hgvs_start - 1) as usize, hgvs_end as usize),
+                };
                 if e > bytes.len() || s >= e {
                     return None;
                 }
@@ -6975,16 +6971,17 @@ mod tests {
 
     #[test]
     fn test_normalize_rna_deletion_shifts_3prime() {
-        // NM_001234.1 has a G repeat at tx positions 13-37 spanning three
-        // exons: exon 1 (1-15), exon 2 (16-30), exon 3 (31-44). Per HGVS
-        // general.md's exon-junction exception, an r. deletion does not
-        // shift across exon boundaries — so `r.14del` (a G in exon 1)
-        // shifts only as far as `r.15del` (the last G inside exon 1).
+        // NM_001234.1 has cds_start = 5 and a G repeat at tx positions 13-37
+        // spanning three exons: exon 1 (1-15), exon 2 (16-30), exon 3 (31-44).
+        // `r.` is CDS-relative (== `c.`, #469), so `r.10` = tx 14 — a G in
+        // exon 1. Per HGVS general.md's exon-junction exception, an r.
+        // deletion does not shift across exon boundaries, so `r.10del` shifts
+        // only as far as `r.11del` (= tx 15, the last G inside exon 1).
         // Closes #334.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        let variant = parse_hgvs("NM_001234.1:r.14del").unwrap();
+        let variant = parse_hgvs("NM_001234.1:r.10del").unwrap();
         let result = normalizer.normalize(&variant).unwrap();
         let output = format!("{}", result);
 
@@ -6993,10 +6990,10 @@ mod tests {
             "Deletion should remain a deletion, got: {}",
             output
         );
-        // Spec-canonical 3' anchor inside exon 1 is position 15.
+        // Spec-canonical 3' anchor inside exon 1 is tx 15 = r.11 (CDS-relative).
         assert!(
-            output.contains("r.15del"),
-            "Deletion should shift 3' to exon-1 boundary (r.15del), got: {}",
+            output.contains("r.11del"),
+            "Deletion should shift 3' to exon-1 boundary (r.11del), got: {}",
             output
         );
     }
