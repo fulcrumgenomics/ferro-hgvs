@@ -349,6 +349,14 @@ impl Accession {
             && self.number.chars().all(|c| c.is_ascii_alphanumeric())
     }
 
+    /// Returns true if this accession is a non-coding RNA transcript reference
+    /// (`NR_` curated or `XR_` predicted). Such references have no CDS and are
+    /// not genomic, so only `n.` and `r.` coordinate systems are valid on them
+    /// (a `c.`/`g.`/`m.`/`o.` description is a coordinate-system mismatch — #486).
+    pub fn is_noncoding_rna(&self) -> bool {
+        matches!(&*self.prefix, "NR" | "XR")
+    }
+
     /// Full accession string without version
     pub fn base(&self) -> String {
         // Assembly/chromosome notation: GRCh37(chr23)

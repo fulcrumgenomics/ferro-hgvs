@@ -1,5 +1,9 @@
 {
   "kinds": {
+    "[coord_system_mismatch_c_on_noncoding]": {
+      "category": "rejected_by_design",
+      "reason": "Coding (`c.`) coordinate on a non-coding RNA (NR_/XR_) reference, which has no CDS; only `n.`/`r.` are valid (#486, ECOORDINATESYSTEMMISMATCH)."
+    },
     "[malformed_extra_underscore_in_intronic_offset]": {
       "category": "malformed_input",
       "reason": "Extra `_` between position and `+1` (`3708_+1` should be `3708+1`). Spec form per recommendations/uncertain.md is `(N+1_M-1)`."
@@ -327,6 +331,7 @@
     }
   },
   "expected_failures": {
+    "NR_001566.1:c.107_108gc>ag": "[coord_system_mismatch_c_on_noncoding]",
     "LRG_214t1:c.(3708_+1_3709-1)_(3974+1_3975-1)del": "[malformed_extra_underscore_in_intronic_offset]",
     "LRG_274t1:c.(1845+1_1846-1)_(*_?)del": "[uncertain_range_to_3utr_end]",
     "LRG_274t1:c.(2389+1_2390-1)_(*_?)del": "[uncertain_range_to_3utr_end]",
