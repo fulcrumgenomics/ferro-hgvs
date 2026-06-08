@@ -949,6 +949,65 @@ fn use_compact_form(variants: &[HgvsVariant]) -> bool {
         && !variants.iter().any(HgvsVariant::is_loc_edit_unknown)
 }
 
+/// For a `Trans` allele, return the first concrete leaf sub-variant if the
+/// compact form `ACC:c.[..];[..]` applies. Every concrete leaf — descending
+/// one level into nested cis-group members — must share accession, coord
+/// type, and gene selector; there must be at least one; and none may carry
+/// the per-variant unknown form. `[0]`/`[?]` members contribute no leaves
+/// and are permitted alongside concrete members (this is what keeps
+/// `ACC:c.[X];[?]` / `;[0]` in compact form).
+fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
+    let mut anchor: Option<&HgvsVariant> = None;
+    for member in variants {
+        let leaves: &[HgvsVariant] = match member {
+            HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => &[],
+            HgvsVariant::Allele(a) => &a.variants,
+            other => std::slice::from_ref(other),
+        };
+        for leaf in leaves {
+            if leaf.accession().is_none()
+                || matches!(leaf.variant_type(), "allele" | "null" | "unknown" | "r::r")
+                || leaf.is_loc_edit_unknown()
+            {
+                return None;
+            }
+            match anchor {
+                None => anchor = Some(leaf),
+                Some(a) => {
+                    if leaf.accession() != a.accession()
+                        || leaf.variant_type() != a.variant_type()
+                        || leaf.gene_symbol() != a.gene_symbol()
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    anchor
+}
+
+/// Write the bracket-inner content of one `Trans` allele member (without the
+/// surrounding `[` `]`). A nested cis-group member renders its sub-variants'
+/// loc-edits joined by `;`; `[0]`/`[?]` render their marker; a leaf renders
+/// its loc-edit.
+fn write_trans_member(f: &mut fmt::Formatter<'_>, member: &HgvsVariant) -> fmt::Result {
+    match member {
+        HgvsVariant::NullAllele => write!(f, "0"),
+        HgvsVariant::UnknownAllele => write!(f, "?"),
+        HgvsVariant::Allele(a) => {
+            for (i, sub) in a.variants.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ";")?;
+                }
+                sub.fmt_loc_edit(f)?;
+            }
+            Ok(())
+        }
+        other => other.fmt_loc_edit(f),
+    }
+}
+
 fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt::Result {
     let accession = first
         .accession()
@@ -1174,7 +1233,41 @@ impl fmt::Display for AlleleVariant {
                 }
             }
             AllelePhase::Trans => {
-                if use_compact_form(&self.variants) {
+                // A trans member that is itself a nested cis group (`[a;b]`)
+                // needs dedicated rendering; the existing flat-trans paths
+                // (which `fmt_loc_edit` a single leaf per bracket) can't
+                // express it. Only take the nested path when a nested member
+                // is actually present, so flat trans Display is unchanged.
+                let has_nested_group = self
+                    .variants
+                    .iter()
+                    .any(|v| matches!(v, HgvsVariant::Allele(_)));
+                if has_nested_group {
+                    if let Some(anchor) = trans_compact_anchor(&self.variants) {
+                        // Compact: ACC:c.[a;b];[c;d] — prefix once, then each
+                        // member's bracket-inner content.
+                        write_compact_prefix(f, anchor)?;
+                        for (i, v) in self.variants.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ";")?;
+                            }
+                            write!(f, "[")?;
+                            write_trans_member(f, v)?;
+                            write!(f, "]")?;
+                        }
+                        Ok(())
+                    } else {
+                        // Mixed-reference nested trans (not a spec target):
+                        // expanded, each member rendered in full.
+                        for (i, v) in self.variants.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ";")?;
+                            }
+                            write!(f, "[{}]", v)?;
+                        }
+                        Ok(())
+                    }
+                } else if use_compact_form(&self.variants) {
                     // Compact form: ACC:g.[edit1];[edit2]
                     write_compact_prefix(f, &self.variants[0])?;
                     for (i, v) in self.variants.iter().enumerate() {
