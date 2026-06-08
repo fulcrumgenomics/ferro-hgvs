@@ -23,9 +23,11 @@
 //!    are written to `/tmp/ferro-xfail/biocommons-normalized.{txt,tsv}` for
 //!    burn-down. Tests skip when the manifest is absent (e.g. CI).
 //!
-//! See `tests/fixtures/biocommons-normalize/failure-patterns.md` for the
-//! disposition of currently-known divergences.
+//! See `cases.json` (and the generated `failure-patterns.md` summary, produced
+//! by `examples/generate_conformance_summary`, never hand-maintained — #509)
+//! for the disposition of currently-known divergences.
 
+use ferro_hgvs::conformance::biocommons::{Case, Disposition, Fixture};
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::Transcript;
@@ -33,7 +35,6 @@ use ferro_hgvs::{
     parse_hgvs, FerroError, MultiFastaProvider, NormalizeConfig, Normalizer, ReferenceProvider,
     ShuffleDirection,
 };
-use serde::Deserialize;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -43,81 +44,6 @@ const FIXTURE_PATH: &str = "tests/fixtures/biocommons-normalize/cases.json";
 const MOCK_PIN_PATH: &str = "tests/fixtures/biocommons-normalize/mock-pin/normalized.txt";
 const XFAIL_REPORT_DIR: &str = "/tmp/ferro-xfail";
 const FAIL_PRINT_LIMIT: usize = 10;
-
-// ----------------------------------------------------------------------------
-// Fixture model
-// ----------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Fixture {
-    description: String,
-    source: String,
-    source_commit: String,
-    biocommons_upstream: String,
-    license: String,
-    refreshed_at: String,
-    cases: Vec<Case>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Case {
-    input: String,
-    /// `None` means biocommons expected `normalize()` to raise an error.
-    /// Mutually informed by `expects_error: true`.
-    normalized: Option<String>,
-    #[serde(default)]
-    expects_error: bool,
-    shuffle_direction: String,
-    cross_boundaries: bool,
-    source_function: String,
-    #[serde(default = "default_true")]
-    to_test: bool,
-    /// Optional disposition for a row where ferro diverges from biocommons.
-    /// Absent means "ferro must match biocommons". See [`Disposition`] and
-    /// `classify_outcome` (issue #478, conformance-harness redesign).
-    #[serde(default)]
-    disposition: Option<Disposition>,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Why a row diverges from biocommons, and what ferro produces instead.
-///
-/// Drives the conformance harness's pass/fail decision (issue #478 pillars 1-2).
-/// An annotated divergence whose recorded `ferro_output` still holds is
-/// accounted for (not a failure). An annotation that no longer holds fails the
-/// suite loudly so it gets corrected: a `known_bug` that started matching
-/// biocommons (XPASS — the bug appears fixed), or any drift away from the
-/// recorded `ferro_output`. This is what makes the burn-down self-correcting —
-/// a fixed bug cannot linger silently in the fixture.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-#[allow(dead_code)] // `spec_citation` is documentation for humans reading cases.json.
-enum Disposition {
-    /// ferro intentionally diverges from biocommons and is spec-correct.
-    AcceptedDivergence {
-        /// Human rationale: the HGVS-spec basis or data-availability constraint.
-        reason: String,
-        /// Optional citation into the HGVS recommendations.
-        #[serde(default)]
-        spec_citation: Option<String>,
-        /// The exact output ferro is expected to produce.
-        ferro_output: String,
-    },
-    /// ferro is wrong; xfail until fixed. If ferro starts matching biocommons
-    /// the harness fails (XPASS) so the annotation and the fixed row are
-    /// cleaned up.
-    KnownBug {
-        /// Issue tracking the fix.
-        tracking_issue: u64,
-        /// The (incorrect) output ferro currently produces.
-        ferro_output: String,
-    },
-}
 
 fn direction_from_str(s: &str) -> ShuffleDirection {
     match s {
@@ -637,6 +563,7 @@ mod classify_outcome_tests {
             reason: "spec-correct per HGVS edit-type priority".to_string(),
             spec_citation: None,
             ferro_output: ferro_output.to_string(),
+            cluster: None,
         }
     }
 
@@ -644,6 +571,7 @@ mod classify_outcome_tests {
         Disposition::KnownBug {
             tracking_issue: 999,
             ferro_output: ferro_output.to_string(),
+            cluster: None,
         }
     }
 
