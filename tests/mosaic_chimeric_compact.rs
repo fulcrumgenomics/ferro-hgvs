@@ -56,10 +56,9 @@ fn compact_form_round_trips_across_coord_systems() {
         "NM_000088.3:c.85=//T>C",
         "NR_002196.2:n.100=/A>G",
         "NR_002196.2:n.100=//A>G",
-        // RNA: ferro normalizes case on Display (input lowercase / output
-        // uppercase is observed in the wider test suite).
-        "NR_002196.2:r.100=/A>G",
-        "NR_002196.2:r.100=//A>G",
+        // RNA renders nucleotides in lowercase per the HGVS spec.
+        "NR_002196.2:r.100=/a>g",
+        "NR_002196.2:r.100=//a>g",
         "NC_012920.1:m.3243=/A>G",
         "NC_012920.1:m.3243=//A>G",
         // Deletion — mosaic + chimeric.
@@ -84,6 +83,89 @@ fn compact_form_round_trips_across_coord_systems() {
             format!("{parsed}"),
             input,
             "round-trip mismatch for `{input}`"
+        );
+    }
+}
+
+/// Protein compact mosaic `<acc>:p.<pos>=/<edit>` (the `=/` somatic
+/// and/or form, HGVS general.md). The bare RHS is either an alternative
+/// amino acid (a substitution inheriting the LHS reference + position) or
+/// a bare protein edit (`del`, `dup`).
+#[test]
+fn protein_compact_mosaic_round_trips() {
+    for input in [
+        "LRG_199p1:p.Trp24=/Cys",
+        "NP_003997.1:p.Val7=/del",
+        "NP_003997.1:p.Val7=/dup",
+    ] {
+        let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("must parse `{input}`: {e}"));
+        assert!(
+            matches!(parsed, HgvsVariant::Allele(_)),
+            "expected Allele for `{input}`, got {parsed:?}"
+        );
+        assert_eq!(format!("{parsed}"), input, "round-trip for `{input}`");
+    }
+}
+
+/// A bare alternative amino acid RHS only forms a substitution when the LHS
+/// is a single point. A range identity LHS (`p.Trp24_Cys26=`) must not be
+/// coerced into a substitution carrying the whole interval — the bare-AA
+/// compact form is rejected so the caller falls through to its error path.
+#[test]
+fn protein_compact_mosaic_bare_aa_requires_point_lhs() {
+    for input in [
+        "NP_003997.1:p.Trp24_Cys26=/Gly",
+        "NP_003997.1:p.Val7_Leu9=/Cys",
+    ] {
+        assert!(
+            parse_hgvs(input).is_err(),
+            "range-LHS bare-AA compact form must be rejected, but `{input}` parsed"
+        );
+    }
+}
+
+/// A single-base substitution RHS (`A>G`) only forms a compact mosaic when
+/// the inherited LHS identity is a point. A range identity LHS
+/// (`c.79_80=`) must not be coerced into a substitution spanning the whole
+/// interval — the compact form is rejected. del / dup span ranges fine.
+#[test]
+fn na_compact_mosaic_substitution_requires_point_lhs() {
+    for input in [
+        "NM_000088.3:c.79_80=/A>G",
+        "NM_000088.3:c.79_80=//A>G",
+        "NC_000023.11:g.33344590_33344592=/A>G",
+        "NC_012920.1:m.8470_8482=/A>G",
+    ] {
+        assert!(
+            parse_hgvs(input).is_err(),
+            "range-LHS substitution compact form must be rejected, but `{input}` parsed"
+        );
+    }
+    // Range del / dup remain valid (they legitimately span the interval).
+    for input in ["NM_000088.3:c.79_80=/del", "NM_000088.3:c.79_80=/dup"] {
+        assert!(
+            parse_hgvs(input).is_ok(),
+            "range-LHS del/dup compact form must still parse: `{input}`"
+        );
+    }
+}
+
+/// RNA compact mosaic/chimeric forms must preserve lowercase bases on the
+/// bare-edit RHS — HGVS renders RNA in lowercase. Previously the bare-edit
+/// RHS routed through `NaEdit`'s uppercase `Display`, losing the RNA case.
+#[test]
+fn rna_compact_mosaic_chimeric_preserves_lowercase() {
+    for input in [
+        "NM_004006.3:r.85=/u>c",
+        "NM_004006.3:r.85=//u>c",
+        "NR_002196.2:r.100=/a>g",
+        "NR_002196.2:r.100=//a>g",
+    ] {
+        let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("must parse `{input}`: {e}"));
+        assert_eq!(
+            format!("{parsed}"),
+            input,
+            "RNA case round-trip for `{input}`"
         );
     }
 }

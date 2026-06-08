@@ -4873,7 +4873,90 @@ fn parse_compact_mosaic_rhs(
     lhs: &HgvsVariant,
 ) -> Result<Option<HgvsVariant>, FerroError> {
     use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::interval::Interval;
     use crate::hgvs::parser::edit::parse_na_edit;
+
+    /// A single-base substitution targets one position, so the inherited
+    /// compact-mosaic LHS identity must be a point (`c.85=`), not a range
+    /// (`c.79_80=`). True only when both boundaries are present and equal;
+    /// a complex / unknown boundary is not a point.
+    fn interval_is_point<T: PartialEq>(interval: &Interval<T>) -> bool {
+        matches!(
+            (interval.start.inner(), interval.end.inner()),
+            (Some(start), Some(end)) if start == end
+        )
+    }
+
+    // Protein LHS: `<acc>:p.<pos>=` identity (the `=/` somatic and/or
+    // form). The bare RHS is either a protein edit (`del`, `dup`,
+    // `delins…`) or a bare alternative amino acid (`Cys`); the latter
+    // forms a substitution inheriting the LHS reference amino acid and
+    // position.
+    if let HgvsVariant::Protein(lhs_p) = lhs {
+        use crate::hgvs::edit::ProteinEdit;
+        use crate::hgvs::parser::edit::parse_protein_edit;
+        use crate::hgvs::parser::position::parse_amino_acid;
+
+        // Eligible only for a position-bound protein identity LHS.
+        if !matches!(
+            lhs_p.loc_edit.edit.inner(),
+            Some(ProteinEdit::Identity {
+                whole_protein: false,
+                ..
+            })
+        ) {
+            return Ok(None);
+        }
+
+        // Prefer a fully-consumed protein edit (`del`/`dup`/`delins…`);
+        // otherwise treat a fully-consumed bare amino acid as the
+        // alternative of a substitution at the inherited position. A bare
+        // amino acid (`Cys`) is also accepted by `parse_protein_edit` as a
+        // `Substitution { reference: Xaa, .. }` — the edit syntax alone
+        // carries no reference — so both arms funnel into the same
+        // substitution-reference fix-up below.
+        let prot_edit = match parse_protein_edit(rhs) {
+            Ok((rem, e)) if rem.trim().is_empty() => e,
+            _ => match parse_amino_acid(rhs) {
+                Ok((rem, alt)) if rem.trim().is_empty() => ProteinEdit::Substitution {
+                    reference: AminoAcid::Xaa,
+                    alternative: alt,
+                },
+                _ => return Ok(None),
+            },
+        };
+
+        // A substitution targets a single residue, and its reference amino
+        // acid comes from the inherited LHS position. Require a point identity
+        // LHS (`p.Trp24=`), not a range (`p.Trp24_Cys26=`) — a range would
+        // build a malformed substitution spanning the whole interval — and
+        // inherit the reference AA from that point. Non-substitution edits
+        // (`del`/`dup`/`delins…`) legitimately span a range, so leave them be.
+        let prot_edit = match prot_edit {
+            ProteinEdit::Substitution { alternative, .. } => {
+                let (Some(start_pos), Some(end_pos)) = (
+                    lhs_p.loc_edit.location.start.inner(),
+                    lhs_p.loc_edit.location.end.inner(),
+                ) else {
+                    return Ok(None);
+                };
+                if start_pos != end_pos {
+                    return Ok(None);
+                }
+                ProteinEdit::Substitution {
+                    reference: start_pos.aa,
+                    alternative,
+                }
+            }
+            other => other,
+        };
+
+        return Ok(Some(HgvsVariant::Protein(ProteinVariant {
+            accession: lhs_p.accession.clone(),
+            gene_symbol: lhs_p.gene_symbol.clone(),
+            loc_edit: LocEdit::new(lhs_p.loc_edit.location.clone(), prot_edit),
+        })));
+    }
 
     // Eligibility: LHS must carry a position-bound (not whole-entity)
     // identity edit on a NA coord system.
@@ -4940,6 +5023,29 @@ fn parse_compact_mosaic_rhs(
             ),
             diagnostic: None,
         });
+    }
+
+    // A single-base substitution (`A>G` / `>G`) targets one position, so the
+    // inherited LHS identity must be a point (`c.85=`), not a range
+    // (`c.79_80=`) — a range would build a malformed substitution spanning the
+    // whole interval. del / dup / ins / inv / delins legitimately span a
+    // range, so leave them be. Reject so the caller falls to its error path.
+    if matches!(
+        edit,
+        NaEdit::Substitution { .. } | NaEdit::SubstitutionNoRef { .. }
+    ) {
+        let lhs_is_point = match lhs {
+            HgvsVariant::Genome(v) => interval_is_point(&v.loc_edit.location),
+            HgvsVariant::Cds(v) => interval_is_point(&v.loc_edit.location),
+            HgvsVariant::Tx(v) => interval_is_point(&v.loc_edit.location),
+            HgvsVariant::Rna(v) => interval_is_point(&v.loc_edit.location),
+            HgvsVariant::Mt(v) => interval_is_point(&v.loc_edit.location),
+            HgvsVariant::Circular(v) => interval_is_point(&v.loc_edit.location),
+            _ => false,
+        };
+        if !lhs_is_point {
+            return Ok(None);
+        }
     }
 
     // Build the RHS variant by cloning LHS's accession + gene_symbol +
