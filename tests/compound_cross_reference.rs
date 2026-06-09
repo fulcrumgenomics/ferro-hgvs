@@ -19,10 +19,12 @@
 //!    the relative order of sub-variants.
 //! 2. Phase is preserved (cis `[a;b]`, trans `[a];[b]`, mosaic `a/b`,
 //!    chimeric `a//b`, unknown `[a(;)b]`).
-//! 3. Display falls back to the *expanded* form (each sub-variant prints
-//!    its own `ACC:type.` prefix) whenever the sub-variants do not share
-//!    both accession and coordinate type. The compact form
-//!    (`ACC:type.[edit;edit]`) is a strict optimization for the common case.
+//! 3. Display uses the compact form (`ACC:type.[edit];[edit]` for trans,
+//!    `ACC:type.[edit;edit]` for cis) whenever the concrete members share
+//!    both accession and coordinate type. `[0]`/`[?]` markers in a trans
+//!    allele contribute no accession and are permitted alongside concrete
+//!    members without breaking the compact form. Display falls back to the
+//!    expanded form only when concrete members disagree on accession or type.
 //! 4. Each sub-variant normalizes independently against its own reference;
 //!    a c. dup with a transcript provider 3'-shifts even when its
 //!    cis-companion is a g. variant on a different (un-resolvable) accession.
@@ -795,7 +797,8 @@ fn test_spec_discouraged_cross_reference_trans_accepted() {
 
 #[test]
 fn test_trans_cross_reference_with_null_allele() {
-    let input = "[NM_000088.3:c.1A>G];[0]";
+    // Single shared accession + `[0]` marker -> compact canonical form.
+    let input = "NM_000088.3:c.[1A>G];[0]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Trans, 2);
     assert!(matches!(allele.variants[0], HgvsVariant::Cds(_)));
@@ -804,7 +807,8 @@ fn test_trans_cross_reference_with_null_allele() {
 
 #[test]
 fn test_trans_cross_reference_with_unknown_allele() {
-    let input = "[NM_000088.3:c.1A>G];[?]";
+    // Single shared accession + `[?]` marker -> compact canonical form.
+    let input = "NM_000088.3:c.[1A>G];[?]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Trans, 2);
     assert!(matches!(allele.variants[0], HgvsVariant::Cds(_)));
@@ -813,12 +817,13 @@ fn test_trans_cross_reference_with_unknown_allele() {
 
 #[test]
 fn test_trans_cross_reference_marker_normalize_preserves_shape() {
-    // Markers ride through normalize untouched; the c. partner
-    // normalizes (or no-ops) but the marker leg stays as `[0]` / `[?]`.
+    // Markers ride through normalize untouched; the c. partner normalizes
+    // (or no-ops) but the marker leg stays as `[0]` / `[?]`. Output is the
+    // compact canonical form (shared accession written once).
     let null_normalized = normalize_to_string("[NM_000088.3:c.1A>G];[0]");
-    assert_eq!(null_normalized, "[NM_000088.3:c.1A>G];[0]");
+    assert_eq!(null_normalized, "NM_000088.3:c.[1A>G];[0]");
     let unk_normalized = normalize_to_string("[NM_000088.3:c.1A>G];[?]");
-    assert_eq!(unk_normalized, "[NM_000088.3:c.1A>G];[?]");
+    assert_eq!(unk_normalized, "NM_000088.3:c.[1A>G];[?]");
 }
 
 #[test]

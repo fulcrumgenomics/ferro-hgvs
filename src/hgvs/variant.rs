@@ -1177,49 +1177,21 @@ impl fmt::Display for AlleleVariant {
                 }
             }
             AllelePhase::Trans => {
-                // A trans member that is itself a nested cis group (`[a;b]`)
-                // needs dedicated rendering; the existing flat-trans paths
-                // (which `fmt_loc_edit` a single leaf per bracket) can't
-                // express it. Only take the nested path when a nested member
-                // is actually present, so flat trans Display is unchanged.
-                let has_nested_group = self
-                    .variants
-                    .iter()
-                    .any(|v| matches!(v, HgvsVariant::Allele(_)));
-                if has_nested_group {
-                    if let Some(anchor) = trans_compact_anchor(&self.variants) {
-                        // Compact: ACC:c.[a;b];[c;d] — prefix once, then each
-                        // member's bracket-inner content.
-                        write_compact_prefix(f, anchor)?;
-                        for (i, v) in self.variants.iter().enumerate() {
-                            if i > 0 {
-                                write!(f, ";")?;
-                            }
-                            write!(f, "[")?;
-                            write_trans_member(f, v)?;
-                            write!(f, "]")?;
-                        }
-                        Ok(())
-                    } else {
-                        // Mixed-reference nested trans (not a spec target):
-                        // expanded, each member rendered in full.
-                        for (i, v) in self.variants.iter().enumerate() {
-                            if i > 0 {
-                                write!(f, ";")?;
-                            }
-                            write!(f, "[{}]", v)?;
-                        }
-                        Ok(())
-                    }
-                } else if use_compact_form(&self.variants) {
-                    // Compact form: ACC:g.[edit1];[edit2]
-                    write_compact_prefix(f, &self.variants[0])?;
+                // `trans_compact_anchor` returns the anchoring leaf when the
+                // concrete members share an accession + coord type — nested
+                // cis groups (`[a;b]`), `[0]`/`[?]` markers (which contribute
+                // no anchor), and plain leaves all qualify. The shared
+                // accession is written once and each member is rendered as
+                // its bracket-inner content via `write_trans_member`, giving
+                // the compact `ACC:c.[a;b];[c;d]` / `ACC:c.[X];[?]` forms.
+                if let Some(anchor) = trans_compact_anchor(&self.variants) {
+                    write_compact_prefix(f, anchor)?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, ";")?;
                         }
                         write!(f, "[")?;
-                        v.fmt_loc_edit(f)?;
+                        write_trans_member(f, v)?;
                         write!(f, "]")?;
                     }
                     Ok(())

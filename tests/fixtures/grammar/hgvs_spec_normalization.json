@@ -10,11 +10,11 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 50,
-      "diverges": 136,
+      "diverges": 133,
       "false-acceptance": 75,
       "needs-reference": 31,
       "parse-error": 329,
-      "preserved": 651
+      "preserved": 654
     },
     "by_coordinate_system": {
       "c": 464,
@@ -282,18 +282,6 @@
       "source_paths": [
         "docs/recommendations/DNA/alleles.md"
       ]
-    },
-    {
-      "input": "NM_004006.2:c.[2376G>C];[?]",
-      "current": "[NM_004006.2:c.2376G>C];[?]",
-      "spec_expected": "NM_004006.2:c.[2376G>C];[?]",
-      "status": "diverges",
-      "coordinate_system": "c",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/DNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
       "input": "c.35delG",
@@ -4019,6 +4007,17 @@
       "input": "NM_004006.2:c.[2376G>C];[3103del]",
       "current": "NM_004006.2:c.[2376G>C];[3103del]",
       "spec_expected": "NM_004006.2:c.[2376G>C];[3103del]",
+      "status": "preserved",
+      "coordinate_system": "c",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/DNA/alleles.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:c.[2376G>C];[?]",
+      "current": "NM_004006.2:c.[2376G>C];[?]",
+      "spec_expected": "NM_004006.2:c.[2376G>C];[?]",
       "status": "preserved",
       "coordinate_system": "c",
       "source_kind": "recommendation",
@@ -10268,18 +10267,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_003997.1:p.[(Ser68Arg)];[?]",
-      "current": "[NP_003997.1:p.(Ser68Arg)];[?]",
-      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[?]",
-      "status": "diverges",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_003997.2:p.(Asn444Lysfs*15)",
       "current": "NP_003997.2:p.(Asn444LysfsTer15)",
       "spec_expected": "NP_003997.2:p.(Asn444Lysfs*15)",
@@ -11384,6 +11371,17 @@
       "input": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
       "current": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
       "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "current": "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[?]",
       "status": "preserved",
       "coordinate_system": "p",
       "source_kind": "recommendation",
@@ -12907,18 +12905,6 @@
       "source_paths": [
         "docs/recommendations/RNA/alleles.md"
       ]
-    },
-    {
-      "input": "NM_004006.2:r.[76a>u];[?]",
-      "current": "[NM_004006.2:r.76a>u];[?]",
-      "spec_expected": "NM_004006.2:r.[76a>u];[?]",
-      "status": "diverges",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
       "input": "NM_004006.3:r.85=//u>c",
@@ -14741,6 +14727,17 @@
       "input": "NM_004006.2:r.[76a>u];[76a>u]",
       "current": "NM_004006.2:r.[76a>u];[76a>u]",
       "spec_expected": "NM_004006.2:r.[76a>u];[76a>u]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "NM_004006.2:r.[76a>u];[?]",
+      "current": "NM_004006.2:r.[76a>u];[?]",
+      "spec_expected": "NM_004006.2:r.[76a>u];[?]",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",

@@ -235,25 +235,22 @@ fn delins_reference_with_nested_repeat_count_parses_and_defers() {
 fn trans_compound_repeat_alongside_null_allele() {
     // `[0]` is the spec's "no allele" marker. The trans helper has a
     // dedicated branch for it (`content == "0"`); confirm it still
-    // works when the *other* allele contains a nested repeat
-    // count's `[N]`. The Display path falls back to the
-    // fully-qualified form `[ACC:variant];[0]` (compact-prefix is
-    // only used when both alleles are real variants sharing an
-    // accession).
-    let input = "NC_000001.11:g.[100_105TG[3]];[0]";
-    let canonical = "[NC_000001.11:g.100_105TG[3]];[0]";
-    assert_eq!(round_trip(input), canonical);
+    // works when the *other* allele contains a nested repeat count's
+    // `[N]`. Display uses the compact form: the marker contributes no
+    // accession, so the single real allele's accession anchors the
+    // shared prefix written once — `ACC:g.[variant];[0]`.
+    let canonical = "NC_000001.11:g.[100_105TG[3]];[0]";
     assert_eq!(round_trip(canonical), canonical);
+    assert_eq!(round_trip("[NC_000001.11:g.100_105TG[3]];[0]"), canonical);
 }
 
 #[test]
 fn trans_compound_repeat_alongside_unknown_allele() {
-    // `[?]` is the spec's "unknown allele" marker. Same Display shape
-    // as the null-allele test above.
-    let input = "NC_000001.11:g.[100_105TG[3]];[?]";
-    let canonical = "[NC_000001.11:g.100_105TG[3]];[?]";
-    assert_eq!(round_trip(input), canonical);
+    // `[?]` is the spec's "unknown allele" marker. Same compact Display
+    // shape as the null-allele test above.
+    let canonical = "NC_000001.11:g.[100_105TG[3]];[?]";
     assert_eq!(round_trip(canonical), canonical);
+    assert_eq!(round_trip("[NC_000001.11:g.100_105TG[3]];[?]"), canonical);
 }
 
 // =============================================================================

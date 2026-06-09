@@ -632,8 +632,9 @@ fn protein_unknown_bracket_marker_is_unknown_allele_not_protein_edit() {
     // The spec's canonical heterozygous example (alleles.md:43):
     //   NP_003997.1:p.[(Ser68Arg)];[?]
     // Arm 0 is a predicted protein substitution, arm 1 is the bare
-    // `[?]` whole-allele marker.
-    let input = "[NP_003997.1:p.(Ser68Arg)];[?]";
+    // `[?]` whole-allele marker. Compact form: the shared accession is
+    // written once (the `[?]` marker contributes none).
+    let input = "NP_003997.1:p.[(Ser68Arg)];[?]";
     let parsed = parse_hgvs(input).unwrap();
 
     let allele = match &parsed {

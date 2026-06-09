@@ -468,8 +468,11 @@ fn test_trans_p_homozygous_round_trip() {
 /// "second allele unknown" semantics).
 #[test]
 fn test_trans_c_with_unknown_allele_round_trip() {
-    let input = "[NM_000088.3:c.100A>G];[?]";
+    // Canonical (compact) form writes the shared accession once; the
+    // expanded spelling normalizes to it.
+    let input = "NM_000088.3:c.[100A>G];[?]";
     assert_eq!(parse_to_string(input), input);
+    assert_eq!(parse_to_string("[NM_000088.3:c.100A>G];[?]"), input);
     assert_eq!(parse_phase(input), AllelePhase::Trans);
     let parsed = parse_hgvs(input).expect("parse failed");
     if let HgvsVariant::Allele(a) = parsed {
@@ -486,8 +489,11 @@ fn test_trans_c_with_unknown_allele_round_trip() {
 /// `recommendations/DNA/alleles.md`). Lowers to `NullAllele`.
 #[test]
 fn test_trans_c_with_null_allele_round_trip() {
-    let input = "[NM_000088.3:c.100A>G];[0]";
+    // Canonical (compact) form writes the shared accession once; the
+    // expanded spelling normalizes to it.
+    let input = "NM_000088.3:c.[100A>G];[0]";
     assert_eq!(parse_to_string(input), input);
+    assert_eq!(parse_to_string("[NM_000088.3:c.100A>G];[0]"), input);
     assert_eq!(parse_phase(input), AllelePhase::Trans);
     let parsed = parse_hgvs(input).expect("parse failed");
     if let HgvsVariant::Allele(a) = parsed {
@@ -525,23 +531,26 @@ fn test_trans_c_with_wildtype_second_allele_round_trip() {
 /// asserts both special-token branches in that helper.
 #[test]
 fn test_trans_g_with_special_tokens_round_trip() {
-    let unknown = "[NC_000001.11:g.100G>A];[?]";
+    let unknown = "NC_000001.11:g.[100G>A];[?]";
     assert_eq!(parse_to_string(unknown), unknown);
+    assert_eq!(parse_to_string("[NC_000001.11:g.100G>A];[?]"), unknown);
     assert_eq!(parse_phase(unknown), AllelePhase::Trans);
 
-    let null = "[NC_000001.11:g.100G>A];[0]";
+    let null = "NC_000001.11:g.[100G>A];[0]";
     assert_eq!(parse_to_string(null), null);
+    assert_eq!(parse_to_string("[NC_000001.11:g.100G>A];[0]"), null);
     assert_eq!(parse_phase(null), AllelePhase::Trans);
 }
 
 /// `n.[a];[?]`: special tokens reach the new n.-trans helper added above.
-/// The compact form parses; Display emits the expanded form for the [?]
-/// branch (the Allele Display logic detects mixed-variant-kinds and falls
-/// back). The Display→parse round-trip closes the loop.
+/// The compact form parses and Display emits the compact form (shared
+/// accession written once, `[?]` marker after). The Display→parse round-trip
+/// closes the loop.
 #[test]
 fn test_trans_n_with_unknown_allele_round_trip() {
     let parsed = parse_hgvs("NR_X.1:n.[100A>G];[?]").expect("parse failed");
     let displayed = format!("{}", parsed);
+    assert_eq!(displayed, "NR_X.1:n.[100A>G];[?]");
     assert_eq!(parse_to_string(&displayed), displayed);
     if let HgvsVariant::Allele(a) = parsed {
         assert_eq!(a.variants.len(), 2);
