@@ -1446,6 +1446,101 @@ pub(crate) fn split_top_level_slashes(input: &str, want_double: bool) -> Vec<&st
     chunks
 }
 
+/// Find the first top-level `^` (and/or) separator in `input`, or `None`.
+///
+/// "Top level" means bracket depth 0 with respect to *both* `[ ]`
+/// allele brackets and `( )` uncertainty/grouping parens. The latter
+/// matters because `^` also appears *inside* parens as a within-edit
+/// alternative (`c.(370A>C^372C>R)`, `p.(Gly56Ala^Ser^Cys)`); those are
+/// part of a single description and must NOT be mistaken for a
+/// description-joining and/or operator. Only a `^` outside all brackets
+/// and parens joins full descriptions (`ACC1:c.A^ACC2:c.B`).
+pub(crate) fn find_top_level_caret(input: &str) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth -= 1,
+            b'^' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Bracket/paren-depth-aware top-level split on the `^` (and/or)
+/// separator. Mirrors `str::split('^')` but respects `[ ]` and `( )`
+/// nesting. Empty chunks are preserved; callers reject them.
+pub(crate) fn split_top_level_carets(input: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut s = input;
+    loop {
+        match find_top_level_caret(s) {
+            Some(pos) => {
+                chunks.push(&s[..pos]);
+                s = &s[pos + 1..];
+            }
+            None => {
+                chunks.push(s);
+                break;
+            }
+        }
+    }
+    chunks
+}
+
+/// Detect a whole-edit and/or group wrapped in an uncertainty marker,
+/// i.e. `<prefix>(<inner>)` where `<inner>` carries a top-level `^`
+/// (e.g. `NM_004006.2:c.(370A>C^372C>R)`). Returns `(prefix, inner)`,
+/// where `prefix` is the accession + coordinate-type stem (ending in
+/// `.`, e.g. `NM_004006.2:c.`) and `inner` is the `^`-joined edit list.
+///
+/// The matching `(` is found by scanning back from the final `)`, so an
+/// accession-internal paren like `GRCh38(chr1):g.(...)` is not mistaken
+/// for the uncertainty wrapper. Returns `None` unless the input ends in
+/// `)`, the matched `(` is preceded by a `.`, and the inner content has
+/// a top-level `^`. Residue-level alternatives that do not span whole
+/// edits (e.g. `p.(Gly56Ala^Ser^Cys)`) also match this shape; the
+/// caller's per-operand `parse_variant` then rejects the bare-residue
+/// operands, leaving those forms for separate residue-level handling.
+pub(crate) fn find_uncertain_and_or_group(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim();
+    let bytes = input.as_bytes();
+    if bytes.last() != Some(&b')') {
+        return None;
+    }
+    // Find the `(` matching the final `)` by reverse depth scan.
+    let mut depth: i32 = 0;
+    let mut open: Option<usize> = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let prefix = &input[..open];
+    // The uncertainty wrapper opens immediately after the coordinate
+    // type stem (`g.`, `c.`, `p.`, …), so the char before `(` is `.`.
+    if !prefix.ends_with('.') {
+        return None;
+    }
+    let inner = &input[open + 1..input.len() - 1];
+    if find_top_level_caret(inner).is_some() {
+        Some((prefix, inner))
+    } else {
+        None
+    }
+}
+
 /// Result of `scan_allele_separators`: top-level depth-0 allele-separator
 /// flags plus the depth-aware members.
 #[derive(Debug)]
@@ -5144,6 +5239,85 @@ fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     parse_phase_allele(input, AllelePhase::Chimeric)
 }
 
+/// Parse a top-level and/or allele: full descriptions joined by `^`
+/// (HGVS general.md, "variant A and/or variant B"). Each operand is a
+/// complete description and may carry its own accession (possibly
+/// across references, e.g. `NM_000517.4:c.424C>T^NM_000558.3:c.424C>T`),
+/// so each chunk is parsed via the full `parse_variant`. Unlike the
+/// mosaic/chimeric drivers, there is no inherited-accession or compact
+/// fallback — and/or operands are written out in full.
+fn parse_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let input = input.trim();
+    let chunks = split_top_level_carets(input);
+    if chunks.len() < 2 {
+        return Err(FerroError::Parse {
+            pos: 0,
+            msg: "And/or allele requires '^' separator".to_string(),
+            diagnostic: None,
+        });
+    }
+
+    let mut variants: Vec<HgvsVariant> = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: "Empty operand in and/or allele".to_string(),
+                diagnostic: None,
+            });
+        }
+        variants.push(parse_variant(chunk)?);
+    }
+
+    Ok(HgvsVariant::Allele(AlleleVariant::new(
+        variants,
+        AllelePhase::AndOr,
+    )))
+}
+
+/// Parse a whole-edit and/or group wrapped in an uncertainty marker:
+/// `<prefix>(<edit1>^<edit2>^…)`, e.g. `NM_004006.2:c.(370A>C^372C>R)`.
+/// Each operand is a bare position+edit sharing the accession + coord
+/// type given by `prefix`, so each is reconstructed as `<prefix><edit>`
+/// and parsed via the full `parse_variant`. The resulting allele is
+/// marked uncertain so the surrounding `(...)` round-trips.
+fn parse_uncertain_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let (prefix, inner) = find_uncertain_and_or_group(input).ok_or_else(|| FerroError::Parse {
+        pos: 0,
+        msg: "Not an uncertain and/or group".to_string(),
+        diagnostic: None,
+    })?;
+
+    let operands = split_top_level_carets(inner);
+    if operands.len() < 2 {
+        return Err(FerroError::Parse {
+            pos: 0,
+            msg: "Uncertain and/or group requires '^' separator".to_string(),
+            diagnostic: None,
+        });
+    }
+
+    let mut variants: Vec<HgvsVariant> = Vec::with_capacity(operands.len());
+    for operand in operands {
+        let operand = operand.trim();
+        if operand.is_empty() {
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: "Empty operand in uncertain and/or group".to_string(),
+                diagnostic: None,
+            });
+        }
+        let full = format!("{}{}", prefix, operand);
+        variants.push(parse_variant(&full)?);
+    }
+
+    Ok(HgvsVariant::Allele(AlleleVariant::new_uncertain(
+        variants,
+        AllelePhase::AndOr,
+    )))
+}
+
 /// Whether a chunk-level `parse_variant` error carries a structured
 /// `Diagnostic.code` — i.e. it's a semantic violation that
 /// `parse_phase_allele`'s syntactic-recovery fallback chain should
@@ -5582,6 +5756,21 @@ fn detect_allele_type(input: &str) -> Option<&'static str> {
         }
     }
 
+    // Check for and/or: full descriptions joined by a top-level `^`
+    // (outside all `[]`/`()`). A `^` inside parens is a within-edit
+    // alternative belonging to a single description, not a top-level
+    // and/or join, so `find_top_level_caret` ignores it.
+    if find_top_level_caret(input).is_some() {
+        return Some("and_or");
+    }
+
+    // Check for an uncertainty-wrapped whole-edit and/or group, where
+    // the `^` lives inside the trailing `(...)`, e.g.
+    // `NM_004006.2:c.(370A>C^372C>R)`.
+    if find_uncertain_and_or_group(input).is_some() {
+        return Some("uncertain_and_or");
+    }
+
     // Check for trans: [var];[var] pattern
     if input.starts_with('[') && input.contains("];[") {
         return Some("trans");
@@ -5861,6 +6050,8 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
             "chimeric" => parse_chimeric_allele(input)?,
             "unknown_phase" => parse_unknown_phase_allele(input)?,
             "rna_fusion" => parse_rna_fusion(input)?,
+            "and_or" => parse_and_or_allele(input)?,
+            "uncertain_and_or" => parse_uncertain_and_or_allele(input)?,
             _ => unreachable!(),
         }
     } else {
@@ -7105,6 +7296,51 @@ mod tests {
         assert_eq!(
             format!("{}", variant),
             "NM_000088.3:c.100A>G//NM_000088.3:c.200C>T"
+        );
+    }
+
+    #[test]
+    fn test_parse_and_or_top_level_cross_reference() {
+        // And/or `^` between two full descriptions across references
+        // (HGVS general.md): "variant A and/or variant B".
+        let variant = parse_variant("NM_000517.4:c.424C>T^NM_000558.3:c.424C>T").unwrap();
+        assert!(matches!(variant, HgvsVariant::Allele(_)));
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::AndOr);
+            assert_eq!(allele.variants.len(), 2);
+        }
+        assert_eq!(
+            format!("{}", variant),
+            "NM_000517.4:c.424C>T^NM_000558.3:c.424C>T"
+        );
+    }
+
+    #[test]
+    fn test_parse_and_or_uncertain_whole_edit_cds() {
+        // And/or `^` between two whole edits inside an uncertainty
+        // wrapper `(...)`; operands are full position+edits at different
+        // positions (HGVS general.md). Parens must round-trip.
+        let variant = parse_variant("NM_004006.2:c.(370A>C^372C>R)").unwrap();
+        assert!(matches!(variant, HgvsVariant::Allele(_)));
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::AndOr);
+            assert_eq!(allele.variants.len(), 2);
+        }
+        assert_eq!(format!("{}", variant), "NM_004006.2:c.(370A>C^372C>R)");
+    }
+
+    #[test]
+    fn test_parse_and_or_uncertain_whole_edit_protein() {
+        // Two whole protein descriptions joined by `^` inside `(...)`.
+        let variant = parse_variant("NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)").unwrap();
+        assert!(matches!(variant, HgvsVariant::Allele(_)));
+        if let HgvsVariant::Allele(allele) = &variant {
+            assert_eq!(allele.phase, AllelePhase::AndOr);
+            assert_eq!(allele.variants.len(), 2);
+        }
+        assert_eq!(
+            format!("{}", variant),
+            "NP_003997.1:p.(Gly23GlufsTer7^Gly23CysfsTer26)"
         );
     }
 

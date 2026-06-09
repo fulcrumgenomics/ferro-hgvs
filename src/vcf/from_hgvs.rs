@@ -1025,10 +1025,7 @@ mod tests {
         let provider = MockProvider::new();
         let converter = HgvsToVcfConverter::new(&transcript, &provider);
 
-        let variant = HgvsVariant::Allele(AlleleVariant {
-            variants: vec![],
-            phase: AllelePhase::Cis,
-        });
+        let variant = HgvsVariant::Allele(AlleleVariant::new(vec![], AllelePhase::Cis));
 
         let result = converter.convert(&variant);
         assert!(result.is_err());
@@ -1052,10 +1049,7 @@ mod tests {
             ),
         });
 
-        let variant = HgvsVariant::Allele(AlleleVariant {
-            variants: vec![inner],
-            phase: AllelePhase::Cis,
-        });
+        let variant = HgvsVariant::Allele(AlleleVariant::new(vec![inner], AllelePhase::Cis));
 
         let result = converter.convert(&variant);
         assert!(result.is_ok());
@@ -1090,10 +1084,8 @@ mod tests {
             ),
         });
 
-        let variant = HgvsVariant::Allele(AlleleVariant {
-            variants: vec![inner1, inner2],
-            phase: AllelePhase::Cis,
-        });
+        let variant =
+            HgvsVariant::Allele(AlleleVariant::new(vec![inner1, inner2], AllelePhase::Cis));
 
         let result = converter.convert(&variant);
         assert!(result.is_err());
