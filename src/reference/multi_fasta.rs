@@ -20,7 +20,7 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,43 @@ use std::sync::{Arc, Mutex};
 use log::warn;
 use lru::LruCache;
 use rustc_hash::FxHashMap;
+
+/// Read exactly `buf.len()` bytes from `file` starting at byte `offset`, using a
+/// positioned read (no shared file cursor, no `seek`), so a cached read-only
+/// handle can be shared across calls and threads. Implemented per-platform:
+/// `pread` on Unix, `seek_read` on Windows. On other targets (e.g. WASM, WASI,
+/// Redox) the implementation clones the file descriptor and performs a
+/// `seek` + `read_exact` on the clone so the caller's handle cursor is
+/// unaffected and the cached handle remains shareable.
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let n = file.seek_read(&mut buf[filled..], offset + filled as u64)?;
+        if n == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        filled += n;
+    }
+    Ok(())
+}
+
+/// Fallback for targets that are neither Unix nor Windows (e.g. WASM, WASI, Redox).
+/// Clones the file descriptor so the seek does not disturb the cached handle's cursor.
+#[cfg(not(any(unix, windows)))]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut cloned = file.try_clone()?;
+    cloned.seek(SeekFrom::Start(offset))?;
+    cloned.read_exact(buf)
+}
 
 use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
@@ -154,6 +191,12 @@ pub struct MultiFastaProvider {
     /// resolution correct: the same accession on different builds caches
     /// distinctly. See the resolve-cache perf work.
     transcript_cache: TranscriptCache,
+    /// Cache of open FASTA file handles keyed by path. Sequence reads use a
+    /// positioned `read_exact_at` on a reused handle (one syscall) instead of
+    /// reopening the file on every read — `File::open` per read was ~10 us and
+    /// dominated `get_sequence`/transcript resolution. There are only a handful
+    /// of distinct FASTA files (genome, transcripts, LRG), so this is bounded.
+    open_files: Mutex<FxHashMap<PathBuf, Arc<File>>>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -248,6 +291,7 @@ impl MultiFastaProvider {
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
+            open_files: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -280,6 +324,7 @@ impl MultiFastaProvider {
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
+            open_files: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -581,6 +626,7 @@ impl MultiFastaProvider {
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
+            open_files: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -665,18 +711,27 @@ impl MultiFastaProvider {
         let num_lines = (seq_len + byte_offset).div_ceil(entry.line_bases);
         let bytes_to_read = seq_len + num_lines; // Extra for newlines
 
-        // Read from file
-        let mut file = File::open(&entry.file_path).map_err(|e| FerroError::Io {
-            msg: format!("Failed to open FASTA file: {}", e),
-        })?;
-
-        file.seek(SeekFrom::Start(file_offset))
-            .map_err(|e| FerroError::Io {
-                msg: format!("Failed to seek in FASTA file: {}", e),
+        // Reuse a cached open handle and read positionally at `file_offset`
+        // (one pread, no open/seek/close, no shared cursor) instead of
+        // reopening the file on every read.
+        let file = {
+            let mut handles = self.open_files.lock().map_err(|_| FerroError::Io {
+                msg: "open_files mutex poisoned".to_string(),
             })?;
+            match handles.get(&entry.file_path) {
+                Some(f) => Arc::clone(f),
+                None => {
+                    let f = Arc::new(File::open(&entry.file_path).map_err(|e| FerroError::Io {
+                        msg: format!("Failed to open FASTA file: {}", e),
+                    })?);
+                    handles.insert(entry.file_path.clone(), Arc::clone(&f));
+                    f
+                }
+            }
+        };
 
         let mut buffer = vec![0u8; bytes_to_read as usize];
-        file.read_exact(&mut buffer).map_err(|e| FerroError::Io {
+        read_exact_at(&file, &mut buffer, file_offset).map_err(|e| FerroError::Io {
             msg: format!("Failed to read from FASTA file: {}", e),
         })?;
 
@@ -2158,6 +2213,57 @@ mod tests {
         }
         let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
         (provider, dir)
+    }
+
+    /// Repeated and offset reads through the cached file handle return the
+    /// correct, consistent bytes — i.e. positioned `read_exact_at` on a reused
+    /// handle behaves like the old open-seek-read per call.
+    #[test]
+    fn cached_handle_reads_are_correct_and_repeatable() {
+        // NC_TEST.1 = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC"
+        let (provider, _dir) = build_provider_with_test_genome();
+        // First read opens + caches the handle; the second reuses it.
+        let a = provider.get_sequence("NC_TEST.1", 0, 8).unwrap();
+        let b = provider.get_sequence("NC_TEST.1", 0, 8).unwrap();
+        assert_eq!(a, "AAAACCCC");
+        assert_eq!(a, b, "repeated read via cached handle must be identical");
+        // A different offset on the same cached handle reads the right window.
+        assert_eq!(
+            provider.get_sequence("NC_TEST.1", 4, 12).unwrap(),
+            "CCCCGGGG"
+        );
+        assert_eq!(provider.get_sequence("NC_TEST.1", 36, 40).unwrap(), "CCCC");
+    }
+
+    /// Deleting the backing FASTA after the provider is built triggers a
+    /// `FerroError::Io` on the first read (cache miss → `File::open` fails).
+    #[test]
+    fn cached_handle_open_failure_returns_io_error() {
+        let dir = tempdir().unwrap();
+
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+
+        // NC_TEST.1: 10 bases, sequence starts at byte offset 12 (">NC_TEST.1\n")
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">NC_TEST.1").unwrap();
+        writeln!(fasta_file, "AAACCCTTTG").unwrap();
+        drop(fasta_file);
+
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "NC_TEST.1\t10\t11\t10\t11").unwrap();
+        drop(fai_file);
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        // Delete the FASTA so the cache-miss File::open path fails.
+        std::fs::remove_file(&fasta_path).unwrap();
+
+        let err = provider.get_sequence("NC_TEST.1", 0, 5).unwrap_err();
+        assert!(
+            matches!(err, FerroError::Io { .. }),
+            "expected FerroError::Io after backing file is removed, got {err:?}"
+        );
     }
 
     /// Build a single-exon synthetic `Transcript` over NC_TEST.1[10..30]
