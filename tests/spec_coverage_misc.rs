@@ -263,9 +263,10 @@ fn f16_open_side_uncertain_breakpoint() {
 /// protein-alleles:S-S8 — Predicted-each-cis form `p.[(a);(b)]`.
 #[test]
 fn f16_protein_predicted_each_cis() {
-    pin_reject(
+    pin_round_trip(
         "NP_003997.1:p.[(Trp24Cys);(Lys25Arg)]",
-        "protein/alleles.md silent on predicted-each-cis combination; ferro currently rejects",
+        "NP_003997.1:p.[(Trp24Cys);(Lys25Arg)]",
+        "predicted-each-cis protein allele now parses and round-trips (#544)",
     );
 }
 

@@ -10,11 +10,11 @@
     "total": 1272,
     "by_status": {
       "correctly-rejected": 50,
-      "diverges": 133,
+      "diverges": 134,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 324,
-      "preserved": 659
+      "parse-error": 320,
+      "preserved": 662
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10266,6 +10266,18 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
+      "input": "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "current": "[NP_003997.1:p.(Ser68Arg)];[?]",
+      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[?]",
+      "status": "diverges",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
+      ],
+      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
+    },
+    {
       "input": "NP_003997.2:p.(Asn444Lysfs*15)",
       "current": "NP_003997.2:p.(Asn444LysfsTer15)",
       "spec_expected": "NP_003997.2:p.(Asn444Lysfs*15)",
@@ -10826,30 +10838,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Ser68Arg)];[(Ser68Arg)]\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.[(Ser68Arg)];[?]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Ser68Arg)];[?]\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[?]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Ser68Arg;Asn594del)]\", code: Tag })",
       "spec_expected": "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
@@ -10858,18 +10846,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/alleles.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Ser73Arg)];[(Asn103del)]\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "syntax_yaml",
-      "source_paths": [
-        "docs/syntax.yaml"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -10899,7 +10875,7 @@
     },
     {
       "input": "NP_003997.2:p.[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"[(Asn158Asp)(;)(Asn158Ile)]\", code: Tag })",
+      "current": "parse error: Parse error at position 0: Failed to parse accession: Error(Error { input: \"[(Asn158Val)]\", code: Alpha })",
       "spec_expected": "NP_003997.2:p.[(Asn158Asp)(;)(Asn158Ile)]^[(Asn158Val)]",
       "status": "parse-error",
       "coordinate_system": "p",
@@ -11357,6 +11333,28 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/duplication.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "current": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "spec_expected": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/alleles.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
+      "current": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
+      "spec_expected": "NP_003997.1:p.[(Ser73Arg)];[(Asn103del)]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "syntax_yaml",
+      "source_paths": [
+        "docs/syntax.yaml"
       ]
     },
     {
