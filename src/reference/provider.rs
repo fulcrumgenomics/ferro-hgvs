@@ -138,6 +138,61 @@ pub trait ReferenceProvider {
         })
     }
 
+    /// Return the length (in amino acids) of the named protein.
+    ///
+    /// # Arguments
+    ///
+    /// * `accession` - Protein accession (e.g., `"NP_000079.2"`)
+    ///
+    /// # Returns
+    ///
+    /// The protein length in amino acids, or `0` if the accession cannot be
+    /// resolved by this provider — matching the historical probe's semantics
+    /// (see below), so a missing protein behaves identically to before. (The
+    /// `Result` is retained for providers that surface genuine I/O errors.)
+    ///
+    /// The default implementation discovers the length by probing
+    /// [`get_protein_sequence`](Self::get_protein_sequence) with
+    /// `get_protein_sequence(accession, 0, n)` and binary-searching for
+    /// the largest accepted `n`, which equals the protein length. This
+    /// preserves the exact semantics of the historical probe: a protein
+    /// of length zero (or one the provider cannot resolve) yields a
+    /// length of `0`. Providers that store length metadata override this
+    /// to return the length directly without cloning the sequence.
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        const SEED: u64 = 64 * 1024;
+        const CAP: u64 = 1 << 30;
+
+        let probe_ok = |n: u64| self.get_protein_sequence(accession, 0, n).is_ok();
+
+        let (mut lo, mut hi) = if probe_ok(SEED) {
+            // Common case: the seed succeeded. Grow only if the protein
+            // is even longer (vanishingly rare).
+            let mut hi = SEED;
+            let mut lo = SEED;
+            while probe_ok(hi) {
+                lo = hi;
+                if hi >= CAP {
+                    break;
+                }
+                hi = hi.saturating_mul(2);
+            }
+            (lo, hi)
+        } else {
+            // Seed failed, so the exact length is in `[0, SEED)`.
+            (0, SEED)
+        };
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if probe_ok(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+
     /// Check if this provider has protein sequence data
     fn has_protein_data(&self) -> bool {
         false
@@ -204,6 +259,10 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
         end: u64,
     ) -> Result<String, FerroError> {
         (**self).get_protein_sequence(accession, start, end)
+    }
+
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        (**self).get_protein_length(accession)
     }
 
     fn has_protein_data(&self) -> bool {
