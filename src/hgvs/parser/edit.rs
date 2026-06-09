@@ -1653,6 +1653,45 @@ fn parse_protein_frameshift(input: &str) -> IResult<&str, ProteinEdit> {
     ))
 }
 
+/// Parse a frameshift whose new residue is one of several alternatives:
+/// `(aa^aa^...)fs[ter]` (e.g. `(Ala^Ser)fsTer23`). Requires at least two
+/// alternatives — a single `(aa)fs` is not this form.
+fn parse_protein_frameshift_alternatives(input: &str) -> IResult<&str, ProteinEdit> {
+    let (rest, _) = char('(').parse(input)?;
+    let (rest, first) = parse_amino_acid.parse(rest)?;
+    let mut alternatives = vec![first];
+    let mut rest = rest;
+    while let Some(after_caret) = rest.strip_prefix('^') {
+        let (next, aa) = parse_amino_acid.parse(after_caret)?;
+        alternatives.push(aa);
+        rest = next;
+    }
+    if alternatives.len() < 2 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let rest = rest
+        .strip_prefix(')')
+        .ok_or_else(|| nom::Err::Error(nom::error::Error::new(rest, nom::error::ErrorKind::Tag)))?;
+    let (rest, _) = tag("fs").parse(rest)?;
+    let (rest, ter) = opt(alt((
+        map(tag("Ter?"), |_| FrameshiftTer::Unknown),
+        map(tag("*?"), |_| FrameshiftTer::Unknown),
+        preceded(tag("Ter"), map_res(digit1, parse_frameshift_ter_at)),
+        preceded(tag("*"), map_res(digit1, parse_frameshift_ter_at)),
+    )))
+    .parse(rest)?;
+    Ok((
+        rest,
+        ProteinEdit::FrameshiftAlternatives {
+            alternatives,
+            ter: ter.unwrap_or(FrameshiftTer::Unspecified),
+        },
+    ))
+}
+
 /// Parse the digits of a concrete frameshift termination position into
 /// [`FrameshiftTer::At`]. The position is 1-based (`docs/syntax.yaml`, `aa.fs`;
 /// the first changed amino acid is position 1), so `0` is rejected. Returning
@@ -1983,6 +2022,11 @@ pub fn parse_protein_edit(input: &str) -> IResult<&str, ProteinEdit> {
             // (N_?) uncertain extension annotation pattern (e.g., (41_?))
             // This indicates an uncertain C-terminal extension position
             if let Ok(result) = parse_uncertain_extension_annotation(input) {
+                return Ok(result);
+            }
+            // (aa^aa...)fs<ter> — frameshift whose new residue is one of
+            // several alternatives (e.g. `(Ala^Ser)fsTer23`).
+            if let Ok(result) = parse_protein_frameshift_alternatives(input) {
                 return Ok(result);
             }
             Err(nom::Err::Error(nom::error::Error::new(

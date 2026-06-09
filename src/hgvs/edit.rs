@@ -1001,6 +1001,17 @@ pub enum ProteinEdit {
         ter: FrameshiftTer,
     },
 
+    /// Frameshift whose new residue is one of several alternatives joined by
+    /// `^` inside a wrapper (e.g. `p.Gly719(Ala^Ser)fsTer23`; HGVS
+    /// general.md). The position comes from the location; the alternative
+    /// new residues and the termination detail are stored here.
+    FrameshiftAlternatives {
+        /// The candidate new amino acids at the frameshift position.
+        alternatives: Vec<AminoAcid>,
+        /// Termination detail of the shifted reading frame.
+        ter: FrameshiftTer,
+    },
+
     /// Extension: extension beyond normal start/stop (e.g., p.Met1ext-5, p.Ter110Glnext*17)
     Extension {
         /// The new amino acid at the extension position (e.g., Gln in p.Ter110Glnext*17)
@@ -1167,6 +1178,24 @@ impl fmt::Display for ProteinEdit {
                 // Three-letter `Ter` is the spec-preferred form for the
                 // termination codon (`*` is an accepted input alternative);
                 // Display canonicalizes both to `Ter`.
+                match ter {
+                    FrameshiftTer::Unspecified => {}
+                    FrameshiftTer::Unknown => write!(f, "Ter?")?,
+                    FrameshiftTer::At(pos) => write!(f, "Ter{}", pos)?,
+                }
+                Ok(())
+            }
+            ProteinEdit::FrameshiftAlternatives { alternatives, ter } => {
+                // `(alt1^alt2)fs<ter>` — the new residue is one of the
+                // alternatives, wrapped in parens.
+                write!(f, "(")?;
+                for (i, aa) in alternatives.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "^")?;
+                    }
+                    write!(f, "{}", aa)?;
+                }
+                write!(f, ")fs")?;
                 match ter {
                     FrameshiftTer::Unspecified => {}
                     FrameshiftTer::Unknown => write!(f, "Ter?")?,
