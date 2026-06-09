@@ -2,10 +2,15 @@
 //!
 //! Run with: cargo bench
 //! Run specific benchmark: cargo bench -- parsing
+//!
+//! VERSION FLOOR: v0.4.0 — SWEPT target. Every group/case here parses and normalizes at v0.4.0 (verified by probe), so scripts/perf/sweep_tags.sh overlays this file onto all release tags for regression detection. Do NOT add cases that don't compile+resolve at v0.4.0 — put those in baseline_head.rs.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferro_hgvs::hgvs::parser::parse_hgvs_fast;
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use flate2::read::GzDecoder;
+use serde::Deserialize;
+use std::io::Read;
 
 // =============================================================================
 // Parsing benchmarks
@@ -46,7 +51,35 @@ fn bench_parsing(c: &mut Criterion) {
         ("r.sub", "NM_000088.3:r.100a>g"),
         // Ensembl
         ("enst.sub", "ENST00000357033:c.100A>G"),
+        // --- coverage gap-fills (churned grammar) ---
+        ("m.sub", "NC_012920.1:m.8993T>G"),
+        ("allele_cis", "NC_000001.11:g.[100A>G;200del]"),
+        ("c.compound_repeat", "NM_000088.3:c.5GA[10]"),
+        ("c.uncertain", "NM_000088.3:c.(100_200)del"),
+        ("p.predicted", "NP_000079.2:p.(Val600Glu)"),
+        ("p.three_letter", "NP_000079.2:p.Val600Glufs*15"),
+        ("c.utr3", "NM_000088.3:c.*5A>G"),
+        ("c.utr5", "NM_000088.3:c.-5A>G"),
+        ("c.deep_intronic", "NM_000088.3:c.100+2000A>G"),
+        (
+            "g.long_ins",
+            "NC_000001.11:g.100_101insATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCAT",
+        ),
+        (
+            "g.delins_long",
+            "NC_000001.11:g.100_120delinsACGTACGTACGTACGTACGT",
+        ),
     ];
+
+    // Guard: every benched string must actually parse. A typo or grammar
+    // drift that turns a case into a parse error would otherwise be timed
+    // on the error path and silently misreport. Fail loud instead.
+    for (name, v) in &variants {
+        assert!(
+            parse_hgvs(v).is_ok(),
+            "parsing bench case {name:?} ({v:?}) did not parse"
+        );
+    }
 
     let mut group = c.benchmark_group("parsing");
 
@@ -85,45 +118,60 @@ fn bench_parsing_by_length(c: &mut Criterion) {
 // Throughput benchmarks
 // =============================================================================
 
-/// Benchmark parsing throughput (variants per second)
+#[derive(Deserialize)]
+struct BulkFixture {
+    test_cases: Vec<BulkCase>,
+}
+
+#[derive(Deserialize)]
+struct BulkCase {
+    input: String,
+}
+
+/// Load up to `limit` HGVS strings from the 500k ClinVar corpus. The path is
+/// taken from `FERRO_BENCH_CORPUS` (absolute path, set by the sweep so all
+/// tags read identical input) and falls back to the in-tree fixture.
+fn load_corpus(limit: usize) -> Vec<String> {
+    let path = std::env::var("FERRO_BENCH_CORPUS")
+        .unwrap_or_else(|_| "tests/fixtures/bulk/clinvar_hgvs_500k.json.gz".to_string());
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(), // bench reports empty corpus; see guard below
+    };
+    let mut buf = Vec::new();
+    GzDecoder::new(file)
+        .read_to_end(&mut buf)
+        .expect("decompress corpus");
+    let fixture: BulkFixture = serde_json::from_slice(&buf).expect("parse corpus json");
+    fixture
+        .test_cases
+        .into_iter()
+        .take(limit)
+        .map(|c| c.input)
+        .collect()
+}
+
+/// Parse throughput over a real ClinVar corpus slice (decoded once, outside
+/// the timed loop).
 fn bench_parsing_throughput(c: &mut Criterion) {
-    let variants: Vec<&str> = vec![
-        "NC_000001.11:g.12345A>G",
-        "NM_000088.3:c.459A>G",
-        "NM_000088.3:c.100+5G>A",
-        "NP_000079.2:p.Val600Glu",
-        "NC_000001.11:g.100del",
-        "NM_000088.3:c.100_102dup",
-        "NC_000001.11:g.100_101insATG",
-        "NP_000079.2:p.Val600fs",
-    ];
+    const N: usize = 50_000;
+    let corpus = load_corpus(N);
+    assert!(
+        !corpus.is_empty(),
+        "throughput corpus empty: set FERRO_BENCH_CORPUS or ensure \
+         tests/fixtures/bulk/clinvar_hgvs_500k.json.gz exists (git lfs)"
+    );
 
     let mut group = c.benchmark_group("throughput");
-
-    // Batch of 100 variants
-    group.throughput(Throughput::Elements(100));
-    group.bench_function("parse_100", |b| {
+    group.throughput(Throughput::Elements(corpus.len() as u64));
+    group.sample_size(10); // each iter parses N strings; keep wall-time sane
+    group.bench_function("parse_corpus", |b| {
         b.iter(|| {
-            for _ in 0..100 / variants.len() + 1 {
-                for variant in &variants {
-                    let _ = parse_hgvs(black_box(variant));
-                }
+            for s in &corpus {
+                let _ = parse_hgvs(black_box(s));
             }
         })
     });
-
-    // Batch of 1000 variants
-    group.throughput(Throughput::Elements(1000));
-    group.bench_function("parse_1000", |b| {
-        b.iter(|| {
-            for _ in 0..1000 / variants.len() + 1 {
-                for variant in &variants {
-                    let _ = parse_hgvs(black_box(variant));
-                }
-            }
-        })
-    });
-
     group.finish();
 }
 
@@ -137,25 +185,43 @@ fn bench_normalization(c: &mut Criterion) {
     let normalizer = Normalizer::new(provider);
 
     let test_cases = vec![
+        // c. plus-strand (NM_000088.3, NM_888888.1 for 3'-shift dup)
         ("c.sub", "NM_000088.3:c.10A>G"),
         ("c.del", "NM_000088.3:c.10del"),
         ("c.del_range", "NM_000088.3:c.10_15del"),
-        ("c.dup", "NM_000088.3:c.10dup"),
         ("c.ins", "NM_000088.3:c.10_11insATG"),
-        ("g.sub", "NC_000001.11:g.12345A>G"),
-        ("g.del", "NC_000001.11:g.12345del"),
-        ("p.sub", "NP_000079.2:p.Val10Glu"),
+        ("c.delins", "NM_000088.3:c.10_12delinsAT"),
+        ("c.inv", "NM_000088.3:c.10_15inv"),
+        ("c.dup", "NM_000088.3:c.10dup"),
+        ("c.dup_3shift", "NM_888888.1:c.8dup"),
+        // c. minus-strand (NM_999999.1)
+        ("c.sub_minus", "NM_999999.1:c.5A>G"),
+        ("c.del_minus", "NM_999999.1:c.5del"),
+        ("c.ins_minus", "NM_999999.1:c.5_6insAT"),
+        // protein (NP_000079.2: M1, R97, V600)
+        ("p.sub", "NP_000079.2:p.Val600Glu"),
+        ("p.del", "NP_000079.2:p.Val600del"),
+        ("p.fs", "NP_000079.2:p.Arg97fs"),
+        ("p.fsTer", "NP_000079.2:p.Arg97fsTer15"),
     ];
 
-    let mut group = c.benchmark_group("normalization");
+    // Guard: every case must parse AND normalize on the real path. A case
+    // that errors here (bad coordinate, missing accession) would otherwise be
+    // timed on the error path. Fail loud.
+    for (name, s) in &test_cases {
+        let v = parse_hgvs(s).unwrap_or_else(|e| panic!("normalize bench {name:?} parse: {e}"));
+        normalizer
+            .normalize(&v)
+            .unwrap_or_else(|e| panic!("normalize bench {name:?} ({s:?}) errored: {e}"));
+    }
 
-    for (name, variant_str) in test_cases {
+    let mut group = c.benchmark_group("normalization");
+    for (name, variant_str) in &test_cases {
         let variant = parse_hgvs(variant_str).unwrap();
-        group.bench_function(name, |b| {
+        group.bench_function(*name, |b| {
             b.iter(|| normalizer.normalize(black_box(&variant)))
         });
     }
-
     group.finish();
 }
 
@@ -335,6 +401,85 @@ fn bench_error_handling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Build `g.[1000G>A;1001A>C;…]` — strictly consecutive subs that all collapse.
+fn consecutive_subs_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let (r, a) = match i % 3 {
+            0 => ('G', 'A'),
+            1 => ('A', 'C'),
+            _ => ('C', 'T'),
+        };
+        s.push_str(&format!("{}{}>{}", 1000 + i, r, a));
+    }
+    s.push(']');
+    s
+}
+
+/// Build non-adjacent subs (stride 5 (positions 1000, 1005, 1010, …)): worst case for the adjacency loop —
+/// every pair is checked and rejected.
+fn non_adjacent_subs_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let (r, a) = match i % 3 {
+            0 => ('G', 'A'),
+            1 => ('A', 'C'),
+            _ => ('C', 'T'),
+        };
+        s.push_str(&format!("{}{}>{}", 1000 + i * 5, r, a));
+    }
+    s.push(']');
+    s
+}
+
+/// Non-adjacent delins: worst case for the eager alt-clone in the merge loop.
+fn non_adjacent_delins_allele(n: usize) -> String {
+    let mut s = String::from("NC_000001.11:g.[");
+    for i in 0..n {
+        if i > 0 {
+            s.push(';');
+        }
+        let start = 1000 + i * 10;
+        s.push_str(&format!("{}_{}delinsACGTA", start, start + 4));
+    }
+    s.push(']');
+    s
+}
+
+fn bench_allele_scaling(c: &mut Criterion) {
+    // Uses MockProvider::new() (no sequences), so this measures allele-merge
+    // scaling, not sequence-dependent 3' shift.
+    let normalizer = Normalizer::new(MockProvider::new());
+    let mut group = c.benchmark_group("allele_scaling");
+
+    for n in [10usize, 100, 1000] {
+        for (label, input) in [
+            ("consecutive_subs", consecutive_subs_allele(n)),
+            ("non_adjacent_subs", non_adjacent_subs_allele(n)),
+            ("non_adjacent_delins", non_adjacent_delins_allele(n)),
+        ] {
+            // Guard: must parse + normalize on the real path.
+            let v = parse_hgvs(&input)
+                .unwrap_or_else(|e| panic!("allele bench {label} n={n} parse: {e}"));
+            normalizer
+                .normalize(&v)
+                .unwrap_or_else(|e| panic!("allele bench {label} n={n} normalize: {e}"));
+
+            group.throughput(Throughput::Elements(n as u64));
+            group.bench_with_input(BenchmarkId::new(label, n), &v, |b, v| {
+                b.iter(|| normalizer.normalize(black_box(v)))
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parsing,
@@ -346,6 +491,7 @@ criterion_group!(
     bench_clinical_variants,
     bench_fast_path,
     bench_error_handling,
+    bench_allele_scaling,
 );
 
 criterion_main!(benches);
