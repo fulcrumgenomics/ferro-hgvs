@@ -621,6 +621,7 @@ fn validate_sequence(stated: &[Base], ref_seq: &[u8], start: u64, end: u64) -> V
 /// equals the position-interval span `[start, end]` (1-based inclusive). HGVS
 /// requires `N == end - start + 1`; a disagreement is a `ReferenceMismatch`
 /// (mutalyzer ELENGTHMISMATCH), independent of the reference bases.
+#[must_use]
 fn validate_stated_length(declared: u64, start: u64, end: u64) -> ValidationResult {
     // Inverted ranges (start > end) are tolerated without panic, matching
     // `validate_repeat_tract` (the range gate elsewhere owns that diagnostic).

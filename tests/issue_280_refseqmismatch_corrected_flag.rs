@@ -30,6 +30,10 @@
 //!   (canonical Display drops `deleted`/`deleted_length` via `canonicalize_edit`).
 //! - SECTION 7: `del<N>` numeric length mismatch → `corrected: true`
 //!   (`canonicalize_edit` strips `length`, so the output is corrected).
+//! - SECTION 7b: `dup<N>` numeric length mismatch → `corrected: true`
+//!   (`canonicalize_edit` strips `length`).
+//! - SECTION 7c: `del<N>ins` numeric deleted-length mismatch → `corrected: true`
+//!   (`canonicalize_edit` strips `deleted_length`).
 
 use ferro_hgvs::normalize::NormalizationWarning;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
@@ -384,6 +388,61 @@ mod del_numeric_length_mismatch {
         assert!(
             corrected_flag(&r.warnings),
             "numeric del<N> length mismatch must report corrected=true; output={}, warnings={:?}",
+            r.result,
+            r.warnings
+        );
+    }
+}
+
+// =============================================================================
+// SECTION 7b — Numeric dup<N> length mismatch → corrected: true
+// =============================================================================
+//
+// `c.5dup4` (single position, span 1) states length 4 → the Duplication arm's
+// numeric-length check (#486) fires a RefSeqMismatch. `canonicalize_edit`
+// strips `length`, so the `corrected` flag is honest at `true`.
+
+mod dup_numeric_length_mismatch {
+    use super::*;
+
+    #[test]
+    fn dup_numeric_length_mismatch_corrected_true() {
+        let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
+        let v = parse_hgvs("NM_TEST.1:c.5dup4").expect("parse");
+        let r = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize must not reject in lenient");
+        assert!(
+            corrected_flag(&r.warnings),
+            "numeric dup<N> length mismatch must report corrected=true; output={}, warnings={:?}",
+            r.result,
+            r.warnings
+        );
+    }
+}
+
+// =============================================================================
+// SECTION 7c — Numeric del<N>ins length mismatch → corrected: true
+// =============================================================================
+//
+// `c.5del4insATC` (single position, span 1) states deleted length 4 → the
+// Delins arm's numeric-length check (#486) fires a RefSeqMismatch.
+// `canonicalize_edit` strips `deleted_length`, so the `corrected` flag is
+// honest at `true`.
+
+mod delins_numeric_deleted_length_mismatch {
+    use super::*;
+
+    #[test]
+    fn delins_numeric_deleted_length_mismatch_corrected_true() {
+        let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
+        let v = parse_hgvs("NM_TEST.1:c.5del4insATC").expect("parse");
+        let r = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize must not reject in lenient");
+        assert!(
+            corrected_flag(&r.warnings),
+            "numeric del<N>ins deleted-length mismatch must report corrected=true; output={}, warnings={:?}",
             r.result,
             r.warnings
         );
