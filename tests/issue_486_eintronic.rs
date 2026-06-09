@@ -73,3 +73,128 @@ fn strict_rejects_bare_nm_intronic_substitution() {
         err
     );
 }
+
+/// 2-exon plus-strand non-coding transcript (NR_, no CDS) with a 20-bp
+/// intron-1; genomic coords only (substitutions never reach the
+/// genomic-sequence-dependent intronic pass, so no genomic sequence needed).
+fn provider_intronic_nr() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let transcript = Transcript::new(
+        "NR_INT.1".to_string(),
+        Some("NRINT".to_string()),
+        Strand::Plus,
+        Some("AAAATGCCCCGGGGTAGAATAA".to_string()),
+        None,
+        None,
+        vec![
+            Exon::with_genomic(1, 1, 10, 100, 109),
+            Exon::with_genomic(2, 11, 22, 130, 141),
+        ],
+        Some("chr_int".to_string()),
+        Some(100),
+        Some(141),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+#[test]
+fn strict_rejects_bare_nr_intronic_substitution() {
+    let err = normalize(
+        provider_intronic_nr(),
+        NormalizeConfig::strict(),
+        "NR_INT.1:n.10+5C>A",
+    )
+    .expect_err("strict mode must reject a bare-NR intronic substitution as EINTRONIC");
+    assert!(
+        matches!(err, FerroError::IntronicVariant { .. }),
+        "expected IntronicVariant (EINTRONIC), got {:?}",
+        err
+    );
+}
+
+#[test]
+fn lenient_warns_and_keeps_value_for_bare_nm_intronic_substitution() {
+    let normalizer = Normalizer::with_config(provider_intronic_nm(), NormalizeConfig::lenient());
+    let variant = parse_hgvs("NM_INTRON.1:c.30+1A>G").expect("parse");
+    // Lenient must NOT reject.
+    let out = normalizer
+        .normalize(&variant)
+        .expect("lenient must not reject");
+    // Output is unchanged from the lenient pre-change behavior (a substitution
+    // is echoed; the EINTRONIC change only adds a warning).
+    assert_eq!(out.to_string(), "NM_INTRON.1:c.30+1A>G");
+    // The W4007 warning IS surfaced via normalize_with_diagnostics.
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("lenient diagnostics");
+    assert!(
+        diag.warnings
+            .iter()
+            .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+        "expected INTRONIC_ON_BARE_TRANSCRIPT warning, got {:?}",
+        diag.warnings
+    );
+}
+
+#[test]
+fn ng_nm_intronic_substitution_not_rejected_strict() {
+    // Genomic-context form is the spec-valid description: EINTRONIC must NOT
+    // fire even in strict mode.
+    let out = normalize(
+        provider_intronic_nm(),
+        NormalizeConfig::strict(),
+        "NG_012337.1(NM_INTRON.1):c.30+1A>G",
+    )
+    .expect("NG_(NM_) intronic must be accepted in strict mode");
+    assert!(out.contains("NM_INTRON.1"));
+}
+
+#[test]
+fn bare_nm_exonic_substitution_unaffected_strict() {
+    // An exonic position on a bare NM_ is fine — no EINTRONIC.
+    normalize(
+        provider_intronic_nm(),
+        NormalizeConfig::strict(),
+        "NM_INTRON.1:c.5C>A",
+    )
+    .expect("exonic substitution on a bare NM must not be rejected as EINTRONIC");
+}
+
+#[test]
+fn strict_rejects_bare_nm_intronic_deletion() {
+    // Indel path: del reaches the intronic resolution pass; with genomic
+    // sequence present it resolves, then the W4007 warning escalates.
+    let err = normalize(
+        provider_intronic_nm(),
+        NormalizeConfig::strict(),
+        "NM_INTRON.1:c.30+2_30+3del",
+    )
+    .expect_err("strict mode must reject a bare-NM intronic deletion as EINTRONIC");
+    assert!(
+        matches!(err, FerroError::IntronicVariant { .. }),
+        "expected IntronicVariant (EINTRONIC), got {:?}",
+        err
+    );
+}
+
+#[test]
+fn strict_rejects_cis_allele_with_intronic_member() {
+    // The intronic member inside a cis allele must trigger the reject
+    // (normalize_allele recurses through normalize_with_diagnostics per member).
+    let err = normalize(
+        provider_intronic_nm(),
+        NormalizeConfig::strict(),
+        "NM_INTRON.1:c.[5C>A;30+1A>G]",
+    )
+    .expect_err("strict mode must reject a cis allele containing a bare-NM intronic member");
+    assert!(
+        matches!(err, FerroError::IntronicVariant { .. }),
+        "expected IntronicVariant (EINTRONIC), got {:?}",
+        err
+    );
+}
