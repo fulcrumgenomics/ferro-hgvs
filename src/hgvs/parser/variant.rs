@@ -5924,6 +5924,10 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // ECOORDINATESYSTEMMISMATCH).
     validate_coordinate_system(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject the RNA base `U`/`u` in
+    // a DNA-context edit (DNA is A/C/G/T; mutalyzer's `ENODNA`; #486).
+    validate_no_u_in_dna(&variant)?;
+
     Ok(variant)
 }
 
@@ -5956,6 +5960,100 @@ fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_coordinate_system(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject the RNA base `U`/`u` when it appears in a DNA-context edit.
+///
+/// DNA reference sequences (`g.`/`c.`/`n.`/`m.`/`o.`) use the alphabet
+/// A/C/G/T; `U` is an RNA base and is invalid there (mutalyzer rejects such
+/// inputs with `ENODNA`). The parser stores both `'U'` and `'u'` as
+/// [`Base::U`], so a `Base::U` anywhere in a DNA variant's edit sequence is the
+/// unambiguous signal. RNA (`r.`) variants are skipped — `u` is correct there.
+///
+/// Like the sibling validators it walks `Allele` wrappers and inspects each
+/// leaf `NaEdit`, returning a structured `InvalidEdit` parse error so the
+/// rejection survives slash-form fallback paths.
+fn validate_no_u_in_dna(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::hgvs::edit::{Base, InsertedPart, InsertedSequence, NaEdit, Sequence};
+    use crate::hgvs::uncertainty::Mu;
+
+    fn seq_has_u(s: &Sequence) -> bool {
+        s.bases().contains(&Base::U)
+    }
+    fn opt_seq_has_u(s: &Option<Sequence>) -> bool {
+        s.as_ref().is_some_and(seq_has_u)
+    }
+    fn part_has_u(p: &InsertedPart) -> bool {
+        match p {
+            InsertedPart::Literal(s) => seq_has_u(s),
+            InsertedPart::Repeat { base, .. } => *base == Base::U,
+            _ => false,
+        }
+    }
+    fn ins_has_u(ins: &InsertedSequence) -> bool {
+        match ins {
+            InsertedSequence::Literal(s) => seq_has_u(s),
+            InsertedSequence::Repeat { base, .. } => *base == Base::U,
+            InsertedSequence::SequenceRepeat { sequence, .. } => seq_has_u(sequence),
+            InsertedSequence::Complex(parts) => parts.iter().any(part_has_u),
+            _ => false,
+        }
+    }
+    fn edit_has_u(edit: &Mu<NaEdit>) -> bool {
+        let Some(e) = edit.inner() else {
+            return false;
+        };
+        match e {
+            NaEdit::Substitution {
+                reference,
+                alternative,
+            } => *reference == Base::U || *alternative == Base::U,
+            NaEdit::SubstitutionNoRef { alternative } => *alternative == Base::U,
+            NaEdit::Deletion { sequence, .. } => opt_seq_has_u(sequence),
+            NaEdit::Duplication { sequence, .. } => opt_seq_has_u(sequence),
+            NaEdit::Insertion { sequence } => ins_has_u(sequence),
+            NaEdit::Delins {
+                sequence, deleted, ..
+            } => ins_has_u(sequence) || opt_seq_has_u(deleted),
+            // Tandem repeats carry a literal base alphabet in their repeat
+            // unit(s) and any VEP-style trailing sequence, so inspect those.
+            NaEdit::Repeat {
+                sequence, trailing, ..
+            } => opt_seq_has_u(sequence) || opt_seq_has_u(trailing),
+            NaEdit::MultiRepeat { units } => units.iter().any(|unit| seq_has_u(&unit.sequence)),
+            // `dupins` is already rejected by `validate_no_dupins`; other
+            // forms (inversion, count/range/named inserts) carry no literal
+            // base alphabet.
+            _ => false,
+        }
+    }
+    fn make_error(prefix: &str) -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "`U` is an RNA base and is not valid in a DNA description ({prefix}); \
+                 DNA reference sequences use the alphabet A/C/G/T (use `r.` for RNA)"
+            ),
+            Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+        )
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("g.")),
+        HgvsVariant::Cds(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("c.")),
+        HgvsVariant::Tx(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("n.")),
+        HgvsVariant::Mt(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("m.")),
+        HgvsVariant::Circular(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("o.")),
+        // RNA (`r.`) legitimately uses `u`; protein has no nucleotide alphabet.
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_u_in_dna(inner)?;
             }
         }
         _ => {}
