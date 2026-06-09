@@ -565,6 +565,19 @@ pub enum NormalizationWarning {
         /// The numeric bound (e.g. 945 if the CDS is 945 bases long).
         bound_value: u64,
     },
+
+    /// An intronic offset (`c.<N>±<M>` / `n.<N>±<M>`) appears on a bare
+    /// transcript reference (`NM_` c. / `NR_`/`XR_` n. with
+    /// `genomic_context: None`) — a spec-invalid description form. Code:
+    /// `INTRONIC_ON_BARE_TRANSCRIPT` (W4007). Strict mode (or the errors-axis
+    /// override) escalates this to `FerroError::IntronicVariant`; lenient
+    /// surfaces it and returns the existing value unchanged. See #486.
+    IntronicOnBareTranscript {
+        /// Full variant Display, e.g. `"NM_003002.2:c.274+20C>T"`.
+        variant: String,
+        /// Coordinate system: `"c"` (NM_ coding) or `"n"` (NR_/XR_ non-coding).
+        coordinate_system: String,
+    },
 }
 
 impl NormalizationWarning {
@@ -581,6 +594,7 @@ impl NormalizationWarning {
             Self::InitiatorMetCanonicalization { .. } => "INITIATOR_MET_CANONICALIZATION",
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
+            Self::IntronicOnBareTranscript { .. } => "INTRONIC_ON_BARE_TRANSCRIPT",
         }
     }
 
@@ -688,6 +702,15 @@ impl std::fmt::Display for NormalizationWarning {
             } => write!(
                 f,
                 "{accession}:{coordinate_system}.{position} lies past the {bound_kind} (bound {bound_value})",
+            ),
+            Self::IntronicOnBareTranscript {
+                variant,
+                coordinate_system,
+            } => write!(
+                f,
+                "{variant}: intronic offset on a bare {coordinate_system}. transcript reference; \
+                 a genomic reference sequence is required (e.g. NG_(NM_)/NC_(NM_)) \
+                 (IntronicOnBareTranscript / W4007 / EINTRONIC)",
             ),
         }
     }
