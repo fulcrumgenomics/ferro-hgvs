@@ -916,12 +916,14 @@ fn axis_infos() {
         if actual.is_ok() && has_no_equiv {
             t.divergence_accepted
                 .push((case.input.clone(), INFO_NO_SPEC_EQUIVALENT.to_string()));
-        } else if actual.is_err() {
-            if let Some(ad) = &case.accepted_divergence {
-                if ad.axis == Axis::Infos {
-                    t.divergence_accepted
-                        .push((case.input.clone(), ad.policy.to_string()));
-                    continue;
+        } else if let Err(ref e) = actual {
+            if e.starts_with("ferro emitted extra info") {
+                if let Some(ad) = &case.accepted_divergence {
+                    if ad.axis == Axis::Infos {
+                        t.divergence_accepted
+                            .push((case.input.clone(), ad.policy.to_string()));
+                        continue;
+                    }
                 }
             }
             t.record(case, &expected_repr, actual);
@@ -1304,6 +1306,41 @@ mod comparator_tests {
         );
         assert_eq!(t.fail.len(), 1);
         assert!(t.fail[0].1.contains("err=normalize: panic boom"));
+    }
+
+    // (7b) Under-emission `Err` with `accepted_divergence` on `Axis::Infos` is
+    // STILL FAIL. The infos-axis accepted-divergence path in `axis_infos` only
+    // silences over-emission errors (those starting with `"ferro emitted extra
+    // info"`); under-emission, parse, and normalize errors must still surface
+    // as real failures even when the case carries the annotation.
+    //
+    // `AxisTally::record` itself never silences `Err` results — this test
+    // mirrors `tally_err_with_accepted_divergence_still_fails` for `Axis::Infos`
+    // to confirm that the bucket contract is axis-independent.
+    #[test]
+    fn tally_infos_under_emission_err_with_accepted_divergence_still_fails() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::Infos,
+                policy: Policy::ShuffleAppliedCompoundAllele499,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(
+            &case,
+            "SHUFFLE_APPLIED",
+            Err("ferro infos [] missing expected code \"SHUFFLE_APPLIED\" x1 (got 0)".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.divergence_accepted.is_empty(),
+            "under-emission Err must not silence into divergence_accepted bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
     }
 
     // (7) Mismatch with no annotation is FAIL.
