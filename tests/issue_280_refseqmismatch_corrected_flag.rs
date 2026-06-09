@@ -28,6 +28,8 @@
 //!   (also passes through verbatim).
 //! - SECTION 6: `delins` with mismatched stated-deleted-ref → `corrected: true`
 //!   (canonical Display drops `deleted`/`deleted_length` via `canonicalize_edit`).
+//! - SECTION 7: `del<N>` numeric length mismatch → `corrected: true`
+//!   (`canonicalize_edit` strips `length`, so the output is corrected).
 
 use ferro_hgvs::normalize::NormalizationWarning;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
@@ -355,6 +357,33 @@ mod delins_mismatched_stated_ref {
         assert!(
             corrected_flag(&r.warnings),
             "delins with mismatched stated-deleted-ref must report corrected=true; output={}, warnings={:?}",
+            r.result,
+            r.warnings
+        );
+    }
+}
+
+// =============================================================================
+// SECTION 7 — Numeric del<N> length mismatch → corrected: true
+// =============================================================================
+//
+// `c.5del4` (single position, span 1) states length 4 → the Deletion arm's
+// numeric-length check (#486) fires a RefSeqMismatch. `canonicalize_edit`
+// strips `length`, so the `corrected` flag is honest at `true`.
+
+mod del_numeric_length_mismatch {
+    use super::*;
+
+    #[test]
+    fn del_numeric_length_mismatch_corrected_true() {
+        let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
+        let v = parse_hgvs("NM_TEST.1:c.5del4").expect("parse");
+        let r = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize must not reject in lenient");
+        assert!(
+            corrected_flag(&r.warnings),
+            "numeric del<N> length mismatch must report corrected=true; output={}, warnings={:?}",
             r.result,
             r.warnings
         );
