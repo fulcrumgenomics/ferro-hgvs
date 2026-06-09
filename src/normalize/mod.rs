@@ -1191,6 +1191,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // EINTRONIC (#486): an intronic offset on a bare transcript reference
+        // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
+        // description form. Detect it up front — before any per-axis
+        // short-circuit, so substitutions are covered, and once per allele
+        // member (normalize_allele recurses through normalize_core).
+        let eintronic_warning = if self.config.should_reject_intronic_bare_transcript()
+            || self.config.should_warn_intronic_bare_transcript()
+        {
+            intronic_on_bare_transcript_warning(variant)
+        } else {
+            None
+        };
+        // In reject mode, short-circuit BEFORE normalization: the form is
+        // invalid regardless of whether the intronic position would resolve,
+        // and running normalize_cds/normalize_tx first can surface an
+        // incidental ConversionError (or capability-failure IntronicVariant)
+        // instead of the EINTRONIC form error. The echoed result is discarded
+        // when `normalize()` escalates the warning to FerroError::IntronicVariant.
+        if self.config.should_reject_intronic_bare_transcript() {
+            if let Some(w) = &eintronic_warning {
+                return Ok((variant.clone(), vec![w.clone()]));
+            }
+        }
+
         let (result, mut warnings) = match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
             // must be described with `m.` (#487). Coerce it to an `MtVariant`
@@ -1232,19 +1256,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
         };
 
-        // EINTRONIC (#486): an intronic offset on a bare transcript reference
-        // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
-        // description form. Emit a W4007 warning here — before any per-axis
-        // short-circuit, so substitutions are covered, and once per allele
-        // member (normalize_allele recurses through normalize_core). `normalize()`
-        // escalates it to a reject in strict / under the override; lenient
-        // surfaces it and returns the resolved value unchanged.
-        if self.config.should_reject_intronic_bare_transcript()
-            || self.config.should_warn_intronic_bare_transcript()
-        {
-            if let Some(w) = intronic_on_bare_transcript_warning(variant) {
-                warnings.push(w);
-            }
+        // Lenient (warn-only): attach the EINTRONIC warning to the resolved
+        // output. (Reject mode already short-circuited above; if normalization
+        // errored, lenient surfaces that error as before.)
+        if let Some(w) = eintronic_warning {
+            warnings.push(w);
         }
 
         Ok((result, warnings))
