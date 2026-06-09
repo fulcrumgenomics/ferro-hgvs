@@ -261,10 +261,6 @@
       "category": "spec_not_yet_supported",
       "reason": "Chimeric compound `[a,b]`."
     },
-    "[trans_compound_with_internal_cis]": {
-      "category": "spec_not_yet_supported",
-      "reason": "Trans `[a];[b;c]` \u2014 first allele a single del, second allele a cis pair. Spec recommendations/DNA/alleles.md."
-    },
     "[malformed_trailing_word_annotation]": {
       "category": "malformed_input",
       "reason": "Trailing word `transition` is annotation, not HGVS."
@@ -493,7 +489,6 @@
     "NM_013236.2:c.1173+54822_1173+54826ATTCT(400_760)": "[deprecated_repeat_paren_no_brackets]",
     "NM_013236.2:c.1173+54822_1173+54826ATTCT(800_4500)": "[deprecated_repeat_paren_no_brackets]",
     "NM_014762.3:c.[881A>C,918G>C]": "[chimeric_compound_comma]",
-    "NM_016035.4:c.[23_33delTCCTCCGTCGG];[331G>T;356C>T]": "[trans_compound_with_internal_cis]",
     "NM_016124.4:c.[186G>T;410C>T455A>C667T>G]": "[malformed_compound_missing_semicolon]",
     "NM_016124.4:c.[410C>T;455A>C509T>C667T>G]": "[malformed_compound_missing_semicolon]",
     "NM_016124.6:c.[186G>T;410C>T455A>C602C>G604G>A733G>C]": "[malformed_compound_missing_semicolon]",

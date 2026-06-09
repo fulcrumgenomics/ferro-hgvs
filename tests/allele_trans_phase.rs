@@ -91,6 +91,51 @@ fn test_trans_spec_example_round_trip() {
     );
 }
 
+/// Trans alleles whose members are themselves multi-variant CIS groups:
+/// `[a;b;c];[d;e]` (HGVS DNA alleles.md, compound heterozygote).
+#[test]
+fn test_trans_of_cis_groups_round_trips() {
+    let s = "NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]";
+    assert_eq!(parse_to_string(s), s, "round-trip for `{s}`");
+    assert_eq!(parse_phase(s), AllelePhase::Trans, "phase for `{s}`");
+}
+
+/// The spec (DNA/alleles.md) marks the redundant cross-spelled `=` form as
+/// invalid: "do not use `c.[2376G>C;3103=];[2376=;3103del]`". A multi-variant
+/// cis group containing a position-identity (`=`) member must stay rejected
+/// rather than round-trip the discouraged form.
+#[test]
+fn test_trans_of_cis_with_identity_member_is_rejected() {
+    for s in [
+        "LRG_199t1:c.[2376G>C;3103=];[2376=;3103del]",
+        "NM_004006.2:c.[2376G>C;3103=];[2376=;3103del]",
+    ] {
+        assert!(
+            parse_hgvs(s).is_err(),
+            "spec-invalid cross-spelled `=` trans form must reject: `{s}`"
+        );
+    }
+}
+
+/// Inner members of a trans-of-cis allele are nested cis sub-alleles.
+#[test]
+fn test_trans_of_cis_nesting_shape() {
+    let v = parse_hgvs("NM_004006.2:c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]").unwrap();
+    let HgvsVariant::Allele(trans) = &v else {
+        panic!("expected Allele, got {v:?}");
+    };
+    assert_eq!(trans.phase, AllelePhase::Trans);
+    assert_eq!(trans.variants.len(), 2);
+    let HgvsVariant::Allele(cis0) = &trans.variants[0] else {
+        panic!(
+            "expected nested cis allele member, got {:?}",
+            trans.variants[0]
+        );
+    };
+    assert_eq!(cis0.phase, AllelePhase::Cis);
+    assert_eq!(cis0.variants.len(), 3);
+}
+
 /// Genomic trans round-trip — exercises the `g.` parser path.
 #[test]
 fn test_trans_genomic_round_trip() {
