@@ -30,7 +30,9 @@
 //! # Supported Fast-Paths
 //!
 //! Simple substitutions (position + single base change) for:
-//! - **RefSeq**: NC_, NM_, NG_, NR_, XM_, XR_ accessions with `g.` or `c.` variants
+//! - **RefSeq**: NC_, NM_, NG_, XM_ accessions with `g.` or `c.` variants
+//!   (`NR_`/`XR_` non-coding RNA transcripts are deferred to the generic
+//!   parser — their only valid coordinate systems are `n.`/`r.`)
 //! - **Ensembl**: ENST, ENSG accessions with `g.` or `c.` variants
 //! - **LRG**: LRG_ accessions with `g.` or `c.` variants
 //! - **Assembly**: GRCh37/38, hg19/38 notation with `g.` variants
@@ -146,11 +148,20 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
                     return FastPathResult::Fallback;
                 }
 
-                // Check for intronic offset using memchr (faster than loop)
-                // Look for + or - in the region between position start and X>Y
-                let search_region = &bytes[colon_pos + 4..len - 3];
-                if memchr::memchr2(b'+', b'-', search_region).is_some() {
-                    return FastPathResult::Fallback;
+                // Check for intronic offset using memchr (faster than loop).
+                // Look for + or - in the region between the position start and
+                // the trailing `X>Y`. Guard the bounds: for a very short `c.`
+                // body (e.g. a malformed `c.A>G` with no position number)
+                // `colon_pos + 4` can exceed `len - 3`, and an unchecked slice
+                // would panic instead of falling back. When the region is
+                // empty there is no room for an intronic offset anyway, so skip.
+                let region_start = colon_pos + 4;
+                let region_end = len - 3;
+                if region_start < region_end {
+                    let search_region = &bytes[region_start..region_end];
+                    if memchr::memchr2(b'+', b'-', search_region).is_some() {
+                        return FastPathResult::Fallback;
+                    }
                 }
             }
         }
@@ -161,6 +172,20 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
         // RefSeq accessions: NC_, NM_, NP_, NG_, NR_, XM_, XR_, XP_
         b'N' | b'X' => {
             if bytes.len() > 2 && bytes[2] == b'_' {
+                // `NR_`/`XR_` are non-coding RNA transcripts (the only RefSeq
+                // nucleotide prefixes whose second letter is `R`). Per HGVS
+                // (refseq.md: the prefix declares the reference *type*; `n.`
+                // is "based on a transcript not coding for a protein"), their
+                // only valid coordinate systems are `n.`/`r.`. The fast path
+                // parses only `g.`/`c.` substitutions, so parsing one here
+                // would mint a `Genome`/`Cds` variant — silently accepting a
+                // coordinate-system/reference-type mismatch that the generic
+                // parser rejects (#486, ECOORDINATESYSTEMMISMATCH). Defer to
+                // `parse_variant` so it owns that spec rule and the two entry
+                // points stay observationally identical.
+                if bytes[1] == b'R' {
+                    return FastPathResult::Fallback;
+                }
                 return try_refseq_fast_path(input, bytes);
             }
             FastPathResult::Fallback
