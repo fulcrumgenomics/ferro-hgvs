@@ -580,6 +580,60 @@ pub enum NormalizationWarning {
     },
 }
 
+/// EINTRONIC (#486): detect an intronic offset on a **bare transcript
+/// reference** (no `NG_(…)`/`NC_(…)` genomic context). Returns the warning
+/// to emit, or `None`.
+///
+/// In scope (per spec): `NM_` used with `c.` and `NR_`/`XR_` used with `n.`,
+/// with `Accession.genomic_context == None`. Out of scope: genomic-context
+/// forms (`genomic_context: Some`), `NG_`/`NC_` references (which never reach
+/// the c./n. transcript path), LRG, Ensembl `ENST`, and the r. axis.
+fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<NormalizationWarning> {
+    match variant {
+        HV::Cds(v) => {
+            if &*v.accession.prefix != "NM" || v.accession.genomic_context.is_some() {
+                return None;
+            }
+            let intronic = v
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .is_some_and(|p| p.is_intronic())
+                || v.loc_edit
+                    .location
+                    .end
+                    .inner()
+                    .is_some_and(|p| p.is_intronic());
+            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
+                variant: format!("{variant}"),
+                coordinate_system: "c".to_string(),
+            })
+        }
+        HV::Tx(v) => {
+            if !v.accession.is_noncoding_rna() || v.accession.genomic_context.is_some() {
+                return None;
+            }
+            let intronic = v
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .is_some_and(|p| p.is_intronic())
+                || v.loc_edit
+                    .location
+                    .end
+                    .inner()
+                    .is_some_and(|p| p.is_intronic());
+            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
+                variant: format!("{variant}"),
+                coordinate_system: "n".to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
 impl NormalizationWarning {
     /// The warning's user-facing code string.
     pub fn code(&self) -> &'static str {
@@ -9126,5 +9180,36 @@ mod tests {
             out, "NM_003002.2:c.-61del",
             "bare NM_ pter still resolves to the transcript boundary"
         );
+    }
+}
+
+#[cfg(test)]
+mod eintronic_helper_tests {
+    use super::*;
+    use crate::parse_hgvs;
+
+    #[test]
+    fn bare_nm_intronic_sub_yields_warning() {
+        let v = parse_hgvs("NM_004006.2:c.357+1G>A").unwrap();
+        let w = intronic_on_bare_transcript_warning(&v).expect("bare NM intronic must warn");
+        assert_eq!(w.code(), "INTRONIC_ON_BARE_TRANSCRIPT");
+    }
+
+    #[test]
+    fn bare_nr_intronic_del_yields_warning() {
+        let v = parse_hgvs("NR_038420.1:n.100+10del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn ng_nm_intronic_sub_no_warning() {
+        let v = parse_hgvs("NG_012337.1(NM_004006.2):c.357+1G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
+    }
+
+    #[test]
+    fn bare_nm_exonic_no_warning() {
+        let v = parse_hgvs("NM_004006.2:c.357G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
     }
 }
