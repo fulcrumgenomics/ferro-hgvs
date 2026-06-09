@@ -30,6 +30,7 @@
 //! - `EOVERLAP` → `InvalidCoordinates` (ferro's `ErrorCode::SelfCancellingAllele`
 //!   is structurally close but lives in a different taxonomy)
 //! - `ESEQUENCEMISMATCH`, `ELENGTHMISMATCH` → `ReferenceMismatch`
+//! - `ECOORDINATESYSTEMMISMATCH` → `Parse` (remapped in #543; was `UnsupportedVariant`)
 //! - `EOUTOFBOUNDARY` → `InvalidCoordinates`
 
 use crate::error::FerroError;
@@ -304,7 +305,12 @@ fn forward_map(code: MutalyzerCode) -> Option<FerroErrorTag> {
         ENoToSelector => lossy("ReferenceNotFound"),
         ECoordinateSystemInvalid => lossy("Parse"),
         ENoCoordinateSystem => lossy("Parse"),
-        ECoordinateSystemMismatch => lossy("UnsupportedVariant"),
+        // #543 added a parse-time `CoordinateSystemMismatch` rejection for
+        // `c./g./m.` on a non-coding RNA (NR_/XR_), surfaced as a
+        // `FerroError::Parse`. Map to "Parse" alongside the sibling
+        // coordinate-system codes above (was the pre-#543 generic
+        // "UnsupportedVariant", which no longer matches ferro's error).
+        ECoordinateSystemMismatch => lossy("Parse"),
         EOffset => lossy("Parse"),
         EOutsideCds => lossy("InvalidCoordinates"),
         EIntronicRna => lossy("IntronicVariant"),
@@ -350,6 +356,7 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
     match err {
         FerroError::Parse { .. } => &[
             "ECOORDINATESYSTEMINVALID",
+            "ECOORDINATESYSTEMMISMATCH",
             "EMISSINGPARAMETER",
             "ENOCOORDINATESYSTEM",
             "ENODNA",
@@ -377,12 +384,9 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
             "ERANGEREVERSED",
             "EREPEATREFERENCELENGTH",
         ],
-        FerroError::UnsupportedVariant { .. } => &[
-            "ECOORDINATESYSTEMMISMATCH",
-            "ENOCDS",
-            "EREPEATUNSUPPORTED",
-            "EVARIANTNOTSUPPORTED",
-        ],
+        FerroError::UnsupportedVariant { .. } => {
+            &["ENOCDS", "EREPEATUNSUPPORTED", "EVARIANTNOTSUPPORTED"]
+        }
         FerroError::IntronicVariant { .. } => &["EINTRONIC", "EINTRONICRNA"],
         FerroError::ReferenceMismatch { .. } => &[
             "ELENGTHMISMATCH",
@@ -702,7 +706,13 @@ mod tests {
     /// Documented lossy mappings flip `is_lossy()`.
     #[test]
     fn lossy_flag_set_for_documented_lossy_mappings() {
-        for code in &["EOVERLAP", "ESEQUENCEMISMATCH", "ELENGTHMISMATCH"] {
+        for code in &[
+            "ECOORDINATESYSTEMMISMATCH",
+            "ELENGTHMISMATCH",
+            "EOUTOFBOUNDARY",
+            "EOVERLAP",
+            "ESEQUENCEMISMATCH",
+        ] {
             let tag =
                 mutalyzer_to_ferro(code).unwrap_or_else(|| panic!("expected mapping for {code:?}"));
             assert!(tag.is_lossy(), "expected {code:?} to be marked lossy");
