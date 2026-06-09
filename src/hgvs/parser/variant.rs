@@ -1097,10 +1097,15 @@ fn parse_genome_variant(
             }
         }
 
-        // Try trans-allele compact-prefix shorthand: g.[edit1];[edit2]
-        // Detection mirrors the CDS/RNA paths (parse_cds_allele_shorthand,
-        // parse_rna_allele_shorthand): starts with `[` and contains `];[`.
-        if input.starts_with('[') && input.contains("];[") {
+        // Try trans-allele compact-prefix shorthand: g.[edit1];[edit2].
+        // Attempt the trans parser whenever the input is bracketed and fall
+        // back to compound on a clean `Err`, rather than gating on a literal
+        // `];[`. The `];[` substring disappears once the FIRST group carries a
+        // `(;)` mosaic tail (e.g. `[a](;)b;[c]`), so gating on it misrouted
+        // those to compound parsing. The trans parser requires two or more
+        // bracketed groups, so a genuine single-bracket cis/predicted/products
+        // allele rejects and falls through. #559 / CodeRabbit.
+        if input.starts_with('[') {
             if let Ok((remaining, variant)) =
                 parse_genome_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
@@ -1928,6 +1933,24 @@ where
         variants.push(variant);
         remaining = &remaining[close_bracket + 1..];
 
+        // Trans + mosaic mix: a `(;)` tail after a bracket means this trans
+        // allele member is itself an unknown-phase group — the bracketed
+        // member plus `(;)`-separated bare siblings (e.g. `[B](;)C(;)D` in
+        // `[A];[B](;)C`). Wrap them into an unknown-phase sub-allele member.
+        if remaining.starts_with("(;)") {
+            let bracket_member = variants.pop().expect("just pushed a member");
+            let mut up_members = vec![bracket_member];
+            while let Some(after) = remaining.strip_prefix("(;)") {
+                let (rest, sibling) = parse_member(after)?;
+                up_members.push(sibling);
+                remaining = rest;
+            }
+            variants.push(HgvsVariant::Allele(AlleleVariant::new(
+                up_members,
+                AllelePhase::Unknown,
+            )));
+        }
+
         // Enforce strict `[...];[...]` shape. A `;` is only valid if it
         // separates the bracket we just consumed from another bracket; a
         // dangling trailing `;` (e.g. `[A];[B];`) and a missing separator
@@ -2396,9 +2419,18 @@ fn parse_cds_allele_shorthand(
         )));
     }
 
-    // Check for trans allele pattern: [var];[var] or [var];[0] or [var];[?]
-    if input.contains("];[") {
-        return parse_cds_trans_allele_shorthand(input, accession, gene_symbol);
+    // Try the trans-allele shorthand first: `[var];[var]` and friends,
+    // including the trans+mosaic forms where a group carries a `(;)` tail
+    // (e.g. `[a](;)b;[c]`). A literal `];[` no longer appears once the
+    // FIRST group has a tail, so we can't gate on it; instead we attempt
+    // the trans parser and fall back to compound on a clean `Err`. The
+    // trans parser requires two or more bracketed groups, so a genuine
+    // single-bracket cis/predicted/products allele rejects and falls
+    // through. #559 / CodeRabbit.
+    if let Ok((remaining, variant)) =
+        parse_cds_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
+    {
+        return Ok((remaining, variant));
     }
 
     let close_bracket = input.rfind(']').ok_or_else(|| {
@@ -2558,7 +2590,13 @@ fn parse_tx_variant(
         // Compact-prefix trans-allele shorthand: n.[a];[b]. Mirrors
         // parse_genome_variant's dispatch added in PR #146; the expanded
         // form [ACC:n.a];[ACC:n.b] is handled by the top-level allele parser.
-        if input.starts_with('[') && input.contains("];[") {
+        // Attempt the trans parser whenever the input is bracketed and fall
+        // back to compound on a clean `Err`, rather than gating on a literal
+        // `];[` — that substring disappears once the FIRST group carries a
+        // `(;)` mosaic tail (e.g. `[a](;)b;[c]`). The trans parser requires
+        // two or more bracketed groups, so a single-bracket cis/predicted/
+        // products allele rejects and falls through. #559 / CodeRabbit.
+        if input.starts_with('[') {
             if let Ok((remaining, variant)) =
                 parse_tx_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
@@ -2889,8 +2927,14 @@ fn parse_mt_variant(
         }
 
         // Compact-prefix trans-allele shorthand: m.[a];[b]. Mirrors
-        // parse_genome_variant's dispatch added in PR #146.
-        if input.starts_with('[') && input.contains("];[") {
+        // parse_genome_variant's dispatch added in PR #146. Attempt the trans
+        // parser whenever the input is bracketed and fall back to compound on
+        // a clean `Err`, rather than gating on a literal `];[` — that substring
+        // disappears once the FIRST group carries a `(;)` mosaic tail (e.g.
+        // `[a](;)b;[c]`). The trans parser requires two or more bracketed
+        // groups, so a single-bracket cis/predicted/products allele rejects and
+        // falls through. #559 / CodeRabbit.
+        if input.starts_with('[') {
             if let Ok((remaining, variant)) =
                 parse_mt_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
@@ -3665,7 +3709,12 @@ fn parse_protein_variant(
         // before the cis allele path, since trans is the more specific shape.
         // Mirrors the DNA/RNA dispatches (parse_genome_variant,
         // parse_cds_variant, parse_rna_variant) and PR #146's fix for `g.`.
-        if input.starts_with('[') && input.contains("];[") {
+        // Attempt the trans parser whenever the input is bracketed and fall
+        // back to compound on a clean `Err`, rather than gating on a literal
+        // `];[`: `parse_protein_trans_allele_shorthand` requires two or more
+        // bracketed groups, so a single-bracket cis/predicted/products allele
+        // rejects and falls through. #559 / CodeRabbit.
+        if input.starts_with('[') {
             if let Ok((remaining, variant)) =
                 parse_protein_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
@@ -4176,9 +4225,18 @@ fn parse_rna_allele_shorthand(
         )));
     }
 
-    // Check for trans allele pattern: [var];[var] or [var];[0] or [var];[?]
-    if input.contains("];[") {
-        return parse_rna_trans_allele_shorthand(input, accession, gene_symbol);
+    // Try the trans-allele shorthand first: `[var];[var]` and friends,
+    // including the trans+mosaic forms where a group carries a `(;)` tail
+    // (e.g. `[a](;)b;[c]`). A literal `];[` no longer appears once the
+    // FIRST group has a tail, so we can't gate on it; instead we attempt
+    // the trans parser and fall back to compound on a clean `Err`. The
+    // trans parser requires two or more bracketed groups, so a genuine
+    // single-bracket cis/predicted/products allele rejects and falls
+    // through. #559 / CodeRabbit.
+    if let Ok((remaining, variant)) =
+        parse_rna_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
+    {
+        return Ok((remaining, variant));
     }
 
     let close_bracket = input.rfind(']').ok_or_else(|| {
@@ -4316,8 +4374,14 @@ fn parse_circular_variant(
 
         // Compact-prefix trans-allele shorthand: o.[a];[b]. Mirrors
         // parse_genome_variant's dispatch added in PR #146; SVD-WG006 says
-        // circular DNA inherits the DNA allele grammar.
-        if input.starts_with('[') && input.contains("];[") {
+        // circular DNA inherits the DNA allele grammar. Attempt the trans
+        // parser whenever the input is bracketed and fall back to compound on
+        // a clean `Err`, rather than gating on a literal `];[` — that substring
+        // disappears once the FIRST group carries a `(;)` mosaic tail (e.g.
+        // `[a](;)b;[c]`). The trans parser requires two or more bracketed
+        // groups, so a single-bracket cis/predicted/products allele rejects and
+        // falls through. #559 / CodeRabbit.
+        if input.starts_with('[') {
             if let Ok((remaining, variant)) =
                 parse_circular_trans_allele_shorthand(input, accession.clone(), gene_symbol.clone())
             {
