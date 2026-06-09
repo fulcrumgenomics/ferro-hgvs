@@ -61,6 +61,7 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
         NaEdit::Substitution { .. } => "substitution",
         NaEdit::SubstitutionNoRef { .. } => "substitution",
         NaEdit::Deletion { .. } => "deletion",
+        NaEdit::NPaddedDeletion { .. } => "deletion",
         NaEdit::Duplication { .. } => "duplication",
         NaEdit::DupIns { .. } => "dupins",
         NaEdit::Insertion { .. } => "insertion",
@@ -384,6 +385,9 @@ pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
         | NaEdit::Inversion { .. }
         | NaEdit::Identity { .. } => Some(0),
         NaEdit::Deletion { .. } => Some(-compute_span(variant)?),
+        // N-padded deletion: size is a count of unknown bases — no deterministic
+        // indel length.
+        NaEdit::NPaddedDeletion { .. } => None,
         NaEdit::Duplication { .. } => Some(compute_span(variant)?),
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
@@ -435,6 +439,9 @@ pub fn get_indel_length_with_provider<P: ReferenceProvider + ?Sized>(
         | NaEdit::Inversion { .. }
         | NaEdit::Identity { .. } => Some(0),
         NaEdit::Deletion { .. } => Some(-compute_span_with_provider(variant, provider)?),
+        // N-padded deletion: size is a count of unknown bases — no deterministic
+        // indel length.
+        NaEdit::NPaddedDeletion { .. } => None,
         NaEdit::Duplication { .. } => Some(compute_span_with_provider(variant, provider)?),
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
@@ -625,6 +632,23 @@ mod tests {
             status: MethylationStatus::GainOfMethylation,
         };
         assert_eq!(na_edit_type_str(&edit), "methylation");
+    }
+
+    #[test]
+    fn test_na_edit_type_str_npadded_deletion() {
+        use crate::hgvs::edit::RepeatCount;
+        let edit = NaEdit::NPaddedDeletion {
+            count: RepeatCount::Exact(15),
+        };
+        assert_eq!(na_edit_type_str(&edit), "deletion");
+    }
+
+    #[test]
+    fn test_get_indel_length_npadded_deletion() {
+        // N-padded deletion has an uncertain count of deleted bases, so
+        // get_indel_length must return None (not Some(0) or any deterministic value).
+        let variant = parse_hgvs("NM_000333.3:c.(4_246)delN[15]").expect("must parse delN[15]");
+        assert_eq!(get_indel_length(&variant), None);
     }
 
     // ===== edit_type_from_debug Tests =====

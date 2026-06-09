@@ -491,6 +491,15 @@ pub enum NaEdit {
         length: Option<u64>,
     },
 
+    /// N-padded deletion: a deletion whose removed size is given as a count of
+    /// unknown (`N`) bases — `delN[15]`, `delN[(150_180)]`. Used when a
+    /// fragment was amplified and only its size (not its sequence) was
+    /// determined, so the deletion is reported relative to the reference
+    /// fragment size. Spec: `recommendations/uncertain.md`,
+    /// `recommendations/DNA/repeated.md`. The matching insertion form is
+    /// `Insertion { InsertedSequence::Repeat { base: N, .. } }` (`insN[15]`).
+    NPaddedDeletion { count: RepeatCount },
+
     /// Insertion: addition of bases between two positions (e.g., insATG, ins10, insA[10])
     Insertion { sequence: InsertedSequence },
 
@@ -687,6 +696,7 @@ impl NaEdit {
                 }
                 s
             }
+            NaEdit::NPaddedDeletion { count } => format!("delN{}", count),
             NaEdit::Insertion { sequence } => {
                 format!("ins{}", sequence.to_rna_string())
             }
@@ -804,6 +814,7 @@ impl fmt::Display for NaEdit {
                 }
                 Ok(())
             }
+            NaEdit::NPaddedDeletion { count } => write!(f, "delN{}", count),
             NaEdit::Insertion { sequence } => {
                 write!(f, "ins{}", sequence)
             }
