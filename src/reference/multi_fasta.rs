@@ -21,9 +21,12 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use log::warn;
+use lru::LruCache;
 use rustc_hash::FxHashMap;
 
 use crate::data::cdot::CdotMapper;
@@ -140,6 +143,42 @@ pub struct MultiFastaProvider {
     canonical_overrides: CanonicalOverrides,
     /// Protein FASTA index (NP_/XP_ accessions) for get_protein_sequence (#520).
     protein_index: FxHashMap<String, FastaIndexEntry>,
+    /// Bounded LRU memoizing resolved transcripts, keyed on the exact resolution
+    /// inputs `(id, build_hint)`. Resolving a transcript materializes its full
+    /// sequence from the FASTA and rebuilds cdot exon/CDS metadata — by far the
+    /// dominant cost in batch normalization. Most real workloads (transcript- or
+    /// genome-position-sorted input) revisit the same transcript many times in a
+    /// row, so memoizing turns those repeats into cheap `Arc` clones. The result
+    /// is byte-identical to recomputing it, so this is purely a timing change.
+    /// Keying on `(id, build_hint)` (not the bare accession) keeps multi-build
+    /// resolution correct: the same accession on different builds caches
+    /// distinctly. See the resolve-cache perf work.
+    transcript_cache: TranscriptCache,
+}
+
+/// Resolution inputs that uniquely identify a resolved transcript: the requested
+/// accession and the optional genome-build hint. Used as the resolve-cache key.
+type TranscriptCacheKey = (String, Option<String>);
+
+/// Bounded LRU memoizing resolved transcripts (see [`MultiFastaProvider`]'s
+/// `transcript_cache` field). Wrapped in a [`Mutex`] for `&self` access from the
+/// [`ReferenceProvider`] trait, which is shared across threads.
+type TranscriptCache = Mutex<LruCache<TranscriptCacheKey, Arc<Transcript>>>;
+
+/// Default capacity (number of distinct transcripts) for the resolve cache.
+///
+/// Sized well above the working set of typical batch runs (ClinVar-scale inputs
+/// touch on the order of tens of thousands of distinct transcripts), so locality
+/// is captured without eviction churn, while still bounding memory for
+/// long-running services that would otherwise accumulate every transcript ever
+/// requested.
+const TRANSCRIPT_CACHE_CAPACITY: usize = 65_536;
+
+/// Build an empty resolve cache at the default capacity.
+fn new_transcript_cache() -> TranscriptCache {
+    let capacity =
+        NonZeroUsize::new(TRANSCRIPT_CACHE_CAPACITY).expect("cache capacity is non-zero");
+    Mutex::new(LruCache::new(capacity))
 }
 
 impl MultiFastaProvider {
@@ -208,6 +247,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
+            transcript_cache: new_transcript_cache(),
         })
     }
 
@@ -239,6 +279,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
+            transcript_cache: new_transcript_cache(),
         })
     }
 
@@ -539,6 +580,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: FxHashMap::default(),
+            transcript_cache: new_transcript_cache(),
         })
     }
 
@@ -1079,6 +1121,46 @@ impl MultiFastaProvider {
         Ok(tx)
     }
 
+    /// Memoized [`Self::get_transcript_on_build`].
+    ///
+    /// On a cache hit returns a cheap [`Arc`] clone of the previously resolved
+    /// transcript; on a miss it resolves (materializing the full sequence and
+    /// rebuilding cdot metadata), stores the result, and returns it. The cached
+    /// value is exactly what `get_transcript_on_build` would have produced —
+    /// including applied canonical overrides — so callers cannot observe any
+    /// behavioral difference, only reduced work on repeat lookups. The cache key
+    /// `(id, build_hint)` matches the resolution inputs so distinct builds of the
+    /// same accession never collide.
+    fn get_transcript_on_build_cached(
+        &self,
+        id: &str,
+        build_hint: Option<&str>,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        let key = (id.to_string(), build_hint.map(str::to_string));
+
+        if let Some(hit) = self
+            .transcript_cache
+            .lock()
+            .expect("transcript cache mutex poisoned")
+            .get(&key)
+        {
+            return Ok(Arc::clone(hit));
+        }
+
+        // Resolve outside the lock so concurrent misses for *different*
+        // transcripts don't serialize on the expensive FASTA read.
+        // NOTE: concurrent same-key misses both resolve; the second put is a
+        // no-op in value terms (LruCache overwrites with a semantically
+        // identical Arc, and all callers already hold their own Arc clone).
+        let tx = Arc::new(self.get_transcript_on_build(id, build_hint)?);
+
+        self.transcript_cache
+            .lock()
+            .expect("transcript cache mutex poisoned")
+            .put(key, Arc::clone(&tx));
+        Ok(tx)
+    }
+
     fn get_transcript_on_build_inner(
         &self,
         id: &str,
@@ -1408,24 +1490,24 @@ impl MultiFastaProvider {
 }
 
 impl ReferenceProvider for MultiFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
-        self.get_transcript_on_build(id, None)
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
+        self.get_transcript_on_build_cached(id, None)
     }
 
     fn get_transcript_for_variant(
         &self,
         variant: &crate::hgvs::variant::HgvsVariant,
-    ) -> Result<Transcript, FerroError> {
+    ) -> Result<Arc<Transcript>, FerroError> {
         let Some(accession) = variant.accession() else {
             // No accession at all (e.g. NullAllele) — fall through to the
             // default impl which produces a clear ReferenceNotFound error.
-            return self.get_transcript_on_build(&format!("{}", variant), None);
+            return self.get_transcript_on_build_cached(&format!("{}", variant), None);
         };
         let tx_id = accession.transcript_accession();
 
         // No parent → exactly the existing behavior.
         let Some(parent) = accession.genomic_context.as_deref() else {
-            return self.get_transcript_on_build(&tx_id, None);
+            return self.get_transcript_on_build_cached(&tx_id, None);
         };
 
         // Decide a probe order based on the parent class.
@@ -1442,16 +1524,16 @@ impl ReferenceProvider for MultiFastaProvider {
                 if &*parent.prefix == "NG" {
                     &["GRCh38", "GRCh37"]
                 } else {
-                    return self.get_transcript_on_build(&tx_id, None);
+                    return self.get_transcript_on_build_cached(&tx_id, None);
                 }
             }
         };
 
         let mut last_err: Option<FerroError> = None;
         for build in probe_order {
-            match self.get_transcript_on_build(&tx_id, Some(build)) {
+            match self.get_transcript_on_build_cached(&tx_id, Some(build)) {
                 Ok(tx) if tx.chromosome.is_some() => return Ok(tx),
-                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id }),
+                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id.clone() }),
                 Err(e) => last_err = Some(e),
             }
         }
@@ -1459,7 +1541,7 @@ impl ReferenceProvider for MultiFastaProvider {
         // Final fallback: try without a build hint (uses cdot's primary build
         // and any supplemental/FASTA-only data). Preserves the historical
         // behavior for transcripts that only live in the primary build.
-        match self.get_transcript_on_build(&tx_id, None) {
+        match self.get_transcript_on_build_cached(&tx_id, None) {
             Ok(tx) => Ok(tx),
             Err(e) => Err(last_err.unwrap_or(e)),
         }
@@ -2677,6 +2759,70 @@ mod tests {
         drop(fai);
         let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
         (provider, dir)
+    }
+
+    #[test]
+    fn resolve_cache_memoizes_and_preserves_content() {
+        let (provider, _kept) = build_provider_with_transcripts(&[
+            ("NM_CACHE.1", "ATGAAATAA"),
+            ("NM_OTHER.1", "ATGCAT"),
+        ]);
+
+        // The cached result must be byte-identical to an uncached resolve:
+        // caching is purely a timing change, never a behavioral one.
+        let uncached = provider
+            .get_transcript_on_build("NM_CACHE.1", None)
+            .unwrap();
+        let first = provider.get_transcript("NM_CACHE.1").unwrap();
+        assert_eq!(*first, uncached);
+
+        // A second lookup of the same (id, build) returns the *same* Arc — proof
+        // the materialize path ran once and the repeat was served from cache.
+        let second = provider.get_transcript("NM_CACHE.1").unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "repeat lookup should hit the cache and return the same Arc"
+        );
+
+        // A different accession is a distinct entry, not an accidental alias.
+        let other = provider.get_transcript("NM_OTHER.1").unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_eq!(other.sequence.as_deref(), Some("ATGCAT"));
+
+        // A miss still surfaces as an error (not a stale or empty cache hit).
+        assert!(provider.get_transcript("NM_MISSING.1").is_err());
+    }
+
+    #[test]
+    fn resolve_cache_build_hint_key_isolation() {
+        // The docstring for get_transcript_on_build_cached states that the
+        // cache key is (id, build_hint), so the same accession with different
+        // build hints must produce independent entries that never evict each
+        // other.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_BUILD.1", "ATGAAACCC")]);
+
+        let grch37 = provider
+            .get_transcript_on_build_cached("NM_BUILD.1", Some("GRCh37"))
+            .expect("GRCh37 lookup must succeed");
+        let grch38 = provider
+            .get_transcript_on_build_cached("NM_BUILD.1", Some("GRCh38"))
+            .expect("GRCh38 lookup must succeed");
+
+        // Different build hints produce distinct Arc allocations — neither
+        // entry evicted the other from the cache.
+        assert!(
+            !Arc::ptr_eq(&grch37, &grch38),
+            "(id, GRCh37) and (id, GRCh38) must be independent cache entries"
+        );
+
+        // A repeat GRCh37 lookup is still served from the cache (same Arc).
+        let grch37_again = provider
+            .get_transcript_on_build_cached("NM_BUILD.1", Some("GRCh37"))
+            .expect("repeat GRCh37 lookup must succeed");
+        assert!(
+            Arc::ptr_eq(&grch37, &grch37_again),
+            "repeat (id, GRCh37) lookup should hit the cache and return the same Arc"
+        );
     }
 
     #[test]

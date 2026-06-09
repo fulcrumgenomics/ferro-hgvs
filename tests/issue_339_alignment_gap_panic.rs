@@ -31,7 +31,7 @@ struct FixedLengthProvider {
 }
 
 impl ReferenceProvider for FixedLengthProvider {
-    fn get_transcript(&self, _id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, _id: &str) -> Result<std::sync::Arc<Transcript>, FerroError> {
         Err(FerroError::ReferenceNotFound {
             id: "<fixed-length-provider>".to_string(),
         })

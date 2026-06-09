@@ -87,6 +87,8 @@ ferro check --reference ferro-reference --build-cache
 ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 ```
 
+> **Throughput tip:** when normalizing many variants, feed them **sorted by transcript accession (or by genomic position)**. ferro caches each resolved transcript, so consecutive variants on the same transcript skip the (dominant) cost of re-reading and re-building it from the reference. Sorted input keeps the relevant transcripts resident in the cache and is markedly faster on large batches — see [Performance Comparison](#performance-comparison).
+
 ### Library
 
 ```rust
@@ -226,6 +228,8 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 | mutalyzer | ~20 patterns/sec | ~1 pattern/sec | **200,000x** |
 | biocommons/hgvs | ~20 patterns/sec | ~0.2 patterns/sec | **200,000x** |
 | hgvs-rs | ~2 patterns/sec | ~0.2 patterns/sec | **2,000,000x** |
+
+**Input ordering matters for batch throughput.** Resolving a transcript (reading its full sequence from the reference and rebuilding its CDS/exon metadata) dominates per-variant cost. ferro memoizes resolved transcripts in a bounded in-memory cache, so repeated lookups of the same transcript are near-free. Providing variants **sorted by transcript accession — or by genomic position, which clusters variants onto the same transcripts** — maximizes the cache hit rate and can speed up large batches by an order of magnitude versus randomly-ordered input. Ordering matters most when the number of distinct transcripts in the run exceeds the cache capacity (very large or genome-wide inputs); below that, the working set stays resident regardless of order.
 
 ### Reference Data: What ferro Prepares
 

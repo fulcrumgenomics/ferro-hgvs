@@ -133,7 +133,7 @@ fn provider() -> Option<Arc<MultiFastaProvider>> {
 struct ArcProvider(Arc<MultiFastaProvider>);
 
 impl ReferenceProvider for ArcProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.0.get_transcript(id)
     }
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {

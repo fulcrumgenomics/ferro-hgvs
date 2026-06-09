@@ -1031,7 +1031,7 @@ mod tests {
     /// to exercise the `LoadError` surfacing path.
     struct FailingProvider;
     impl ReferenceProvider for FailingProvider {
-        fn get_transcript(&self, _id: &str) -> Result<Transcript, FerroError> {
+        fn get_transcript(&self, _id: &str) -> Result<std::sync::Arc<Transcript>, FerroError> {
             Err(FerroError::InvalidCoordinates {
                 msg: "degenerate coordinates".to_string(),
             })

@@ -2,6 +2,8 @@
 //!
 //! Defines the interface for accessing reference sequence data.
 
+use std::sync::Arc;
+
 use crate::error::FerroError;
 use crate::hgvs::variant::HgvsVariant;
 use crate::reference::transcript::Transcript;
@@ -13,8 +15,16 @@ use crate::reference::transcript::Transcript;
 /// - SeqRepoProvider for local sequence databases
 /// - NCBIProvider for remote NCBI E-utilities
 pub trait ReferenceProvider {
-    /// Get a transcript by its accession
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError>;
+    /// Get a transcript by its accession.
+    ///
+    /// Returns an [`Arc`] so that providers which materialize the full
+    /// transcript sequence (e.g.
+    /// [`MultiFastaProvider`](crate::reference::multi_fasta::MultiFastaProvider))
+    /// can memoize the result and hand out cheap pointer clones on repeated
+    /// lookups of the same transcript. Callers that only read fields are
+    /// unaffected (`Arc<Transcript>` derefs to `Transcript`); callers that
+    /// need an owned `Transcript` can clone via `(*tx).clone()`.
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError>;
 
     /// Get the transcript for the given variant, optionally using the
     /// variant's `genomic_context` parent (NG/NC) to pick a cdot build
@@ -30,7 +40,10 @@ pub trait ReferenceProvider {
     /// specific cdot build (e.g. [`crate::reference::multi_fasta::MultiFastaProvider`])
     /// override this to consult the parent accession before falling back to
     /// the bare transcript lookup. See issue #332.
-    fn get_transcript_for_variant(&self, variant: &HgvsVariant) -> Result<Transcript, FerroError> {
+    fn get_transcript_for_variant(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Arc<Transcript>, FerroError> {
         let accession = variant
             .accession()
             .ok_or_else(|| FerroError::ReferenceNotFound {
@@ -219,11 +232,14 @@ pub trait ReferenceProvider {
 
 /// Blanket implementation for boxed trait objects
 impl ReferenceProvider for Box<dyn ReferenceProvider> {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         (**self).get_transcript(id)
     }
 
-    fn get_transcript_for_variant(&self, variant: &HgvsVariant) -> Result<Transcript, FerroError> {
+    fn get_transcript_for_variant(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Arc<Transcript>, FerroError> {
         (**self).get_transcript_for_variant(variant)
     }
 

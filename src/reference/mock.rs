@@ -5,12 +5,12 @@ use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Mock reference provider that loads transcripts from JSON
 #[derive(Clone)]
 pub struct MockProvider {
-    transcripts: HashMap<String, Transcript>,
+    transcripts: HashMap<String, Arc<Transcript>>,
     proteins: HashMap<String, String>,
     /// Genomic sequences keyed by contig name
     genomic_sequences: HashMap<String, String>,
@@ -84,9 +84,9 @@ impl MockProvider {
             }
         };
 
-        let map: HashMap<String, Transcript> = transcripts
+        let map: HashMap<String, Arc<Transcript>> = transcripts
             .into_iter()
-            .map(|tx| (tx.id.clone(), tx))
+            .map(|tx| (tx.id.clone(), Arc::new(tx)))
             .collect();
 
         Ok(Self {
@@ -99,7 +99,8 @@ impl MockProvider {
 
     /// Add a transcript to the provider
     pub fn add_transcript(&mut self, transcript: Transcript) {
-        self.transcripts.insert(transcript.id.clone(), transcript);
+        self.transcripts
+            .insert(transcript.id.clone(), Arc::new(transcript));
     }
 
     /// Add a protein sequence to the provider
@@ -273,7 +274,7 @@ impl MockProvider {
 
     /// Iterate over all transcripts registered in the provider.
     pub fn all_transcripts(&self) -> impl Iterator<Item = &Transcript> {
-        self.transcripts.values()
+        self.transcripts.values().map(Arc::as_ref)
     }
 
     /// True when `id` is declared as a chromosome/contig name — either an
@@ -298,10 +299,10 @@ impl Default for MockProvider {
 }
 
 impl ReferenceProvider for MockProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {
-            return Ok(tx.clone());
+            return Ok(Arc::clone(tx));
         }
 
         // Try without version: only match a stored key whose base id (the
@@ -317,7 +318,7 @@ impl ReferenceProvider for MockProvider {
         if !id.contains('.') {
             for (key, tx) in &self.transcripts {
                 if key.split('.').next().unwrap_or(key) == id {
-                    return Ok(tx.clone());
+                    return Ok(Arc::clone(tx));
                 }
             }
         }
