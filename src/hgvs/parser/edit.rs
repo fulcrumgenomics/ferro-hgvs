@@ -767,6 +767,25 @@ fn parse_parenthesized_count(input: &str) -> IResult<&str, InsertedSequence> {
                             {
                                 let start2: u64 = start2_str.parse().unwrap_or(0);
                                 let end2: u64 = end2_str.parse().unwrap_or(0);
+
+                                // A trailing `inv` marks an orientation-reversed
+                                // insertion of the single uncertain-boundary
+                                // region — the HGVS-sanctioned form for what the
+                                // spec rejects as `dupinv` (DNA/complex.md,
+                                // DNA/inversion.md:19). Preserve it verbatim
+                                // rather than splitting into two bracket parts.
+                                if let Ok((rest, _)) =
+                                    tag::<_, _, nom::error::Error<&str>>("inv").parse(rest)
+                                {
+                                    return Ok((
+                                        rest,
+                                        InsertedSequence::UncertainRangeInv {
+                                            start: (start1, end1),
+                                            end: (start2, end2),
+                                        },
+                                    ));
+                                }
+
                                 return Ok((
                                     rest,
                                     InsertedSequence::Complex(vec![

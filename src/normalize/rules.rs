@@ -2116,12 +2116,16 @@ pub fn expand_inserted_sequence<P: ReferenceProvider>(
         InsertedSequence::Complex(parts) => expand_complex_parts(parts, accession, kind, provider),
 
         // Already flat or out-of-scope for this canonicalization.
+        // `UncertainRangeInv` has uncertain (parenthesized) breakpoints that
+        // are not sequenced, so there are no exact bases to fetch — leave it
+        // as-is (DNA/complex.md).
         InsertedSequence::Literal(_)
         | InsertedSequence::Count(_)
         | InsertedSequence::Range(_, _)
         | InsertedSequence::Repeat { .. }
         | InsertedSequence::SequenceRepeat { .. }
         | InsertedSequence::Named(_)
+        | InsertedSequence::UncertainRangeInv { .. }
         | InsertedSequence::Uncertain
         | InsertedSequence::Empty => Ok(None),
     }

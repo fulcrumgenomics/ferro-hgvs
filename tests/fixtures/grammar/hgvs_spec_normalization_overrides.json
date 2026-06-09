@@ -29,6 +29,10 @@
     "g.456_457ins123_456": {
       "status": "needs-reference",
       "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference ins-from-range payload requires provider sequence to expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
+    },
+    "chr8:g.128746677_128749160dupinv": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, which is banner-flagged `not updated` and superseded by DNA/complex.md. The adopted recommendation rejects `dupinv` (`<code class=\"invalid\">` at DNA/inversion.md:19, RNA/inversion.md:19) and re-expresses this exact orientation-reversed duplication as an inverted insertion (`NC_000008.11:g.(131500001_136400000)ins(127300001_131500000)_(131500001_136400000)inv`, DNA/complex.md). The seeded `spec_expected` was a fixture bug; force spec-rejects so ferro correctly rejecting `dupinv` reads as `correctly-rejected`, not `parse-error`. ferro supports the spec-correct `ins(...)_(...)inv` form instead (#546)."
     }
   }
 }
