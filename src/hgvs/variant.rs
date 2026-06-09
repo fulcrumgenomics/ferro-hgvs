@@ -1048,12 +1048,17 @@ fn intervals_match_for_compact_mosaic(a: &HgvsVariant, b: &HgvsVariant) -> bool 
 
 /// Shared Display path for `Mosaic` (`/`) and `Chimeric` (`//`) phases.
 ///
-/// Three branches in priority order (mutually exclusive on each input):
+/// Four branches in priority order (mutually exclusive on each input):
 ///
 /// 1. **Spec compact mosaic / chimeric** — LHS is a position-bound `=`
 ///    identity edit, RHS shares accession + coord type + interval.
 ///    Emits `<lhs-full>=/<rhs-bare-edit>`. Per
 ///    `recommendations/DNA/{substitution,deletion,duplication}.md`.
+///
+/// 1b. **Whole-entity identity LHS** — LHS carries `r.=` / `c.=` / etc.
+///    (whole-entity, not position-bound); RHS carries its own position.
+///    Emits `<prefix>=/<rhs-loc-edit>`, optionally wrapped in `(...)` when
+///    `uncertain`. E.g. `r.=/6_8del` and `r.(=/6_8del)`.
 ///
 /// 2. **`var/=` shorthand cleanup** — LHS is a non-identity variant,
 ///    RHS is a whole-entity identity edit (the synthetic shape
@@ -1066,18 +1071,47 @@ fn write_mosaic_or_chimeric(
     f: &mut fmt::Formatter<'_>,
     variants: &[HgvsVariant],
     sep: &str,
+    uncertain: bool,
 ) -> fmt::Result {
     if variants.len() == 2 && use_compact_form(variants) {
         let lhs = &variants[0];
         let rhs = &variants[1];
 
-        // Branch 1: spec compact (LHS pos-identity, intervals match).
+        // Branch 1: spec compact (LHS pos-identity, intervals match). The
+        // prefix is written once; a predicted (`uncertain`) mosaic wraps the
+        // body — `<prefix>(<lhs-loc-edit>/<rhs-bare-edit>)` (e.g.
+        // `p.(Val7=/del)`).
         if is_position_identity_lhs(lhs) && intervals_match_for_compact_mosaic(lhs, rhs) {
-            write!(f, "{}", lhs)?;
+            write_compact_prefix(f, lhs)?;
+            if uncertain {
+                write!(f, "(")?;
+            }
+            lhs.fmt_loc_edit(f)?;
             write!(f, "{}", sep)?;
             // Emit the RHS edit alone (no accession, no type prefix, no
             // position) — that is the spec compact RHS shape.
-            return write_bare_edit(f, rhs);
+            write_bare_edit(f, rhs)?;
+            if uncertain {
+                write!(f, ")")?;
+            }
+            return Ok(());
+        }
+
+        // Branch 1b: whole-entity identity LHS (`r.=`); the RHS carries its
+        // own position. Compact form `<prefix>=/<rhs-loc-edit>` (e.g.
+        // `r.=/6_8del`), optionally predicted (`r.(=/6_8del)`).
+        if is_whole_entity_identity_rhs(lhs) {
+            write_compact_prefix(f, lhs)?;
+            if uncertain {
+                write!(f, "(")?;
+            }
+            write!(f, "=")?;
+            write!(f, "{}", sep)?;
+            rhs.fmt_loc_edit(f)?;
+            if uncertain {
+                write!(f, ")")?;
+            }
+            return Ok(());
         }
 
         // Branch 2: var/= cleanup. LHS must NOT be position-identity
@@ -1211,8 +1245,8 @@ impl fmt::Display for AlleleVariant {
                     write!(f, "]")
                 }
             }
-            AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/"),
-            AllelePhase::Chimeric => write_mosaic_or_chimeric(f, &self.variants, "//"),
+            AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/", self.uncertain),
+            AllelePhase::Chimeric => write_mosaic_or_chimeric(f, &self.variants, "//", false),
             AllelePhase::AndOr => {
                 if self.uncertain && use_compact_form(&self.variants) {
                     // Uncertainty-wrapped, shared accession + coord type:

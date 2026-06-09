@@ -13,8 +13,8 @@
       "diverges": 133,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 327,
-      "preserved": 656
+      "parse-error": 322,
+      "preserved": 661
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10779,18 +10779,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199t1:p.(Trp24=/Cys)",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(Trp24=\", code: Tag })",
-      "spec_expected": "LRG_199t1:p.(Trp24=/Cys)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
       "spec_expected": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
@@ -10811,30 +10799,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/insertion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.(Val7=/del)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Val7=\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.(Val7=/del)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "NP_003997.1:p.(Val7=/dup)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Val7=\", code: Tag })",
-      "spec_expected": "NP_003997.1:p.(Val7=/dup)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/duplication.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -11186,6 +11150,17 @@
       ]
     },
     {
+      "input": "LRG_199t1:p.(Trp24=/Cys)",
+      "current": "LRG_199t1:p.(Trp24=/Cys)",
+      "spec_expected": "LRG_199t1:p.(Trp24=/Cys)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/substitution.md"
+      ]
+    },
+    {
       "input": "NP_000213.1:p.(Val559_Glu561del)",
       "current": "NP_000213.1:p.(Val559_Glu561del)",
       "spec_expected": "NP_000213.1:p.(Val559_Glu561del)",
@@ -11283,6 +11258,28 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/protein/insertion.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.(Val7=/del)",
+      "current": "NP_003997.1:p.(Val7=/del)",
+      "spec_expected": "NP_003997.1:p.(Val7=/del)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/deletion.md"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.(Val7=/dup)",
+      "current": "NP_003997.1:p.(Val7=/dup)",
+      "spec_expected": "NP_003997.1:p.(Val7=/dup)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/duplication.md"
       ]
     },
     {
@@ -13159,30 +13156,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "LRG_199t1:r.(=/6_8del)",
-      "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(=\", code: Digit })",
-      "spec_expected": "LRG_199t1:r.(=/6_8del)",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "LRG_199t1:r.=/6_8del",
-      "current": "parse error: Parse error at position 0: Unknown variant type prefix: expected one of 'c.', 'g.', 'p.', 'n.', 'r.', 'm.', 'o.' but found '6_8'",
-      "spec_expected": "LRG_199t1:r.=/6_8del",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/deletion.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
       "current": "parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: \"(578c>u;1339a>g;1680del)\", code: Digit })",
       "spec_expected": "LRG_199t1:r.[(578c>u;1339a>g;1680del)]",
@@ -14310,6 +14283,17 @@
       ]
     },
     {
+      "input": "LRG_199t1:r.(=/6_8del)",
+      "current": "LRG_199t1:r.(=/6_8del)",
+      "spec_expected": "LRG_199t1:r.(=/6_8del)",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/deletion.md"
+      ]
+    },
+    {
       "input": "LRG_199t1:r.10del",
       "current": "LRG_199t1:r.10del",
       "spec_expected": "LRG_199t1:r.10del",
@@ -14373,6 +14357,17 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/RNA/alleles.md"
+      ]
+    },
+    {
+      "input": "LRG_199t1:r.=/6_8del",
+      "current": "LRG_199t1:r.=/6_8del",
+      "spec_expected": "LRG_199t1:r.=/6_8del",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/deletion.md"
       ]
     },
     {

@@ -1541,6 +1541,46 @@ pub(crate) fn find_uncertain_and_or_group(input: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Detect a predicted (`(...)`-wrapped) mosaic group `<prefix>(<inner>)`
+/// where `<inner>` carries a top-level mosaic `/` (e.g. `p.(Val7=/del)`,
+/// `r.(=/6_8del)`). Returns `(prefix, inner)`. Mirrors
+/// `find_uncertain_and_or_group` but for the mosaic separator.
+pub(crate) fn find_uncertain_mosaic_group(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim();
+    let bytes = input.as_bytes();
+    if bytes.last() != Some(&b')') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut open: Option<usize> = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let prefix = &input[..open];
+    if !prefix.ends_with('.') {
+        return None;
+    }
+    let inner = &input[open + 1..input.len() - 1];
+    // A single top-level `/` is the mosaic separator (`=/`). Chimeric `//`
+    // inside a predicted wrapper is not a spec form handled here.
+    if find_top_level_slash(inner, false).is_some() {
+        Some((prefix, inner))
+    } else {
+        None
+    }
+}
+
 /// Result of `scan_allele_separators`: top-level depth-0 allele-separator
 /// flags plus the depth-aware members.
 #[derive(Debug)]
@@ -4758,6 +4798,31 @@ fn is_lhs_position_identity(variant: &HgvsVariant) -> bool {
     }
 }
 
+/// True iff `variant` carries a whole-entity identity edit (`r.=`, `c.=`,
+/// …). The mosaic LHS shape for `r.=/6_8del`, where the RHS carries its own
+/// position rather than inheriting the LHS's.
+fn lhs_is_whole_entity_identity(variant: &HgvsVariant) -> bool {
+    use crate::hgvs::edit::NaEdit;
+    let edit_is_whole = |edit: &Mu<NaEdit>| {
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: true,
+                ..
+            })
+        )
+    };
+    match variant {
+        HgvsVariant::Genome(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Cds(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Tx(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Rna(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Mt(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Circular(v) => edit_is_whole(&v.loc_edit.edit),
+        _ => false,
+    }
+}
+
 /// Create an identity variant based on the type of the reference variant.
 /// Used for mosaic/chimeric notation where "=" means reference allele.
 fn create_identity_variant_from(reference: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
@@ -5287,6 +5352,30 @@ fn parse_chimeric_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     parse_phase_allele(input, AllelePhase::Chimeric)
 }
 
+/// Parse a predicted (`(...)`-wrapped) mosaic `=/` group, e.g.
+/// `NP_003997.1:p.(Val7=/del)` or `LRG_199t1:r.(=/6_8del)`. Strips the
+/// uncertainty wrapper, parses the inner mosaic via the normal path, and
+/// marks the resulting allele uncertain so the `(...)` round-trips.
+fn parse_uncertain_mosaic_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let (prefix, inner) = find_uncertain_mosaic_group(input).ok_or_else(|| FerroError::Parse {
+        pos: 0,
+        msg: "Not an uncertain mosaic group".to_string(),
+        diagnostic: None,
+    })?;
+    let reconstructed = format!("{}{}", prefix, inner);
+    match parse_variant(&reconstructed)? {
+        HgvsVariant::Allele(mut allele) if allele.phase == AllelePhase::Mosaic => {
+            allele.uncertain = true;
+            Ok(HgvsVariant::Allele(allele))
+        }
+        _ => Err(FerroError::Parse {
+            pos: 0,
+            msg: "Predicted mosaic group did not resolve to a mosaic allele".to_string(),
+            diagnostic: None,
+        }),
+    }
+}
+
 /// Parse a top-level and/or allele: full descriptions joined by `^`
 /// (HGVS general.md, "variant A and/or variant B"). Each operand is a
 /// complete description and may carry its own accession (possibly
@@ -5576,41 +5665,65 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
                     match parse_variant_with_inherited_accession(chunk, acc, gs.as_ref()) {
                         Ok(v) => v,
                         Err(prefix_err) => {
+                            // Fallback 1.5: whole-entity identity LHS (`r.=`).
+                            // The RHS is a full position+edit lacking the
+                            // type prefix (`6_8del`); rebuild it as
+                            // `<acc>:<type>.<chunk>` and parse, so
+                            // `r.=/6_8del` (whole-entity mosaic) works.
+                            //
+                            // When the LHS is whole-entity identity the RHS is
+                            // unambiguously this rebuilt shape (the spec
+                            // compact bare-edit fallback below only applies to
+                            // a *position-bound* identity LHS, so it can never
+                            // recover a whole-entity-LHS chunk). So surface the
+                            // rebuilt parse's own error rather than swallowing
+                            // it with `.ok()` and falling through to the
+                            // generic `prefix_err` — otherwise a malformed RHS
+                            // like `g.=/6_8delQ` reports a misleading "Unknown
+                            // variant type prefix … found '6_8'" instead of the
+                            // real "Unexpected trailing characters: 'Q'".
+                            if lhs_is_whole_entity_identity(lhs) {
+                                let rebuilt =
+                                    format!("{}:{}.{}", acc.full(), lhs.variant_type(), chunk);
+                                parse_variant(&rebuilt)?
+                            } else
                             // Fallback 2: HGVS spec compact form — bare
                             // NaEdit RHS inheriting accession + coord
                             // type + position from `<pos>=` LHS.
-                            match parse_compact_mosaic_rhs(chunk, lhs)? {
-                                Some(v) => v,
-                                None => {
-                                    // Targeted diagnostic for the
-                                    // ClinVar-prose multi-allelic
-                                    // shorthand `m.<pos><ref>><alt>/<alt2>`
-                                    // (issue #278). Only fire on the
-                                    // recognizable bare-base RHS shape,
-                                    // when the LHS has already parsed
-                                    // (so this is genuinely a mosaic-RHS
-                                    // rejection), and when the LHS is a
-                                    // mitochondrial variant — the W3018
-                                    // diagnostic text and code are
-                                    // specifically for `m.` heteroplasmy
-                                    // prose; firing it on non-mito LHS
-                                    // would mislabel unrelated parse
-                                    // failures.
-                                    if matches!(lhs, HgvsVariant::Mt(_))
-                                        && is_prose_multi_allelic_rhs(chunk)
-                                    {
-                                        use crate::error::{Diagnostic, ErrorCode, SourceSpan};
-                                        let _w3018 = ErrorType::ClinVarProseMultiAllelic;
-                                        let diag = Diagnostic::new()
-                                            .with_code(ErrorCode::ClinVarProseMultiAllelic)
-                                            .with_span(SourceSpan::new(0, chunk.len()));
-                                        return Err(FerroError::parse_with_diagnostic(
-                                            0,
-                                            prose_multi_allelic_diagnostic_msg(chunk),
-                                            diag,
-                                        ));
+                            {
+                                match parse_compact_mosaic_rhs(chunk, lhs)? {
+                                    Some(v) => v,
+                                    None => {
+                                        // Targeted diagnostic for the
+                                        // ClinVar-prose multi-allelic
+                                        // shorthand `m.<pos><ref>><alt>/<alt2>`
+                                        // (issue #278). Only fire on the
+                                        // recognizable bare-base RHS shape,
+                                        // when the LHS has already parsed
+                                        // (so this is genuinely a mosaic-RHS
+                                        // rejection), and when the LHS is a
+                                        // mitochondrial variant — the W3018
+                                        // diagnostic text and code are
+                                        // specifically for `m.` heteroplasmy
+                                        // prose; firing it on non-mito LHS
+                                        // would mislabel unrelated parse
+                                        // failures.
+                                        if matches!(lhs, HgvsVariant::Mt(_))
+                                            && is_prose_multi_allelic_rhs(chunk)
+                                        {
+                                            use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+                                            let _w3018 = ErrorType::ClinVarProseMultiAllelic;
+                                            let diag = Diagnostic::new()
+                                                .with_code(ErrorCode::ClinVarProseMultiAllelic)
+                                                .with_span(SourceSpan::new(0, chunk.len()));
+                                            return Err(FerroError::parse_with_diagnostic(
+                                                0,
+                                                prose_multi_allelic_diagnostic_msg(chunk),
+                                                diag,
+                                            ));
+                                        }
+                                        return Err(prefix_err);
                                     }
-                                    return Err(prefix_err);
                                 }
                             }
                         }
@@ -5775,6 +5888,14 @@ fn parse_unknown_phase_allele(input: &str) -> Result<HgvsVariant, FerroError> {
 /// Determine the type of allele from the input string
 fn detect_allele_type(input: &str) -> Option<&'static str> {
     let input = input.trim();
+
+    // Predicted (`(...)`-wrapped) mosaic `=/` must be checked BEFORE the
+    // bare top-level slash check below — the `/` lives inside the parens,
+    // which `find_top_level_slash` does not track, so it would otherwise be
+    // misclassified as a bare mosaic.
+    if find_uncertain_mosaic_group(input).is_some() {
+        return Some("uncertain_mosaic");
+    }
 
     // Top-level slash check happens BEFORE the bracket-wrapping checks
     // so that bracketed chimeric / mosaic forms like
@@ -6100,6 +6221,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
             "rna_fusion" => parse_rna_fusion(input)?,
             "and_or" => parse_and_or_allele(input)?,
             "uncertain_and_or" => parse_uncertain_and_or_allele(input)?,
+            "uncertain_mosaic" => parse_uncertain_mosaic_allele(input)?,
             _ => unreachable!(),
         }
     } else {
