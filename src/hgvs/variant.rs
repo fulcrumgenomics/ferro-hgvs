@@ -938,6 +938,118 @@ fn ranges_overlap(a: SelfCancellingRange, b: SelfCancellingRange) -> bool {
     lo <= hi
 }
 
+/// Set the count of a single-count `Repeat` edit on `v` to `new_count`,
+/// returning `true` on success. Used to build the sibling alleles of a
+/// shared-position repeat trans allele (`p.Ala2[10];[11]`): clone the first
+/// variant and swap in each subsequent allele's count. Variants that are
+/// not single-count repeats are left unchanged and return `false`.
+pub(crate) fn set_repeat_count(
+    v: &mut HgvsVariant,
+    new_count: crate::hgvs::edit::RepeatCount,
+) -> bool {
+    fn na(edit: &mut Mu<NaEdit>, c: crate::hgvs::edit::RepeatCount) -> bool {
+        match edit {
+            Mu::Certain(NaEdit::Repeat {
+                count,
+                additional_counts,
+                trailing,
+                ..
+            })
+            | Mu::Uncertain(NaEdit::Repeat {
+                count,
+                additional_counts,
+                trailing,
+                ..
+            }) if additional_counts.is_empty() && trailing.is_none() => {
+                *count = c;
+                true
+            }
+            _ => false,
+        }
+    }
+    match v {
+        HgvsVariant::Genome(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Cds(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Tx(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Rna(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Mt(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Circular(x) => na(&mut x.loc_edit.edit, new_count),
+        HgvsVariant::Protein(x) => match &mut x.loc_edit.edit {
+            Mu::Certain(ProteinEdit::Repeat { count, .. })
+            | Mu::Uncertain(ProteinEdit::Repeat { count, .. }) => {
+                *count = new_count;
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The count of a single-count `Repeat` edit on `v`, if any. Used by the
+/// shared-position repeat trans Display.
+fn repeat_count_of(v: &HgvsVariant) -> Option<&crate::hgvs::edit::RepeatCount> {
+    fn na(edit: &Mu<NaEdit>) -> Option<&crate::hgvs::edit::RepeatCount> {
+        match edit.inner() {
+            Some(NaEdit::Repeat {
+                count,
+                additional_counts,
+                trailing,
+                ..
+            }) if additional_counts.is_empty() && trailing.is_none() => Some(count),
+            _ => None,
+        }
+    }
+    match v {
+        HgvsVariant::Genome(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Cds(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Tx(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Rna(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Mt(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Circular(x) => na(&x.loc_edit.edit),
+        HgvsVariant::Protein(x) => match x.loc_edit.edit.inner() {
+            Some(ProteinEdit::Repeat { count, .. }) => Some(count),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// True iff `variants` is a shared-position repeat trans allele: 2+ members
+/// that are single-count repeats sharing accession, coord type, position,
+/// and repeat unit — differing only in count. Such an allele renders in the
+/// compact `<pos><unit>[c1];[c2]` form (HGVS repeated.md) rather than the
+/// generic `[m1];[m2]`.
+fn is_shared_repeat_trans(variants: &[HgvsVariant]) -> bool {
+    if variants.len() < 2 || !HgvsVariant::all_share_accession_and_type(variants) {
+        return false;
+    }
+    // The compact `<pos><unit>[c1];[c2]` form is the spec canonical for RNA
+    // and protein (`recommendations/{protein,DNA}/repeated.md`); the DNA
+    // axes (g./c./m./o.) spell each allele out in full (`[member];[member]`,
+    // DNA/repeated.md:33). Gate the compact rendering to RNA + protein so
+    // DNA repeat trans alleles keep their explicit spec form.
+    if !variants
+        .iter()
+        .all(|v| matches!(v, HgvsVariant::Rna(_) | HgvsVariant::Protein(_)))
+    {
+        return false;
+    }
+    // Key = the full Display with the count normalized out; equal keys mean
+    // the members differ only in their repeat count.
+    let key = |v: &HgvsVariant| -> Option<String> {
+        let mut probe = v.clone();
+        set_repeat_count(&mut probe, crate::hgvs::edit::RepeatCount::Exact(0))
+            .then(|| format!("{}", probe))
+    };
+    match key(&variants[0]) {
+        Some(first) => variants
+            .iter()
+            .all(|v| key(v).as_deref() == Some(first.as_str())),
+        None => false,
+    }
+}
+
 /// Write the `ACC:<type>.` prefix for compact allele form.
 ///
 /// Per HGVS spec, bracketed `?` is only valid as a whole-allele marker (`[?]`),
@@ -1267,6 +1379,30 @@ impl fmt::Display for AlleleVariant {
                         }
                         Ok(())
                     }
+                } else if is_shared_repeat_trans(&self.variants) {
+                    // Shared-position repeat trans: `ACC:p.Ala2[10];[11]` —
+                    // the position+unit is written once (first member in
+                    // full), then each allele's count `;[cN]`. A shared-repeat
+                    // group has no nested-cis members, so it is disjoint from
+                    // the `has_nested_group` arm above.
+                    write_compact_prefix(f, &self.variants[0])?;
+                    self.variants[0].fmt_loc_edit(f)?;
+                    for v in &self.variants[1..] {
+                        write!(f, ";")?;
+                        // `repeat_count_of` cannot be `None` here: every member
+                        // is a single-count repeat (the same invariant
+                        // `is_shared_repeat_trans` keyed on). The `if let`
+                        // stays defensive — a missing count would otherwise
+                        // emit a malformed bare `;`.
+                        debug_assert!(
+                            repeat_count_of(v).is_some(),
+                            "is_shared_repeat_trans guarantees a single-count repeat per member"
+                        );
+                        if let Some(count) = repeat_count_of(v) {
+                            write!(f, "{}", count)?;
+                        }
+                    }
+                    Ok(())
                 } else if use_compact_form(&self.variants) {
                     // Compact form: ACC:g.[edit1];[edit2]
                     write_compact_prefix(f, &self.variants[0])?;

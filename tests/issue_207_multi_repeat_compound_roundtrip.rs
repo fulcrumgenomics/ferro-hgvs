@@ -81,9 +81,13 @@ fn noncoding_trans_compound_repeat() {
 #[test]
 fn rna_trans_compound_repeat_lowercase() {
     // RNA spec requires lowercase bases; the compound trans form must
-    // preserve case end-to-end.
-    let s = "NM_000088.3:r.[10_15ug[3]];[10_15ug[5]]";
-    assert_eq!(round_trip(s), s);
+    // preserve case end-to-end. Unlike the DNA axes (which spell each
+    // allele out in full, DNA/repeated.md:33), RNA's spec canonical form
+    // for a shared-locus repeat trans is the compact `<pos><unit>[c1];[c2]`
+    // (RNA/repeated.md:36), so the explicit `[..];[..]` input normalizes to
+    // the compact shape (lowercase preserved). See #544.
+    let input = "NM_000088.3:r.[10_15ug[3]];[10_15ug[5]]";
+    assert_eq!(round_trip(input), "NM_000088.3:r.10_15ug[3];[5]");
 }
 
 #[test]
