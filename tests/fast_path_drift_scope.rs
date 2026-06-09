@@ -14,7 +14,8 @@
 //!   cargo test --release --test fast_path_drift_scope --features dev -- \
 //!     --nocapture --ignored
 
-use ferro_hgvs::{parse_hgvs, parse_hgvs_fast};
+use ferro_hgvs::hgvs::parser::variant::parse_variant;
+use ferro_hgvs::parse_hgvs;
 use std::collections::BTreeMap;
 
 /// Divergence class for a single input.
@@ -26,7 +27,9 @@ enum Class {
 }
 
 fn classify(input: &str) -> Class {
-    match (parse_hgvs(input), parse_hgvs_fast(input)) {
+    // Compare the generic parser (source of truth) against the default
+    // `parse_hgvs`, which now routes through the fast path.
+    match (parse_variant(input), parse_hgvs(input)) {
         (Ok(a), Ok(b)) if a == b => Class::Agree,
         (Err(_), Err(_)) => Class::Agree,
         (Err(e), Ok(_)) => {
