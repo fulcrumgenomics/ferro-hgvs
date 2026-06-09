@@ -1500,10 +1500,15 @@ pub(crate) fn split_top_level_carets(input: &str) -> Vec<&str> {
 /// accession-internal paren like `GRCh38(chr1):g.(...)` is not mistaken
 /// for the uncertainty wrapper. Returns `None` unless the input ends in
 /// `)`, the matched `(` is preceded by a `.`, and the inner content has
-/// a top-level `^`. Residue-level alternatives that do not span whole
-/// edits (e.g. `p.(Gly56Ala^Ser^Cys)`) also match this shape; the
-/// caller's per-operand `parse_variant` then rejects the bare-residue
-/// operands, leaving those forms for separate residue-level handling.
+/// a top-level `^`.
+///
+/// The protein residue-level alternatives shorthand
+/// (`p.(Gly56Ala^Ser^Cys)`, protein/substitution.md) shares this outer
+/// shape but is NOT a whole-edit and/or group — its trailing `^`-operands
+/// are bare residues, not full edits. It is excluded here (see
+/// [`inner_is_protein_residue_alternatives`]) so it falls through to the
+/// substitution parser's `SubstitutionAlternatives` path; a whole-edit
+/// and/or operand always carries a position and is unaffected.
 pub(crate) fn find_uncertain_and_or_group(input: &str) -> Option<(&str, &str)> {
     let input = input.trim();
     let bytes = input.as_bytes();
@@ -1534,11 +1539,37 @@ pub(crate) fn find_uncertain_and_or_group(input: &str) -> Option<(&str, &str)> {
         return None;
     }
     let inner = &input[open + 1..input.len() - 1];
-    if find_top_level_caret(inner).is_some() {
+    if find_top_level_caret(inner).is_some()
+        && !inner_is_protein_residue_alternatives(prefix, inner)
+    {
         Some((prefix, inner))
     } else {
         None
     }
+}
+
+/// True iff `<prefix>(<inner>)` is the protein residue-level alternatives
+/// shorthand (`p.(Gly56Ala^Ser^Cys)` — "Gly56 is changed to an Ala, Ser,
+/// or Cys", protein/substitution.md) rather than a whole-edit and/or group.
+///
+/// The discriminator is positive (it matches the residue grammar) rather
+/// than "operand lacks a digit": every `^`-operand after the first must
+/// parse *completely* as a single amino-acid token. A whole-edit and/or
+/// operand (`Gly23CysfsTer26`) leaves a position remainder, and a
+/// whole-protein token (`=`, `?`, `0`) is not an amino acid at all — so
+/// neither is mistaken for a bare residue.
+fn inner_is_protein_residue_alternatives(prefix: &str, inner: &str) -> bool {
+    if !prefix.ends_with("p.") {
+        return false;
+    }
+    let operands = split_top_level_carets(inner);
+    if operands.len() < 2 {
+        return false;
+    }
+    operands[1..].iter().all(|op| {
+        let op = op.trim();
+        !op.is_empty() && matches!(parse_amino_acid(op), Ok((rest, _)) if rest.is_empty())
+    })
 }
 
 /// Result of `scan_allele_separators`: top-level depth-0 allele-separator
@@ -4982,6 +5013,22 @@ fn parse_compact_mosaic_rhs(
                     reference: start_pos.aa,
                     alternative,
                 }
+            }
+            // Residue-level alternatives (`Ala^Ser`) target a single residue
+            // too, so they carry the same point-LHS requirement as a plain
+            // substitution. The reference is rendered by the location, so the
+            // edit passes through unchanged once the guard holds.
+            ProteinEdit::SubstitutionAlternatives { alternatives } => {
+                let (Some(start_pos), Some(end_pos)) = (
+                    lhs_p.loc_edit.location.start.inner(),
+                    lhs_p.loc_edit.location.end.inner(),
+                ) else {
+                    return Ok(None);
+                };
+                if start_pos != end_pos {
+                    return Ok(None);
+                }
+                ProteinEdit::SubstitutionAlternatives { alternatives }
             }
             other => other,
         };

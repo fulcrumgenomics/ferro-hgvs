@@ -13,8 +13,8 @@
       "diverges": 133,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 326,
-      "preserved": 657
+      "parse-error": 324,
+      "preserved": 659
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10790,18 +10790,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
-      "spec_expected": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/substitution.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_003997.1:p.(Val582_Asn583insXaa[5])",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"(Val582_Asn583insXaa[5])\", code: Tag })",
       "spec_expected": "NP_003997.1:p.(Val582_Asn583insXaa[5])",
@@ -10965,19 +10953,6 @@
       "input_prefixed": "NP_003997.1:p.(Ala123_Pro131)insXaa[4]",
       "current": "parse error: Parse error at position 35: Unexpected trailing characters: '[4]'",
       "spec_expected": "NP_003997.1:p.(Ala123_Pro131)insXaa[4]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.(Gly719Ala^Ser)",
-      "input_prefixed": "NP_003997.1:p.(Gly719Ala^Ser)",
-      "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: Digit })",
-      "spec_expected": "NP_003997.1:p.(Gly719Ala^Ser)",
       "status": "parse-error",
       "coordinate_system": "p",
       "source_kind": "recommendation",
@@ -11202,6 +11177,17 @@
       "source_kind": "syntax_yaml",
       "source_paths": [
         "docs/syntax.yaml"
+      ]
+    },
+    {
+      "input": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+      "current": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+      "spec_expected": "NP_003997.1:p.(Gly56Ala^Ser^Cys)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/substitution.md"
       ]
     },
     {
@@ -11978,6 +11964,18 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/checklist.md"
+      ]
+    },
+    {
+      "input": "p.(Gly719Ala^Ser)",
+      "input_prefixed": "NP_003997.1:p.(Gly719Ala^Ser)",
+      "current": "NP_003997.1:p.(Gly719Ala^Ser)",
+      "spec_expected": "NP_003997.1:p.(Gly719Ala^Ser)",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/uncertain.md"
       ]
     },
     {

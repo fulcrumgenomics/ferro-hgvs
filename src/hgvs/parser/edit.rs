@@ -1522,6 +1522,21 @@ pub fn parse_na_edit(input: &str) -> IResult<&str, NaEdit> {
 /// Parse a protein substitution (e.g., Val600Glu after the position)
 fn parse_protein_substitution(input: &str) -> IResult<&str, ProteinEdit> {
     let (remaining, alternative) = parse_amino_acid.parse(input)?;
+
+    // Residue-level and/or: a `^`-joined list of alternative residues
+    // (e.g. `Ala^Ser^Cys`, used inside `p.(Gly56Ala^Ser^Cys)`). Each
+    // alternative is a bare amino acid sharing the reference + position.
+    if remaining.starts_with('^') {
+        let mut alternatives = vec![alternative];
+        let mut rest = remaining;
+        while let Some(after_caret) = rest.strip_prefix('^') {
+            let (next, aa) = parse_amino_acid.parse(after_caret)?;
+            alternatives.push(aa);
+            rest = next;
+        }
+        return Ok((rest, ProteinEdit::SubstitutionAlternatives { alternatives }));
+    }
+
     // Allow optional trailing number (e.g., p.Arg725Trp5) - appears in ClinVar data
     // This number is typically an annotation suffix and is ignored
     let remaining = if let Ok((rest, _)) = digit1::<_, nom::error::Error<&str>>.parse(remaining) {

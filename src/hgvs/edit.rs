@@ -976,6 +976,13 @@ pub enum ProteinEdit {
         alternative: AminoAcid,
     },
 
+    /// Residue-level and/or substitution: one reference residue changed to
+    /// any of several alternatives, joined by `^` inside an uncertainty
+    /// wrapper (e.g. `p.(Gly56Ala^Ser^Cys)`; HGVS general.md). The
+    /// reference residue and position come from the location; only the
+    /// alternatives are stored here.
+    SubstitutionAlternatives { alternatives: Vec<AminoAcid> },
+
     /// Deletion: removal of amino acids (e.g., p.Lys23del, p.Lys228_Met259del32, p.Gln367_Gly372delQRGEPG)
     Deletion {
         /// Optional amino acid sequence that was deleted (e.g., Lys in p.Lys903delLys)
@@ -1157,6 +1164,17 @@ impl fmt::Display for ProteinEdit {
                 alternative,
             } => {
                 write!(f, "{}", alternative)
+            }
+            ProteinEdit::SubstitutionAlternatives { alternatives } => {
+                // Bare alternative residues joined by `^`; the reference +
+                // position are rendered by the location.
+                for (i, aa) in alternatives.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "^")?;
+                    }
+                    write!(f, "{}", aa)?;
+                }
+                Ok(())
             }
             ProteinEdit::Deletion { sequence, count } => {
                 write!(f, "del")?;
