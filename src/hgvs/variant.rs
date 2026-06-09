@@ -1133,6 +1133,68 @@ fn write_trans_member(f: &mut fmt::Formatter<'_>, member: &HgvsVariant) -> fmt::
     }
 }
 
+/// The first leaf (non-allele) sub-variant that carries an accession,
+/// descending through nested allele members. Used to derive the shared
+/// accession + coord-type prefix of an and/or-of-alleles or to inherit it
+/// onto bare bracketed operands.
+pub(crate) fn first_leaf_with_accession(v: &HgvsVariant) -> Option<&HgvsVariant> {
+    match v {
+        HgvsVariant::Allele(a) => a.variants.iter().find_map(first_leaf_with_accession),
+        HgvsVariant::NullAllele | HgvsVariant::UnknownAllele | HgvsVariant::RnaFusion(_) => None,
+        other => {
+            if other.accession().is_some() {
+                Some(other)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// True iff every operand of an and/or allele is itself an `Allele` and all
+/// their leaves share accession + coord type — the `ACC:p.[..]^[..]` form
+/// where the shared prefix is written once.
+fn andor_alleles_share_accession(variants: &[HgvsVariant]) -> bool {
+    let mut anchor: Option<&HgvsVariant> = None;
+    for member in variants {
+        let HgvsVariant::Allele(_) = member else {
+            return false;
+        };
+        let leaf = match first_leaf_with_accession(member) {
+            Some(l) => l,
+            None => return false,
+        };
+        match anchor {
+            None => anchor = Some(leaf),
+            Some(a) => {
+                if leaf.accession() != a.accession() || leaf.variant_type() != a.variant_type() {
+                    return false;
+                }
+            }
+        }
+    }
+    anchor.is_some()
+}
+
+/// Write the bracket-inner content of one and/or allele operand: each
+/// member's loc-edit, separated only between adjacent members — a
+/// one-member allele emits only that member's loc-edit with no separator.
+/// The separator is `(;)` for an unknown-phase group or `;` for cis.
+fn write_andor_allele_inner(f: &mut fmt::Formatter<'_>, allele: &AlleleVariant) -> fmt::Result {
+    let sep = if allele.phase == AllelePhase::Unknown {
+        "(;)"
+    } else {
+        ";"
+    };
+    for (i, member) in allele.variants.iter().enumerate() {
+        if i > 0 {
+            write!(f, "{}", sep)?;
+        }
+        member.fmt_loc_edit(f)?;
+    }
+    Ok(())
+}
+
 fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt::Result {
     let accession = first
         .accession()
@@ -1549,6 +1611,28 @@ impl fmt::Display for AlleleVariant {
                         write!(f, "{}", v)?;
                     }
                     write!(f, ")")
+                } else if andor_alleles_share_accession(&self.variants) {
+                    // And/or between bracketed alleles sharing an accession:
+                    // `ACC:p.[a(;)b]^[c]` — prefix once, then each operand as
+                    // a bracketed allele.
+                    let anchor = first_leaf_with_accession(&self.variants[0])
+                        .expect("andor_alleles_share_accession guarantees a leaf");
+                    write_compact_prefix(f, anchor)?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "^")?;
+                        }
+                        write!(f, "[")?;
+                        if let HgvsVariant::Allele(a) = v {
+                            write_andor_allele_inner(f, a)?;
+                        } else {
+                            unreachable!(
+                                "andor_alleles_share_accession guarantees all operands are Alleles"
+                            )
+                        }
+                        write!(f, "]")?;
+                    }
+                    Ok(())
                 } else {
                     // And/or `^` join of full descriptions (possibly across
                     // references): render each in full — `ACC1:c.A^ACC2:c.B`.
