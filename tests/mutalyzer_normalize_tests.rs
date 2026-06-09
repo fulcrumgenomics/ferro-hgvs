@@ -904,11 +904,27 @@ fn axis_infos() {
         // A clean match where the upstream expected at least one code ferro
         // intentionally does not model is an accepted divergence (ferro does
         // not mirror mutalyzer's non-spec internal info codes), tallied
-        // separately so it stays visible. Errors (under/over-emission, parse,
+        // separately so it stays visible.
+        //
+        // An over-emission `Err` where the case carries an `accepted_divergence`
+        // on `Axis::Infos` is also a tracked divergence — ferro emits a
+        // spec-valid info code that mutalyzer does not (e.g. per-member
+        // `SHUFFLE_APPLIED` for a genuine 3' shift in a compound allele,
+        // where mutalyzer only reports the allele-level `ISORTEDVARIANTS`).
+        // See #499 (precedent #481). All other errors (under-emission, parse,
         // normalize, panic) are real failures routed through `record`.
         if actual.is_ok() && has_no_equiv {
             t.divergence_accepted
                 .push((case.input.clone(), INFO_NO_SPEC_EQUIVALENT.to_string()));
+        } else if actual.is_err() {
+            if let Some(ad) = &case.accepted_divergence {
+                if ad.axis == Axis::Infos {
+                    t.divergence_accepted
+                        .push((case.input.clone(), ad.policy.to_string()));
+                    continue;
+                }
+            }
+            t.record(case, &expected_repr, actual);
         } else {
             t.record(case, &expected_repr, actual);
         }

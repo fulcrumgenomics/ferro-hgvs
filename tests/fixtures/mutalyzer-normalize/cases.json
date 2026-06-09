@@ -34,6 +34,12 @@
       "title": "Gene-symbol selector policy (#121)",
       "spec_section": "background/refseq.md (NM_(GENE) form)",
       "note": "ferro's terminal #121 policy preserves the NM_(GENE) gene-symbol selector; both forms are spec-allowed (an accepted divergence, not a convergence target)."
+    },
+    {
+      "id": "shuffle-applied-compound-allele-499",
+      "title": "Compound-allele SHUFFLE_APPLIED (#499)",
+      "spec_section": "recommendations/DNA (3' shifting); mutalyzer info model",
+      "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound allele; mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Accepted divergence per #499 (precedent #481)."
     }
   ],
   "cases": [
@@ -2959,6 +2965,12 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
+        "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
+        "cluster": "shuffle-applied-compound-allele-499"
+      },
       "to_test": true
     },
     {
@@ -3121,6 +3133,12 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
+        "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
+        "cluster": "shuffle-applied-compound-allele-499"
+      },
       "to_test": true
     },
     {
@@ -3132,6 +3150,12 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
+        "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
+        "cluster": "shuffle-applied-compound-allele-499"
+      },
       "to_test": true
     },
     {
@@ -3165,6 +3189,12 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
+        "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
+        "cluster": "shuffle-applied-compound-allele-499"
+      },
       "to_test": true
     },
     {
