@@ -91,7 +91,7 @@ jobs:
         if: steps.cache-manifest.outputs.cache-hit != 'true'
         run: |
           ./target/release/ferro prepare \
-            --output benchmark-output \
+            --output-dir benchmark-output \
             --genome grch38
 
       - name: Confirm manifest present
