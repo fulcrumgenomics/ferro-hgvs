@@ -1384,6 +1384,33 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W4007",
+        CodeInfo {
+            code: "W4007",
+            name: "IntronicOnBareTranscript",
+            summary: "Intronic offset on a bare transcript reference (no genomic context).",
+            explanation: "A coding (c.) or non-coding (n.) DNA reference sequence does not \
+                contain introns, so it cannot describe an intronic position (an offset `+M`/`-M` \
+                from a splice site). The bare forms `NM_004006.2:c.357+1G>A` and \
+                `NR_038420.1:n.100+10del` are spec-invalid (background/refseq.md): an intronic \
+                description must supply a genomic reference, e.g. `NG_012337.1(NM_004006.2):c.357+1G>A`, \
+                `NC_…(NM_…):c.357+1`, or `LRG_199t1:c.357+1`. Strict mode rejects (mapped to \
+                EINTRONIC); lenient mode emits W4007 and returns the existing value unchanged; \
+                silent accepts. Has no safe auto-correction — ferro cannot synthesize the \
+                genomic reference.",
+            category: CodeCategory::Position,
+            bad_examples: &["NM_004006.2:c.357+1G>A", "NR_038420.1:n.100+10del"],
+            good_examples: &[
+                "NG_012337.1(NM_004006.2):c.357+1G>A",
+                "LRG_199t1:c.357+1G>A",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/refseq/"),
+            related_codes: &["W4004", "E4001"],
+        },
+    );
+
     // --- Semantic Warnings (W5xxx) ---
 
     map.insert(
