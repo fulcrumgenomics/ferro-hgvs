@@ -1810,6 +1810,83 @@ pub(crate) fn find_products_bracket(input: &str) -> Option<(&str, &str, bool)> {
     Some((&input[..=open], inner, uncertain))
 }
 
+/// Detect a predicted/uncertain compound cis allele `<prefix>[(<inner>)]`,
+/// where `<inner>` is a `;`-separated cis group wrapped in `(...)` inside the
+/// allele bracket (e.g. `NP_003997.1:p.[(Ser68Arg;Asn594del)]`). Returns
+/// `(prefix, inner)` where `prefix` runs through the opening `[` and `inner`
+/// is the cis content with the wrapping parens stripped.
+///
+/// Requires a top-level `;` (depth 0 w.r.t. nested edit brackets / parens,
+/// via [`scan_allele_separators`]) so it stays distinct from the comma
+/// transcript-product form `[(a,b)]`, from a single predicted member, and
+/// from an edit carrying a nested `;` (`ins[A;T]`). The matched `[` must be
+/// the whole-allele bracket (at the start or right after the coordinate-type
+/// stem), not a nested edit suffix like `...ins[(A;T)]`.
+pub(crate) fn find_predicted_cis_bracket(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim();
+    if !input.ends_with(")]") {
+        return None;
+    }
+    // Find the allele `[` matching the final `]` by reverse depth scan.
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    let mut open: Option<usize> = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    // The matched `[` must be the whole-allele bracket, not a nested edit
+    // suffix (`...ins[(A;T)]`). The allele bracket opens at the very start
+    // or immediately after the coordinate-type stem (`g.`, `c.`, `p.`, …),
+    // so the char before `[` is `.`. A nested `ins[...]` / `delins[...]`
+    // bracket is preceded by a letter, so it is rejected here.
+    if open != 0 && !input[..open].ends_with('.') {
+        return None;
+    }
+    let content = &input[open + 1..input.len() - 1];
+    // The content must be a single `(...)` group: starts with `(`, and the
+    // `)` matching that opening `(` is the final character.
+    if !content.starts_with('(') {
+        return None;
+    }
+    let cbytes = content.as_bytes();
+    let mut d: i32 = 0;
+    for (j, &b) in cbytes.iter().enumerate() {
+        match b {
+            b'(' => d += 1,
+            b')' => {
+                d -= 1;
+                if d == 0 && j != cbytes.len() - 1 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if d != 0 {
+        return None;
+    }
+    let inner = &content[1..content.len() - 1];
+    // Require a *top-level* `;` cis separator — depth 0 with respect to
+    // nested edit brackets (`ins[A;T]`) and parens. A `;` buried inside an
+    // edit is part of that edit, not an allele-level cis separator, so a
+    // single member like `100_101ins[A;T]` is not a `;`-separated cis group.
+    if !scan_allele_separators(inner).has_cis_separator {
+        return None;
+    }
+    Some((&input[..=open], inner))
+}
+
 /// Detect a whole-edit and/or group wrapped in an uncertainty marker,
 /// i.e. `<prefix>(<inner>)` where `<inner>` carries a top-level `^`
 /// (e.g. `NM_004006.2:c.(370A>C^372C>R)`). Returns `(prefix, inner)`,
@@ -5973,6 +6050,30 @@ fn parse_products_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     Ok(HgvsVariant::Allele(allele))
 }
 
+/// Parse a predicted/uncertain compound cis allele `<prefix>[(<inner>)]`.
+/// Strips the inner `(...)`, parses `<prefix>[<inner>]` as an ordinary cis
+/// allele, and marks it uncertain so the `(...)` round-trips.
+fn parse_predicted_cis_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let (prefix, inner) = find_predicted_cis_bracket(input).ok_or_else(|| FerroError::Parse {
+        pos: 0,
+        msg: "Not a predicted cis allele".to_string(),
+        diagnostic: None,
+    })?;
+    // `prefix` includes the opening `[`.
+    let reconstructed = format!("{}{}]", prefix, inner);
+    match parse_variant(&reconstructed)? {
+        HgvsVariant::Allele(mut allele) if allele.phase == AllelePhase::Cis => {
+            allele.uncertain = true;
+            Ok(HgvsVariant::Allele(allele))
+        }
+        _ => Err(FerroError::Parse {
+            pos: 0,
+            msg: "Predicted cis bracket did not resolve to a cis allele".to_string(),
+            diagnostic: None,
+        }),
+    }
+}
+
 /// Parse a whole-edit and/or group wrapped in an uncertainty marker:
 /// `<prefix>(<edit1>^<edit2>^…)`, e.g. `NM_004006.2:c.(370A>C^372C>R)`.
 /// Each operand is a bare position+edit sharing the accession + coord
@@ -6434,6 +6535,15 @@ fn detect_allele_type(input: &str) -> Option<&'static str> {
         return Some("products");
     }
 
+    // Predicted/uncertain compound cis allele `[(a;b)]`: a `(...)` wrapping a
+    // `;`-separated cis group inside the allele bracket. Checked first — the
+    // inner `(` would otherwise confuse the bare-bracket cis check below, and
+    // the required top-level `;` keeps it distinct from the comma
+    // transcript-product form `[(a,b)]`.
+    if find_predicted_cis_bracket(input).is_some() {
+        return Some("predicted_cis");
+    }
+
     // Top-level slash check happens BEFORE the bracket-wrapping checks
     // so that bracketed chimeric / mosaic forms like
     // `[a;b]//[c;d]` and `[a;b]/[c;d]` route to chimeric / mosaic
@@ -6814,6 +6924,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
             "and_or" => parse_and_or_allele(input)?,
             "products" => parse_products_allele(input)?,
             "uncertain_and_or" => parse_uncertain_and_or_allele(input)?,
+            "predicted_cis" => parse_predicted_cis_allele(input)?,
             _ => unreachable!(),
         }
     } else {

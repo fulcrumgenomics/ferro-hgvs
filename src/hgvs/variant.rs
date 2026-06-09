@@ -1358,32 +1358,40 @@ impl fmt::Display for AlleleVariant {
         // Per HGVS spec, `[var]` denotes a multi-variant allele; a singleton
         // is just the inner variant. (Mosaic/chimeric already emit bare via
         // their separator-only loops; this unifies cis/trans/unknown.)
+        // A valid predicted cis allele always has ≥2 members — enforced by the
+        // ';' guard in `find_predicted_cis_bracket` — so this singleton
+        // short-circuit never fires for `[(a;b)]` inputs.  The normalizer
+        // also guards `allele.uncertain` before collapsing a cis allele to a
+        // singleton, keeping this invariant intact through the normalize path.
         if self.variants.len() == 1 {
             return self.variants[0].fmt(f);
         }
         match self.phase {
             AllelePhase::Cis => {
+                // A predicted/uncertain cis allele wraps the bracket content in
+                // `(...)`: `[(a;b)]` (recommendations/uncertain.md).
+                let (lp, rp) = if self.uncertain { ("(", ")") } else { ("", "") };
                 if use_compact_form(&self.variants) {
-                    // Compact form: ACC:g.[edit1;edit2]
+                    // Compact form: ACC:g.[edit1;edit2] / ACC:p.[(edit1;edit2)]
                     write_compact_prefix(f, &self.variants[0])?;
-                    write!(f, "[")?;
+                    write!(f, "[{}", lp)?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, ";")?;
                         }
                         v.fmt_loc_edit(f)?;
                     }
-                    write!(f, "]")
+                    write!(f, "{}]", rp)
                 } else {
                     // Expanded form: [ACC:g.edit1;ACC:g.edit2]
-                    write!(f, "[")?;
+                    write!(f, "[{}", lp)?;
                     for (i, v) in self.variants.iter().enumerate() {
                         if i > 0 {
                             write!(f, ";")?;
                         }
                         write!(f, "{}", v)?;
                     }
-                    write!(f, "]")
+                    write!(f, "{}]", rp)
                 }
             }
             AllelePhase::Products => {
