@@ -499,7 +499,7 @@
       "spec_section": "background/refseq.md: a coding/non-coding DNA reference sequence does not contain introns and can not be used to describe variants in introns; intronic descriptions require a genomic reference sequence (NG_(NM_)/NC_(NM_)/LRG_199t1)",
       "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
       "status": "enforced",
-      "spec_section_notes": "Detected in normalize_with_diagnostics via intronic_on_bare_transcript_warning (HV::Cds with NM_ prefix / HV::Tx with NR_/XR_ prefix, genomic_context None, an intronic start/end position). Strict mode (and the errors-axis override) reject via should_reject_intronic_bare_transcript(), short-circuiting before normalization and escalating in normalize() to FerroError::IntronicVariant (the EINTRONIC tag in mutalyzer_map.rs); lenient emits W4007 and returns the existing value unchanged; silent accepts. The genomic-context form (NG_(NM_)) is the spec-correct description and is not flagged."
+      "spec_section_notes": "Detected in normalize_with_diagnostics via intronic_on_bare_transcript_warning (HV::Cds with NM_/XM_ prefix / HV::Tx with NR_/XR_ prefix, genomic_context None, an intronic start/end position — including either endpoint of an uncertain-breakpoint Range boundary). Strict mode (and the errors-axis override) reject via should_reject_intronic_bare_transcript(), short-circuiting before normalization and escalating in normalize() to FerroError::IntronicVariant (the EINTRONIC tag in mutalyzer_map.rs); lenient emits W4007 and returns the existing value unchanged; silent accepts. The genomic-context form (NG_(NM_)) is the spec-correct description and is not flagged."
     },
     {
       "code": "W5001",

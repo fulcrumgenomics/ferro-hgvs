@@ -373,8 +373,10 @@ pub enum ErrorType {
     /// `c.-6G>C` on a transcript whose 5'UTR is only 5 bases;
     /// `n.21G>C` on a 20-base transcript. Strict mode rejects; lenient
     /// emits W4004 and short-circuits normalize() to the canonical
-    /// variant; silent mode skips the check entirely. Intronic offsets
-    /// remain out of scope (their bounds depend on intron size).
+    /// variant; silent mode skips the check entirely. Intronic-offset
+    /// magnitude checks remain out of scope (their bounds depend on intron
+    /// size); bare-transcript intronic positions (where the reference form
+    /// itself is invalid) are rejected by W4007 (#486).
     PositionPastEnd,
 
     /// Two or more cis-allele edits share identical reference bounds

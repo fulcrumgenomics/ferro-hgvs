@@ -198,3 +198,27 @@ fn strict_rejects_cis_allele_with_intronic_member() {
         err
     );
 }
+
+#[test]
+fn silent_accepts_bare_nm_intronic_substitution_without_warning() {
+    // Silent mode (`warn_accept()` → Accept): the intronic offset on a bare
+    // NM_ is accepted without rejection and without emitting W4007.
+    let normalizer = Normalizer::with_config(provider_intronic_nm(), NormalizeConfig::silent());
+    let variant = parse_hgvs("NM_INTRON.1:c.30+1A>G").expect("parse");
+    // Must not reject.
+    let _ = normalizer
+        .normalize(&variant)
+        .expect("silent mode must accept a bare-NM intronic substitution without error");
+    // Must not emit the INTRONIC_ON_BARE_TRANSCRIPT warning.
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("silent diagnostics");
+    assert!(
+        !diag
+            .warnings
+            .iter()
+            .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+        "silent mode must not emit INTRONIC_ON_BARE_TRANSCRIPT, got {:?}",
+        diag.warnings
+    );
+}
