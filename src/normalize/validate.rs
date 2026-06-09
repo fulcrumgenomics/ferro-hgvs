@@ -61,8 +61,9 @@ impl ValidationResult {
 /// Returns a ValidationResult indicating whether the stated reference matches
 /// the actual sequence, and provides correction information if not.
 ///
-/// For `Delins`, the stated `deleted` bases (when present) are validated
-/// against the span; `deleted_length` (a count) is not checked.
+/// Stated bases (when present) take precedence. An explicit numeric length
+/// (`del<N>`/`dup<N>`/`del<N>ins…`) is otherwise validated against the span
+/// (#486); uncertain-extent dups (`dupN?`) are skipped.
 ///
 /// # Arguments
 /// * `edit` - The edit to validate
@@ -72,29 +73,51 @@ impl ValidationResult {
 pub fn validate_reference(edit: &NaEdit, ref_seq: &[u8], start: u64, end: u64) -> ValidationResult {
     match edit {
         NaEdit::Substitution { reference, .. } => validate_single_base(reference, ref_seq, start),
-        NaEdit::Deletion { sequence, .. } => {
+        NaEdit::Deletion { sequence, length } => {
             if let Some(seq) = sequence {
                 validate_sequence(seq.bases(), ref_seq, start, end)
+            } else if let Some(n) = length {
+                // Numeric `del<N>`: N must equal the position span (#486).
+                validate_stated_length(*n, start, end)
             } else {
                 // No sequence stated, nothing to validate
                 ValidationResult::ok()
             }
         }
-        NaEdit::Delins { deleted, .. } => {
+        NaEdit::Delins {
+            deleted,
+            deleted_length,
+            ..
+        } => {
             if let Some(seq) = deleted {
                 // Non-recommended `delACinsGT` form: ferro parses the stated
                 // deleted bases into `deleted`. Validate them against the
                 // reference span (#486) — mirrors the `Deletion` arm.
-                // `deleted_length` is a count, not bases, so it is not checked.
                 validate_sequence(seq.bases(), ref_seq, start, end)
+            } else if let Some(n) = deleted_length {
+                // Numeric `del<N>ins…`: N must equal the position span (#486).
+                validate_stated_length(*n, start, end)
             } else {
                 // Recommended short form `delinsXXX`: no stated deleted bases.
                 ValidationResult::ok()
             }
         }
-        NaEdit::Duplication { sequence, .. } => {
+        NaEdit::Duplication {
+            sequence,
+            length,
+            uncertain_extent,
+        } => {
             if let Some(seq) = sequence {
                 validate_sequence(seq.bases(), ref_seq, start, end)
+            } else if let Some(n) = length {
+                // Numeric `dup<N>`: N must equal the span (#486). Skipped when
+                // `uncertain_extent` is set (`dupN?`/`dupN(a_b)`) — there the
+                // span is intentionally not the duplicated length.
+                if uncertain_extent.is_some() {
+                    ValidationResult::ok()
+                } else {
+                    validate_stated_length(*n, start, end)
+                }
             } else {
                 // No sequence stated, nothing to validate
                 ValidationResult::ok()
@@ -104,6 +127,9 @@ pub fn validate_reference(edit: &NaEdit, ref_seq: &[u8], start: u64, end: u64) -
             if let Some(seq) = sequence {
                 validate_sequence(seq.bases(), ref_seq, start, end)
             } else {
+                // `inv<N>` numeric length is intentionally NOT span-checked here
+                // (no ELENGTHMISMATCH corpus row; the preprocessor W3016 covers
+                // it at the config-parse layer). See #486.
                 ValidationResult::ok()
             }
         }
@@ -591,6 +617,28 @@ fn validate_sequence(stated: &[Base], ref_seq: &[u8], start: u64, end: u64) -> V
     ValidationResult::ok()
 }
 
+/// Validate that an explicit numeric edit length (`del<N>`/`dup<N>`/`del<N>ins…`)
+/// equals the position-interval span `[start, end]` (1-based inclusive). HGVS
+/// requires `N == end - start + 1`; a disagreement is a `ReferenceMismatch`
+/// (mutalyzer ELENGTHMISMATCH), independent of the reference bases.
+fn validate_stated_length(declared: u64, start: u64, end: u64) -> ValidationResult {
+    // Inverted ranges (start > end) are tolerated without panic, matching
+    // `validate_repeat_tract` (the range gate elsewhere owns that diagnostic).
+    // Guard before the u64 subtraction.
+    if end < start {
+        return ValidationResult::ok();
+    }
+    let span = end - start + 1;
+    if declared == span {
+        ValidationResult::ok()
+    } else {
+        ValidationResult::mismatch(
+            format!("length {declared}"),
+            format!("span {span} ({start}_{end})"),
+        )
+    }
+}
+
 /// Apply reference validation policy based on configuration.
 ///
 /// Returns Ok(()) if validation passes or correction is allowed,
@@ -631,7 +679,7 @@ pub fn apply_validation_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hgvs::edit::{InsertedSequence, Sequence};
+    use crate::hgvs::edit::{InsertedSequence, Sequence, UncertainDupExtent};
     use std::str::FromStr;
 
     #[test]
@@ -684,13 +732,14 @@ mod tests {
 
     #[test]
     fn test_validate_no_sequence() {
+        // No stated sequence AND no stated length → nothing to validate.
         let edit = NaEdit::Deletion {
             sequence: None,
-            length: Some(3),
+            length: None,
         };
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
-        assert!(result.valid); // No stated sequence to validate
+        assert!(result.valid);
     }
 
     #[test]
@@ -736,9 +785,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_delins_length_not_validated() {
-        // `c.1_3del3insAT`: a deleted-length count (not bases) — it must not
-        // be validated as a sequence, even when the span content differs.
+    fn test_validate_delins_deleted_length_match() {
+        // `c.1_3del3insAT`: deleted_length 3 == span 3, so it validates clean
+        // (#486 checks deleted_length against the span; it is not compared as
+        // bases). The mismatch case is covered separately below.
         let edit = NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
             deleted: None,
@@ -796,5 +846,74 @@ mod tests {
         // start=3 end=1 → start_idx(2) > end_idx(1), should return mismatch not panic
         let result = validate_reference(&edit, ref_seq, 3, 1);
         assert!(!result.valid);
+    }
+
+    #[test]
+    fn test_validate_deletion_length_mismatch() {
+        // `c.45del4`: single position (span 1) but stated length 4.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: Some(4),
+        };
+        let result = validate_reference(&edit, b"ATGC", 45, 45);
+        assert!(!result.valid);
+        assert_eq!(result.stated_ref, Some("length 4".to_string()));
+    }
+
+    #[test]
+    fn test_validate_deletion_length_match() {
+        // `c.1_4del4`: span 4 == stated 4.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: Some(4),
+        };
+        let result = validate_reference(&edit, b"ATGC", 1, 4);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_deletion_length_inverted_range_no_panic() {
+        // start > end must be tolerated (guard), not panic on u64 underflow.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: Some(4),
+        };
+        let result = validate_reference(&edit, b"ATGC", 3, 1);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_duplication_length_mismatch() {
+        let edit = NaEdit::Duplication {
+            sequence: None,
+            length: Some(4),
+            uncertain_extent: None,
+        };
+        let result = validate_reference(&edit, b"ATGC", 45, 45);
+        assert!(!result.valid);
+        assert_eq!(result.stated_ref, Some("length 4".to_string()));
+    }
+
+    #[test]
+    fn test_validate_duplication_uncertain_extent_skipped() {
+        let edit = NaEdit::Duplication {
+            sequence: None,
+            length: Some(4),
+            uncertain_extent: Some(UncertainDupExtent::Unknown),
+        };
+        let result = validate_reference(&edit, b"ATGC", 45, 45);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_delins_deleted_length_mismatch() {
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("ATC").unwrap()),
+            deleted: None,
+            deleted_length: Some(4),
+        };
+        let result = validate_reference(&edit, b"ATGC", 45, 45);
+        assert!(!result.valid);
+        assert_eq!(result.stated_ref, Some("length 4".to_string()));
     }
 }
