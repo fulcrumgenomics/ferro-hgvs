@@ -800,7 +800,7 @@ fn protein_unknown_trans_compound_with_position_unknown_arm_round_trips() {
 // =====================================================================
 
 #[test]
-fn protein_unknown_trans_compound_with_predicted_arm_drifts() {
+fn protein_unknown_trans_compound_with_predicted_arm_round_trips() {
     let input = "[NP_000079.2:p.Arg97Trp];[NP_000079.2:p.(Met1?)]";
     let parsed = parse_hgvs(input).unwrap();
 
@@ -831,7 +831,7 @@ fn protein_unknown_trans_compound_with_predicted_arm_drifts() {
     }
 
     // Display compacts to ACC:p.[Arg97Trp];[(Met1?)]. The bracket parsers
-    // don't dispatch on `(` today, so re-parsing the compact form fails.
+    // now dispatch on `(`, so the compact form re-parses cleanly (#544).
     let displayed = format!("{}", parsed);
     assert!(
         displayed.starts_with("NP_000079.2:p.["),
@@ -842,12 +842,11 @@ fn protein_unknown_trans_compound_with_predicted_arm_drifts() {
         "{input:?}: expected predicted-form arm in compact Display, got {displayed:?}"
     );
 
-    let reparsed = parse_hgvs(&displayed);
-    assert!(
-        reparsed.is_err(),
-        "{input:?}: compact-form Display {displayed:?} unexpectedly re-parsed; \
-         this means the predicted-form bracket gap is fixed and this assertion \
-         should flip to `assert_eq!(reparsed.unwrap(), parsed)`. Got: {:?}",
-        reparsed.ok()
+    let reparsed = parse_hgvs(&displayed).unwrap_or_else(|e| {
+        panic!("{input:?}: compact-form Display {displayed:?} must re-parse: {e}")
+    });
+    assert_eq!(
+        reparsed, parsed,
+        "{input:?}: re-parsing the compact Display must yield the same allele"
     );
 }

@@ -99,12 +99,12 @@ fn allele_with_predicted_variant_inside() {
 
 #[test]
 fn protein_allele_with_predicted_variant_inside() {
-    // protein/alleles.md:91 is a valid spec example, but ferro does not
-    // yet parse a predicted member inside a protein allele bracket —
-    // pin the current gap. Promote to `pin_accept` when ferro supports it.
-    pin_reject(
+    // protein/alleles.md:91 spec example: a predicted member inside a
+    // protein allele bracket now parses and round-trips (#544).
+    pin_round_trip(
         "NP_003997.1:p.[Phe233Leu;(Cys690Trp)]",
-        "protein/alleles.md:91 spec example — currently a parse gap",
+        "NP_003997.1:p.[Phe233Leu;(Cys690Trp)]",
+        "protein/alleles.md:91 spec example — predicted member inside allele bracket",
     );
 }
 
