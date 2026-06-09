@@ -4,12 +4,13 @@
 //! et al.) already exists; this pins the strict-mode rejection that the errors
 //! axis relies on, independent of the manifest.
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
-use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer};
+use ferro_hgvs::{parse_hgvs, FerroError, MockProvider, NormalizeConfig, Normalizer};
 
 fn tx_provider() -> MockProvider {
     let mut p = MockProvider::new();
     // 60 bp transcript, CDS spans the whole thing (1..=60).
     let seq = "ATGCAAAAACCCCCGGGGGTTTTTAAAAACCCCCGGGGGTTTTTAAAAACCCCCGGGGGT".to_string();
+    assert_eq!(seq.len(), 60, "fixture length must be 60");
     let len = seq.len() as u64;
     let tx = Transcript::new(
         "NM_TEST.1".to_string(),
@@ -39,10 +40,15 @@ fn cds_position_past_end_rejects_strict() {
     let err = normalizer
         .normalize(&v)
         .expect_err("strict normalize must reject a position past CDS-end");
-    assert!(
-        format!("{err:?}").contains("InvalidCoordinates"),
-        "expected InvalidCoordinates, got {err:?}"
-    );
+    match &err {
+        FerroError::InvalidCoordinates { msg } => {
+            assert!(
+                msg.contains("W4004"),
+                "expected W4004 in message, got: {msg}"
+            );
+        }
+        other => panic!("expected FerroError::InvalidCoordinates, got: {other:?}"),
+    }
 }
 
 #[test]
