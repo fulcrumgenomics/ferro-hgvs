@@ -226,7 +226,7 @@ impl<P: ReferenceProvider + Clone> CountingProvider<P> {
 }
 
 impl<P: ReferenceProvider + Clone> ReferenceProvider for CountingProvider<P> {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<std::sync::Arc<Transcript>, FerroError> {
         self.transcript_calls.fetch_add(1, Ordering::SeqCst);
         self.inner.get_transcript(id)
     }

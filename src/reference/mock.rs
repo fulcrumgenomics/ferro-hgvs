@@ -5,7 +5,7 @@ use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Mock reference provider that loads transcripts from JSON
 #[derive(Clone)]
@@ -298,10 +298,10 @@ impl Default for MockProvider {
 }
 
 impl ReferenceProvider for MockProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {
-            return Ok(tx.clone());
+            return Ok(Arc::new(tx.clone()));
         }
 
         // Try without version: only match a stored key whose base id (the
@@ -317,7 +317,7 @@ impl ReferenceProvider for MockProvider {
         if !id.contains('.') {
             for (key, tx) in &self.transcripts {
                 if key.split('.').next().unwrap_or(key) == id {
-                    return Ok(tx.clone());
+                    return Ok(Arc::new(tx.clone()));
                 }
             }
         }

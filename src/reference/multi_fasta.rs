@@ -23,7 +23,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use hashlink::LruCache;
 use log::warn;
 
 use crate::data::cdot::CdotMapper;
@@ -94,7 +96,28 @@ pub struct MultiFastaProvider {
     canonical_overrides: CanonicalOverrides,
     /// Protein FASTA index (NP_/XP_ accessions) for get_protein_sequence (#520).
     protein_index: HashMap<String, FastaIndexEntry>,
+    /// Memoization cache of built transcripts, keyed by (accession, cdot build
+    /// hint). `get_transcript_on_build` rebuilds the full transcript (sequence
+    /// read + cdot conversion + exon construction) on every miss, and callers
+    /// like `normalize_cds` resolve the *same* transcript many times per variant
+    /// (bounds check, intronic, special-position, the 3' shuffle, plus each
+    /// recursion); the cache turns those repeats into shared `Arc` clones.
+    /// Bounded (LRU) so a long batch's working set stays in memory without
+    /// unbounded growth. Transcripts are immutable for the provider's lifetime,
+    /// so this is pure memoization — no invalidation.
+    transcript_cache: Mutex<TranscriptCache>,
 }
+
+/// Cache key for a built transcript: (accession as requested, cdot build hint).
+type TranscriptCacheKey = (String, Option<String>);
+
+/// Bounded LRU of built transcripts shared as `Arc`.
+type TranscriptCache = LruCache<TranscriptCacheKey, Arc<Transcript>>;
+
+/// LRU capacity for the built-transcript cache. Comfortably exceeds the working
+/// set of a single normalize call (one transcript for a simple variant, a
+/// handful for a compound allele) while bounding memory for long batches.
+const TRANSCRIPT_CACHE_CAPACITY: usize = 512;
 
 impl MultiFastaProvider {
     /// Create a new multi-FASTA provider from a directory of FASTA files
@@ -167,6 +190,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: HashMap::new(),
+            transcript_cache: Mutex::new(LruCache::new(TRANSCRIPT_CACHE_CAPACITY)),
         })
     }
 
@@ -200,6 +224,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: HashMap::new(),
+            transcript_cache: Mutex::new(LruCache::new(TRANSCRIPT_CACHE_CAPACITY)),
         })
     }
 
@@ -508,6 +533,7 @@ impl MultiFastaProvider {
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
             protein_index: HashMap::new(),
+            transcript_cache: Mutex::new(LruCache::new(TRANSCRIPT_CACHE_CAPACITY)),
         })
     }
 
@@ -1042,9 +1068,29 @@ impl MultiFastaProvider {
         &self,
         id: &str,
         build_hint: Option<&str>,
-    ) -> Result<Transcript, FerroError> {
+    ) -> Result<Arc<Transcript>, FerroError> {
+        // Memoize on (accession, build hint): the inner builder reads the full
+        // sequence and reconstructs cdot metadata on every call, and callers
+        // resolve the same transcript repeatedly. Key by the raw `id` so the
+        // repeated same-accession lookups in one normalize share an entry;
+        // version-fallback siblings simply get their own entry.
+        let key = (id.to_string(), build_hint.map(str::to_string));
+        if let Some(cached) = self
+            .transcript_cache
+            .lock()
+            .expect("transcript cache mutex poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
         let mut tx = self.get_transcript_on_build_inner(id, build_hint)?;
         self.apply_canonical_overrides_to(&mut tx);
+        let tx = Arc::new(tx);
+        self.transcript_cache
+            .lock()
+            .expect("transcript cache mutex poisoned")
+            .insert(key, tx.clone());
         Ok(tx)
     }
 
@@ -1326,7 +1372,7 @@ impl MultiFastaProvider {
     /// version-exactness of the served *bases*, while a canonical override
     /// corrects CDS/`protein` *metadata* on the exact-version record — the two
     /// are orthogonal, so a strict caller still gets the canonical metadata.
-    pub fn get_transcript_strict(&self, id: &str) -> Result<Transcript, FerroError> {
+    pub fn get_transcript_strict(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         if !self.has_transcript_exact(id) {
             return Err(FerroError::TranscriptVersionNotExact {
                 requested: id.to_string(),
@@ -1377,14 +1423,14 @@ impl MultiFastaProvider {
 }
 
 impl ReferenceProvider for MultiFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.get_transcript_on_build(id, None)
     }
 
     fn get_transcript_for_variant(
         &self,
         variant: &crate::hgvs::variant::HgvsVariant,
-    ) -> Result<Transcript, FerroError> {
+    ) -> Result<Arc<Transcript>, FerroError> {
         let Some(accession) = variant.accession() else {
             // No accession at all (e.g. NullAllele) — fall through to the
             // default impl which produces a clear ReferenceNotFound error.
@@ -1420,7 +1466,7 @@ impl ReferenceProvider for MultiFastaProvider {
         for build in probe_order {
             match self.get_transcript_on_build(&tx_id, Some(build)) {
                 Ok(tx) if tx.chromosome.is_some() => return Ok(tx),
-                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id }),
+                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id.clone() }),
                 Err(e) => last_err = Some(e),
             }
         }
@@ -2045,6 +2091,20 @@ mod tests {
         }
         let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
         (provider, dir)
+    }
+
+    /// Repeated `get_transcript` for the same accession returns the *same*
+    /// cached `Arc` rather than rebuilding the transcript (the A2 win:
+    /// `normalize_cds` resolves the same transcript many times per variant).
+    #[test]
+    fn get_transcript_returns_shared_cached_arc() {
+        let (provider, _dir) = build_provider_with_test_genome();
+        let first = provider.get_transcript("NC_TEST.1").unwrap();
+        let second = provider.get_transcript("NC_TEST.1").unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "repeated get_transcript must return the same cached Arc (no rebuild)"
+        );
     }
 
     /// Build a single-exon synthetic `Transcript` over NC_TEST.1[10..30]

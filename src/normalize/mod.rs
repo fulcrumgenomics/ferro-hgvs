@@ -1779,7 +1779,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // hit the downstream `try_expand_cds_ins` and canonicalization passes.
         let accession = variant.accession.transcript_accession();
         let transcript_for_intronic =
-            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+            || -> Result<std::sync::Arc<crate::reference::transcript::Transcript>, FerroError> {
                 self.provider
                     .get_transcript_for_variant(&HV::Cds(variant.clone()))
             };
@@ -2379,7 +2379,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `try_expand_tx_ins` and canonicalization passes.
         let accession = variant.accession.transcript_accession();
         let transcript_for_intronic =
-            || -> Result<crate::reference::transcript::Transcript, FerroError> {
+            || -> Result<std::sync::Arc<crate::reference::transcript::Transcript>, FerroError> {
                 self.provider
                     .get_transcript_for_variant(&HV::Tx(variant.clone()))
             };

@@ -49,7 +49,8 @@ impl ReferenceProvider for PyProvider {
     fn get_transcript(
         &self,
         id: &str,
-    ) -> Result<crate::reference::transcript::Transcript, crate::error::FerroError> {
+    ) -> Result<std::sync::Arc<crate::reference::transcript::Transcript>, crate::error::FerroError>
+    {
         match self {
             PyProvider::Mock(p) => p.get_transcript(id),
             PyProvider::MultiFasta(p) => p.get_transcript(id),

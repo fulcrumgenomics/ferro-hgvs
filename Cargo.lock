@@ -949,6 +949,7 @@ dependencies = [
  "dhat",
  "flate2",
  "futures-util",
+ "hashlink",
  "hgvs",
  "indexmap",
  "indicatif",

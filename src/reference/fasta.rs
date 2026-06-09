@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::error::FerroError;
 use crate::reference::provider::ReferenceProvider;
@@ -238,10 +239,11 @@ impl FastaProvider {
 }
 
 impl ReferenceProvider for FastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.transcripts
             .get(id)
             .cloned()
+            .map(Arc::new)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
@@ -597,7 +599,7 @@ impl CachedFastaProvider {
 }
 
 impl ReferenceProvider for CachedFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.inner.get_transcript(id)
     }
 
@@ -899,10 +901,10 @@ impl MmapFastaProvider {
 
 #[cfg(feature = "mmap")]
 impl ReferenceProvider for MmapFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {
-            return Ok(tx.clone());
+            return Ok(Arc::new(tx.clone()));
         }
 
         // Try without version: only match a stored key whose base id (the
@@ -913,7 +915,7 @@ impl ReferenceProvider for MmapFastaProvider {
         let base_id = id.split('.').next().unwrap_or(id);
         for (key, tx) in &self.transcripts {
             if key.split('.').next().unwrap_or(key) == base_id {
-                return Ok(tx.clone());
+                return Ok(Arc::new(tx.clone()));
             }
         }
 
