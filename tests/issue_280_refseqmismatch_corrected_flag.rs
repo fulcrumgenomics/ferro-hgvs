@@ -26,6 +26,8 @@
 //!   the case that motivated this issue.
 //! - SECTION 5: `MultiRepeat` consistency mismatch → `corrected: false`
 //!   (also passes through verbatim).
+//! - SECTION 6: `delins` with mismatched stated-deleted-ref → `corrected: true`
+//!   (canonical Display drops `deleted`/`deleted_length` via `canonicalize_edit`).
 
 use ferro_hgvs::normalize::NormalizationWarning;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
@@ -325,6 +327,34 @@ mod multirepeat_consistency_mismatch {
             !corrected_flag(&r.warnings),
             "MultiRepeat content-mismatch passes through verbatim; corrected must be false; \
              output={}, warnings={:?}",
+            r.result,
+            r.warnings
+        );
+    }
+}
+
+// =============================================================================
+// SECTION 6 — Delins with mismatched stated-deleted-ref → corrected: true
+// =============================================================================
+//
+// `c.5delGinsTT` against a transcript where c.5 = `A` triggers the
+// `NaEdit::Delins` arm of `validate_reference` (#486). The canonical
+// Display drops the stated `deleted` bases (via `canonicalize_edit`), so
+// the `corrected` flag is honest at `true`.
+
+mod delins_mismatched_stated_ref {
+    use super::*;
+
+    #[test]
+    fn delins_mismatched_stated_ref_corrected_true() {
+        let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
+        let v = parse_hgvs("NM_TEST.1:c.5delGinsTT").expect("parse");
+        let r = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize must not reject in lenient");
+        assert!(
+            corrected_flag(&r.warnings),
+            "delins with mismatched stated-deleted-ref must report corrected=true; output={}, warnings={:?}",
             r.result,
             r.warnings
         );

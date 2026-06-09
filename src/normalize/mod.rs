@@ -4535,12 +4535,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // the user's form and the normalizer passes the description
             // through verbatim.
             //
-            // TODO/Note: revisit if `delins` ever gets a stated-deleted
-            // validator — today `validate_reference`'s `NaEdit::Delins`
-            // arm returns `ok()` unconditionally (see also the Delins
-            // arm in `canonicalize_edit`, which strips `deleted` /
-            // `deleted_length`), so the branch is unreachable for
-            // Delins.
+            // `delins` with a stated `deleted` sequence is validated by
+            // `validate_reference`'s `NaEdit::Delins` arm (#486); the
+            // canonical form drops `deleted` / `deleted_length` (see the
+            // Delins arm in `canonicalize_edit`), so `corrected` is `true`.
             let corrected = !matches!(edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. });
             warnings.push(NormalizationWarning::RefSeqMismatch {
                 stated_ref: validation.stated_ref.unwrap_or_default(),
