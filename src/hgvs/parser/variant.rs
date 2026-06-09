@@ -3091,6 +3091,26 @@ fn parse_protein_bracket_member(part: &str) -> IResult<&str, LocEdit<ProtInterva
         ));
     }
 
+    // Predicted-change member `(position+edit)` — strip the uncertainty
+    // wrapper, parse the inner position+edit, and mark the edit uncertain
+    // so the member round-trips as `[(...)]` (e.g.
+    // `p.[(Ser68Arg)];[(Ser73Arg)]`). Mirrors the single-variant predicted
+    // form in `parse_protein_variant`.
+    if part.starts_with('(') {
+        if let Ok((remaining, (interval, edit))) = delimited(
+            char('('),
+            (parse_prot_interval, parse_protein_edit),
+            char(')'),
+        )
+        .parse(part)
+        {
+            return Ok((
+                remaining,
+                LocEdit::with_uncertainty(interval, Mu::Uncertain(edit)),
+            ));
+        }
+    }
+
     let (edit_remaining, interval) = parse_prot_interval(part)?;
     let (final_remaining, edit) = parse_protein_edit(edit_remaining)?;
     Ok((final_remaining, LocEdit::new(interval, edit)))
