@@ -990,6 +990,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (normalized, warnings) = self.normalize_core(variant)?;
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
+        // EINTRONIC (#486): reject an intronic offset on a bare transcript
+        // reference. The reference *form* being invalid (the spec marks
+        // `NM_:c.357+1` "not correct") is more fundamental than any
+        // offset-magnitude error, so this is checked BEFORE PositionPastEnd —
+        // a bare intronic-and-past-intron-end input rejects as EINTRONIC, not
+        // W4004. Reuses `FerroError::IntronicVariant` because only that variant
+        // carries the EINTRONIC tag in mutalyzer_map.rs (the runner
+        // substring-matches the `IntronicVariant` variant name); the
+        // capability-failure guard in normalize_intronic_cds (no genomic data)
+        // uses the same variant but is reached on a different path.
+        if self.config.should_reject_intronic_bare_transcript() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::IntronicOnBareTranscript { variant, .. } => {
+                    Some(FerroError::IntronicVariant {
+                        variant: variant.clone(),
+                    })
+                }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         // In strict mode, reject if there were reference mismatches.
         if self.config.should_reject_ref_mismatch() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
@@ -1168,7 +1191,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        let result = match variant {
+        let (result, mut warnings) = match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
             // must be described with `m.` (#487). Coerce it to an `MtVariant`
             // — same accession/location/edit, only the coordinate system label
@@ -1208,7 +1231,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::NullAllele => (HV::NullAllele, vec![]),
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
         };
-        Ok(result)
+
+        // EINTRONIC (#486): an intronic offset on a bare transcript reference
+        // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
+        // description form. Emit a W4007 warning here — before any per-axis
+        // short-circuit, so substitutions are covered, and once per allele
+        // member (normalize_allele recurses through normalize_core). `normalize()`
+        // escalates it to a reject in strict / under the override; lenient
+        // surfaces it and returns the resolved value unchanged.
+        if self.config.should_reject_intronic_bare_transcript()
+            || self.config.should_warn_intronic_bare_transcript()
+        {
+            if let Some(w) = intronic_on_bare_transcript_warning(variant) {
+                warnings.push(w);
+            }
+        }
+
+        Ok((result, warnings))
     }
 
     /// Normalize an allele (compound) variant
