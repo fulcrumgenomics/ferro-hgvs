@@ -414,6 +414,21 @@ pub enum ErrorType {
     /// `[a;b]` (≥2 cis) and `[a];[b]` (≥2 trans) are conformant and are not
     /// flagged. See #493.
     NonConformantBracketCardinality,
+
+    /// An intronic offset (`c.<N>±<M>` / `n.<N>±<M>`) appears on a **bare
+    /// transcript reference** (a `NM_` used with `c.` or an `NR_`/`XR_`
+    /// used with `n.`, with no `NG_(…)`/`NC_(…)` genomic-context wrapper —
+    /// `Accession.genomic_context` is `None`).
+    ///
+    /// A coding/non-coding DNA reference sequence does not contain introns,
+    /// so it cannot describe intronic positions: `background/refseq.md:45-49`
+    /// lists `NM_004006.2:c.357+1G>A` verbatim as "not correct"; the correct
+    /// forms supply a genomic reference — `NG_…(NM_…):c.357+1`,
+    /// `NC_…(NM_…):c.357+1`, or `LRG_199t1:c.357+1`. mutalyzer enforces this
+    /// as `EINTRONIC`. Strict mode rejects with `FerroError::IntronicVariant`;
+    /// lenient emits W4007 and returns the existing value unchanged; silent
+    /// accepts. See #486.
+    IntronicOnBareTranscript,
 }
 
 impl ErrorType {
@@ -462,6 +477,7 @@ impl ErrorType {
             ErrorType::UnresolvableCentromere => "W4005",
             ErrorType::TranscriptFlankNotDescribable => "W4006",
             ErrorType::NonConformantBracketCardinality => "W3026",
+            ErrorType::IntronicOnBareTranscript => "W4007",
         }
     }
 
@@ -516,6 +532,7 @@ impl ErrorType {
         ErrorType::VariantExceedsReference,
         ErrorType::UnresolvableCentromere,
         ErrorType::TranscriptFlankNotDescribable,
+        ErrorType::IntronicOnBareTranscript,
     ];
 
     /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
@@ -607,6 +624,9 @@ impl ErrorType {
             ErrorType::NonConformantBracketCardinality => {
                 "standalone single-member bracket (allele brackets require \u{2265}2 cis members or \u{2265}2 trans groups)"
             }
+            ErrorType::IntronicOnBareTranscript => {
+                "intronic position requires a genomic reference sequence (e.g. NG_(NM_))"
+            }
         }
     }
 
@@ -694,6 +714,9 @@ impl ErrorType {
             // (`c.[76A>C]` -> `c.76A>C`); the singleton AlleleVariant is
             // unwrapped to its sole member.
             ErrorType::NonConformantBracketCardinality => true,
+            // The fix is to supply a genomic reference (NG_(NM_)/NC_(NM_));
+            // ferro cannot synthesize one, so this is never auto-corrected.
+            ErrorType::IntronicOnBareTranscript => false,
         }
     }
 
@@ -777,6 +800,10 @@ impl ErrorType {
             ErrorType::NonConformantBracketCardinality => {
                 ("NM_000088.3:c.[76A>C]", "NM_000088.3:c.76A>C")
             }
+            ErrorType::IntronicOnBareTranscript => (
+                "NM_004006.2:c.357+1G>A",
+                "NG_012337.1(NM_004006.2):c.357+1G>A",
+            ),
         }
     }
 }
@@ -1000,6 +1027,7 @@ mod tests {
         assert_eq!(ErrorType::SwappedPositions.code(), "W4001");
         assert_eq!(ErrorType::SinglePositionRange.code(), "W4003");
         assert_eq!(ErrorType::PositionPastEnd.code(), "W4004");
+        assert_eq!(ErrorType::IntronicOnBareTranscript.code(), "W4007");
         assert_eq!(ErrorType::RefSeqMismatch.code(), "W5001");
         assert_eq!(ErrorType::VariantExceedsReference.code(), "W5003");
     }
@@ -1016,6 +1044,7 @@ mod tests {
         // Past-end positions could mean a different position or a different
         // reference — no safe auto-correction.
         assert!(!ErrorType::PositionPastEnd.is_correctable());
+        assert!(!ErrorType::IntronicOnBareTranscript.is_correctable());
         // Variants exceeding the reference bounds have no safe correction.
         assert!(!ErrorType::VariantExceedsReference.is_correctable());
         // InitiatorMetCanonicalization is informational only — the dup
@@ -1197,6 +1226,7 @@ mod tests {
             ErrorType::UnresolvableCentromere,
             ErrorType::TranscriptFlankNotDescribable,
             ErrorType::NonConformantBracketCardinality,
+            ErrorType::IntronicOnBareTranscript,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
         // this match fails to compile until `every_variant` is extended.
@@ -1245,7 +1275,8 @@ mod tests {
                 | ErrorType::VariantExceedsReference
                 | ErrorType::UnresolvableCentromere
                 | ErrorType::TranscriptFlankNotDescribable
-                | ErrorType::NonConformantBracketCardinality => {}
+                | ErrorType::NonConformantBracketCardinality
+                | ErrorType::IntronicOnBareTranscript => {}
             }
             assert!(
                 ErrorType::ALL.contains(&v),
