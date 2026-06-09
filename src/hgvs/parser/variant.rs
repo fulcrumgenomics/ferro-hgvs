@@ -1490,6 +1490,117 @@ pub(crate) fn split_top_level_carets(input: &str) -> Vec<&str> {
     chunks
 }
 
+/// Index of the first top-level (bracket/paren depth 0) `,` separator —
+/// the "different transcripts/proteins from one allele" relationship.
+pub(crate) fn find_top_level_comma(input: &str) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth -= 1,
+            b',' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Bracket/paren-depth-aware top-level split on the `,` (products) separator.
+pub(crate) fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut s = input;
+    loop {
+        match find_top_level_comma(s) {
+            Some(pos) => {
+                chunks.push(&s[..pos]);
+                s = &s[pos + 1..];
+            }
+            None => {
+                chunks.push(s);
+                break;
+            }
+        }
+    }
+    chunks
+}
+
+/// Detect a products allele `<prefix>[a,b]` (or predicted `<prefix>[(a,b)]`):
+/// the outermost allele bracket carries a top-level `,`. Returns
+/// `(prefix_through_open_bracket, inner, uncertain)` where `inner` is the
+/// bracket content with any whole-group `(...)` wrapper stripped.
+///
+/// The matched `[` must open the allele (preceded by the coord stem `.` or at
+/// the start), so the inner bracket of a trans form `[a,b];[c,d]` is not
+/// mistaken for it.
+pub(crate) fn find_products_bracket(input: &str) -> Option<(&str, &str, bool)> {
+    let input = input.trim();
+    if !input.ends_with(']') {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let mut depth: i32 = 0;
+    let mut open: Option<usize> = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    // The comma (products) relationship — different transcripts/proteins
+    // derived from one allele — applies only to the r./p. axes. It is never
+    // used on a g./c. DNA-source description, so require the allele bracket to
+    // open right after an `r.`/`p.` coordinate stem. This keeps invalid
+    // `c.[a,b]` / `g.[a,b]` comma forms rejected. The stem is either bare
+    // (`r.[`) or accession-qualified (`<acc>:r.[`); matching on `:r.`/`:p.`
+    // (or the bare-prefix start) avoids a false hit on an accession that
+    // merely ends in `r`/`p` before the dot.
+    let stem = &input[..open];
+    let is_rna_or_protein =
+        stem == "r." || stem == "p." || stem.ends_with(":r.") || stem.ends_with(":p.");
+    if !is_rna_or_protein {
+        return None;
+    }
+    let content = &input[open + 1..input.len() - 1];
+    // Strip a whole-group `(...)` predicted wrapper if present.
+    let (inner, uncertain) = if content.starts_with('(') && content.ends_with(')') {
+        // confirm the opening `(` matches the final `)`
+        let cb = content.as_bytes();
+        let mut d: i32 = 0;
+        let mut matched_at_end = false;
+        for (j, &b) in cb.iter().enumerate() {
+            match b {
+                b'(' => d += 1,
+                b')' => {
+                    d -= 1;
+                    if d == 0 {
+                        matched_at_end = j == cb.len() - 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if matched_at_end {
+            (&content[1..content.len() - 1], true)
+        } else {
+            (content, false)
+        }
+    } else {
+        (content, false)
+    };
+    // Must carry a top-level `,` to be a products allele.
+    find_top_level_comma(inner)?;
+    Some((&input[..=open], inner, uncertain))
+}
+
 /// Detect a whole-edit and/or group wrapped in an uncertainty marker,
 /// i.e. `<prefix>(<inner>)` where `<inner>` carries a top-level `^`
 /// (e.g. `NM_004006.2:c.(370A>C^372C>R)`). Returns `(prefix, inner)`,
@@ -5484,6 +5595,56 @@ fn parse_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     )))
 }
 
+/// Parse a products allele `[a,b]` / predicted `[(a,b)]` — different
+/// transcripts/proteins derived from one allele (HGVS general.md,
+/// RNA/splicing.md). Members are `,`-separated; each is parsed with the
+/// shared accession + coord-type stem inherited from the bracket prefix
+/// (or its own accession in the expanded multi-transcript form). The
+/// `(...)` whole-group wrapper sets the `uncertain` flag.
+fn parse_products_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let (prefix, inner, uncertain) =
+        find_products_bracket(input).ok_or_else(|| FerroError::Parse {
+            pos: 0,
+            msg: "Not a products allele".to_string(),
+            diagnostic: None,
+        })?;
+    // `prefix` runs through the opening `[`; drop it to get the coord stem.
+    let coord_prefix = &prefix[..prefix.len() - 1];
+    let members = split_top_level_commas(inner);
+    if members.len() < 2 {
+        return Err(FerroError::Parse {
+            pos: 0,
+            msg: "Products allele requires at least two `,`-separated members".to_string(),
+            diagnostic: None,
+        });
+    }
+    let mut variants: Vec<HgvsVariant> = Vec::with_capacity(members.len());
+    for member in members {
+        let member = member.trim();
+        if member.is_empty() {
+            return Err(FerroError::Parse {
+                pos: 0,
+                msg: "Empty member in products allele".to_string(),
+                diagnostic: None,
+            });
+        }
+        // A member may carry its own accession (expanded multi-transcript
+        // form) or be bare and inherit the shared accession + coord type.
+        let variant = if member.contains(':') {
+            parse_variant(member)?
+        } else {
+            parse_variant(&format!("{}{}", coord_prefix, member))?
+        };
+        variants.push(variant);
+    }
+    let allele = if uncertain {
+        AlleleVariant::new_uncertain(variants, AllelePhase::Products)
+    } else {
+        AlleleVariant::new(variants, AllelePhase::Products)
+    };
+    Ok(HgvsVariant::Allele(allele))
+}
+
 /// Parse a whole-edit and/or group wrapped in an uncertainty marker:
 /// `<prefix>(<edit1>^<edit2>^…)`, e.g. `NM_004006.2:c.(370A>C^372C>R)`.
 /// Each operand is a bare position+edit sharing the accession + coord
@@ -5936,6 +6097,15 @@ fn parse_unknown_phase_allele(input: &str) -> Result<HgvsVariant, FerroError> {
 fn detect_allele_type(input: &str) -> Option<&'static str> {
     let input = input.trim();
 
+    // Products allele `[a,b]` / predicted `[(a,b)]`: the outer allele bracket
+    // carries a top-level `,` (different transcripts/proteins from one
+    // allele). Checked before the cis `;` / bare-bracket checks so a comma
+    // bracket is never misread as cis, and so a mixed `[a,b;c]` routes here
+    // and is then rejected when a member fails to parse.
+    if find_products_bracket(input).is_some() {
+        return Some("products");
+    }
+
     // Top-level slash check happens BEFORE the bracket-wrapping checks
     // so that bracketed chimeric / mosaic forms like
     // `[a;b]//[c;d]` and `[a;b]/[c;d]` route to chimeric / mosaic
@@ -6300,6 +6470,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
             "unknown_phase" => parse_unknown_phase_allele(input)?,
             "rna_fusion" => parse_rna_fusion(input)?,
             "and_or" => parse_and_or_allele(input)?,
+            "products" => parse_products_allele(input)?,
             "uncertain_and_or" => parse_uncertain_and_or_allele(input)?,
             _ => unreachable!(),
         }

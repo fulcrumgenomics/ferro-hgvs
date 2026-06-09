@@ -489,7 +489,10 @@ impl<L: fmt::Display, E: fmt::Display> fmt::Display for LocEdit<L, E> {
 
 /// Main HGVS variant enum
 ///
-/// Phase of allele variants (cis vs trans vs mosaic vs chimeric)
+/// The relationship/separator kind among the sub-descriptions of a single
+/// allele bracket. Most variants are true *phase* (cis/trans/mosaic/chimeric),
+/// but the enum also carries non-phase relationships expressed with the same
+/// `[...]` machinery: `AndOr` (`^`) and `Products` (`,`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AllelePhase {
     /// Same chromosome (cis): [var1;var2]
@@ -507,6 +510,12 @@ pub enum AllelePhase {
     /// And/or - alternatives joined by `^`: var1^var2
     /// ("variant A and/or variant B"; HGVS general.md)
     AndOr,
+    /// Products - different transcripts/proteins derived from one allele,
+    /// joined by `,`: `r.[a,b]` (HGVS general.md, RNA/splicing.md,
+    /// RNA/alleles.md). Not a phase: the members are downstream products of a
+    /// single DNA-level event (e.g. alternative splicing), not co-occurrence
+    /// relationships. Only meaningful on the r./p. axes.
+    Products,
 }
 
 impl fmt::Display for AllelePhase {
@@ -518,6 +527,7 @@ impl fmt::Display for AllelePhase {
             AllelePhase::Mosaic => write!(f, "mosaic"),
             AllelePhase::Chimeric => write!(f, "chimeric"),
             AllelePhase::AndOr => write!(f, "and/or"),
+            AllelePhase::Products => write!(f, "products"),
         }
     }
 }
@@ -1342,6 +1352,34 @@ impl fmt::Display for AlleleVariant {
                         write!(f, "{}", v)?;
                     }
                     write!(f, "]")
+                }
+            }
+            AllelePhase::Products => {
+                // `[a,b]` — different transcripts/proteins from one allele.
+                // Mirrors the cis compact/expanded split (members may carry
+                // distinct transcript accessions, so do not assume shared),
+                // joining with `,`. A predicted group wraps the members in
+                // `(...)` inside the bracket: `[(a,b)]`.
+                let (lp, rp) = if self.uncertain { ("(", ")") } else { ("", "") };
+                if use_compact_form(&self.variants) {
+                    write_compact_prefix(f, &self.variants[0])?;
+                    write!(f, "[{}", lp)?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ",")?;
+                        }
+                        v.fmt_loc_edit(f)?;
+                    }
+                    write!(f, "{}]", rp)
+                } else {
+                    write!(f, "[{}", lp)?;
+                    for (i, v) in self.variants.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ",")?;
+                        }
+                        write!(f, "{}", v)?;
+                    }
+                    write!(f, "{}]", rp)
                 }
             }
             AllelePhase::Trans => {
@@ -2697,12 +2735,16 @@ mod tests {
         assert!(!AllelePhase::Unknown.is_mosaic());
         assert!(AllelePhase::Mosaic.is_mosaic());
         assert!(!AllelePhase::Chimeric.is_mosaic());
+        assert!(!AllelePhase::AndOr.is_mosaic());
+        assert!(!AllelePhase::Products.is_mosaic());
 
         assert!(!AllelePhase::Cis.is_chimeric());
         assert!(!AllelePhase::Trans.is_chimeric());
         assert!(!AllelePhase::Unknown.is_chimeric());
         assert!(!AllelePhase::Mosaic.is_chimeric());
         assert!(AllelePhase::Chimeric.is_chimeric());
+        assert!(!AllelePhase::AndOr.is_chimeric());
+        assert!(!AllelePhase::Products.is_chimeric());
     }
 
     // ============== Accession Tests ==============
@@ -2973,6 +3015,8 @@ mod tests {
         assert_eq!(format!("{}", AllelePhase::Unknown), "unknown");
         assert_eq!(format!("{}", AllelePhase::Mosaic), "mosaic");
         assert_eq!(format!("{}", AllelePhase::Chimeric), "chimeric");
+        assert_eq!(format!("{}", AllelePhase::AndOr), "and/or");
+        assert_eq!(format!("{}", AllelePhase::Products), "products");
     }
 
     // ============== AlleleVariant Tests ==============
