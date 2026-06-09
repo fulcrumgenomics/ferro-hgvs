@@ -22,6 +22,7 @@
 //! - UTR variants: `c.*100A>G`, `c.-50A>G`
 //! - Non-coding RNA: `n.100A>G`
 //! - RNA variants: `r.100a>g`
+//! - Non-coding RNA accessions: NR_/XR_ (any coordinate system)
 //!
 //! This overhead comes from the quick-rejection checks needed to identify
 //! fast-path candidates. For workloads dominated by substitutions, the net
@@ -90,6 +91,37 @@ fn scan_digits(bytes: &[u8], start: usize) -> (u64, usize) {
     (value, end)
 }
 
+/// True for a base byte the fast path may parse in a DNA substitution. This is
+/// [`is_iupac_base`] minus the RNA base `U`: HGVS forbids `U` in a DNA (`g.` /
+/// `c.`) description (#486, `ENODNA`), so a `U` base must defer to the generic
+/// parser, which rejects it. (Lowercase bases already fail `is_iupac_base`.)
+#[inline]
+const fn is_fast_dna_base(b: u8) -> bool {
+    is_iupac_base(b) && b != b'U'
+}
+
+/// Scan an HGVS *position*: a run of ASCII digits that is canonical (no leading
+/// zero) and fits in `u64`. Returns `(value, end)`, or `None` if the position
+/// is absent, has a leading zero (`0`, `00`, `007`, `01` — all rejected by the
+/// generic parser), or overflows `u64`; the fast path defers to the generic
+/// parser on `None`. Distinct from [`scan_digits`], which is also used for
+/// accession numbers where leading zeros are valid (e.g. `NM_000088`).
+#[inline]
+fn scan_position(bytes: &[u8], start: usize) -> Option<(u64, usize)> {
+    if start >= bytes.len() || !bytes[start].is_ascii_digit() || bytes[start] == b'0' {
+        return None;
+    }
+    let mut end = start;
+    let mut value: u64 = 0;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        value = value
+            .checked_mul(10)?
+            .checked_add((bytes[end] - b'0') as u64)?;
+        end += 1;
+    }
+    Some((value, end))
+}
+
 /// Result of fast-path parsing attempt
 #[allow(clippy::large_enum_variant)]
 pub enum FastPathResult {
@@ -115,10 +147,12 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
 
     // Quick check: does it end with a substitution pattern (X>Y)?
     // This avoids expensive parsing for deletions, insertions, etc.
+    // `is_fast_dna_base` (not `is_iupac_base`) so a `U` base — invalid in a DNA
+    // description — falls back to the generic parser rather than being parsed.
     if len < 3
         || bytes[len - 2] != b'>'
-        || !is_iupac_base(bytes[len - 1])
-        || !is_iupac_base(bytes[len - 3])
+        || !is_fast_dna_base(bytes[len - 1])
+        || !is_fast_dna_base(bytes[len - 3])
     {
         return FastPathResult::Fallback;
     }
@@ -169,7 +203,8 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
 
     // Dispatch based on first character
     match bytes[0] {
-        // RefSeq accessions: NC_, NM_, NP_, NG_, NR_, XM_, XR_, XP_
+        // RefSeq accessions: NC_, NM_, NP_, NG_, XM_, XP_
+        // (NR_/XR_ are deferred to the generic parser before try_refseq_fast_path)
         b'N' | b'X' => {
             if bytes.len() > 2 && bytes[2] == b'_' {
                 // `NR_`/`XR_` are non-coding RNA transcripts (the only RefSeq
@@ -478,15 +513,12 @@ fn try_parse_genome_substitution(
     edit_start: usize,
     accession: Accession,
 ) -> FastPathResult {
-    // Parse position (must start with digit for simple case)
-    if edit_start >= bytes.len() || !bytes[edit_start].is_ascii_digit() {
-        return FastPathResult::Fallback;
-    }
-
-    let (position, pos_end) = scan_digits(bytes, edit_start);
-    if pos_end == edit_start {
-        return FastPathResult::Fallback;
-    }
+    // Parse a canonical position (no leading zero, fits u64); a non-canonical
+    // or overflowing position defers to the generic parser, which rejects it.
+    let (position, pos_end) = match scan_position(bytes, edit_start) {
+        Some(p) => p,
+        None => return FastPathResult::Fallback,
+    };
 
     // Check for simple substitution pattern: A>G at end of string
     // pos_end should point to ref base, pos_end+1 to '>', pos_end+2 to alt base
@@ -494,9 +526,9 @@ fn try_parse_genome_substitution(
         return FastPathResult::Fallback; // Not a simple substitution at end
     }
 
-    if !is_iupac_base(bytes[pos_end])
+    if !is_fast_dna_base(bytes[pos_end])
         || bytes[pos_end + 1] != b'>'
-        || !is_iupac_base(bytes[pos_end + 2])
+        || !is_fast_dna_base(bytes[pos_end + 2])
     {
         return FastPathResult::Fallback;
     }
@@ -529,14 +561,15 @@ fn try_parse_cds_substitution(
     edit_start: usize,
     accession: Accession,
 ) -> FastPathResult {
-    // Parse position - must start with digit for simple case
-    // Complex cases: -, *, (, ? all fall back to generic parser
-    if edit_start >= bytes.len() || !bytes[edit_start].is_ascii_digit() {
-        return FastPathResult::Fallback;
-    }
-
-    let (position, pos_end) = scan_digits(bytes, edit_start);
-    if pos_end == edit_start {
+    // Parse a canonical position (no leading zero, fits u64); a non-canonical
+    // or overflowing position defers to the generic parser, which rejects it.
+    // Complex cases (-, *, (, ?) start with a non-digit and so also defer.
+    let (position, pos_end) = match scan_position(bytes, edit_start) {
+        Some(p) => p,
+        None => return FastPathResult::Fallback,
+    };
+    // CdsPos is i64; a value beyond i64::MAX would wrap, so defer it.
+    if position > i64::MAX as u64 {
         return FastPathResult::Fallback;
     }
 
@@ -554,9 +587,9 @@ fn try_parse_cds_substitution(
         return FastPathResult::Fallback;
     }
 
-    if !is_iupac_base(bytes[pos_end])
+    if !is_fast_dna_base(bytes[pos_end])
         || bytes[pos_end + 1] != b'>'
-        || !is_iupac_base(bytes[pos_end + 2])
+        || !is_fast_dna_base(bytes[pos_end + 2])
     {
         return FastPathResult::Fallback;
     }

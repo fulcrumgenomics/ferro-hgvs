@@ -84,6 +84,16 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     // --- whitespace / trimming edges ---
     "  NC_000001.11:g.12345A>G  ",
     "\tNM_000088.3:c.459A>G\n",
+    // --- invalid base `U` in DNA / non-canonical positions: fast must defer ---
+    "NC_000001.11:g.100A>U",
+    "NC_000001.11:g.100U>A",
+    "NM_000088.3:c.45A>U",
+    "NM_000088.3:c.0A>G",
+    "NM_000088.3:c.00A>G",
+    "NM_000088.3:c.01A>G",
+    "NM_000088.3:c.007A>G",
+    "NC_000001.11:g.99999999999999999999999A>G",
+    "NM_000088.3:c.9223372036854775808A>G",
     // --- malformed (both must reject) ---
     "",
     "not an hgvs string",
@@ -151,8 +161,10 @@ prop_compose! {
 
 prop_compose! {
     /// An intronic / UTR-offset substitution, e.g. `c.100+5A>G` or
-    /// `c.-50A>G` — structurally a substitution but outside the fast path,
-    /// so it must route to the generic parser identically.
+    /// `c.-50A>G`. When `offset` is non-empty, the generated string is outside
+    /// the fast path and defers to the generic parser; when `offset` is empty
+    /// the generated string (e.g. `NM_000088.3:c.1A>G`) is a standard fast-path
+    /// case. In both cases both parsers must agree.
     fn offset_substitution()(
         acc in accession(),
         pos in 1u64..50_000,
@@ -180,6 +192,46 @@ prop_compose! {
         ],
     ) -> String {
         format!("{acc}:c.{pos}_{end}{edit}", end = pos + span)
+    }
+}
+
+/// A base spanning canonical (`ACGT`), IUPAC-ambiguity (`RYN`), the RNA base
+/// `U`, and lowercase — to exercise base-validity parity.
+fn edge_base() -> impl Strategy<Value = &'static str> {
+    prop_oneof![
+        Just("A"),
+        Just("C"),
+        Just("G"),
+        Just("T"),
+        Just("U"),
+        Just("R"),
+        Just("Y"),
+        Just("N"),
+        Just("a"),
+        Just("t"),
+        Just("u"),
+    ]
+}
+
+prop_compose! {
+    /// A substitution whose base and/or position deliberately ranges over the
+    /// invalid edges the fast path historically mis-accepted: the RNA base `U`,
+    /// IUPAC-ambiguity codes, lowercase, and non-canonical positions (`0`,
+    /// leading zeros, u64/i64 overflow). The generic parser rejects these; the
+    /// fast path must agree by *deferring*, not by parsing them.
+    fn edge_substitution()(
+        acc in accession(),
+        sys in prop_oneof![Just("g"), Just("c")],
+        pos in prop_oneof![
+            Just("1"), Just("100"), Just("250000000"), // canonical
+            Just("0"), Just("00"), Just("01"), Just("007"), // leading zero / zero
+            Just("99999999999999999999999"), // u64 overflow
+            Just("9223372036854775808"),     // i64::MAX + 1
+        ],
+        from in edge_base(),
+        to in edge_base(),
+    ) -> String {
+        format!("{acc}:{sys}.{pos}{from}>{to}")
     }
 }
 
@@ -226,6 +278,11 @@ proptest! {
 
     #[test]
     fn fast_path_matches_standard_truncated(input in truncated_boundary()) {
+        prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
+    }
+
+    #[test]
+    fn fast_path_matches_standard_edge(input in edge_substitution()) {
         prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
     }
 }
