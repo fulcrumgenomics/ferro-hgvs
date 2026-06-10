@@ -1503,6 +1503,13 @@ impl ReferenceProvider for MultiFastaProvider {
             // default impl which produces a clear ReferenceNotFound error.
             return self.get_transcript_on_build_cached(&format!("{}", variant), None);
         };
+        self.get_transcript_for_accession(accession)
+    }
+
+    fn get_transcript_for_accession(
+        &self,
+        accession: &crate::hgvs::variant::Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
         let tx_id = accession.transcript_accession();
 
         // No parent → exactly the existing behavior.
@@ -3184,6 +3191,47 @@ mod tests {
         let tx = provider.get_transcript_for_variant(&variant).unwrap();
         assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
         assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
+    }
+
+    // --- get_transcript_for_accession (issue #582) ---------------------------
+
+    #[test]
+    fn get_transcript_for_accession_with_ng_context() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::ReferenceProvider;
+        // FASTA-only provider: no cdot, so chromosome is None for all transcripts.
+        // With an NG_* genomic_context the implementation probes GRCh38 then
+        // GRCh37 (no cdot → no chromosome hit), then falls back to the
+        // no-build-hint path, which succeeds because the transcript is in the
+        // FASTA index.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_ACC.1", "ATGAAATAA")]);
+        let inner = Accession::new("NM", "ACC", Some(1));
+        let context = Accession::new("NG", "012345", Some(1));
+        let accession = inner.with_genomic_context(context);
+        let tx = provider
+            .get_transcript_for_accession(&accession)
+            .expect("NG_* context must not prevent transcript lookup");
+        assert_eq!(tx.id, "NM_ACC.1");
+        assert_eq!(tx.sequence.as_deref(), Some("ATGAAATAA"));
+    }
+
+    #[test]
+    fn get_transcript_for_accession_with_nc_context() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::ReferenceProvider;
+        // NC_000023.11 → infer_build_from_parent returns GRCh38, so the probe
+        // order is [GRCh38, GRCh37].  In a FASTA-only provider neither probe
+        // finds a chromosome-bearing transcript, so we fall back to the plain
+        // no-build-hint lookup, which still succeeds via the FASTA index.
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_ACC.2", "ATGTGGTAA")]);
+        let inner = Accession::new("NM", "ACC", Some(2));
+        let context = Accession::new("NC", "000023", Some(11));
+        let accession = inner.with_genomic_context(context);
+        let tx = provider
+            .get_transcript_for_accession(&accession)
+            .expect("NC_* context must not prevent transcript lookup");
+        assert_eq!(tx.id, "NM_ACC.2");
+        assert_eq!(tx.sequence.as_deref(), Some("ATGTGGTAA"));
     }
 
     // --- protein FASTA ingestion (issue #520, edge 3) -----------------------
