@@ -741,9 +741,17 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
     // Parse JSON and serialize to bincode for fast subsequent loading.
     // Always regenerate bincode when JSON was freshly downloaded to avoid stale cache.
     let bin_path = json_path.with_extension("bin");
-    if !json_is_fresh && skip_existing && bin_path.exists() {
-        eprintln!("  Skipping cdot bincode conversion (exists)");
+    // Only skip when an existing cache is actually *current* — a stale cache
+    // (written by a build with a different snapshot layout) fails to load and
+    // silently forces a ~10x JSON parse on every run, so it must be regenerated.
+    let bin_is_current =
+        bin_path.exists() && crate::data::cdot::CdotMapper::bincode_is_current(&bin_path);
+    if !json_is_fresh && skip_existing && bin_is_current {
+        eprintln!("  Skipping cdot bincode conversion (up to date)");
     } else {
+        if bin_path.exists() && !bin_is_current {
+            eprintln!("  Existing cdot bincode is stale; regenerating...");
+        }
         eprintln!("  Converting cdot JSON to bincode for fast loading...");
         let mapper = crate::data::cdot::CdotMapper::from_json_file(&json_path).map_err(|e| {
             FerroError::Io {
