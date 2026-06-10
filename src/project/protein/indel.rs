@@ -11,7 +11,7 @@ use crate::reference::transcript::Transcript;
 
 use super::helpers::{
     affects_initiation_codon, build_cterminal_extension, build_initiator_unknown,
-    build_mutated_cds_with_ref, first_diff_position, net_length_change,
+    build_mutated_cds_with_ref, first_diff_position, mut_cds_with_3utr, net_length_change,
     translate_full_cds_with_stop, translate_mutated_cds, translate_mutated_cds_inframe,
     RefProteinBundle,
 };
@@ -594,9 +594,13 @@ fn build_frameshift_variant(
     // `fs` — that is reserved for human-authored input with no detail. The
     // degenerate `else` (frameshift starts at/beyond the CDS end) is likewise
     // an unknown-termination case (frameshift.md:44; spec example p.Ile327Argfs*?).
+    // Scan for the new stop over the mutated CDS *plus* the unchanged 3'UTR:
+    // a frameshift's new in-frame stop commonly lies past the annotated CDS
+    // end. Scanning only the CDS-truncated `mut_cds` mis-emits `fsTer?`.
+    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
     let codon_byte_offset = first_diff * 3;
-    let ter: FrameshiftTer = if codon_byte_offset < mut_cds.len() {
-        let downstream = &mut_cds[codon_byte_offset..];
+    let ter: FrameshiftTer = if codon_byte_offset < scan_seq.len() {
+        let downstream = &scan_seq[codon_byte_offset..];
         let downstream_aas = translate_full_cds_with_stop(downstream);
         // fsTer{K}: K is the 1-based position of the Ter in the downstream
         // scan (counting the new shifted amino acid as position 1).
