@@ -15,6 +15,16 @@ use crate::hgvs::variant::HgvsVariant;
 pub struct VariantProjection {
     pub genomic: Option<HgvsVariant>,
     pub coding: Option<HgvsVariant>,
+    /// The `n.` (transcript-relative) representation on this transcript, when
+    /// derivable. Populated for both coding transcripts (derived genome-free
+    /// from the `c.` form via CDS-offset arithmetic) and non-coding transcripts
+    /// (the same `Tx` form also carried in `coding`). `None` when no transcript
+    /// coordinate is available (e.g. an empty allele).
+    ///
+    /// Note: for a non-coding (`NR_`) transcript `coding` *also* holds this
+    /// `Tx` form — a pre-existing quirk of the `coding` field's name. This axis
+    /// gives callers a single field that always means "the `n.` form".
+    pub noncoding: Option<HgvsVariant>,
     pub protein: Option<HgvsVariant>,
     pub transcript_id: String,
     pub gene_symbol: Option<String>,

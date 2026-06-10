@@ -866,6 +866,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 // already `None` for the empty allele (#508 review).
                 genomic: None,
                 coding: None,
+                // Empty allele: no inner member to derive an n. form from.
+                noncoding: None,
                 protein: None,
                 transcript_id: transcript_id.to_string(),
                 gene_symbol,
@@ -935,6 +937,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(VariantProjection {
             genomic,
             coding,
+            noncoding: None,
             protein,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
@@ -1209,6 +1212,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(VariantProjection {
             genomic: None,
             coding: Some(normalized.clone()),
+            noncoding: None,
             protein,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
@@ -1484,6 +1488,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(VariantProjection {
             genomic: Some(projected_genome),
             coding: Some(coding),
+            noncoding: None,
             protein,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
