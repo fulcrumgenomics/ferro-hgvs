@@ -526,6 +526,15 @@ pub(crate) fn mut_cds_with_3utr(
         .ok_or_else(|| FerroError::ConversionError {
             msg: format!("transcript {} has no CDS end", transcript.id),
         })? as usize;
+    // Guard the slice (mirrors `read_full_cds`): in the normal flow the caller
+    // has already validated the transcript via `RefProteinBundle::from_transcript`,
+    // but this is `pub(crate)` — return a clean error rather than panic if a
+    // future caller passes a transcript whose `cds_end` exceeds its sequence.
+    if cds_end > seq.len() {
+        return Err(FerroError::ProteinSequenceUnavailable {
+            accession: transcript.id.clone(),
+        });
+    }
     Ok(format!("{mut_cds}{}", seq[cds_end..].to_ascii_uppercase()))
 }
 
