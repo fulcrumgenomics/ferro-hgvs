@@ -638,29 +638,8 @@ fn build_extension_variant(
     // tail is computed by the shared C-terminal extension builder.
     let stop_pos = (ref_protein.len() + 1) as u64;
 
-    // `mut_cds` from `build_mutated_cds_with_ref` stops at the annotated CDS
-    // end (the original stop codon). Stop-loss read-through continues into the
-    // 3'UTR, so `build_cterminal_extension` needs the mutated CDS *plus* the
-    // downstream transcript sequence to locate the new stop — without it a stop
-    // in the tail is missed and the extension degrades to `extTer?` (or a
-    // too-short count). The edit lies within the CDS, so the 3'UTR slice
-    // `seq[cds_end..]` is unchanged by it; append it. Mirrors the substitution
-    // path's `mutated_cds_with_3utr`.
-    let seq =
-        transcript
-            .sequence
-            .as_deref()
-            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
-                accession: transcript.id.clone(),
-            })?;
-    let cds_end = transcript
-        .cds_end
-        .ok_or_else(|| FerroError::ConversionError {
-            msg: format!("transcript {} has no CDS end", transcript.id),
-        })? as usize;
-    let mut_cds_with_3utr = format!("{mut_cds}{}", seq[cds_end..].to_ascii_uppercase());
-
-    build_cterminal_extension(stop_pos, &mut_cds_with_3utr, protein_accession, transcript)
+    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
+    build_cterminal_extension(stop_pos, &scan_seq, protein_accession, transcript)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
