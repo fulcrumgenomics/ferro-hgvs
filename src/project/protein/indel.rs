@@ -1259,4 +1259,21 @@ mod tests {
         let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2ArgfsTer5)");
     }
+
+    /// Spec (frameshift.md:22, 36-39): a frameshift whose first changed residue
+    /// is immediately a stop is a NONSENSE substitution (`p.(<aa><pos>Ter)`),
+    /// never `fsTer1` — `fsTer1` is an illegal count (the minimum is `fsTer2`).
+    /// `c.3_4insT` on Met-Lys-Ter shifts the frame so codon 2 reads TAA: the
+    /// mutated CDS "ATGTAAATAA" translates Met then an immediate stop at the
+    /// first changed codon ⇒ `p.(Lys2Ter)`, not `p.(Lys2fsTer1)`.
+    #[test]
+    fn frameshift_immediate_stop_is_nonsense_not_fster1() {
+        let t = tx("ATGAAATAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "T".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
+    }
 }
