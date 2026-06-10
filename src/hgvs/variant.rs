@@ -1157,16 +1157,18 @@ fn write_accession_with_optional_gene(
 /// [`GenomeRing`]'s `Display` so a ring segment round-trips byte-identically
 /// to a standalone genome variant.
 ///
-/// Whole-entity identity (`g.=`) / unknown (`g.?`) skip the position; the
+/// Whole-entity identity (`g.=`) / unknown (`g.?`) and a positionless
+/// breakpoint insertion (composite SV `[...;insG]`) skip the position; the
 /// predicted form wraps position+edit in parens (#241); otherwise the plain
 /// `LocEdit` Display is used.
 fn fmt_genome_loc_edit(
     f: &mut fmt::Formatter<'_>,
     loc_edit: &LocEdit<GenomeInterval, NaEdit>,
 ) -> fmt::Result {
-    // For whole-entity identity (g.=) or unknown (g.?), skip the position.
+    // For whole-entity identity (g.=) or unknown (g.?), or a positionless
+    // breakpoint insertion (composite SV `[...;insG]`), skip the position.
     if let Some(edit) = loc_edit.edit.inner() {
-        if edit.is_whole_entity() {
+        if edit.is_whole_entity() || edit.is_positionless() {
             return write!(f, "{}", loc_edit.edit);
         }
     }

@@ -167,6 +167,7 @@ fn is_overlap_edit(edit: &NaEdit) -> bool {
         | NaEdit::Inversion { .. }
         | NaEdit::Repeat { .. } => true,
         NaEdit::Insertion { .. }
+        | NaEdit::BreakpointInsertion { .. }
         | NaEdit::DupIns { .. }
         | NaEdit::MultiRepeat { .. }
         | NaEdit::Identity { .. }

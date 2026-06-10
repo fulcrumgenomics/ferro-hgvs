@@ -306,6 +306,12 @@ pub mod rules {
                     "Insertion must have at least one base",
                 ));
             }
+            NaEdit::BreakpointInsertion { sequence } if sequence.is_empty() => {
+                result = result.with_error(ValidationError::new(
+                    "E002",
+                    "Insertion must have at least one base",
+                ));
+            }
             NaEdit::Delins { sequence, .. } if sequence.is_empty() => {
                 result = result.with_error(ValidationError::new(
                     "E003",
@@ -584,6 +590,21 @@ mod tests {
         #[test]
         fn test_validate_insertion_empty_error() {
             let edit = NaEdit::Insertion {
+                sequence: InsertedSequence::Literal(Sequence::new(vec![])),
+            };
+            let result = rules::validate_na_edit(&edit);
+            assert!(!result.valid);
+            assert!(result.has_errors());
+            assert_eq!(result.errors[0].code, "E002");
+        }
+
+        #[test]
+        fn test_validate_breakpoint_insertion_empty_error() {
+            // BreakpointInsertion is publicly constructible and carries the
+            // same InsertedSequence field as Insertion; an empty sequence must
+            // also emit E002 (the parser never produces this, but direct
+            // struct construction must be guarded).
+            let edit = NaEdit::BreakpointInsertion {
                 sequence: InsertedSequence::Literal(Sequence::new(vec![])),
             };
             let result = rules::validate_na_edit(&edit);
