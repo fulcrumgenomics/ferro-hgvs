@@ -499,6 +499,12 @@ enum Commands {
         /// Reference directory to check
         #[arg(long, default_value = "ferro-reference")]
         reference: PathBuf,
+
+        /// After checking, load the reference once to build/refresh the on-disk
+        /// cdot bincode cache. Pay the one-time cache build here as a setup step
+        /// so it doesn't land inside (and slow down the start of) a real run.
+        #[arg(long)]
+        build_cache: bool,
     },
 
     /// Build a transcripts.json from a FASTA + CDS coordinates (single-exon).
@@ -788,7 +794,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate_canonical.as_deref(),
             dry_run,
         ),
-        Commands::Check { reference } => run_check(&reference),
+        Commands::Check {
+            reference,
+            build_cache,
+        } => run_check(&reference, build_cache),
         Commands::BuildTranscript {
             fasta,
             cds_start,
@@ -2817,17 +2826,28 @@ fn run_prepare(
 }
 
 /// Check reference data setup.
-fn run_check(reference: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn run_check(reference: &Path, build_cache: bool) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::check::{check_reference, print_check_summary};
 
     let result = check_reference(reference);
     print_check_summary(&result, reference);
 
-    if result.valid {
-        Ok(())
-    } else {
-        Err("Reference data check failed".into())
+    if !result.valid {
+        return Err("Reference data check failed".into());
     }
+
+    if build_cache {
+        // Load the reference once so the cdot bincode cache is built/refreshed
+        // now (a stale cache self-heals on this load), keeping subsequent runs
+        // on the fast path. The constructed provider is intentionally dropped.
+        use ferro_hgvs::commands::create_reference_provider;
+        eprintln!("Building/refreshing reference cache (one-time)...");
+        let started = std::time::Instant::now();
+        let _provider = create_reference_provider(Some(reference))?;
+        eprintln!("Reference cache ready in {:.1?}.", started.elapsed());
+    }
+
+    Ok(())
 }
 
 /// Build a transcripts.json from a FASTA file and CDS coordinates.
