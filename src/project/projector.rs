@@ -1219,20 +1219,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         let frameshift = is_frameshift(normalized);
 
-        // c↔n axis: derive the n. (transcript-relative) form genome-free from
-        // the resolved CDS positions. Best-effort — never fail the whole
-        // projection if the n. derivation hits an edge (e.g. legacy c.0); log
-        // and leave None.
+        // c↔n axis: derive the n. (transcript-relative) form from the resolved
+        // CDS positions via the exon/CIGAR-aware mapper. Carry the *input's*
+        // gene symbol (`cds.gene_symbol`) so the n. form matches the `coding`
+        // form (which is the raw input here) rather than disagreeing on the
+        // gene tag. Best-effort — a derivation edge (e.g. legacy c.0) is logged
+        // and leaves the axis None rather than failing the whole projection.
         let noncoding = match self.cached_get_transcript_for_variant(normalized, transcript_id) {
-            Ok(tx) => crate::project::transcript_axis::noncoding_from_coding(
+            Ok(tx) => match crate::project::transcript_axis::noncoding_from_coding(
                 &cds_start,
                 &cds_end,
                 &tx,
                 &edit,
                 transcript_id,
-                gene_symbol.clone(),
-            )
-            .ok(),
+                cds.gene_symbol.clone(),
+            ) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    log::trace!("c→n derivation failed for {transcript_id}: {e}");
+                    None
+                }
+            },
             Err(_) => None,
         };
 
@@ -1518,15 +1525,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // reached, but carries the correct semantics for when it is).
         let noncoding = if is_coding {
             match self.cached_get_transcript_for_variant(&cache_variant, transcript_id) {
-                Ok(tx) => crate::project::transcript_axis::noncoding_from_coding(
+                Ok(tx) => match crate::project::transcript_axis::noncoding_from_coding(
                     &cds_start,
                     &cds_end,
                     &tx,
                     &c_edit,
                     transcript_id,
                     gene_symbol.clone(),
-                )
-                .ok(),
+                ) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        log::trace!("c→n derivation failed for {transcript_id}: {e}");
+                        None
+                    }
+                },
                 Err(_) => None,
             }
         } else {
@@ -2696,6 +2708,18 @@ mod tests {
             assert!(
                 av.variants.iter().all(|v| matches!(v, HgvsVariant::Tx(_))),
                 "every inner member of the n. allele should be an n. (Tx) variant"
+            );
+            // The fixture's inner members are g.1003→c.4 and g.1006→c.7 on
+            // NM_TEST.1 (CDS at tx pos 1), so the aggregated n. coordinates are
+            // n.4 and n.7 — pin them so an off-by-one in the derivation fails.
+            let rendered: Vec<String> = av.variants.iter().map(|v| v.to_string()).collect();
+            assert!(
+                rendered.iter().any(|s| s.contains(":n.4")),
+                "expected an n.4 member, got {rendered:?}"
+            );
+            assert!(
+                rendered.iter().any(|s| s.contains(":n.7")),
+                "expected an n.7 member, got {rendered:?}"
             );
         }
     }
