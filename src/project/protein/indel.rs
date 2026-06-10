@@ -613,6 +613,25 @@ fn build_frameshift_variant(
         FrameshiftTer::Unknown
     };
 
+    // Spec (frameshift.md:22, 36-39): `fsTer1` is illegal — the minimum
+    // frameshift count is `fsTer2`. A shifted frame whose first changed codon
+    // is immediately a stop is a NONSENSE substitution `p.(<aa><pos>Ter)`, not
+    // a frameshift. Emit the nonsense form (mirrors `predict_substitution`'s
+    // `Ter` substitution) rather than the invalid `fsTer1`.
+    if matches!(ter, FrameshiftTer::At(1)) {
+        let nonsense_edit = ProteinEdit::Substitution {
+            reference: ref_aa,
+            alternative: AminoAcid::Ter,
+        };
+        let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_pos));
+        let accession = parse_accession(protein_accession);
+        return Ok(HgvsVariant::Protein(ProteinVariant {
+            accession,
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(loc, nonsense_edit),
+        }));
+    }
+
     let protein_edit = ProteinEdit::Frameshift { new_aa, ter };
     let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_pos));
     let accession = parse_accession(protein_accession);
