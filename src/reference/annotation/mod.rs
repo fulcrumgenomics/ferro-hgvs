@@ -194,6 +194,37 @@ pub fn load_annotations<P: AsRef<Path>>(
     };
     let genome_build = config.genome_build.unwrap_or(GenomeBuild::GRCh38);
 
+    // Binary cache fast path: parsing a large GFF/GTF dominates load time, but
+    // the result is stable for a given (file, build). Reuse a sibling
+    // `<source>.<build>.tdb` cache when it is current (magic+version, and newer
+    // than the source). Skipped when FASTA validation is requested (the cache
+    // doesn't carry parse-time validation diagnostics) or when the caller uses
+    // strict error mode (a cache written during a lenient run must not be served
+    // to a strict caller — it would bypass the strict error check and return Ok
+    // with has_error:false for a file that has parse errors).
+    let skip_cache =
+        (config.fasta.is_some() && config.validate_fasta) || config.error_mode == ErrorMode::Strict;
+    let cache_path = TranscriptDb::cache_path_for(path, genome_build, format);
+    if !skip_cache && TranscriptDb::cache_is_fresh(&cache_path, path) {
+        match TranscriptDb::from_cache_file(&cache_path) {
+            Ok(db) => {
+                // Reflect the cached transcript count so callers that read
+                // `report.transcripts_loaded` see the real number, not 0.
+                let report = LoaderReport {
+                    transcripts_loaded: db.len(),
+                    ..LoaderReport::default()
+                };
+                return Ok((db, report));
+            }
+            Err(e) => eprintln!(
+                "warning: annotation cache {} is unusable ({}); reparsing {}",
+                cache_path.display(),
+                e,
+                path.display()
+            ),
+        }
+    }
+
     let file = File::open(path).map_err(|e| FerroError::Io {
         msg: format!("Failed to open {}: {}", path.display(), e),
     })?;
@@ -327,6 +358,19 @@ pub fn load_annotations<P: AsRef<Path>>(
         });
     }
 
+    // Self-heal: write the binary cache so the next load skips the parse.
+    // Best-effort — a read-only directory or write failure is non-fatal, and we
+    // skip it when FASTA validation ran (the cache wouldn't carry that path).
+    if !skip_cache {
+        if let Err(e) = db.to_cache_file(&cache_path) {
+            eprintln!(
+                "note: could not write annotation cache {}: {} (continuing)",
+                cache_path.display(),
+                e
+            );
+        }
+    }
+
     Ok((db, report))
 }
 
@@ -365,6 +409,43 @@ mod tests {
         let tx = db.get("gene01.1").unwrap();
         assert_eq!(tx.exons.len(), 1);
         assert_eq!(tx.exons[0].genomic_start, Some(100));
+    }
+
+    #[test]
+    fn cache_hit_reports_loaded_transcript_count() {
+        // First load parses and writes the sibling `.tdb` cache; the second
+        // load takes the cache fast path. The cache-hit LoaderReport must carry
+        // the real transcript count, not 0 (regression for the fast path
+        // returning LoaderReport::default()).
+        let f = write_gff3(
+            "##gff-version 3\n\
+             seq1\t.\tgene\t100\t1200\t.\t+\t.\tID=gene01;Name=gene01\n\
+             seq1\t.\tmRNA\t100\t1200\t.\t+\t.\tID=gene01.1;Parent=gene01\n\
+             seq1\t.\tCDS\t100\t1200\t.\t+\t0\tParent=gene01.1\n",
+        );
+        let cfg = LoaderConfig::new();
+
+        let (_db, first) = load_annotations(f.path(), &cfg).unwrap();
+        assert_eq!(first.transcripts_loaded, 1);
+
+        // The cache file now exists, so the next load hits the fast path.
+        let cache_path =
+            TranscriptDb::cache_path_for(f.path(), GenomeBuild::GRCh38, AnnotationFormat::Gff3);
+        assert!(
+            cache_path.exists(),
+            "first load should have written the cache"
+        );
+        assert!(TranscriptDb::cache_is_fresh(&cache_path, f.path()));
+
+        let (db, cached) = load_annotations(f.path(), &cfg).unwrap();
+        assert_eq!(db.len(), 1);
+        assert_eq!(
+            cached.transcripts_loaded,
+            db.len(),
+            "cache-hit report must reflect the loaded transcript count, not 0"
+        );
+
+        let _ = std::fs::remove_file(&cache_path);
     }
 
     #[test]
@@ -577,6 +658,52 @@ mod tests {
         let tx2 = db.get("tx2").unwrap();
         assert_eq!(tx1.exons.len(), 1);
         assert_eq!(tx2.exons.len(), 1);
+    }
+
+    #[test]
+    fn strict_mode_skips_cache_written_by_lenient_run() {
+        // A cache written by a lenient run must NOT be served to a strict caller.
+        // Before the fix, `skip_cache` was only true when fasta validation was
+        // requested, so the fast path could return Ok(db, report) with
+        // has_error:false for a file that has parse errors — bypassing the strict
+        // check at the bottom of load_annotations.
+        //
+        // This test writes a GFF3 that contains one well-formed transcript AND one
+        // malformed record (bad start coordinate → E-LOAD-001). A lenient load
+        // writes the cache. A subsequent strict load must re-parse and return Err.
+        let gff3 = "##gff-version 3\n\
+             chr1\t.\tgene\t100\t500\t.\t+\t.\tID=g1;Name=g1\n\
+             chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1;Parent=g1\n\
+             chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1\n\
+             chr1\t.\tgene\tnot_a_number\t500\t.\t+\t.\tID=g_bad\n";
+        let f = write_gff3(gff3);
+        let cache_path =
+            TranscriptDb::cache_path_for(f.path(), GenomeBuild::GRCh38, AnnotationFormat::Gff3);
+
+        // Lenient load: succeeds (one transcript loaded), cache is written.
+        let lenient_cfg = LoaderConfig::new(); // Lenient by default
+        let (db, report) = load_annotations(f.path(), &lenient_cfg).unwrap();
+        assert_eq!(db.len(), 1, "lenient load should load the valid transcript");
+        assert!(
+            report.has_error,
+            "lenient report should record the malformed-record error"
+        );
+        assert!(
+            cache_path.exists(),
+            "lenient load should have written a .tdb cache"
+        );
+        assert!(TranscriptDb::cache_is_fresh(&cache_path, f.path()));
+
+        // Strict load: must re-parse and return Err — not serve the cached Ok.
+        let strict_cfg = LoaderConfig::new().with_strict();
+        let result = load_annotations(f.path(), &strict_cfg);
+        assert!(
+            result.is_err(),
+            "strict load must return Err even when a lenient cache exists; \
+             got Ok (cache was incorrectly served, bypassing strict error check)"
+        );
+
+        let _ = std::fs::remove_file(&cache_path);
     }
 
     #[test]
