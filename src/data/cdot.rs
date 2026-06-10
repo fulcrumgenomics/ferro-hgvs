@@ -323,6 +323,16 @@ mod rkyv_cache {
 const CDOT_BINCODE_MAGIC: [u8; 4] = *b"FCDT";
 const CDOT_BINCODE_VERSION: u32 = 1;
 
+/// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
+/// or `None` when there is no trailing numeric `.<n>`. Used to pick the highest
+/// version deterministically when resolving a base accession to a specific one.
+fn accession_version(accession: &str) -> Option<u32> {
+    accession
+        .split('.')
+        .nth(1)
+        .and_then(|v| v.parse::<u32>().ok())
+}
+
 /// cdot transcript alignment data (normalized internal representation).
 ///
 /// # Coordinate Systems
@@ -1751,10 +1761,28 @@ impl CdotMapper {
             .or_default()
             .push(accession.clone());
 
-        // Update base to versioned index (e.g., "NM_000088" -> "NM_000088.4")
+        // Update base to versioned index (e.g., "NM_000088" -> "NM_000088.4").
+        //
+        // The cdot file deserializes its transcripts into a `HashMap`, so the
+        // order `add_transcript` is called in is non-deterministic across runs.
+        // A plain last-writer-wins insert would therefore map a base accession
+        // to a *random* one of its versions, which surfaces downstream as a
+        // run-to-run flip in version-fallback resolution (e.g. requesting
+        // `NM_003002.2` — absent from cdot — would resolve to `.3` or `.4`
+        // arbitrarily, shifting CDS coordinates by the versions' length delta).
+        // Pick the highest version deterministically so the fallback is stable.
         if let Some(base) = accession.split('.').next() {
-            self.base_to_versioned
-                .insert(base.to_string(), accession.clone());
+            let replace = match self.base_to_versioned.get(base) {
+                None => true,
+                Some(existing) => {
+                    (accession_version(&accession), accession.as_str())
+                        > (accession_version(existing), existing.as_str())
+                }
+            };
+            if replace {
+                self.base_to_versioned
+                    .insert(base.to_string(), accession.clone());
+            }
         }
 
         self.transcripts.insert(accession, transcript);
@@ -3878,6 +3906,70 @@ mod tests {
             Some(20),
             "alt-build fallback must deterministically pick the highest version (.4 over .3)"
         );
+    }
+
+    #[test]
+    fn test_get_transcript_primary_version_fallback_picks_highest() {
+        // Same determinism guarantee as the alt-build path, but for the primary
+        // build's base->versioned fallback. The cdot file deserializes its
+        // transcripts into a HashMap, so `add_transcript` runs in a
+        // nondeterministic order; `base_to_versioned` must still map a base
+        // accession to its highest version rather than whichever the hasher
+        // inserted last. Pre-fix, requesting an absent version (.2) resolved to
+        // .3 or .4 arbitrarily across runs, shifting CDS coordinates downstream.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                },
+                "NM_000088.4": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184269, 1, 0, 173, "M173"]]
+                        }
+                    },
+                    "start_codon": 20,
+                    "stop_codon": 160
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        // .2 is absent, forcing the base->versioned fallback on the primary build.
+        let tx = mapper
+            .get_transcript("NM_000088.2")
+            .expect("version fallback must find a sibling");
+        assert_eq!(
+            tx.cds_start,
+            Some(20),
+            "primary-build base->version fallback must deterministically pick \
+             the highest version (.4 over .3)"
+        );
+    }
+
+    #[test]
+    fn test_accession_version_parsing() {
+        assert_eq!(accession_version("NM_003002.4"), Some(4));
+        assert_eq!(accession_version("NM_003002.10"), Some(10));
+        assert_eq!(accession_version("NM_003002"), None);
+        assert_eq!(accession_version("LRG_1t1"), None);
+        // Versionless accessions both yield `None`; the `>` tie-break comparison
+        // in `base_to_versioned` insertion evaluates to `false`, so the existing
+        // entry is kept — the fallback is stable for unversioned ids.
+        assert_eq!(accession_version("LRG_1t2"), accession_version("LRG_1t1"));
     }
 
     #[test]
