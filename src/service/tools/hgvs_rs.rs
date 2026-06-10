@@ -206,9 +206,9 @@ mod tests {
         // With hgvs-rs feature, this might fail due to missing database, but shouldn't panic
         #[cfg(feature = "hgvs-rs")]
         {
-            let result = HgvsRsService::new(&config);
-            // This may succeed or fail depending on whether the database is available
-            // But it shouldn't panic
+            // This may succeed or fail depending on whether the database is available,
+            // but it must not panic — the binding is discarded deliberately.
+            let _result = HgvsRsService::new(&config);
         }
     }
 
