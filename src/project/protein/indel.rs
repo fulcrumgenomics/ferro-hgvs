@@ -1250,4 +1250,30 @@ mod tests {
             s
         );
     }
+
+    /// Regression: a frameshift whose new in-frame stop lies in the 3'UTR
+    /// (past `cds_end`) must emit `fsTer{K}` (counting the new stop's
+    /// position from the first shifted residue), NOT `fsTer?`. Before the
+    /// 3'UTR-extension fix, `build_frameshift_variant` scanned only the
+    /// CDS-truncated `mut_cds`, so the downstream stop was never found.
+    ///
+    /// Construction (worked out codon-by-codon):
+    ///   ref CDS  "ATGAAGAAGAAGTGA" = Met Lys Lys Lys Ter   (cds 1..=15)
+    ///   3'UTR    "CTAACCC"                                  (seq 16..=22)
+    ///   delete c.4 (first A of codon-2 AAG) →
+    ///     mutated CDS  "ATGAGAAGAAGTGA"  (CDS-only: Met Arg Arg Ser … no stop)
+    ///     + 3'UTR      "ATGAGAAGAAGTGACTAACCC"
+    ///       → ATG(Met) AGA(Arg) AGA(Arg) AGT(Ser) GAC(Asp) TAA(*) — stop at
+    ///         downstream position 5 (Arg=1, Arg=2, Ser=3, Asp=4, Ter=5).
+    ///   first changed AA: Lys2 → Arg ⇒ p.(Lys2ArgfsTer5).
+    #[test]
+    fn frameshift_new_stop_in_3utr_emits_fster_count() {
+        let t = tx("ATGAAGAAGAAGTGACTAACCC", 1, 15);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2ArgfsTer5)");
+    }
 }
