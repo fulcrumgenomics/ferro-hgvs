@@ -1498,6 +1498,32 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         )?;
 
         let frameshift = is_frameshift(&coding);
+
+        // c↔n axis. For a coding transcript derive the n. form genome-free from
+        // the resolved CDS positions (same edit, reframed coordinates);
+        // best-effort — never fail the whole projection on an n.-derivation
+        // edge. For a non-coding transcript `coding` already IS the n. (Tx)
+        // form, so reuse it (forward-compatible: the non-coding full-projection
+        // path is currently pinned unsupported — see
+        // `tests/issue_328_projector_accepts_cnr.rs` — so this arm is not yet
+        // reached, but carries the correct semantics for when it is).
+        let noncoding = if is_coding {
+            match self.cached_get_transcript_for_variant(&cache_variant, transcript_id) {
+                Ok(tx) => crate::project::transcript_axis::noncoding_from_coding(
+                    &cds_start,
+                    &cds_end,
+                    &tx,
+                    &c_edit,
+                    transcript_id,
+                    gene_symbol.clone(),
+                )
+                .ok(),
+                Err(_) => None,
+            }
+        } else {
+            Some(coding.clone())
+        };
+
         // `.genomic` is always the canonical g. representation. For g.
         // input that's the (normalized) input itself; for c./n./r.
         // input that's the variant produced by `project_to_genomic`.
@@ -1506,7 +1532,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(VariantProjection {
             genomic: Some(projected_genome),
             coding: Some(coding),
-            noncoding: None,
+            noncoding,
             protein,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
@@ -2031,6 +2057,35 @@ mod tests {
         assert!(!result.is_frameshift);
         assert!(!result.is_intronic);
         assert!(!result.is_utr);
+    }
+
+    #[test]
+    fn project_genome_pivot_coding_populates_noncoding_axis() {
+        // c↔n axis: a g. SNV projected onto a coding transcript carries BOTH
+        // the c. form and the n. form, in distinct coordinate frames.
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "NM_TEST.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. present");
+        assert!(
+            matches!(c, HgvsVariant::Cds(_)),
+            "coding should be a c. (Cds) variant, got {c:?}"
+        );
+        let n = result
+            .noncoding
+            .as_ref()
+            .expect("n. axis populated for coding tx");
+        assert!(
+            matches!(n, HgvsVariant::Tx(_)),
+            "noncoding should be an n. (Tx) variant, got {n:?}"
+        );
+        // NM_TEST.1's CDS begins at transcript position 1, so c.4 → n.4.
+        assert!(
+            n.to_string().contains(":n.4C>A"),
+            "expected n.4C>A, got {n}"
+        );
     }
 
     #[test]
@@ -2753,6 +2808,15 @@ mod tests {
             provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
             (projector, provider)
         }
+
+        // Note: the non-coding (`else`) branch of `project_single_inner` — where
+        // `noncoding` mirrors the `coding` `Tx` form — is currently unreachable
+        // via full projection: the downstream g.→c. path errors with
+        // `TranscriptNotOverlapping` for non-coding transcripts, pinned in
+        // `tests/issue_328_projector_accepts_cnr.rs`. When that path is expanded
+        // to support non-coding tx, add a `noncoding == coding` regression test
+        // here. The branch stays for forward-compatibility (correct semantics
+        // the moment the path is reachable).
 
         // -- 1: plus-strand substitution ---------------------------------------
 
