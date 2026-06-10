@@ -1055,7 +1055,7 @@ fn scan_digits(bytes: &[u8]) -> (u64, usize) {
 /// Parse a repeat count (e.g., [12], [10_15], [?], [?_?], [10_?], [?_10])
 /// Optimized with byte-based dispatch to avoid alt() backtracking
 #[inline]
-fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
+pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
     let bytes = input.as_bytes();
 
     // Must start with '['

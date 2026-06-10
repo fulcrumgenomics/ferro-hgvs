@@ -6200,6 +6200,47 @@ fn prose_multi_allelic_diagnostic_msg(rhs: &str) -> String {
     )
 }
 
+/// Build the error for a single variant with un-consumed trailing input that
+/// is *not* a valid shared-position repeat-trans continuation.
+///
+/// `remaining` is the un-consumed tail of `input`. Trailing allele-fraction /
+/// heteroplasmy annotations such as `[level=70%]`, `[heteroplasmy=70%]`,
+/// `[mosaic=80%]`, or `(80%)` are out-of-spec but appear in real-world
+/// submissions. Emit the dedicated SVA code (W3017 /
+/// `ErrorType::AlleleFractionAnnotation`) so downstream tooling can recognize
+/// the intent rather than seeing a generic trailing-character parse error. See
+/// issue #278 (follow-up to #133 work-item 4). Any other trailing input gets
+/// the generic "unexpected trailing characters" parse error.
+fn repeat_trans_or_trailing_error(input: &str, remaining: &str) -> FerroError {
+    if is_allele_fraction_annotation(remaining) {
+        use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+        // Bind the SVA `ErrorType::*` here so the audit's emission-site scan
+        // (see tests/error_code_audit.rs) sees a real reference for this
+        // W-code in the parser path.
+        let _w3017 = ErrorType::AlleleFractionAnnotation;
+        let pos = input.len() - remaining.len();
+        let diag = Diagnostic::new()
+            .with_code(ErrorCode::AlleleFractionAnnotation)
+            .with_span(SourceSpan::new(pos, input.len()));
+        return FerroError::parse_with_diagnostic(
+            pos,
+            format!(
+                "Allele-fraction / heteroplasmy annotation '{}' is not part of the HGVS \
+                 spec; allele fraction belongs in accompanying metadata (VCF \
+                 FORMAT/AF, ClinVar's heteroplasmy field, etc.), not in the HGVS \
+                 expression. Strip the annotation and record the fraction separately.",
+                remaining
+            ),
+            diag,
+        );
+    }
+    FerroError::Parse {
+        pos: input.len() - remaining.len(),
+        msg: format!("Unexpected trailing characters: '{}'", remaining),
+        diagnostic: None,
+    }
+}
+
 /// Parse a complete HGVS variant string
 ///
 /// The parser is optimized with:
@@ -6266,43 +6307,56 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
         // Parse as single variant
         let (remaining, v) = parse_single_variant(input)?;
         if !remaining.is_empty() {
-            // Trailing allele-fraction / heteroplasmy annotations such as
-            // `[level=70%]`, `[heteroplasmy=70%]`, `[mosaic=80%]`, or
-            // `(80%)` are out-of-spec but appear in real-world
-            // submissions. Emit the dedicated SVA code (W3017 /
-            // `ErrorType::AlleleFractionAnnotation`) so downstream
-            // tooling can recognize the intent rather than seeing a
-            // generic trailing-character parse error. See issue #278
-            // (follow-up to #133 work-item 4).
-            if is_allele_fraction_annotation(remaining) {
-                use crate::error::{Diagnostic, ErrorCode, SourceSpan};
-                // Bind the SVA `ErrorType::*` here so the audit's
-                // emission-site scan (see tests/error_code_audit.rs) sees
-                // a real reference for this W-code in the parser path.
-                let _w3017 = ErrorType::AlleleFractionAnnotation;
-                let pos = input.len() - remaining.len();
-                let diag = Diagnostic::new()
-                    .with_code(ErrorCode::AlleleFractionAnnotation)
-                    .with_span(SourceSpan::new(pos, input.len()));
-                return Err(FerroError::parse_with_diagnostic(
-                    pos,
-                    format!(
-                        "Allele-fraction / heteroplasmy annotation '{}' is not part of the HGVS \
-                         spec; allele fraction belongs in accompanying metadata (VCF \
-                         FORMAT/AF, ClinVar's heteroplasmy field, etc.), not in the HGVS \
-                         expression. Strip the annotation and record the fraction separately.",
-                        remaining
-                    ),
-                    diag,
-                ));
+            // Shared-position repeat trans allele: `<repeat>[c1];[c2]...`
+            // where the first variant is a single-count repeat and each
+            // `;[cN]` is another allele's count inheriting the same
+            // position + unit (HGVS repeated.md). Only engages when the
+            // whole remainder is consumed as `;[count]` continuations.
+            //
+            // The built allele falls through to the end-of-function
+            // validators (`validate_coordinate_system`, `validate_no_u_in_dna`,
+            // etc.) rather than returning early — a `c.` coordinate on an NR_
+            // reference, or a `U` in a DNA repeat, must still be rejected when
+            // written in this shorthand (#486 / #544).
+            if remaining.starts_with(';') {
+                let mut members = vec![v.clone()];
+                let mut rest = remaining;
+                let mut consumed_ok = true;
+                while let Some(after_semi) = rest.strip_prefix(';') {
+                    match crate::hgvs::parser::edit::parse_repeat_count(after_semi) {
+                        Ok((next, count)) => {
+                            let mut sibling = v.clone();
+                            if crate::hgvs::variant::set_repeat_count(&mut sibling, count) {
+                                members.push(sibling);
+                                rest = next;
+                            } else {
+                                consumed_ok = false;
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            consumed_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if consumed_ok && rest.is_empty() && members.len() >= 2 {
+                    HgvsVariant::Allele(AlleleVariant::new(members, AllelePhase::Trans))
+                } else {
+                    // Report the post-loop tail (`rest`), not the pre-loop
+                    // `remaining`: after consuming one or more `;[count]`
+                    // members the actual leftover is what follows them (e.g.
+                    // `(80%)`), so the diagnostic — including W3017 allele-
+                    // fraction detection — keys off the real trailing text.
+                    // `rest == remaining` when nothing was consumed.
+                    return Err(repeat_trans_or_trailing_error(input, rest));
+                }
+            } else {
+                return Err(repeat_trans_or_trailing_error(input, remaining));
             }
-            return Err(FerroError::Parse {
-                pos: input.len() - remaining.len(),
-                msg: format!("Unexpected trailing characters: '{}'", remaining),
-                diagnostic: None,
-            });
+        } else {
+            v
         }
-        v
     };
 
     // Spec-mandated post-parse semantic check: reject self-cancelling alleles

@@ -13,8 +13,8 @@
       "diverges": 134,
       "false-acceptance": 75,
       "needs-reference": 31,
-      "parse-error": 320,
-      "preserved": 662
+      "parse-error": 316,
+      "preserved": 666
     },
     "by_coordinate_system": {
       "c": 464,
@@ -10886,18 +10886,6 @@
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
     {
-      "input": "NP_0123456.1:p.Ala2[10];[11]",
-      "current": "parse error: Parse error at position 23: Unexpected trailing characters: ';[11]'",
-      "spec_expected": "NP_0123456.1:p.Ala2[10];[11]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "syntax_yaml",
-      "source_paths": [
-        "docs/syntax.yaml"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
       "input": "NP_060250.2:p.Gln746_Lys747ins*63",
       "current": "parse error: Parse error at position 31: Unexpected trailing characters: '63'",
       "spec_expected": "NP_060250.2:p.Gln746_Lys747ins*63",
@@ -10934,19 +10922,6 @@
       "source_kind": "recommendation",
       "source_paths": [
         "docs/recommendations/uncertain.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "p.Ala2[10];[11]",
-      "input_prefixed": "NP_003997.1:p.Ala2[10];[11]",
-      "current": "parse error: Parse error at position 22: Unexpected trailing characters: ';[11]'",
-      "spec_expected": "NP_003997.1:p.Ala2[10];[11]",
-      "status": "parse-error",
-      "coordinate_system": "p",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/protein/repeated.md"
       ],
       "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
     },
@@ -11644,6 +11619,17 @@
       ]
     },
     {
+      "input": "NP_0123456.1:p.Ala2[10];[11]",
+      "current": "NP_0123456.1:p.Ala2[10];[11]",
+      "spec_expected": "NP_0123456.1:p.Ala2[10];[11]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "syntax_yaml",
+      "source_paths": [
+        "docs/syntax.yaml"
+      ]
+    },
+    {
       "input": "NP_0123456.1:p.Arg65_Ser67[12]",
       "current": "NP_0123456.1:p.Arg65_Ser67[12]",
       "spec_expected": "NP_0123456.1:p.Arg65_Ser67[12]",
@@ -12176,6 +12162,18 @@
       "input_prefixed": "NP_003997.1:p.Ala2[10]",
       "current": "NP_003997.1:p.Ala2[10]",
       "spec_expected": "NP_003997.1:p.Ala2[10]",
+      "status": "preserved",
+      "coordinate_system": "p",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/protein/repeated.md"
+      ]
+    },
+    {
+      "input": "p.Ala2[10];[11]",
+      "input_prefixed": "NP_003997.1:p.Ala2[10];[11]",
+      "current": "NP_003997.1:p.Ala2[10];[11]",
+      "spec_expected": "NP_003997.1:p.Ala2[10];[11]",
       "status": "preserved",
       "coordinate_system": "p",
       "source_kind": "recommendation",
@@ -13340,32 +13338,6 @@
       "input_prefixed": "NM_004006.3:r.-124",
       "current": "parse error: Parse error at position 12: Failed to parse variant: Error(Error { input: \"\", code: TakeWhile1 })",
       "spec_expected": "NM_004006.3:r.-124",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/repeated.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.-124_-123[14];[18]",
-      "input_prefixed": "NM_004006.3:r.-124_-123[14];[18]",
-      "current": "parse error: Parse error at position 27: Unexpected trailing characters: ';[18]'",
-      "spec_expected": "NM_004006.3:r.-124_-123[14];[18]",
-      "status": "parse-error",
-      "coordinate_system": "r",
-      "source_kind": "recommendation",
-      "source_paths": [
-        "docs/recommendations/RNA/repeated.md"
-      ],
-      "todo": "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83"
-    },
-    {
-      "input": "r.-124ug[14];[18]",
-      "input_prefixed": "NM_004006.3:r.-124ug[14];[18]",
-      "current": "parse error: Parse error at position 24: Unexpected trailing characters: ';[18]'",
-      "spec_expected": "NM_004006.3:r.-124ug[14];[18]",
       "status": "parse-error",
       "coordinate_system": "r",
       "source_kind": "recommendation",
@@ -15178,10 +15150,34 @@
       ]
     },
     {
+      "input": "r.-124_-123[14];[18]",
+      "input_prefixed": "NM_004006.3:r.-124_-123[14];[18]",
+      "current": "NM_004006.3:r.-124_-123[14];[18]",
+      "spec_expected": "NM_004006.3:r.-124_-123[14];[18]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/repeated.md"
+      ]
+    },
+    {
       "input": "r.-124ug[14]",
       "input_prefixed": "NM_004006.3:r.-124ug[14]",
       "current": "NM_004006.3:r.-124ug[14]",
       "spec_expected": "NM_004006.3:r.-124ug[14]",
+      "status": "preserved",
+      "coordinate_system": "r",
+      "source_kind": "recommendation",
+      "source_paths": [
+        "docs/recommendations/RNA/repeated.md"
+      ]
+    },
+    {
+      "input": "r.-124ug[14];[18]",
+      "input_prefixed": "NM_004006.3:r.-124ug[14];[18]",
+      "current": "NM_004006.3:r.-124ug[14];[18]",
+      "spec_expected": "NM_004006.3:r.-124ug[14];[18]",
       "status": "preserved",
       "coordinate_system": "r",
       "source_kind": "recommendation",
