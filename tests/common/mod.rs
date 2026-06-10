@@ -7,6 +7,8 @@
 //!   bulk parser fixtures (cmrg, paraphase, clinvar 500K + unique). See
 //!   `failure_expectations.rs` for the snapshot shape and contract;
 //!   tracking issue: #174.
+//! - `spec_fixture`: regenerates the gitignored HGVS spec-normalization
+//!   fixture on demand so tests that read it work on a fresh checkout.
 //!
 //! `#![allow(dead_code)]`: each integration test binary that does
 //! `mod common;` compiles the full common tree into its binary and the
@@ -16,4 +18,5 @@
 #![allow(dead_code)]
 
 pub mod failure_expectations;
+pub mod spec_fixture;
 pub mod synthetic;

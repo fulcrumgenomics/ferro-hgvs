@@ -32,6 +32,19 @@ cargo test --features dev            # Alternative
 cargo nextest run -E 'test(parse)'   # Run specific tests by name pattern
 ```
 
+### Generated spec fixture (not committed)
+
+`tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` example from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)
+
+```bash
+cargo run --features dev --example generate_spec_fixture            # (re)generate it
+cargo run --features dev --example generate_spec_fixture -- --output <path>   # write elsewhere
+```
+
+The two tests that read it (`tests/idempotency_tests.rs`, `tests/hgvs_spec_normalization_tests.rs`) call a shared helper (`tests/common/spec_fixture.rs`) that regenerates it on demand if missing, so a fresh `cargo test` "just works" (one-time generation). CI regenerates it explicitly before the test run. Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init`); without it the generator errors with `overrides reference unknown inputs`.
+
+Because the fixture is no longer in git, per-PR `parse-error → preserved` status transitions are reviewed via the PR description and the accompanying test/parser changes, not a committed diff.
+
 ### Python Tests
 ```bash
 pytest tests/python/ -v              # Run all Python tests
