@@ -19,12 +19,12 @@
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use log::warn;
+use rustc_hash::FxHashMap;
 
 use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
@@ -63,7 +63,47 @@ pub struct SupplementalTranscriptInfo {
 pub struct SupplementalCdsInfo {
     /// Mapping from accession to transcript info.
     /// CDS coordinates are 1-based inclusive.
-    pub transcripts: HashMap<String, SupplementalTranscriptInfo>,
+    pub transcripts: FxHashMap<String, SupplementalTranscriptInfo>,
+}
+
+/// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
+/// or `None` when there is no trailing numeric `.<n>`.
+fn accession_version(accession: &str) -> Option<u32> {
+    accession
+        .rsplit_once('.')
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+}
+
+/// Build the `base -> versioned` fallback map from a fully populated FASTA
+/// index, deterministically choosing the **highest** version per base
+/// accession.
+///
+/// Building this by iterating the index in hash order with last-writer-wins
+/// made version fallback nondeterministic across runs (the index uses a
+/// fixed-seed hasher now, but relying on iteration order for *which* version
+/// wins is fragile regardless). Keying on `(version, accession)` gives a stable
+/// total order: the newest version always wins, independent of insertion or
+/// iteration order.
+fn build_base_to_versioned(
+    index: &FxHashMap<String, FastaIndexEntry>,
+) -> FxHashMap<String, String> {
+    let mut map: FxHashMap<String, String> = FxHashMap::default();
+    for name in index.keys() {
+        let Some(base) = name.split('.').next() else {
+            continue;
+        };
+        let replace = match map.get(base) {
+            None => true,
+            Some(existing) => {
+                (accession_version(name), name.as_str())
+                    > (accession_version(existing), existing.as_str())
+            }
+        };
+        if replace {
+            map.insert(base.to_string(), name.clone());
+        }
+    }
+    map
 }
 
 /// Multi-FASTA reference provider
@@ -80,12 +120,18 @@ pub struct SupplementalCdsInfo {
 /// let seq = provider.get_sequence("NM_000546.6", 0, 100)?;
 /// ```
 pub struct MultiFastaProvider {
-    /// Index mapping sequence names to their locations
-    index: HashMap<String, FastaIndexEntry>,
+    /// Index mapping sequence names to their locations.
+    ///
+    /// These index maps use [`FxHashMap`] (a fast, fixed-seed hasher) rather
+    /// than the default SipHash: the keys are internal reference accessions,
+    /// not attacker-controlled, so DoS resistance is unnecessary, and building
+    /// the ~400k+ entry indexes is a large slice of startup. The fixed seed
+    /// also makes iteration deterministic across runs.
+    index: FxHashMap<String, FastaIndexEntry>,
     /// Index mapping base accession (without version) to versioned accession
-    base_to_versioned: HashMap<String, String>,
+    base_to_versioned: FxHashMap<String, String>,
     /// Chromosome aliases (e.g., NC_000001 -> chr1)
-    aliases: HashMap<String, String>,
+    aliases: FxHashMap<String, String>,
     /// Optional cdot transcript metadata (CDS positions, exon coordinates)
     cdot_mapper: Option<CdotMapper>,
     /// Supplemental CDS info for transcripts not in cdot
@@ -93,7 +139,7 @@ pub struct MultiFastaProvider {
     /// Authoritative canonical overrides (issue #520), loaded from the manifest.
     canonical_overrides: CanonicalOverrides,
     /// Protein FASTA index (NP_/XP_ accessions) for get_protein_sequence (#520).
-    protein_index: HashMap<String, FastaIndexEntry>,
+    protein_index: FxHashMap<String, FastaIndexEntry>,
 }
 
 impl MultiFastaProvider {
@@ -109,8 +155,7 @@ impl MultiFastaProvider {
             });
         }
 
-        let mut index = HashMap::new();
-        let mut base_to_versioned = HashMap::new();
+        let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
 
         // Find all FASTA files with indexes
         let entries = std::fs::read_dir(dir).map_err(|e| FerroError::Io {
@@ -134,10 +179,6 @@ impl MultiFastaProvider {
                     let file_index = load_fai_index(&path, &fai_path)?;
 
                     for (name, entry) in file_index {
-                        // Map base accession (without version) to versioned
-                        if let Some(base) = name.split('.').next() {
-                            base_to_versioned.insert(base.to_string(), name.clone());
-                        }
                         index.insert(name, entry);
                     }
                 }
@@ -160,20 +201,19 @@ impl MultiFastaProvider {
         );
 
         Ok(Self {
+            base_to_versioned: build_base_to_versioned(&index),
             index,
-            base_to_versioned,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
-            protein_index: HashMap::new(),
+            protein_index: FxHashMap::default(),
         })
     }
 
     /// Create a provider from multiple directories (e.g., transcripts + genome)
     pub fn from_directories<P: AsRef<Path>>(dirs: &[P]) -> Result<Self, FerroError> {
-        let mut combined_index = HashMap::new();
-        let mut base_to_versioned = HashMap::new();
+        let mut combined_index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
 
         for dir in dirs {
             let dir = dir.as_ref();
@@ -183,7 +223,6 @@ impl MultiFastaProvider {
 
             let partial = Self::from_directory(dir)?;
             combined_index.extend(partial.index);
-            base_to_versioned.extend(partial.base_to_versioned);
         }
 
         if combined_index.is_empty() {
@@ -193,13 +232,13 @@ impl MultiFastaProvider {
         }
 
         Ok(Self {
+            base_to_versioned: build_base_to_versioned(&combined_index),
             index: combined_index,
-            base_to_versioned,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
-            protein_index: HashMap::new(),
+            protein_index: FxHashMap::default(),
         })
     }
 
@@ -483,14 +522,6 @@ impl MultiFastaProvider {
 
         let index = load_fai_index(fasta_path, &fai_path)?;
 
-        // Build base to versioned mapping
-        let mut base_to_versioned = HashMap::new();
-        for name in index.keys() {
-            if let Some(base) = name.split('.').next() {
-                base_to_versioned.insert(base.to_string(), name.clone());
-            }
-        }
-
         eprintln!("Loaded {} sequences from FASTA", index.len());
 
         // Load cdot (prefers bincode if available, falls back to JSON)
@@ -501,13 +532,13 @@ impl MultiFastaProvider {
         );
 
         Ok(Self {
+            base_to_versioned: build_base_to_versioned(&index),
             index,
-            base_to_versioned,
             aliases: build_chromosome_aliases(),
             cdot_mapper: Some(cdot_mapper),
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
-            protein_index: HashMap::new(),
+            protein_index: FxHashMap::default(),
         })
     }
 
@@ -1554,7 +1585,7 @@ impl ReferenceProvider for MultiFastaProvider {
 fn load_fai_index<P: AsRef<Path>>(
     fasta_path: P,
     fai_path: P,
-) -> Result<HashMap<String, FastaIndexEntry>, FerroError> {
+) -> Result<FxHashMap<String, FastaIndexEntry>, FerroError> {
     // Canonicalize the FASTA path to resolve symlinks and get absolute path
     // This helps prevent path traversal vulnerabilities
     let fasta_path = fasta_path
@@ -1574,7 +1605,7 @@ fn load_fai_index<P: AsRef<Path>>(
     })?;
     let reader = BufReader::new(file);
 
-    let mut index = HashMap::new();
+    let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
 
     for line in reader.lines() {
         let line = line.map_err(|e| FerroError::Io {
@@ -1639,14 +1670,14 @@ fn load_fai_index<P: AsRef<Path>>(
 }
 
 /// Count unique files in the index
-fn count_unique_files(index: &HashMap<String, FastaIndexEntry>) -> usize {
+fn count_unique_files(index: &FxHashMap<String, FastaIndexEntry>) -> usize {
     let files: std::collections::HashSet<_> = index.values().map(|e| &e.file_path).collect();
     files.len()
 }
 
 /// Build chromosome name aliases
-fn build_chromosome_aliases() -> HashMap<String, String> {
-    let mut aliases = HashMap::new();
+fn build_chromosome_aliases() -> FxHashMap<String, String> {
+    let mut aliases: FxHashMap<String, String> = FxHashMap::default();
 
     // RefSeq to UCSC chromosome names (for genome)
     let refseq_chroms = [
@@ -2584,6 +2615,30 @@ mod tests {
     // assert that the lenient `get_transcript` chain is UNCHANGED: where strict
     // refuses a sibling-version substitution, lenient still falls back to it.
     // ----------------------------------------------------------------------
+
+    #[test]
+    fn build_base_to_versioned_picks_highest_version_deterministically() {
+        let entry = |name: &str| FastaIndexEntry {
+            file_path: PathBuf::from("x.fna"),
+            name: name.to_string(),
+            length: 1,
+            offset: 0,
+            line_bases: 1,
+            line_bytes: 2,
+        };
+        let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
+        for v in ["NM_000088.3", "NM_000088.4", "NM_000088.10", "NM_000088.2"] {
+            index.insert(v.to_string(), entry(v));
+        }
+        let map = build_base_to_versioned(&index);
+        // Highest *numeric* version wins (10 > 4 > 3 > 2) — not lexical, which
+        // would pick ".4" over ".10" — and the result is independent of the
+        // (hash) iteration order of the index.
+        assert_eq!(
+            map.get("NM_000088").map(String::as_str),
+            Some("NM_000088.10")
+        );
+    }
 
     /// Build a provider from a transcript FASTA carrying exactly the given
     /// `(accession, sequence)` entries (one record each). No genome, no cdot.

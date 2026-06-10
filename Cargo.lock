@@ -996,6 +996,7 @@ dependencies = [
  "rkyv",
  "rstest",
  "rusqlite",
+ "rustc-hash 2.1.1",
  "seqrepo",
  "serde",
  "serde_json",
