@@ -182,6 +182,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
+          # The spec-normalization fixture is generated (not committed) from the
+          # HGVS spec submodule, so the standard test suite needs it checked out.
+          submodules: true
           lfs: true
           persist-credentials: false
 
@@ -199,6 +202,11 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # The spec-normalization fixture is a generated artifact (gitignored);
+      # regenerate it before the suite so the reader tests find it.
+      - name: Generate HGVS v21.0 spec fixture
+        run: cargo run --features dev --example generate_spec_fixture
 
       # `dev` bundles every testable feature; `slow-tests` is
       # intentionally opt-in because it requires a ~1 GB ClinVar

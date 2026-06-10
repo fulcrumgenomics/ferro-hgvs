@@ -12,6 +12,8 @@ use ferro_hgvs::{parse_hgvs, Normalizer};
 use serde::Deserialize;
 use std::path::PathBuf;
 
+mod common;
+
 #[derive(Debug, Deserialize)]
 struct Fixture {
     rows: Vec<Row>,
@@ -70,6 +72,7 @@ fn observe(normalizer: &Normalizer<MockProvider>, input: &str) -> (String, Vec<S
 
 #[test]
 fn pinned_v21_normalization_behavior() {
+    common::spec_fixture::ensure_spec_fixture();
     let text = std::fs::read_to_string(fixture_path()).expect("read fixture");
     let fx: Fixture = serde_json::from_str(&text).expect("parse fixture");
 

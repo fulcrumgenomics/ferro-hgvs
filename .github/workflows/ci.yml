@@ -212,10 +212,13 @@ jobs:
         # the same suite with a real manifest. #397 item 6.
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
+      - name: Generate HGVS v21.0 spec fixture
+        # The fixture is a generated artifact (gitignored), not committed.
+        # Regenerate it before the test run; the generator also validates the
+        # overrides file, which is the guard the old `--check` step provided.
+        run: cargo run --features dev --example generate_spec_fixture
       - name: Run Rust tests
         run: cargo nextest run --features dev
-      - name: Verify HGVS v21.0 fixture is up to date
-        run: cargo run --features dev --example generate_spec_fixture -- --check
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Install dev dependencies
