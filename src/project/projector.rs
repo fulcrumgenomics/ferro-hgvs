@@ -898,6 +898,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let coding = coding_variants
             .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
 
+        // Build the n. (transcript-relative) allele the same all-or-nothing way:
+        // only when EVERY member carries an n. form (mirrors the coding rule).
+        let noncoding_variants: Option<Vec<HgvsVariant>> = inner_projections
+            .iter()
+            .map(|p| p.noncoding.clone())
+            .collect();
+        let noncoding = noncoding_variants
+            .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+
         // Build the protein allele only if ALL inner projections have a protein.
         let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
         let protein = if all_have_protein {
@@ -937,7 +946,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(VariantProjection {
             genomic,
             coding,
-            noncoding: None,
+            noncoding,
             protein,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
@@ -2661,6 +2670,32 @@ mod tests {
                 av.variants.len(),
                 2,
                 "expected 2 inner c. variants in cis allele"
+            );
+        }
+    }
+
+    #[test]
+    fn project_cis_allele_aggregates_noncoding_axis() {
+        // c↔n axis: every inner member carries an n. form, so the allele
+        // projection exposes a cis n. allele mirroring the c. allele.
+        let result = project_cis_allele();
+        let noncoding = result
+            .noncoding
+            .as_ref()
+            .expect("n. allele should be aggregated");
+        assert!(
+            matches!(noncoding, HgvsVariant::Allele(av) if av.phase == AllelePhase::Cis),
+            "expected Cis noncoding allele, got: {noncoding}"
+        );
+        if let HgvsVariant::Allele(av) = noncoding {
+            assert_eq!(
+                av.variants.len(),
+                2,
+                "expected 2 inner n. variants in cis allele"
+            );
+            assert!(
+                av.variants.iter().all(|v| matches!(v, HgvsVariant::Tx(_))),
+                "every inner member of the n. allele should be an n. (Tx) variant"
             );
         }
     }
