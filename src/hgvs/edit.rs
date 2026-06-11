@@ -219,6 +219,19 @@ pub enum InsertedSequence {
     PositionRange { start: u64, end: u64 },
     /// Position range with inversion (e.g., delins86116_86422inv)
     PositionRangeInv { start: u64, end: u64 },
+    /// Inserted copy of a single region with uncertain (parenthesized) start
+    /// and end boundaries, inserted in inverted orientation
+    /// (e.g., `ins(127300001_131500000)_(131500001_136400000)inv`). This is the
+    /// HGVS-sanctioned way to describe an orientation-reversed duplication whose
+    /// breakpoints are not sequenced (DNA/complex.md) — the spec rejects the
+    /// shorthand `dupinv` (DNA/inversion.md:19). Each boundary is itself an
+    /// uncertain range `(min_max)`.
+    UncertainRangeInv {
+        /// Uncertain start position `(min, max)`.
+        start: (u64, u64),
+        /// Uncertain end position `(min, max)`.
+        end: (u64, u64),
+    },
     /// Uncertain sequence (e.g., delins(?))
     Uncertain,
     /// Empty insertion (e.g., just "ins" without sequence - rare but valid)
@@ -317,6 +330,9 @@ impl fmt::Display for InsertedSequence {
             InsertedSequence::PositionRangeInv { start, end } => {
                 write!(f, "{}_{}inv", start, end)
             }
+            InsertedSequence::UncertainRangeInv { start, end } => {
+                write!(f, "({}_{})_({}_{})inv", start.0, start.1, end.0, end.1)
+            }
             InsertedSequence::Uncertain => write!(f, "(?)"),
             InsertedSequence::Empty => Ok(()),
         }
@@ -386,7 +402,8 @@ impl InsertedSequence {
             InsertedSequence::Reference(_) => None, // Requires lookup
             InsertedSequence::PositionRange { start, end } => Some((end - start + 1) as usize),
             InsertedSequence::PositionRangeInv { start, end } => Some((end - start + 1) as usize),
-            InsertedSequence::Uncertain => None, // Unknown
+            InsertedSequence::UncertainRangeInv { .. } => None, // Boundaries uncertain
+            InsertedSequence::Uncertain => None,                // Unknown
             InsertedSequence::Empty => Some(0),
         }
     }
@@ -425,6 +442,9 @@ impl InsertedSequence {
             InsertedSequence::Reference(reference) => format!("[{}]", reference),
             InsertedSequence::PositionRange { start, end } => format!("{}_{}", start, end),
             InsertedSequence::PositionRangeInv { start, end } => format!("{}_{}inv", start, end),
+            InsertedSequence::UncertainRangeInv { start, end } => {
+                format!("({}_{})_({}_{})inv", start.0, start.1, end.0, end.1)
+            }
             InsertedSequence::Uncertain => String::from("(?)"),
             InsertedSequence::Empty => String::new(),
         }
