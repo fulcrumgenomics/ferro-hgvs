@@ -60,6 +60,10 @@ pub mod sequence;
 #[cfg(feature = "web-service")]
 pub mod service;
 pub mod spdi;
+/// Tool-support matrix types + table generation (used by the
+/// `generate_tool_support_tables` example and its tests).
+#[cfg(feature = "dev")]
+pub mod tool_support;
 pub mod vcf;
 
 // Re-export commonly used types

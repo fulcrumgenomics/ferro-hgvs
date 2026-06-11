@@ -189,6 +189,10 @@ pulldown-cmark = { version = "0.13", default-features = false }
 serde_yaml = "0.9"
 anyhow = "1"
 
+[[example]]
+name = "generate_tool_support_tables"
+required-features = ["dev"]
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

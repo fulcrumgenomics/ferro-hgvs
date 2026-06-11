@@ -199,6 +199,8 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 
 ### Normalization Capabilities Comparison
 
+<!-- DO NOT EDIT — generated from docs/tool_support_matrix.json by `generate_tool_support_tables`. -->
+<!-- BEGIN tool-support:normalization_capabilities -->
 | Pattern Type | ferro | mutalyzer | biocommons | hgvs-rs |
 |--------------|:-----:|:---------:|:----------:|:-------:|
 | Genomic (g.) | ✓ | ✓ | ✓ | ✓ |
@@ -206,10 +208,11 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 | Coding (c.) intronic | ✓ | ✓* | ✗ | ✗ |
 | Non-coding (n.) | ✓ | ✓ | ✓ | ✓ |
 | RNA (r.) | ✓ | ✓ | ✓ | ✓ |
-| Protein (p.) | ✓ | Net** | ✗ | ✓ |
+| Protein (p.) | ✓ | Net** | ✗ | ✗ |
 
-\* mutalyzer intronic support requires genomic context rewriting (enabled by default)
-\** mutalyzer protein normalization requires network access for NP_→NM_ lookups
+\* mutalyzer intronic support is enabled by default via genomic-context rewriting; disable with --no-rewrite-intronic.
+\*\* mutalyzer protein normalization requires network access for NP_→NM_ lookups (cannot be cached locally).
+<!-- END tool-support:normalization_capabilities -->
 
 ### Performance Comparison
 

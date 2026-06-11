@@ -56,42 +56,7 @@ class HelpSystem {
                 <p>This matrix shows which features each tool supports: <strong>V/N</strong> = Validate &amp; Normalize,
                 <strong>V</strong> = Validate only, <strong>N</strong> = Normalize only, <strong>-</strong> = Not supported.</p>
 
-                <h5>Reference Types <a href="https://hgvs-nomenclature.org/stable/background/refseq/" target="_blank" rel="noopener">[Spec]</a></h5>
-                <table>
-                    <tr><th>Reference</th><th>Description</th><th>Example</th><th>ferro</th><th>mutalyzer</th><th>biocommons</th><th>hgvs-rs</th></tr>
-                    <tr><td><code>NM_</code></td><td>Coding transcript (mRNA)</td><td><code>NM_000088.3</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>NR_</code></td><td>Non-coding transcript</td><td><code>NR_024540.1</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>NC_</code></td><td>Genomic chromosome</td><td><code>NC_000001.11</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>NG_</code></td><td>Genomic gene region</td><td><code>NG_007400.1</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>NP_</code></td><td>Protein</td><td><code>NP_000079.2</code></td><td>V</td><td>V/N</td><td>V/N</td><td>-</td></tr>
-                    <tr><td><code>LRG_</code></td><td>Locus Reference Genomic</td><td><code>LRG_1</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>ENST</code></td><td>Ensembl transcript</td><td><code>ENST00000357033</code></td><td>-</td><td>V/N</td><td>V/N</td><td>-</td></tr>
-                </table>
-
-                <h5>Coordinate Types</h5>
-                <table>
-                    <tr><th>Coordinate</th><th>Description</th><th>Example</th><th>ferro</th><th>mutalyzer</th><th>biocommons</th><th>hgvs-rs</th></tr>
-                    <tr><td><code>c.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/" target="_blank" rel="noopener">Coding DNA</a> (relative to CDS)</td><td><code>c.589G>T</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>g.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/" target="_blank" rel="noopener">Genomic</a> (absolute position)</td><td><code>g.12345A>G</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>n.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/" target="_blank" rel="noopener">Non-coding transcript</a></td><td><code>n.100del</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>p.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/protein/" target="_blank" rel="noopener">Protein</a></td><td><code>p.Gly12Val</code></td><td>V</td><td>V/N</td><td>V/N</td><td>-</td></tr>
-                    <tr><td><code>m.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/" target="_blank" rel="noopener">Mitochondrial</a></td><td><code>m.8993T>G</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><code>r.</code></td><td><a href="https://hgvs-nomenclature.org/stable/recommendations/RNA/" target="_blank" rel="noopener">RNA</a></td><td><code>r.76a>u</code></td><td>V</td><td>V/N</td><td>V/N</td><td>-</td></tr>
-                    <tr><td><code>+/-</code></td><td>Intronic positions</td><td><code>c.100+5G>A</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V</td></tr>
-                </table>
-
-                <h5>Variant Types <a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/" target="_blank" rel="noopener">[Spec]</a></h5>
-                <table>
-                    <tr><th>Type</th><th>Description</th><th>Example</th><th>ferro</th><th>mutalyzer</th><th>biocommons</th><th>hgvs-rs</th></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/" target="_blank" rel="noopener">Substitution</a></td><td>Single nucleotide change</td><td><code>c.589G>T</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/deletion/" target="_blank" rel="noopener">Deletion</a></td><td>Nucleotide(s) removed</td><td><code>c.589del</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/insertion/" target="_blank" rel="noopener">Insertion</a></td><td>Nucleotide(s) added</td><td><code>c.589_590insA</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/duplication/" target="_blank" rel="noopener">Duplication</a></td><td>Sequence copied in tandem</td><td><code>c.589dup</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/delins/" target="_blank" rel="noopener">Delins</a></td><td>Deletion + insertion</td><td><code>c.589delinsAT</code></td><td>V/N</td><td>V/N</td><td>V/N</td><td>V/N</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/inversion/" target="_blank" rel="noopener">Inversion</a></td><td>Sequence reversed</td><td><code>c.589_600inv</code></td><td>V</td><td>V/N</td><td>V/N</td><td>V</td></tr>
-                    <tr><td><a href="https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/repeated/" target="_blank" rel="noopener">Repeat</a></td><td>Tandem repeat expansion</td><td><code>c.589CAG[23]</code></td><td>V</td><td>V/N</td><td>V</td><td>-</td></tr>
-                    <tr><td>Conversion</td><td>Gene conversion event</td><td><code>c.589_600con</code></td><td>-</td><td>V/N</td><td>V</td><td>-</td></tr>
-                </table>
+                <div id="support-matrix" data-loaded="false">Loading support matrix…</div>
 
                 <p><em>Note: Actual support may vary by tool version and configuration. "Validate" = parsing/syntax checking,
                 "Normalize" = 3' shifting and HGVS-compliant formatting.</em></p>
@@ -301,6 +266,7 @@ Content-Type: application/json
         const container = document.getElementById('help-tab-content');
         if (container && this.content[tabId]) {
             container.innerHTML = this.content[tabId];
+            if (tabId === 'support') renderSupportMatrix();
         }
     }
 }
@@ -314,6 +280,65 @@ document.addEventListener('DOMContentLoaded', () => {
     // (Server runs actual health checks every 15 minutes in background)
     setInterval(refreshHealth, 60000);
 });
+
+// Fetch and render the tool-support matrix tables in the help tab.
+// Runs once per page load; subsequent calls are no-ops (data-loaded guard).
+async function renderSupportMatrix() {
+    const host = document.getElementById('support-matrix');
+    if (!host || host.dataset.loaded === 'true') return;
+    try {
+        const res = await fetch('/static/data/tool_support_matrix.json');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        host.innerHTML = '';
+        for (const cat of data.categories) {
+            const h = document.createElement('h5');
+            h.textContent = cat.title;
+            host.appendChild(h);
+
+            const table = document.createElement('table');
+            const head = document.createElement('tr');
+            for (const col of ['', 'Example', ...data.tools.map(t => t.name)]) {
+                const th = document.createElement('th');
+                th.scope = 'col';
+                th.textContent = col;
+                head.appendChild(th);
+            }
+            table.appendChild(head);
+
+            for (const row of cat.rows) {
+                const tr = document.createElement('tr');
+                const label = document.createElement('th');
+                label.scope = 'row';
+                label.textContent = row.label;
+                tr.appendChild(label);
+
+                const ex = document.createElement('td');
+                if (row.example) { const c = document.createElement('code'); c.textContent = row.example; ex.appendChild(c); }
+                tr.appendChild(ex);
+
+                for (const cell of row.cells) {
+                    const td = document.createElement('td');
+                    td.textContent = (cell.glyph === '-' ? '—' : cell.glyph) + (cell.footnote || '');
+                    if (cell.glyph === '-') td.setAttribute('aria-label', 'not supported');
+                    tr.appendChild(td);
+                }
+                table.appendChild(tr);
+            }
+            host.appendChild(table);
+
+            if (cat.footnotes && cat.footnotes.length) {
+                const fn = document.createElement('p');
+                fn.className = 'support-footnotes';
+                fn.innerHTML = cat.footnotes.map(f => `<small>${escapeHtml(f.marker)} ${escapeHtml(f.text)}</small>`).join('<br>');
+                host.appendChild(fn);
+            }
+        }
+        host.dataset.loaded = 'true';
+    } catch (e) {
+        host.textContent = `Failed to load support matrix: ${e.message}`;
+    }
+}
 
 // Refresh health status (quick check)
 async function refreshHealth() {

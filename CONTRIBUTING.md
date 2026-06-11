@@ -184,6 +184,19 @@ override file.
    - re-validate the default-prefix table above against the new spec corpus
    - regenerate the fixture and review the diff
 
+## Tool-support comparison tables
+
+The ferro/mutalyzer/biocommons/hgvs-rs support tables in `README.md`,
+`docs/BENCHMARK_GUIDE.md`, and the web help tab are **generated**. To change a
+cell, edit `docs/tool_support_matrix.json` and run:
+
+```bash
+cargo run --features dev --example generate_tool_support_tables
+```
+
+Do not edit the tables in those files directly — CI (`… -- --check`) will fail.
+See `docs/tool_support_matrix.json` for the full schema and inline `_comment` field for authoring notes.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.

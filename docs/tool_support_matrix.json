@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "_comment": "SOURCE OF TRUTH for tool-support tables. Edit cells here, then run: cargo run --features dev --example generate_tool_support_tables. Cells with a 'carried' note are inherited from the prior web table and not source-verified.",
+  "tools": [
+    { "id": "ferro", "name": "ferro", "version": "0.6.0", "url": "https://github.com/fulcrumgenomics/ferro-hgvs" },
+    { "id": "mutalyzer", "name": "mutalyzer", "version": "3.1.1", "url": "https://mutalyzer.nl/" },
+    { "id": "biocommons", "name": "biocommons", "version": "main @ fa02ca5 (post-1.5.3)", "url": "https://github.com/biocommons/hgvs" },
+    { "id": "hgvs-rs", "name": "hgvs-rs", "version": "0.20.2", "url": "https://github.com/varfish-org/hgvs-rs" }
+  ],
+  "footnotes": {
+    "rewrite": "mutalyzer intronic support is enabled by default via genomic-context rewriting; disable with --no-rewrite-intronic.",
+    "net": "mutalyzer protein normalization requires network access for NP_→NM_ lookups (cannot be cached locally)."
+  },
+  "categories": [
+    {
+      "id": "reference_types",
+      "title": "Reference Types",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "rows": [
+        { "key": "NM_", "label": "Coding transcript (mRNA)", "example": "NM_000088.3", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "NR_", "label": "Non-coding transcript", "example": "NR_024540.1", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "NC_", "label": "Genomic chromosome", "example": "NC_000001.11", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "NG_", "label": "Genomic gene region", "example": "NG_007400.1", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "NP_", "label": "Protein", "example": "NP_000079.2", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"network_only","footnote":"net"}, "biocommons": {"validate":"yes","normalize":"unsupported_by_design"}, "hgvs-rs": {"validate":"permissive","normalize":"errors","note":"permissive: accepts protein syntax but performs no semantic validation; normalization errors"} } },
+        { "key": "LRG_", "label": "Locus Reference Genomic", "example": "LRG_1", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "ENST", "label": "Ensembl transcript", "example": "ENST00000357033", "last_reviewed": "2026-06-10",
+          "support": { "ferro": {"validate":"yes","normalize":"no","note":"parses ENST (ensembl_style flag) but ferro downloads RefSeq-only cdot, so ENST c./n. is returned unchanged"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"no","note":"parses ENST; c./n. mapping requires an Ensembl-populated provider — the default RefSeq UTA lacks ENST alignments (HGVSDataNotAvailableError)"}, "hgvs-rs": {"validate":"permissive","normalize":"no","note":"accession parser accepts any prefix incl. ENST; no Ensembl data in default UTA-style provider"} } }
+      ]
+    },
+    {
+      "id": "coordinate_types",
+      "title": "Coordinate Types",
+      "rows": [
+        { "key": "c", "label": "Coding DNA (relative to CDS)", "example": "c.589G>T", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "g", "label": "Genomic (absolute position)", "example": "g.12345A>G", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "n", "label": "Non-coding transcript", "example": "n.100del", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "p", "label": "Protein", "example": "p.Gly12Val", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"network_only","footnote":"net"}, "biocommons": {"validate":"yes","normalize":"unsupported_by_design"}, "hgvs-rs": {"validate":"permissive","normalize":"errors","note":"permissive: accepts protein syntax but performs no semantic validation; normalization errors"} } },
+        { "key": "m", "label": "Mitochondrial", "example": "m.8993T>G", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "r", "label": "RNA", "example": "r.76a>u", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/RNA/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "intronic", "label": "Intronic positions", "example": "c.100+5G>A", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full","footnote":"rewrite"}, "biocommons": {"validate":"yes","normalize":"no"}, "hgvs-rs": {"validate":"permissive","normalize":"unsupported_by_design"} } }
+      ]
+    },
+    {
+      "id": "variant_types",
+      "title": "Variant Types",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/",
+      "rows": [
+        { "key": "substitution", "label": "Substitution", "example": "c.589G>T", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "deletion", "label": "Deletion", "example": "c.589del", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/deletion/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "insertion", "label": "Insertion", "example": "c.589_590insA", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/insertion/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "duplication", "label": "Duplication", "example": "c.589dup", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/duplication/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "delins", "label": "Delins", "example": "c.589delinsAT", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/delins/", "last_reviewed": "2026-06-09",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "inversion", "label": "Inversion", "example": "c.589_600inv", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/inversion/", "last_reviewed": "2026-06-10",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"yes","normalize":"full"}, "hgvs-rs": {"validate":"permissive","normalize":"full"} } },
+        { "key": "repeat", "label": "Repeat", "example": "c.589CAG[23]", "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/repeated/", "last_reviewed": "2026-06-10",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"full"}, "biocommons": {"validate":"no","normalize":"no","note":"grammar has no [N] repeat rule; raises HGVSParseError (the Repeat Edit class is unreachable dead code)"}, "hgvs-rs": {"validate":"no","normalize":"unsupported_by_design","note":"no repeat AST node or parser"} } },
+        { "key": "conversion", "label": "Conversion", "example": "c.589_600con", "last_reviewed": "2026-06-10",
+          "support": { "ferro": {"validate":"yes","normalize":"full"}, "mutalyzer": {"validate":"yes","normalize":"unsupported_by_design","note":"parses con and lowers to delins, but there is no delins->con round-trip, so con is never re-emitted"}, "biocommons": {"validate":"yes","normalize":"unsupported_by_design","note":"normalize() raises HGVSUnsupportedOperationError for con"}, "hgvs-rs": {"validate":"no","normalize":"unsupported_by_design","note":"no con AST node; explicit 'once we support gene conversions' TODO in normalizer"} } }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "id": "normalization_capabilities",
+      "title": "Normalization Capabilities",
+      "row_label_header": "Pattern Type",
+      "select": [
+        { "category": "coordinate_types", "key": "g", "label": "Genomic (g.)" },
+        { "category": "coordinate_types", "key": "c", "label": "Coding (c.) exonic" },
+        { "category": "coordinate_types", "key": "intronic", "label": "Coding (c.) intronic" },
+        { "category": "coordinate_types", "key": "n", "label": "Non-coding (n.)" },
+        { "category": "coordinate_types", "key": "r", "label": "RNA (r.)" },
+        { "category": "coordinate_types", "key": "p", "label": "Protein (p.)" }
+      ]
+    }
+  ]
+}
