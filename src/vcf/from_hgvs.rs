@@ -154,6 +154,11 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                     "genome ring (::) conversion to VCF not supported (complex structural variant)"
                         .to_string(),
             }),
+            HgvsVariant::Supernumerary(_) => Err(FerroError::ConversionError {
+                msg: "supernumerary (sup) conversion to VCF not supported \
+                      (complex structural variant)"
+                    .to_string(),
+            }),
         }
     }
 

@@ -79,6 +79,7 @@ fn test_mutalyzer_grammar_patterns() {
                         HgvsVariant::Circular(_) => "genomic",
                         HgvsVariant::RnaFusion(_) => "rna",
                         HgvsVariant::GenomeRing(_) => "genomic",
+                        HgvsVariant::Supernumerary(_) => "supernumerary",
                         HgvsVariant::Allele(_) => "allele",
                         HgvsVariant::NullAllele => "null",
                         HgvsVariant::UnknownAllele => "unknown",

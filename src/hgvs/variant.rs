@@ -1534,6 +1534,8 @@ impl fmt::Display for AlleleVariant {
 /// - m. (mitochondrial)
 /// - o. (circular DNA) - SVD-WG006
 /// - RNA fusion (::) - SVD-WG007
+/// - Ring chromosome (::) — HGVS DNA/complex.md:127
+/// - sup (supernumerary chromosome marker) — HGVS DNA/complex.md:33-34
 /// - Allele (compound variants)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HgvsVariant {
@@ -1556,6 +1558,20 @@ pub enum HgvsVariant {
     /// Ring chromosome: two or more genome edits on a single accession joined
     /// by `::` break junctions (HGVS DNA/complex.md:127/130).
     GenomeRing(GenomeRing),
+    /// Supernumerary chromosome marker `sup` (HGVS DNA/complex.md:33-34, the
+    /// ISCN named extension for a supernumerary chromosome). Wraps the inner
+    /// genome description and renders it with a trailing `sup`.
+    ///
+    /// Two inner shapes occur in the spec:
+    /// - a supernumerary whole chromosome (`pter_qtersup`,
+    ///   DNA/duplication.md:117), where the inner is a [`HgvsVariant::Genome`]
+    ///   with a `pter_qter` interval and no edit; and
+    /// - a supernumerary ring chromosome (`[<ring>]sup`,
+    ///   DNA/complex.md:161), where the inner is a [`HgvsVariant::GenomeRing`].
+    ///   Unlike a standalone ring (which renders without brackets), the
+    ///   supernumerary ring is bracketed (`g.[<ring>]sup`) so the marker
+    ///   applies to the whole ring; `Display` adds the brackets for this case.
+    Supernumerary(Box<HgvsVariant>),
     /// Allele/compound variant
     Allele(AlleleVariant),
     /// Null allele marker [0] - indicates no variant on this chromosome (hemizygous)
@@ -1581,6 +1597,7 @@ impl HgvsVariant {
             HgvsVariant::Circular(v) => Some(&v.accession),
             HgvsVariant::RnaFusion(v) => Some(&v.five_prime.accession),
             HgvsVariant::GenomeRing(g) => Some(&g.accession),
+            HgvsVariant::Supernumerary(inner) => inner.accession(),
             HgvsVariant::Allele(a) => a.variants.first().and_then(|v| v.accession()),
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => None,
         }
@@ -1604,6 +1621,7 @@ impl HgvsVariant {
             HgvsVariant::Mt(v) => v.gene_symbol.as_deref(),
             HgvsVariant::Circular(v) => v.gene_symbol.as_deref(),
             HgvsVariant::GenomeRing(g) => g.gene_symbol.as_deref(),
+            HgvsVariant::Supernumerary(inner) => inner.gene_symbol(),
             HgvsVariant::RnaFusion(_)
             | HgvsVariant::Allele(_)
             | HgvsVariant::NullAllele
@@ -1623,6 +1641,7 @@ impl HgvsVariant {
             HgvsVariant::Circular(_) => "o",
             HgvsVariant::RnaFusion(_) => "r::r",
             HgvsVariant::GenomeRing(_) => "g::g",
+            HgvsVariant::Supernumerary(inner) => inner.variant_type(),
             HgvsVariant::Allele(_) => "allele",
             HgvsVariant::NullAllele => "null",
             HgvsVariant::UnknownAllele => "unknown",
@@ -1665,6 +1684,7 @@ impl HgvsVariant {
             // These types have no compact form — fall back to full Display.
             HgvsVariant::RnaFusion(v) => write!(f, "{}", v),
             HgvsVariant::GenomeRing(g) => write!(f, "{}", g),
+            HgvsVariant::Supernumerary(_) => write!(f, "{}", self),
             HgvsVariant::Allele(a) => write!(f, "{}", a),
             HgvsVariant::NullAllele => write!(f, "0"),
             HgvsVariant::UnknownAllele => write!(f, "?"),
@@ -1692,6 +1712,7 @@ impl HgvsVariant {
             },
             HgvsVariant::RnaFusion(_)
             | HgvsVariant::GenomeRing(_)
+            | HgvsVariant::Supernumerary(_)
             | HgvsVariant::Allele(_)
             | HgvsVariant::NullAllele
             | HgvsVariant::UnknownAllele => false,
@@ -1733,6 +1754,38 @@ impl HgvsVariant {
     }
 }
 
+/// True if a nucleotide-edit `Mu` wrapper is a certain, position-only identity
+/// edit (`NaEdit::Identity { sequence: None, whole_entity: false }`) — the
+/// editless "position reference" form produced when a genome interval is given
+/// with no edit (e.g. `g.pter_qter`). Used by the supernumerary whole-chromosome
+/// Display to drop the trailing `=` so `pter_qtersup` round-trips.
+///
+/// Note: this is stricter than [`is_position_identity_lhs`], which accepts any
+/// position-bound identity (`whole_entity: false`) regardless of `sequence`.
+/// This predicate additionally requires `sequence: None` (no `<ref>` written),
+/// so `g.123A=` satisfies `is_position_identity_lhs` but not this — they are not
+/// redundant.
+fn is_position_only_identity(edit: &Mu<NaEdit>) -> bool {
+    matches!(
+        edit,
+        Mu::Certain(NaEdit::Identity {
+            sequence: None,
+            whole_entity: false,
+        })
+    )
+}
+
+/// Wrap a valid supernumerary inner (an editless whole-chromosome genome
+/// variant, or a [`GenomeRing`]) in [`HgvsVariant::Supernumerary`]. Returns
+/// `None` for any other inner — `sup` only applies to those two shapes
+/// (HGVS DNA/complex.md:33-34). This is the single constructor enforcing the
+/// supernumerary invariant, mirroring [`GenomeRing::new`].
+pub(crate) fn make_supernumerary(inner: HgvsVariant) -> Option<HgvsVariant> {
+    let ok = matches!(&inner, HgvsVariant::GenomeRing(_))
+        || matches!(&inner, HgvsVariant::Genome(g) if is_position_only_identity(&g.loc_edit.edit));
+    ok.then(|| HgvsVariant::Supernumerary(Box::new(inner)))
+}
+
 /// True if a nucleotide-edit `Mu` wrapper represents the per-variant unknown form
 /// (e.g. `c.?`, `r.?`).
 fn is_na_edit_unknown(edit: &Mu<NaEdit>) -> bool {
@@ -1754,6 +1807,27 @@ impl fmt::Display for HgvsVariant {
             HgvsVariant::Circular(v) => write!(f, "{}", v),
             HgvsVariant::RnaFusion(v) => write!(f, "{}", v),
             HgvsVariant::GenomeRing(g) => write!(f, "{}", g),
+            HgvsVariant::Supernumerary(inner) => {
+                // A supernumerary ring is bracketed (`g.[<ring>]sup`); a bare
+                // supernumerary whole chromosome is not (`g.pter_qtersup`).
+                match inner.as_ref() {
+                    HgvsVariant::GenomeRing(g) => g.fmt_bracketed(f)?,
+                    // A whole-chromosome supernumerary carries a position-only
+                    // (editless) interval such as `pter_qter`; the spec form is
+                    // `pter_qtersup`, with no trailing identity `=`. Render the
+                    // location alone so `sup` attaches directly to it.
+                    HgvsVariant::Genome(v) if is_position_only_identity(&v.loc_edit.edit) => {
+                        write_accession_with_optional_gene(
+                            f,
+                            &v.accession,
+                            v.gene_symbol.as_deref(),
+                        )?;
+                        write!(f, ":g.{}", v.loc_edit.location)?;
+                    }
+                    other => write!(f, "{}", other)?,
+                }
+                write!(f, "sup")
+            }
             HgvsVariant::Allele(a) => write!(f, "{}", a),
             HgvsVariant::NullAllele => write!(f, "0"),
             HgvsVariant::UnknownAllele => write!(f, "?"),
@@ -1813,12 +1887,11 @@ impl GenomeRing {
             segments,
         })
     }
-}
 
-impl fmt::Display for GenomeRing {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
-        write!(f, ":g.")?;
+    /// Format the `::`-joined ring segments (without the `accession:g.` prefix
+    /// or any surrounding brackets). Shared by [`Display`] and
+    /// [`GenomeRing::fmt_bracketed`] so the two renderings stay in lock-step.
+    fn fmt_segments(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, segment) in self.segments.iter().enumerate() {
             if i > 0 {
                 write!(f, "::")?;
@@ -1826,6 +1899,25 @@ impl fmt::Display for GenomeRing {
             fmt_genome_loc_edit(f, segment)?;
         }
         Ok(())
+    }
+
+    /// Format the ring with its `::`-joined segments wrapped in `[...]`, i.e.
+    /// `accession:g.[seg1::seg2…]`. This is the shape used when the ring is the
+    /// inner of a supernumerary ring chromosome (`g.[<ring>]sup`,
+    /// DNA/complex.md:161). The standalone ring [`Display`] is unbracketed.
+    fn fmt_bracketed(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":g.[")?;
+        self.fmt_segments(f)?;
+        write!(f, "]")
+    }
+}
+
+impl fmt::Display for GenomeRing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":g.")?;
+        self.fmt_segments(f)
     }
 }
 

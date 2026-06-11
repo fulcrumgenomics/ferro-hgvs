@@ -66,6 +66,7 @@ fn test_parsing_from_fixtures() {
                     ferro_hgvs::HgvsVariant::Circular(_) => "CircularVariant",
                     ferro_hgvs::HgvsVariant::RnaFusion(_) => "RnaFusionVariant",
                     ferro_hgvs::HgvsVariant::GenomeRing(_) => "GenomeRing",
+                    ferro_hgvs::HgvsVariant::Supernumerary(_) => "Supernumerary",
                     ferro_hgvs::HgvsVariant::Allele(_) => "AlleleVariant",
                     ferro_hgvs::HgvsVariant::NullAllele => "NullAllele",
                     ferro_hgvs::HgvsVariant::UnknownAllele => "UnknownAllele",

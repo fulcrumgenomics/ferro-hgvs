@@ -330,6 +330,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::GenomeRing(_) => Err(FerroError::UnsupportedProjection {
                 reason: "project_all does not accept genome ring inputs".to_string(),
             }),
+            HgvsVariant::Supernumerary(_) => Err(FerroError::UnsupportedProjection {
+                reason: "project_all does not accept supernumerary (sup) inputs".to_string(),
+            }),
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
                 Err(FerroError::UnsupportedProjection {
                     reason: "project_all does not accept null/unknown allele inputs".to_string(),
@@ -553,6 +556,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::GenomeRing(_) => {
                 return Err(FerroError::UnsupportedProjection {
                     reason: "project_to_genomic does not support genome ring inputs".to_string(),
+                })
+            }
+            HgvsVariant::Supernumerary(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support supernumerary (sup) inputs"
+                        .to_string(),
                 })
             }
             HgvsVariant::Allele(_) => {

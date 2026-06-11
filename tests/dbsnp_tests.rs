@@ -125,6 +125,7 @@ fn get_variant_type_name(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Circular(_) => "circular",
         HgvsVariant::RnaFusion(_) => "rna_fusion",
         HgvsVariant::GenomeRing(_) => "genome_ring",
+        HgvsVariant::Supernumerary(_) => "supernumerary",
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null_allele",
         HgvsVariant::UnknownAllele => "unknown_allele",
