@@ -79,6 +79,10 @@ ferro prepare --output-dir ferro-reference
 # Verify reference data is ready
 ferro check --reference ferro-reference
 
+# (Optional) pre-build the on-disk cdot cache as a setup step, so the one-time
+# cache build doesn't slow the start of a real (or timed/benchmarked) run.
+ferro check --reference ferro-reference --build-cache
+
 # Normalize with reference
 ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 ```

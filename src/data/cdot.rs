@@ -32,9 +32,22 @@ use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use superintervals::IntervalMap;
+
+/// Magic bytes prefixing a cdot bincode cache file, followed by a `u32`
+/// schema version. The version MUST be bumped whenever the serialized layout
+/// of [`CdotMapperSnapshot`] changes (a field added/removed/reordered, or a
+/// nested type's layout changes), so a cache written by an older build is
+/// detected as stale and refreshed rather than silently mis-deserialized.
+///
+/// Without this guard a layout change makes `bincode` read past the end of the
+/// file (`failed to fill whole buffer`) only *after* a partial read, and the
+/// loader falls back to parsing the multi-hundred-MB JSON on every run — ~10x
+/// slower — with no indication anything is wrong.
+const CDOT_BINCODE_MAGIC: [u8; 4] = *b"FCDT";
+const CDOT_BINCODE_VERSION: u32 = 1;
 
 /// cdot transcript alignment data (normalized internal representation).
 ///
@@ -738,6 +751,12 @@ struct CdotMapperSnapshot {
     /// hand-rolled deserializer skipping this field — bincode itself will
     /// error on a truncated stream and the loader falls back to JSON).
     primary_build: Option<String>,
+    /// Per-build transcript maps for non-primary builds (e.g. GRCh37 when the
+    /// primary is GRCh38). Required for NG/NC-parent-aware resolution (#332);
+    /// omitting it from the cache silently degraded that path on every fast
+    /// load. Part of the v1 layout — a cache missing it fails the version/EOF
+    /// guard and is regenerated.
+    alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscriptSnapshot>>,
 }
 
 /// Borrowed view of CdotMapper for zero-copy serialization to bincode.
@@ -749,6 +768,7 @@ struct CdotMapperSnapshotRef<'a> {
     base_to_versioned: &'a HashMap<String, String>,
     lrg_to_refseq: &'a HashMap<String, String>,
     primary_build: Option<&'a str>,
+    alt_build_transcripts: HashMap<&'a String, HashMap<&'a String, CdotTranscriptSnapshotRef<'a>>>,
 }
 
 /// Bincode-friendly snapshot of CdotTranscript, using standard Strand serde.
@@ -1011,7 +1031,31 @@ impl CdotMapper {
             msg: format!("Failed to open cdot bincode file: {}", e),
         })?;
         let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let reader = BufReader::new(file);
+        let mut reader = BufReader::new(file);
+
+        // Verify the magic + schema version before deserializing. A mismatch
+        // (including a legacy headerless cache, or one written by a build with a
+        // different snapshot layout) is reported cleanly so the caller can fall
+        // back to JSON and refresh the cache, instead of mis-deserializing.
+        let mut header = [0u8; 8];
+        reader.read_exact(&mut header).map_err(|e| FerroError::Io {
+            msg: format!("cdot bincode too short to contain a header: {}", e),
+        })?;
+        if header[..4] != CDOT_BINCODE_MAGIC {
+            return Err(FerroError::Io {
+                msg: "cdot bincode has no valid magic (legacy or non-cdot file)".to_string(),
+            });
+        }
+        let version = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        if version != CDOT_BINCODE_VERSION {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "cdot bincode schema version {} != expected {}",
+                    version, CDOT_BINCODE_VERSION
+                ),
+            });
+        }
+
         // Use a size limit to prevent OOM on corrupt files. Allow 20x the file size
         // (bincode is compact, but deserialized HashMap overhead can be significant).
         // Limit deserialization size to prevent OOM on corrupt files (20x file size or 1MB min).
@@ -1034,17 +1078,13 @@ impl CdotMapper {
             contig_alias_to_canonical: snapshot.contig_alias_to_canonical,
             base_to_versioned: snapshot.base_to_versioned,
             lrg_to_refseq: snapshot.lrg_to_refseq,
-            // Bincode snapshots are produced for a specific genome build; alt-
-            // build data is not part of the serialized format. Callers that
-            // need multi-build access (e.g. NG/NC-parent-aware transcript
-            // lookup per #332) should load from JSON.
-            alt_build_transcripts: {
-                log::warn!(
-                    "cdot bincode load: alt-build data unavailable; NG/NC-parent build \
-                     resolution (#332) is degraded. Load from JSON to enable."
-                );
-                HashMap::new()
-            },
+            // Alt-build maps are now part of the serialized format (v1), so
+            // NG/NC-parent-aware resolution (#332) works on the fast path too.
+            alt_build_transcripts: snapshot
+                .alt_build_transcripts
+                .into_iter()
+                .map(|(build, txs)| (build, txs.into_iter().map(|(k, v)| (k, v.into())).collect()))
+                .collect(),
             // Honor the snapshot's recorded primary build; older snapshots
             // that pre-date this field surface as `None` rather than
             // claiming a fabricated GRCh38 (#389 follow-up).
@@ -1052,6 +1092,22 @@ impl CdotMapper {
             contig_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         })
+    }
+
+    /// Cheap check: does `path` begin with the current cdot bincode magic and
+    /// schema version? Lets callers (e.g. `ferro prepare`) decide whether a
+    /// cache needs regenerating without paying for a full deserialize.
+    pub fn bincode_is_current<P: AsRef<Path>>(path: P) -> bool {
+        let Ok(mut file) = File::open(path) else {
+            return false;
+        };
+        let mut header = [0u8; 8];
+        if file.read_exact(&mut header).is_err() {
+            return false;
+        }
+        header[..4] == CDOT_BINCODE_MAGIC
+            && u32::from_le_bytes([header[4], header[5], header[6], header[7]])
+                == CDOT_BINCODE_VERSION
     }
 
     /// Write the mapper to a bincode file for fast subsequent loading.
@@ -1067,17 +1123,56 @@ impl CdotMapper {
             base_to_versioned: &self.base_to_versioned,
             lrg_to_refseq: &self.lrg_to_refseq,
             primary_build: self.primary_build.as_deref(),
+            alt_build_transcripts: self
+                .alt_build_transcripts
+                .iter()
+                .map(|(build, txs)| (build, txs.iter().map(|(k, v)| (k, v.into())).collect()))
+                .collect(),
         };
-        let file = File::create(path.as_ref()).map_err(|e| FerroError::Io {
-            msg: format!("Failed to create cdot bincode file: {}", e),
+        // Write to a unique temp sibling, then atomically rename, so a crash
+        // mid-write or a concurrent reader never observes a half-written cache.
+        // The temp name combines the pid (unique across live processes) with a
+        // process-global counter (unique across concurrent writers within this
+        // process), so two threads writing the same cache never collide.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let path = path.as_ref();
+        let mut tmp = path.to_path_buf();
+        let tmp_name = format!(
+            "{}.tmp.{}.{}",
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "cdot.bin".to_string()),
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        tmp.set_file_name(tmp_name);
+
+        let file = File::create(&tmp).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create cdot bincode temp file: {}", e),
         })?;
-        let writer = std::io::BufWriter::new(file);
-        bincode::options()
-            .with_fixint_encoding()
-            .serialize_into(writer, &snapshot)
-            .map_err(|e| FerroError::Io {
+        let mut writer = std::io::BufWriter::new(file);
+        let write_result = (|| -> std::io::Result<()> {
+            writer.write_all(&CDOT_BINCODE_MAGIC)?;
+            writer.write_all(&CDOT_BINCODE_VERSION.to_le_bytes())?;
+            bincode::options()
+                .with_fixint_encoding()
+                .serialize_into(&mut writer, &snapshot)
+                .map_err(std::io::Error::other)?;
+            writer.flush()
+        })();
+        if let Err(e) = write_result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(FerroError::Io {
                 msg: format!("Failed to serialize cdot bincode: {}", e),
-            })
+            });
+        }
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            FerroError::Io {
+                msg: format!("Failed to finalize cdot bincode file: {}", e),
+            }
+        })
     }
 
     /// Load a cdot file, preferring a sibling `.bin` (bincode) file if available.
@@ -1106,8 +1201,12 @@ impl CdotMapper {
             match Self::from_bincode_file(&bin_path) {
                 Ok(mapper) => return Ok(mapper),
                 Err(e) => {
-                    log::warn!(
-                        "Failed to load bincode {}: {}. Falling back to JSON.",
+                    // Loud (stderr, not just `log`) — the binary may not
+                    // initialize a logger, and silently eating the ~10x JSON
+                    // parse on every run is exactly the failure mode this guards.
+                    eprintln!(
+                        "warning: cdot bincode cache {} is unusable ({}); \
+                         parsing JSON (much slower) and refreshing the cache",
                         bin_path.display(),
                         e
                     );
@@ -1115,12 +1214,25 @@ impl CdotMapper {
             }
         }
 
-        // Fall back to JSON
-        if path_str.ends_with(".gz") {
-            Self::from_json_gz(path)
+        // Fall back to JSON.
+        let mapper = if path_str.ends_with(".gz") {
+            Self::from_json_gz(path)?
         } else {
-            Self::from_json_file(path)
+            Self::from_json_file(path)?
+        };
+
+        // Self-heal: best-effort refresh of the sibling bincode cache so the
+        // next load takes the fast path. Failures here (e.g. a read-only
+        // reference mount) are non-fatal — we already have a usable mapper.
+        if let Err(e) = mapper.to_bincode_file(&bin_path) {
+            eprintln!(
+                "note: could not refresh cdot bincode cache {}: {} (continuing)",
+                bin_path.display(),
+                e
+            );
         }
+
+        Ok(mapper)
     }
 
     /// Load from any reader, defaulting to GRCh38 genome build.
@@ -2450,6 +2562,61 @@ mod tests {
     }
 
     #[test]
+    fn test_concurrent_to_bincode_file_same_path() {
+        // Multiple threads writing the same cache path concurrently must not
+        // collide on their temp siblings or leave a half-written file: the
+        // final cache must always be loadable and complete.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = std::sync::Arc::new(CdotMapper::from_reader(json.as_bytes()).unwrap());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let bin_path = std::sync::Arc::new(temp_dir.path().join("concurrent.bin"));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let original = std::sync::Arc::clone(&original);
+                let bin_path = std::sync::Arc::clone(&bin_path);
+                std::thread::spawn(move || original.to_bincode_file(bin_path.as_path()))
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .unwrap()
+                .expect("concurrent write should succeed");
+        }
+
+        // The final cache is complete and loadable, and no temp siblings leaked.
+        let loaded = CdotMapper::from_bincode_file(bin_path.as_path()).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert!(loaded.get_transcript("NM_000088.3").is_some());
+
+        let leftover_tmp: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            leftover_tmp.is_empty(),
+            "temp siblings leaked: {:?}",
+            leftover_tmp
+        );
+    }
+
+    #[test]
     fn test_load_prefers_bincode() {
         let json = r#"
         {
@@ -2553,6 +2720,98 @@ mod tests {
         let loaded = CdotMapper::load(&json_path).unwrap();
         assert_eq!(loaded.transcript_count(), 1);
         assert!(loaded.get_transcript("NM_000088.3").is_some());
+
+        // Self-heal: the corrupt cache must have been refreshed to a current
+        // one, so a second load takes the fast bincode path.
+        assert!(
+            CdotMapper::bincode_is_current(&bin_path),
+            "corrupt cache should be refreshed after the JSON fallback"
+        );
+        let reloaded = CdotMapper::from_bincode_file(&bin_path).unwrap();
+        assert_eq!(reloaded.transcript_count(), 1);
+    }
+
+    #[test]
+    fn test_bincode_roundtrip_preserves_alt_build() {
+        // A transcript with both GRCh37 and GRCh38 alignments. Primary build is
+        // GRCh38, so GRCh37 lives in the alt-build map. The fast (bincode) path
+        // must preserve it, or NG/NC-parent build resolution (#332) silently
+        // breaks whenever the cache is used.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "+",
+                            "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                        },
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let from_json = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.bin");
+        from_json.to_bincode_file(&p).unwrap();
+        let from_bin = CdotMapper::from_bincode_file(&p).unwrap();
+
+        // GRCh37 (alt-build) resolution must be identical across both paths.
+        let want = from_json
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .map(|t| (t.contig.clone(), t.cds_start));
+        let got = from_bin
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .map(|t| (t.contig.clone(), t.cds_start));
+        assert_eq!(
+            want, got,
+            "alt-build resolution must survive bincode roundtrip"
+        );
+        assert_eq!(got, Some(("NC_000017.10".to_string(), Some(10))));
+    }
+
+    #[test]
+    fn test_bincode_header_roundtrip_and_staleness() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.bin");
+
+        let mut m = CdotMapper::new();
+        m.add_transcript("NM_000001.1".to_string(), sample_transcript());
+        m.to_bincode_file(&p).unwrap();
+
+        // A freshly written cache carries the current magic+version and loads.
+        assert!(CdotMapper::bincode_is_current(&p));
+        assert_eq!(
+            CdotMapper::from_bincode_file(&p)
+                .unwrap()
+                .transcript_count(),
+            1
+        );
+
+        // A legacy / headerless cache is detected as not-current and rejected
+        // cleanly, rather than mis-deserialized.
+        std::fs::write(&p, b"legacy-bincode-without-any-header-bytes").unwrap();
+        assert!(!CdotMapper::bincode_is_current(&p));
+        assert!(CdotMapper::from_bincode_file(&p).is_err());
+
+        // Correct magic but a future schema version is also rejected.
+        let mut wrong_version = Vec::new();
+        wrong_version.extend_from_slice(&CDOT_BINCODE_MAGIC);
+        wrong_version.extend_from_slice(&(CDOT_BINCODE_VERSION + 1).to_le_bytes());
+        wrong_version.extend_from_slice(&[0u8; 16]);
+        std::fs::write(&p, &wrong_version).unwrap();
+        assert!(!CdotMapper::bincode_is_current(&p));
+        assert!(CdotMapper::from_bincode_file(&p).is_err());
     }
 
     // =========================================================================
