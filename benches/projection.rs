@@ -94,25 +94,36 @@ fn intronic_projector() -> VariantProjector<MockProvider> {
         },
     );
     let mut provider = MockProvider::new();
-    provider.add_transcript(Transcript::new(
-        "NM_INTR.1".to_string(),
-        Some("INTRGENE".to_string()),
-        Strand::Plus,
-        Some("ATGCGCAAAGGGTAACCC".to_string()),
-        Some(1),
-        Some(18),
-        vec![
-            Exon::with_genomic(1, 1, 10, 1000, 1009),
-            Exon::with_genomic(2, 11, 20, 2000, 2009),
-        ],
-        Some("chr1".to_string()),
-        Some(1000),
-        Some(2009),
-        GenomeBuild::default(),
-        ManeStatus::default(),
-        None,
-        None,
-    ));
+    provider.add_transcript(
+        Transcript::new(
+            "NM_INTR.1".to_string(),
+            Some("INTRGENE".to_string()),
+            Strand::Plus,
+            // 20 bases to match the exon tx-coordinate spans (tx 1..=20) and the
+            // genomic reconstruction below (exon1 `ATGCGCAAAG` + exon2
+            // `GGTAACCCNN`); CDS still ends at 18, leaving the trailing `NN` as 3'UTR.
+            Some("ATGCGCAAAGGGTAACCCNN".to_string()),
+            Some(1),
+            Some(18),
+            vec![
+                Exon::with_genomic(1, 1, 10, 1000, 1009),
+                Exon::with_genomic(2, 11, 20, 2000, 2009),
+            ],
+            Some("chr1".to_string()),
+            Some(1000),
+            Some(2009),
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        )
+        .with_protein_id(Some("NP_INTR.1".to_string())),
+    );
+    // Register the protein the CdotTranscript references (parallels
+    // `plus_projector`), so the fixture is self-consistent and a future
+    // protein-projection bench over this transcript would resolve.
+    // CDS tx 1..=18 = ATG CGC AAA GGG TAA CCC -> M R K G * P (stop at codon 5).
+    provider.add_protein("NP_INTR.1", "MRKG*P");
     // chr1 sequence: 999 N's + exon1(10bp) + intron(990bp N's) + exon2(10bp) + 100 N's
     let exon1 = "ATGCGCAAAG"; // genome g.1000..g.1009
     let intron = "N".repeat(990); // genome g.1010..g.1999
