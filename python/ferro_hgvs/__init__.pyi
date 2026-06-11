@@ -243,7 +243,8 @@ class HgvsVariant:
     """A parsed HGVS variant.
 
     Attributes:
-        variant_type: The type of variant (genomic, coding, non_coding, protein, rna, mitochondrial)
+        variant_type: The type of variant (genomic, coding, non_coding, protein, rna, mitochondrial,
+            circular, rna_fusion, genome_ring, allele, null_allele, unknown_allele)
         reference: The reference accession (e.g., "NM_000088.3")
         edit_type: The type of edit (substitution, deletion, duplication, insertion, delins, etc.)
     """
@@ -270,8 +271,8 @@ class HgvsVariant:
         Returns the base position (without intronic offset) for genomic, coding,
         non-coding, RNA, mitochondrial, and circular variants. For single-element
         alleles, delegates to the sub-variant. Returns None for protein variants,
-        RNA fusions, null/unknown alleles, and alleles with multiple sub-variants
-        (whose start is ambiguous).
+        RNA fusions, genome ring variants, null/unknown alleles, and alleles with
+        multiple sub-variants (whose start is ambiguous).
 
         Note: 5' UTR (``c.-5A>G``) and 3' UTR (``c.*5A>G``) positions are returned
         as raw base values and are indistinguishable from CDS positions at the same
@@ -285,7 +286,8 @@ class HgvsVariant:
 
         For point variants, end equals start. For single-element alleles,
         delegates to the sub-variant. Returns None for protein variants, RNA
-        fusions, null/unknown alleles, and alleles with multiple sub-variants.
+        fusions, genome ring variants, null/unknown alleles, and alleles with
+        multiple sub-variants.
         """
         ...
 

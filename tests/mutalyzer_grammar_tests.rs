@@ -78,6 +78,7 @@ fn test_mutalyzer_grammar_patterns() {
                         HgvsVariant::Mt(_) => "mitochondrial",
                         HgvsVariant::Circular(_) => "genomic",
                         HgvsVariant::RnaFusion(_) => "rna",
+                        HgvsVariant::GenomeRing(_) => "genomic",
                         HgvsVariant::Allele(_) => "allele",
                         HgvsVariant::NullAllele => "null",
                         HgvsVariant::UnknownAllele => "unknown",

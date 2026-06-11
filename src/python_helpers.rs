@@ -37,6 +37,7 @@ pub fn variant_type_str(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Mt(_) => "mitochondrial",
         HgvsVariant::Circular(_) => "circular",
         HgvsVariant::RnaFusion(_) => "rna_fusion",
+        HgvsVariant::GenomeRing(_) => "genome_ring",
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null_allele",
         HgvsVariant::UnknownAllele => "unknown_allele",
@@ -160,6 +161,7 @@ pub fn get_variant_reference(variant: &HgvsVariant) -> Result<String, &'static s
         HgvsVariant::Mt(v) => Ok(v.accession.to_string()),
         HgvsVariant::Circular(v) => Ok(v.accession.to_string()),
         HgvsVariant::RnaFusion(v) => Ok(v.five_prime.accession.to_string()),
+        HgvsVariant::GenomeRing(g) => Ok(g.accession.to_string()),
         HgvsVariant::Allele(a) => {
             if let Some(first) = a.variants.first() {
                 get_variant_reference(first)
@@ -196,6 +198,7 @@ pub fn get_variant_edit_type(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Circular(v) => mu_na_edit_type_str(&v.loc_edit.edit),
         HgvsVariant::Protein(_) => "protein",
         HgvsVariant::RnaFusion(_) => "fusion",
+        HgvsVariant::GenomeRing(_) => "ring",
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null",
         HgvsVariant::UnknownAllele => "unknown",
@@ -269,6 +272,7 @@ pub fn get_variant_start(variant: &HgvsVariant) -> Option<i64> {
         },
         HgvsVariant::Protein(_)
         | HgvsVariant::RnaFusion(_)
+        | HgvsVariant::GenomeRing(_)
         | HgvsVariant::NullAllele
         | HgvsVariant::UnknownAllele => None,
     }
@@ -294,6 +298,7 @@ pub fn get_variant_end(variant: &HgvsVariant) -> Option<i64> {
         },
         HgvsVariant::Protein(_)
         | HgvsVariant::RnaFusion(_)
+        | HgvsVariant::GenomeRing(_)
         | HgvsVariant::NullAllele
         | HgvsVariant::UnknownAllele => None,
     }

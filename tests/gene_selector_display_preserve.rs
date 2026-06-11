@@ -38,6 +38,7 @@ fn gene_symbol_of(variant: &HgvsVariant) -> Option<&str> {
         HgvsVariant::Protein(v) => v.gene_symbol.as_deref(),
         HgvsVariant::Mt(v) => v.gene_symbol.as_deref(),
         HgvsVariant::Circular(v) => v.gene_symbol.as_deref(),
+        HgvsVariant::GenomeRing(g) => g.gene_symbol.as_deref(),
         HgvsVariant::RnaFusion(_)
         | HgvsVariant::Allele(_)
         | HgvsVariant::NullAllele

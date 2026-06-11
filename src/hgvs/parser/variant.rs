@@ -9,16 +9,18 @@ use crate::hgvs::interval::{
     CdsInterval, GenomeInterval, Interval, ProtInterval, RnaInterval, TxInterval, UncertainBoundary,
 };
 use crate::hgvs::location::{AminoAcid, CdsPos, ProtPos};
-use crate::hgvs::parser::accession::{parse_accession, parse_gene_symbol};
+use crate::hgvs::parser::accession::{
+    looks_like_accession_start, parse_accession, parse_gene_symbol,
+};
 use crate::hgvs::parser::edit::{parse_na_edit, parse_protein_edit};
 use crate::hgvs::parser::position::{
     parse_amino_acid, parse_cds_pos, parse_genome_pos, parse_prot_pos, parse_rna_pos, parse_tx_pos,
 };
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
-    Accession, AllelePhase, AlleleVariant, CdsVariant, CircularVariant, GenomeVariant, HgvsVariant,
-    LocEdit, MtVariant, ProteinVariant, RnaFusionBreakpoint, RnaFusionVariant, RnaVariant,
-    TxVariant,
+    Accession, AllelePhase, AlleleVariant, CdsVariant, CircularVariant, GenomeRing, GenomeVariant,
+    HgvsVariant, LocEdit, MtVariant, ProteinVariant, RnaFusionBreakpoint, RnaFusionVariant,
+    RnaVariant, TxVariant,
 };
 use nom::{
     branch::alt,
@@ -210,8 +212,11 @@ fn parse_genome_boundary(
         )));
     }
 
-    // Fast path: if starts with digit, it's a simple certain position
-    if bytes[0].is_ascii_digit() {
+    // Fast path: if starts with a digit or a special telomere/centromere
+    // marker (pter/qter/cen), it's a simple certain position. Special markers
+    // are needed so a complex boundary like `pter_(a_b)` or `(a_b)_qter`
+    // (ring-chromosome notation, #546) parses each end correctly.
+    if bytes[0].is_ascii_digit() || starts_with_special_pos(bytes) {
         return map(parse_genome_pos, UncertainBoundary::certain).parse(input);
     }
 
@@ -1053,12 +1058,110 @@ fn parse_rna_interval(input: &str) -> IResult<&str, RnaInterval> {
 }
 
 /// Parse genomic variant (g.)
+/// Split `input` on top-level `::` separators, scanning at both bracket (`[]`)
+/// and paren (`()`) depth 0. Ring segments themselves contain parens (e.g.
+/// `(12200001_14700000)`), so a naive `split("::")` would be safe here, but
+/// depth tracking keeps the split robust against bracketed inner forms and
+/// guards against `::` that appears inside a sub-expression. Returns the list
+/// of segment slices (always at least one element).
+fn split_top_level_double_colon(input: &str) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut segments: Vec<&str> = Vec::new();
+    let mut bracket_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth -= 1,
+            b'(' => paren_depth += 1,
+            b')' => paren_depth -= 1,
+            b':' if bracket_depth == 0
+                && paren_depth == 0
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b':' =>
+            {
+                segments.push(&input[start..i]);
+                i += 2;
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    segments.push(&input[start..]);
+    segments
+}
+
+/// Try to parse a same-chromosome ring `::` deletion-join (#546). Returns
+/// `Some((remaining, HgvsVariant::GenomeRing(..)))` when `input` (the text
+/// after the `accession:g.` prefix) is a top-level `::`-joined sequence of two
+/// or more genome loc-edits on the single `accession`. Returns `None` (so the
+/// caller falls through to the ordinary single-variant path) when there is no
+/// top-level `::`. Returns `None` for any malformed join (a segment that fails
+/// to parse, leaves trailing input, or contains an inner `:` accession) so that
+/// cross-chromosome `::` is rejected rather than mis-parsed as a ring.
+fn try_parse_genome_ring<'a>(
+    input: &'a str,
+    accession: &Accession,
+    gene_symbol: Option<&str>,
+) -> Option<(&'a str, HgvsVariant)> {
+    let segments = split_top_level_double_colon(input);
+    // No top-level `::` → not a ring; let the single-variant path handle it.
+    if segments.len() < 2 {
+        return None;
+    }
+
+    let mut parsed_segments: Vec<LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>> =
+        Vec::with_capacity(segments.len());
+    for segment in segments {
+        // Reject a segment that names another accession: a cross-chromosome
+        // `::` (`::NC_…:g.…`) is ISCN2016, removed in ISCN2020, and spec-invalid.
+        // `looks_like_accession_start` self-documents that intent for the
+        // RefSeq/Ensembl/LRG accession shapes. We also keep the coarse
+        // `contains(':')` guard as a fallback, because bare chromosome names
+        // (`chrN:`, `1:`, contigs) do not match those shapes yet still carry an
+        // inner `:` accession separator that must be rejected.
+        if looks_like_accession_start(segment) || segment.contains(':') {
+            return None;
+        }
+        let (rest, loc_edit) = parse_genome_bracket_member(segment, GenomeKind::Genome).ok()?;
+        // Each segment must be consumed in full; trailing text means the
+        // join is malformed.
+        if !rest.is_empty() {
+            return None;
+        }
+        parsed_segments.push(loc_edit);
+    }
+
+    let ring = GenomeRing::new(
+        accession.clone(),
+        gene_symbol.map(str::to_string),
+        parsed_segments,
+    )?;
+    Some(("", HgvsVariant::GenomeRing(ring)))
+}
+
 fn parse_genome_variant(
     accession: Accession,
     gene_symbol: Option<String>,
 ) -> impl FnMut(&str) -> IResult<&str, HgvsVariant> {
     move |input: &str| {
         let (input, _) = tag("g.").parse(input)?;
+
+        // Same-chromosome ring `::` deletion-join (#546; HGVS DNA/complex.md:127).
+        // Two or more genome edits on this one accession joined by top-level
+        // `::` describe a ring chromosome. Cross-chromosome `::` (an inner
+        // accession after a `::`) is ISCN2016, removed in ISCN2020, and is
+        // rejected here by requiring every segment to parse as a bare genome
+        // loc-edit with no inner `:` accession.
+        if let Some((remaining, ring)) =
+            try_parse_genome_ring(input, &accession, gene_symbol.as_deref())
+        {
+            return Ok((remaining, ring));
+        }
 
         // First try whole-genome identity (g.= or g.(=)) - no position.
         // Reject the probe when the remainder starts with `(;)` so that a

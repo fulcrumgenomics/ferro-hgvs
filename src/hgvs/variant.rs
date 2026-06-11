@@ -1078,7 +1078,10 @@ fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
         };
         for leaf in leaves {
             if leaf.accession().is_none()
-                || matches!(leaf.variant_type(), "allele" | "null" | "unknown" | "r::r")
+                || matches!(
+                    leaf.variant_type(),
+                    "allele" | "null" | "unknown" | "r::r" | "g::g"
+                )
                 || leaf.is_loc_edit_unknown()
             {
                 return None;
@@ -1147,6 +1150,33 @@ fn write_accession_with_optional_gene(
         write!(f, "({})", gene)?;
     }
     Ok(())
+}
+
+/// Format the position+edit portion of a genome loc-edit (without the
+/// `accession:g.` prefix). Shared by [`GenomeVariant::fmt_loc_edit`] and
+/// [`GenomeRing`]'s `Display` so a ring segment round-trips byte-identically
+/// to a standalone genome variant.
+///
+/// Whole-entity identity (`g.=`) / unknown (`g.?`) skip the position; the
+/// predicted form wraps position+edit in parens (#241); otherwise the plain
+/// `LocEdit` Display is used.
+fn fmt_genome_loc_edit(
+    f: &mut fmt::Formatter<'_>,
+    loc_edit: &LocEdit<GenomeInterval, NaEdit>,
+) -> fmt::Result {
+    // For whole-entity identity (g.=) or unknown (g.?), skip the position.
+    if let Some(edit) = loc_edit.edit.inner() {
+        if edit.is_whole_entity() {
+            return write!(f, "{}", loc_edit.edit);
+        }
+    }
+    // Predicted form: wrap position+edit in parens. #241.
+    if loc_edit.edit.is_uncertain() {
+        if let Some(edit) = loc_edit.edit.inner() {
+            return write!(f, "({}{})", loc_edit.location, edit);
+        }
+    }
+    write!(f, "{}", loc_edit)
 }
 
 /// True iff `variant` carries a position-bound (not whole-entity)
@@ -1523,6 +1553,9 @@ pub enum HgvsVariant {
     Circular(CircularVariant),
     /// RNA Fusion variant (::) - SVD-WG007
     RnaFusion(RnaFusionVariant),
+    /// Ring chromosome: two or more genome edits on a single accession joined
+    /// by `::` break junctions (HGVS DNA/complex.md:127/130).
+    GenomeRing(GenomeRing),
     /// Allele/compound variant
     Allele(AlleleVariant),
     /// Null allele marker [0] - indicates no variant on this chromosome (hemizygous)
@@ -1547,6 +1580,7 @@ impl HgvsVariant {
             HgvsVariant::Mt(v) => Some(&v.accession),
             HgvsVariant::Circular(v) => Some(&v.accession),
             HgvsVariant::RnaFusion(v) => Some(&v.five_prime.accession),
+            HgvsVariant::GenomeRing(g) => Some(&g.accession),
             HgvsVariant::Allele(a) => a.variants.first().and_then(|v| v.accession()),
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => None,
         }
@@ -1569,6 +1603,7 @@ impl HgvsVariant {
             HgvsVariant::Protein(v) => v.gene_symbol.as_deref(),
             HgvsVariant::Mt(v) => v.gene_symbol.as_deref(),
             HgvsVariant::Circular(v) => v.gene_symbol.as_deref(),
+            HgvsVariant::GenomeRing(g) => g.gene_symbol.as_deref(),
             HgvsVariant::RnaFusion(_)
             | HgvsVariant::Allele(_)
             | HgvsVariant::NullAllele
@@ -1587,6 +1622,7 @@ impl HgvsVariant {
             HgvsVariant::Mt(_) => "m",
             HgvsVariant::Circular(_) => "o",
             HgvsVariant::RnaFusion(_) => "r::r",
+            HgvsVariant::GenomeRing(_) => "g::g",
             HgvsVariant::Allele(_) => "allele",
             HgvsVariant::NullAllele => "null",
             HgvsVariant::UnknownAllele => "unknown",
@@ -1628,6 +1664,7 @@ impl HgvsVariant {
             HgvsVariant::Circular(v) => v.fmt_loc_edit(f),
             // These types have no compact form — fall back to full Display.
             HgvsVariant::RnaFusion(v) => write!(f, "{}", v),
+            HgvsVariant::GenomeRing(g) => write!(f, "{}", g),
             HgvsVariant::Allele(a) => write!(f, "{}", a),
             HgvsVariant::NullAllele => write!(f, "0"),
             HgvsVariant::UnknownAllele => write!(f, "?"),
@@ -1654,6 +1691,7 @@ impl HgvsVariant {
                 Mu::Certain(e) | Mu::Uncertain(e) => e.is_whole_protein_unknown(),
             },
             HgvsVariant::RnaFusion(_)
+            | HgvsVariant::GenomeRing(_)
             | HgvsVariant::Allele(_)
             | HgvsVariant::NullAllele
             | HgvsVariant::UnknownAllele => false,
@@ -1681,7 +1719,9 @@ impl HgvsVariant {
 
         // Don't use compact form for types that aren't simple coordinate-based variants,
         // or when the first variant has no accession (e.g. NullAllele, UnknownAllele)
-        if first_acc.is_none() || matches!(first_type, "allele" | "null" | "unknown" | "r::r") {
+        if first_acc.is_none()
+            || matches!(first_type, "allele" | "null" | "unknown" | "r::r" | "g::g")
+        {
             return false;
         }
 
@@ -1713,6 +1753,7 @@ impl fmt::Display for HgvsVariant {
             HgvsVariant::Mt(v) => write!(f, "{}", v),
             HgvsVariant::Circular(v) => write!(f, "{}", v),
             HgvsVariant::RnaFusion(v) => write!(f, "{}", v),
+            HgvsVariant::GenomeRing(g) => write!(f, "{}", g),
             HgvsVariant::Allele(a) => write!(f, "{}", a),
             HgvsVariant::NullAllele => write!(f, "0"),
             HgvsVariant::UnknownAllele => write!(f, "?"),
@@ -1731,19 +1772,7 @@ pub struct GenomeVariant {
 impl GenomeVariant {
     /// Format just the position+edit portion (without `accession:g.` prefix).
     fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // For whole-entity identity (g.=) or unknown (g.?), skip the position
-        if let Some(edit) = self.loc_edit.edit.inner() {
-            if edit.is_whole_entity() {
-                return write!(f, "{}", self.loc_edit.edit);
-            }
-        }
-        // Predicted form: wrap position+edit in parens. #241.
-        if self.loc_edit.edit.is_uncertain() {
-            if let Some(edit) = self.loc_edit.edit.inner() {
-                return write!(f, "({}{})", self.loc_edit.location, edit);
-            }
-        }
-        write!(f, "{}", self.loc_edit)
+        fmt_genome_loc_edit(f, &self.loc_edit)
     }
 }
 
@@ -1752,6 +1781,51 @@ impl fmt::Display for GenomeVariant {
         write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
         write!(f, ":g.")?;
         self.fmt_loc_edit(f)
+    }
+}
+
+/// A ring chromosome described as two or more genome edits on a single
+/// accession joined by `::` break junctions (HGVS DNA/complex.md:127/130 —
+/// the ISCN2020 meaning of `::`). Each segment is a normal genome loc-edit
+/// (typically a `del`); `Display` joins them with `::`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GenomeRing {
+    pub accession: Accession,
+    pub gene_symbol: Option<String>,
+    pub segments: Vec<LocEdit<GenomeInterval, NaEdit>>,
+}
+
+impl GenomeRing {
+    /// Build a ring from its segments. Requires at least two segments joined
+    /// by `::` (a ring needs >= 2 break junctions on one accession); returns
+    /// `None` otherwise, since a 0/1-segment ring would not round-trip.
+    pub fn new(
+        accession: Accession,
+        gene_symbol: Option<String>,
+        segments: Vec<LocEdit<GenomeInterval, NaEdit>>,
+    ) -> Option<Self> {
+        if segments.len() < 2 {
+            return None;
+        }
+        Some(Self {
+            accession,
+            gene_symbol,
+            segments,
+        })
+    }
+}
+
+impl fmt::Display for GenomeRing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":g.")?;
+        for (i, segment) in self.segments.iter().enumerate() {
+            if i > 0 {
+                write!(f, "::")?;
+            }
+            fmt_genome_loc_edit(f, segment)?;
+        }
+        Ok(())
     }
 }
 
