@@ -1595,8 +1595,25 @@ impl CdotMapper {
             (path.with_extension("rkyv"), path.with_extension("bin"))
         };
 
+        // A sibling cache is only usable if it is at least as new as the source
+        // JSON. cdot files are normally version-stamped in the filename, but a
+        // re-`prepare` that rewrites the JSON under the same name would
+        // otherwise be masked by a stale archive. Mirrors the freshness check
+        // the GFF/GTF loader applies via `TranscriptDb::cache_is_fresh`. An
+        // unreadable mtime (cache or source) is treated as "not fresh" so we
+        // fall through to JSON rather than serve a stale cache.
+        let cache_is_fresh = |cache: &Path| -> bool {
+            let Ok(cache_mtime) = std::fs::metadata(cache).and_then(|m| m.modified()) else {
+                return false;
+            };
+            let Ok(source_mtime) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+                return false;
+            };
+            cache_mtime >= source_mtime
+        };
+
         // 1. Prefer the rkyv archive (fastest, validated).
-        if rkyv_path.exists() {
+        if rkyv_path.exists() && cache_is_fresh(&rkyv_path) {
             match Self::from_rkyv_file(&rkyv_path) {
                 Ok(mapper) => return Ok(mapper),
                 Err(e) => eprintln!(
@@ -1608,7 +1625,9 @@ impl CdotMapper {
         }
 
         // 2. Legacy bincode cache — usable, but upgrade to rkyv for next time.
-        if bin_path.exists() {
+        //    Only promote a *fresh* bincode cache to rkyv; a stale one is
+        //    skipped here and the JSON below refreshes both.
+        if bin_path.exists() && cache_is_fresh(&bin_path) {
             match Self::from_bincode_file(&bin_path) {
                 Ok(mapper) => {
                     if let Err(e) = mapper.to_rkyv_file(&rkyv_path) {
@@ -3197,6 +3216,76 @@ mod tests {
                 .as_deref(),
             Some("FROM_RKYV"),
             "load() should prefer .rkyv over .bin and JSON"
+        );
+    }
+
+    #[test]
+    fn test_load_skips_stale_rkyv_and_reparses_json() {
+        // A sibling .rkyv OLDER than the source JSON must not be served: a
+        // re-`prepare` that rewrites the JSON under the same name would
+        // otherwise be masked by the stale archive. load() must skip it, reparse
+        // the JSON, and refresh the cache.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // A stale rkyv carrying a sentinel gene_name distinct from the JSON.
+        let mut stale = original.clone();
+        stale.transcripts.get_mut("NM_000088.3").unwrap().gene_name =
+            Some("FROM_STALE_RKYV".to_string());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
+
+        std::fs::write(&json_path, json).unwrap();
+        stale.to_rkyv_file(&rkyv_path).unwrap();
+
+        // Backdate the rkyv so it is strictly older than the JSON source.
+        let backdated = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&rkyv_path)
+            .unwrap()
+            .set_modified(backdated)
+            .unwrap();
+
+        // load() must ignore the stale rkyv and reparse the JSON (COL1A1).
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(
+            loaded
+                .get_transcript("NM_000088.3")
+                .unwrap()
+                .gene_name
+                .as_deref(),
+            Some("COL1A1"),
+            "load() must skip an rkyv cache older than its source JSON"
+        );
+
+        // Self-heal: the stale archive should have been refreshed from JSON, so
+        // reading the rkyv directly now yields the JSON's value, not the stale
+        // sentinel.
+        let refreshed = CdotMapper::from_rkyv_file(&rkyv_path).unwrap();
+        assert_eq!(
+            refreshed
+                .get_transcript("NM_000088.3")
+                .unwrap()
+                .gene_name
+                .as_deref(),
+            Some("COL1A1"),
+            "load() should refresh the stale rkyv after reparsing the JSON"
         );
     }
 
