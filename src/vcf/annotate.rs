@@ -253,6 +253,7 @@ pub fn determine_consequence(ann: &HgvsAnnotation) -> Consequence {
         HgvsVariant::Circular(_) => Consequence::Unknown,
         HgvsVariant::RnaFusion(_) => Consequence::Unknown, // Fusion transcripts - complex structural consequence
         HgvsVariant::GenomeRing(_) => Consequence::Unknown, // Ring chromosome - complex structural consequence
+        HgvsVariant::Supernumerary(_) => Consequence::Unknown, // Supernumerary chromosome - complex structural consequence
         HgvsVariant::Allele(_) => Consequence::Unknown,
         HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => Consequence::Unknown,
     }

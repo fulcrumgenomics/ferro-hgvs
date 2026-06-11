@@ -243,8 +243,9 @@ class HgvsVariant:
     """A parsed HGVS variant.
 
     Attributes:
-        variant_type: The type of variant (genomic, coding, non_coding, protein, rna, mitochondrial,
-            circular, rna_fusion, genome_ring, allele, null_allele, unknown_allele)
+        variant_type: The type of variant (genomic, coding, non_coding, protein, rna,
+            mitochondrial, circular, rna_fusion, genome_ring, allele, null_allele,
+            unknown_allele, supernumerary)
         reference: The reference accession (e.g., "NM_000088.3")
         edit_type: The type of edit (substitution, deletion, duplication, insertion, delins, etc.)
     """

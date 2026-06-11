@@ -45,6 +45,7 @@ fn gene_symbol_of(variant: &HgvsVariant) -> Option<&str> {
         HgvsVariant::Mt(v) => v.gene_symbol.as_deref(),
         HgvsVariant::Circular(v) => v.gene_symbol.as_deref(),
         HgvsVariant::GenomeRing(g) => g.gene_symbol.as_deref(),
+        HgvsVariant::Supernumerary(inner) => inner.gene_symbol(),
         // RnaFusion, Allele: selectors live on sub-variants/breakpoints.
         HgvsVariant::RnaFusion(_)
         | HgvsVariant::Allele(_)

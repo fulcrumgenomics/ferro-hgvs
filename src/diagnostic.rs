@@ -425,6 +425,7 @@ fn variant_type_name(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Circular(_) => "Circular DNA (o.)",
         HgvsVariant::RnaFusion(_) => "RNA Fusion (::)",
         HgvsVariant::GenomeRing(_) => "Genome Ring (::)",
+        HgvsVariant::Supernumerary(_) => "Supernumerary (sup)",
         HgvsVariant::Allele(_) => "Allele/Compound",
         HgvsVariant::NullAllele => "Null Allele [0]",
         HgvsVariant::UnknownAllele => "Unknown Allele [?]",

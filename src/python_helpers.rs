@@ -38,6 +38,7 @@ pub fn variant_type_str(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Circular(_) => "circular",
         HgvsVariant::RnaFusion(_) => "rna_fusion",
         HgvsVariant::GenomeRing(_) => "genome_ring",
+        HgvsVariant::Supernumerary(_) => "supernumerary",
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null_allele",
         HgvsVariant::UnknownAllele => "unknown_allele",
@@ -162,6 +163,7 @@ pub fn get_variant_reference(variant: &HgvsVariant) -> Result<String, &'static s
         HgvsVariant::Circular(v) => Ok(v.accession.to_string()),
         HgvsVariant::RnaFusion(v) => Ok(v.five_prime.accession.to_string()),
         HgvsVariant::GenomeRing(g) => Ok(g.accession.to_string()),
+        HgvsVariant::Supernumerary(inner) => get_variant_reference(inner),
         HgvsVariant::Allele(a) => {
             if let Some(first) = a.variants.first() {
                 get_variant_reference(first)
@@ -199,6 +201,7 @@ pub fn get_variant_edit_type(variant: &HgvsVariant) -> &'static str {
         HgvsVariant::Protein(_) => "protein",
         HgvsVariant::RnaFusion(_) => "fusion",
         HgvsVariant::GenomeRing(_) => "ring",
+        HgvsVariant::Supernumerary(_) => "supernumerary",
         HgvsVariant::Allele(_) => "allele",
         HgvsVariant::NullAllele => "null",
         HgvsVariant::UnknownAllele => "unknown",
@@ -273,6 +276,7 @@ pub fn get_variant_start(variant: &HgvsVariant) -> Option<i64> {
         HgvsVariant::Protein(_)
         | HgvsVariant::RnaFusion(_)
         | HgvsVariant::GenomeRing(_)
+        | HgvsVariant::Supernumerary(_)
         | HgvsVariant::NullAllele
         | HgvsVariant::UnknownAllele => None,
     }
@@ -299,6 +303,7 @@ pub fn get_variant_end(variant: &HgvsVariant) -> Option<i64> {
         HgvsVariant::Protein(_)
         | HgvsVariant::RnaFusion(_)
         | HgvsVariant::GenomeRing(_)
+        | HgvsVariant::Supernumerary(_)
         | HgvsVariant::NullAllele
         | HgvsVariant::UnknownAllele => None,
     }
@@ -520,6 +525,12 @@ mod tests {
     fn test_variant_type_str_circular() {
         let variant = parse_hgvs("NC_001416.1:o.100A>G").unwrap();
         assert_eq!(variant_type_str(&variant), "circular");
+    }
+
+    #[test]
+    fn test_variant_type_str_supernumerary() {
+        let variant = parse_hgvs("NC_000023.11:g.pter_qtersup").unwrap();
+        assert_eq!(variant_type_str(&variant), "supernumerary");
     }
 
     #[test]

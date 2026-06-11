@@ -18,9 +18,9 @@ use crate::hgvs::parser::position::{
 };
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
-    Accession, AllelePhase, AlleleVariant, CdsVariant, CircularVariant, GenomeRing, GenomeVariant,
-    HgvsVariant, LocEdit, MtVariant, ProteinVariant, RnaFusionBreakpoint, RnaFusionVariant,
-    RnaVariant, TxVariant,
+    make_supernumerary, Accession, AllelePhase, AlleleVariant, CdsVariant, CircularVariant,
+    GenomeRing, GenomeVariant, HgvsVariant, LocEdit, MtVariant, ProteinVariant,
+    RnaFusionBreakpoint, RnaFusionVariant, RnaVariant, TxVariant,
 };
 use std::collections::HashSet;
 
@@ -1144,6 +1144,64 @@ fn try_parse_genome_ring<'a>(
         parsed_segments,
     )?;
     Some(("", HgvsVariant::GenomeRing(ring)))
+}
+
+/// Try to parse a supernumerary chromosome marker `sup` (#546; HGVS
+/// DNA/complex.md:33-34). Returns `Some(variant)` when `input` ends in `sup`
+/// and the leading description is a genome variant of one of the two
+/// spec-defined shapes:
+///
+/// - a bare supernumerary whole chromosome — `accession:g.<genome>sup` (e.g.
+///   `NC_000023.11:g.pter_qtersup`, DNA/duplication.md:117), where `<genome>`
+///   parses as an ordinary single genome variant; and
+/// - a supernumerary ring chromosome — `accession:g.[<ring>]sup` (e.g.
+///   DNA/complex.md:161), where the bracketed content parses as a
+///   [`GenomeRing`] (PR-B's `::`-join). Unlike a standalone ring the marker
+///   wraps the whole ring in `[...]`; the brackets are stripped here and
+///   re-added on `Display`.
+///
+/// Returns `None` (so the caller falls through to ordinary parsing) when the
+/// input does not end in `sup`, the inner description is not a genome variant,
+/// or the bracketed-ring content fails to parse as a ring.
+fn try_parse_supernumerary(input: &str) -> Option<HgvsVariant> {
+    let inner_str = input.strip_suffix("sup")?;
+
+    // Parse the `accession(gene)?:g.` prefix ONCE, the same way the rest of the
+    // file does (accession → optional gene-symbol → `:` → `g.` type prefix).
+    // Supernumerary is genome-only, so the type prefix must be `g.`.
+    let (remaining, accession) = parse_accession(inner_str).ok()?;
+    let (remaining, gene_symbol) = parse_gene_symbol(remaining).ok()?;
+    // Body is the post-`:` text; supernumerary is genome-only so it must start
+    // with the `g.` type prefix. `g_body` is the text after `g.`.
+    let after_colon = remaining.strip_prefix(':')?;
+    let g_body = after_colon.strip_prefix("g.")?;
+
+    let inner = if let Some(ring_body) = g_body.strip_prefix('[') {
+        // Supernumerary ring: `…g.[<ring>]sup`. Strip the closing `]` and
+        // parse the body as a `::`-joined ring on this accession.
+        let ring_body = ring_body.strip_suffix(']')?;
+        let (_, ring) = try_parse_genome_ring(ring_body, &accession, gene_symbol.as_deref())?;
+        ring
+    } else {
+        // Bare supernumerary whole chromosome: `…g.<genome>sup`. The leading
+        // text must parse as a single genome variant with nothing left over,
+        // and — per spec — the inner must be the editless / position-only
+        // whole-chromosome form (`pter_qter`). An editful inner
+        // (`pter_qterdel`, `12345A>G`, …) is not a supernumerary and must fall
+        // through to ordinary parsing (where it errors). `parse_genome_variant`
+        // re-consumes its own `g.` tag, so hand it the `g.`-prefixed body.
+        let (rest, variant) = parse_genome_variant(accession, gene_symbol)
+            .parse(after_colon)
+            .ok()?;
+        if !rest.is_empty() {
+            return None;
+        }
+        variant
+    };
+
+    // make_supernumerary enforces the inner invariant (editless whole-chromosome
+    // genome variant, or a GenomeRing); returns None for any other inner.
+    make_supernumerary(inner)
 }
 
 fn parse_genome_variant(
@@ -6496,8 +6554,22 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
         ));
     }
 
+    // Supernumerary chromosome marker `sup` (#546; HGVS DNA/complex.md:33-34).
+    // Checked before allele detection because the bracketed-ring form
+    // (`g.[<ring>]sup`) would otherwise be misrouted: the brackets here wrap a
+    // single ring expression, not a `;`-separated allele list.
+    // `try_parse_supernumerary` only engages when the input ends in `sup` and
+    // the inner is a genome description; otherwise we fall through unchanged.
+    // The result flows through the shared tail validators below.
+    let supernumerary = input
+        .ends_with("sup")
+        .then(|| try_parse_supernumerary(input))
+        .flatten();
+
     // Check for allele patterns and RNA fusion first
-    let variant = if let Some(allele_type) = detect_allele_type(input) {
+    let variant = if let Some(variant) = supernumerary {
+        variant
+    } else if let Some(allele_type) = detect_allele_type(input) {
         match allele_type {
             "cis" => parse_cis_allele(input)?,
             "trans" => parse_trans_allele(input)?,

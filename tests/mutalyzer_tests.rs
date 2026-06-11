@@ -61,6 +61,7 @@ fn test_mutalyzer_valid_variants() {
                         HgvsVariant::Circular(_) => "Circular",
                         HgvsVariant::RnaFusion(_) => "RnaFusion",
                         HgvsVariant::GenomeRing(_) => "GenomeRing",
+                        HgvsVariant::Supernumerary(_) => "Supernumerary",
                         HgvsVariant::Allele(_) => "Allele",
                         HgvsVariant::NullAllele => "NullAllele",
                         HgvsVariant::UnknownAllele => "UnknownAllele",
