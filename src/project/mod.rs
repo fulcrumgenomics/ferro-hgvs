@@ -5,6 +5,7 @@ pub mod edit;
 mod projector;
 mod protein;
 mod result;
+mod transcript_axis;
 
 pub use projector::VariantProjector;
 pub use result::VariantProjection;

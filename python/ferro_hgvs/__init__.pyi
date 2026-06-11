@@ -1462,6 +1462,16 @@ class VariantProjection:
         ...
 
     @property
+    def n_name(self) -> str | None:
+        """The n. (transcript-relative) variant as an HGVS string.
+
+        Populated for both coding transcripts (derived genome-free from the c.
+        form) and non-coding transcripts; None when no transcript coordinate is
+        available (e.g. an empty allele).
+        """
+        ...
+
+    @property
     def p_name(self) -> str | None:
         """The p. variant as an HGVS string, or None for intronic/UTR/non-coding variants."""
         ...

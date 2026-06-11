@@ -673,6 +673,15 @@ impl PyVariantProjection {
         self.inner.coding.as_ref().map(|v| v.to_string())
     }
 
+    /// The n. (transcript-relative) variant as an HGVS string. Populated for
+    /// both coding transcripts (derived genome-free from the c. form) and
+    /// non-coding transcripts; None when no transcript coordinate is available
+    /// (e.g. an empty allele).
+    #[getter]
+    fn n_name(&self) -> Option<String> {
+        self.inner.noncoding.as_ref().map(|v| v.to_string())
+    }
+
     /// The p. variant as an HGVS string (None for intronic, UTR, non-coding,
     /// or non-substitution edits).
     #[getter]
@@ -707,9 +716,10 @@ impl PyVariantProjection {
 
     fn __repr__(&self) -> String {
         format!(
-            "VariantProjection(g={:?}, c={:?}, p={:?}, transcript={:?})",
+            "VariantProjection(g={:?}, c={:?}, n={:?}, p={:?}, transcript={:?})",
             self.g_name(),
             self.c_name(),
+            self.n_name(),
             self.p_name(),
             self.transcript_id()
         )
