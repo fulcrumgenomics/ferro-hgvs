@@ -327,6 +327,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::RnaFusion(_) => Err(FerroError::UnsupportedProjection {
                 reason: "project_all does not accept RNA fusion inputs".to_string(),
             }),
+            HgvsVariant::GenomeRing(_) => Err(FerroError::UnsupportedProjection {
+                reason: "project_all does not accept genome ring inputs".to_string(),
+            }),
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
                 Err(FerroError::UnsupportedProjection {
                     reason: "project_all does not accept null/unknown allele inputs".to_string(),
@@ -545,6 +548,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::RnaFusion(_) => {
                 return Err(FerroError::UnsupportedProjection {
                     reason: "project_to_genomic does not support RNA fusion inputs".to_string(),
+                })
+            }
+            HgvsVariant::GenomeRing(_) => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: "project_to_genomic does not support genome ring inputs".to_string(),
                 })
             }
             HgvsVariant::Allele(_) => {

@@ -388,7 +388,7 @@ fn parse_standard_accession(input: &str) -> IResult<&str, Accession> {
 
 /// Check if the input starts with something that looks like an accession
 /// (not a gene symbol). Accessions have patterns like NC_, NM_, ENST, LRG_, etc.
-fn looks_like_accession_start(input: &str) -> bool {
+pub(crate) fn looks_like_accession_start(input: &str) -> bool {
     let bytes = input.as_bytes();
     if bytes.len() < 3 {
         return false;

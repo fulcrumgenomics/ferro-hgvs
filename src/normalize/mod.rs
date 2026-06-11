@@ -1123,6 +1123,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ),
             // RNA fusions pass through unchanged (no normalization needed for fusions)
             HV::RnaFusion(v) => (HV::RnaFusion(v.clone()), vec![]),
+            // Genome rings pass through unchanged (not normalized; #546)
+            HV::GenomeRing(g) => (HV::GenomeRing(g.clone()), vec![]),
             // Null and unknown allele markers pass through unchanged
             HV::NullAllele => (HV::NullAllele, vec![]),
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
@@ -5844,9 +5846,12 @@ fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
         HV::Rna(v) => Some(format!("{}", v.loc_edit.location)),
         HV::Mt(v) => Some(format!("{}", v.loc_edit.location)),
         HV::Circular(v) => Some(format!("{}", v.loc_edit.location)),
-        HV::Protein(_) | HV::Allele(_) | HV::RnaFusion(_) | HV::NullAllele | HV::UnknownAllele => {
-            None
-        }
+        HV::Protein(_)
+        | HV::Allele(_)
+        | HV::RnaFusion(_)
+        | HV::GenomeRing(_)
+        | HV::NullAllele
+        | HV::UnknownAllele => None,
     }
 }
 
@@ -5863,9 +5868,12 @@ fn na_edit_if_shuffleable(variant: &HgvsVariant) -> Option<&NaEdit> {
         HV::Rna(v) => &v.loc_edit.edit,
         HV::Mt(v) => &v.loc_edit.edit,
         HV::Circular(v) => &v.loc_edit.edit,
-        HV::Protein(_) | HV::Allele(_) | HV::RnaFusion(_) | HV::NullAllele | HV::UnknownAllele => {
-            return None
-        }
+        HV::Protein(_)
+        | HV::Allele(_)
+        | HV::RnaFusion(_)
+        | HV::GenomeRing(_)
+        | HV::NullAllele
+        | HV::UnknownAllele => return None,
     };
     match mu {
         crate::hgvs::Mu::Certain(e) | crate::hgvs::Mu::Uncertain(e) => Some(e),

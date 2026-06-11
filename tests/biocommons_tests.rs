@@ -67,6 +67,7 @@ fn test_biocommons_valid_variants() {
                         HgvsVariant::Mt(_) => "Mt",
                         HgvsVariant::Circular(_) => "Circular",
                         HgvsVariant::RnaFusion(_) => "RnaFusion",
+                        HgvsVariant::GenomeRing(_) => "GenomeRing",
                         HgvsVariant::Allele(_) => "Allele",
                         HgvsVariant::NullAllele => "NullAllele",
                         HgvsVariant::UnknownAllele => "UnknownAllele",

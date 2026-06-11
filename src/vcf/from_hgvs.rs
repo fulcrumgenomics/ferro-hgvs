@@ -149,6 +149,11 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 msg: "RNA fusion (::) conversion to VCF not supported (complex structural variant)"
                     .to_string(),
             }),
+            HgvsVariant::GenomeRing(_) => Err(FerroError::ConversionError {
+                msg:
+                    "genome ring (::) conversion to VCF not supported (complex structural variant)"
+                        .to_string(),
+            }),
         }
     }
 
