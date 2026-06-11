@@ -150,6 +150,42 @@ jobs:
             ${{ runner.os }}-cargo-
       - run: cargo clippy --features dev --all-targets -- -D warnings
 
+  clippy-all-features:
+    # Lints the feature-gated code that `--features dev` never compiles —
+    # notably `python` (pyo3) and `hgvs-rs`, whose `#[cfg(test)]` modules are
+    # otherwise unbuilt in CI and silently rot when the production API they
+    # construct changes. Complements (does not replace) the `clippy` job
+    # above: that one lints the `#[cfg(not(feature = ...))]` slice and the
+    # default-features-off code most consumers compile, which `--all-features`
+    # cannot see.
+    name: Clippy (all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-all-features
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+
   test:
     name: Test
     runs-on: ubuntu-latest
