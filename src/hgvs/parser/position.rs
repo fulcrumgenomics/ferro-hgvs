@@ -10,6 +10,18 @@ use nom::{
     IResult, Parser,
 };
 
+/// Length of a leading `pter`/`qter`/`cen` special-position marker, if `bytes`
+/// starts with one. Single source of truth for the three special markers.
+pub(crate) fn special_pos_marker_len(bytes: &[u8]) -> Option<usize> {
+    if bytes.starts_with(b"pter") || bytes.starts_with(b"qter") {
+        Some(4)
+    } else if bytes.starts_with(b"cen") {
+        Some(3)
+    } else {
+        None
+    }
+}
+
 /// Parse a genomic position (unsigned integer >= 1, or special marker like pter/qter/cen)
 ///
 /// Also supports optional offsets for uncertain intronic-style notation (e.g., g.12345-? or g.67890+?).
@@ -30,16 +42,13 @@ use nom::{
 pub fn parse_genome_pos(input: &str) -> IResult<&str, GenomePos> {
     // Check for special position markers first
     let bytes = input.as_bytes();
-    if bytes.len() >= 4 {
-        if bytes[0..4] == *b"pter" {
-            return Ok((&input[4..], GenomePos::pter()));
-        }
-        if bytes[0..4] == *b"qter" {
-            return Ok((&input[4..], GenomePos::qter()));
-        }
-    }
-    if bytes.len() >= 3 && bytes[0..3] == *b"cen" {
-        return Ok((&input[3..], GenomePos::cen()));
+    if let Some(len) = special_pos_marker_len(bytes) {
+        let pos = match &bytes[..len] {
+            b"pter" => GenomePos::pter(),
+            b"qter" => GenomePos::qter(),
+            _ => GenomePos::cen(),
+        };
+        return Ok((&input[len..], pos));
     }
 
     // Regular numeric position
@@ -126,14 +135,13 @@ pub fn parse_cds_pos(input: &str) -> IResult<&str, CdsPos> {
     // Telomere/centromere markers (mirror parse_genome_pos): pter/qter (4 bytes),
     // cen (3 bytes).
     let bytes = input.as_bytes();
-    if bytes.len() >= 4 && bytes[0..4] == *b"pter" {
-        return Ok((&input[4..], CdsPos::pter()));
-    }
-    if bytes.len() >= 4 && bytes[0..4] == *b"qter" {
-        return Ok((&input[4..], CdsPos::qter()));
-    }
-    if bytes.len() >= 3 && bytes[0..3] == *b"cen" {
-        return Ok((&input[3..], CdsPos::cen()));
+    if let Some(len) = special_pos_marker_len(bytes) {
+        let pos = match &bytes[..len] {
+            b"pter" => CdsPos::pter(),
+            b"qter" => CdsPos::qter(),
+            _ => CdsPos::cen(),
+        };
+        return Ok((&input[len..], pos));
     }
 
     // ? or ?+5 or ?-232 (unknown position with optional offset)

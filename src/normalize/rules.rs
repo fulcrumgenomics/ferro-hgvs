@@ -2118,7 +2118,9 @@ pub fn expand_inserted_sequence<P: ReferenceProvider>(
         // Already flat or out-of-scope for this canonicalization.
         // `UncertainRangeInv` has uncertain (parenthesized) breakpoints that
         // are not sequenced, so there are no exact bases to fetch — leave it
-        // as-is (DNA/complex.md).
+        // as-is (DNA/complex.md). `SpecialPositionRange` has pter/qter/cen
+        // endpoints that have no concrete coordinate, so it likewise cannot be
+        // expanded to literal bases.
         InsertedSequence::Literal(_)
         | InsertedSequence::Count(_)
         | InsertedSequence::Range(_, _)
@@ -2126,6 +2128,7 @@ pub fn expand_inserted_sequence<P: ReferenceProvider>(
         | InsertedSequence::SequenceRepeat { .. }
         | InsertedSequence::Named(_)
         | InsertedSequence::UncertainRangeInv { .. }
+        | InsertedSequence::SpecialPositionRange { .. }
         | InsertedSequence::Uncertain
         | InsertedSequence::Empty => Ok(None),
     }

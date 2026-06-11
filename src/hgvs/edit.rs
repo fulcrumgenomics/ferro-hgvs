@@ -2,7 +2,7 @@
 //!
 //! Edits describe the actual change (substitution, deletion, insertion, etc.)
 
-use super::location::AminoAcid;
+use super::location::{AminoAcid, GenomePos};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -218,6 +218,12 @@ pub enum InsertedSequence {
     /// This refers to positions in the same reference sequence
     PositionRange { start: u64, end: u64 },
     /// Position range with inversion (e.g., delins86116_86422inv)
+    ///
+    /// Note: this is the all-numeric inverted range. When an endpoint is a special
+    /// position (`pter`/`qter`/`cen`), inversion is instead folded into the
+    /// `inverted: bool` field of [`InsertedSequence::SpecialPositionRange`] rather
+    /// than a separate variant — a future author pattern-matching `PositionRangeInv`
+    /// should also consider `SpecialPositionRange`.
     PositionRangeInv { start: u64, end: u64 },
     /// Inserted copy of a single region with uncertain (parenthesized) start
     /// and end boundaries, inserted in inverted orientation
@@ -231,6 +237,19 @@ pub enum InsertedSequence {
         start: (u64, u64),
         /// Uncertain end position `(min, max)`.
         end: (u64, u64),
+    },
+    /// An inserted genome position-range where one or both endpoints are special
+    /// positions (`pter`/`qter`/`cen`), optionally inverted — e.g.
+    /// `delins102425452_qterinv`, `delinspter_26393001inv` (HGVS DNA/complex.md:94-95).
+    /// Genome-only (special positions don't apply to c./n./r.); all-numeric inserted
+    /// ranges stay on `PositionRange`/`PositionRangeInv`.
+    SpecialPositionRange {
+        /// Range start position (may be a special position).
+        start: GenomePos,
+        /// Range end position (may be a special position).
+        end: GenomePos,
+        /// Whether the inserted range is in inverted orientation.
+        inverted: bool,
     },
     /// Uncertain sequence (e.g., delins(?))
     Uncertain,
@@ -333,6 +352,17 @@ impl fmt::Display for InsertedSequence {
             InsertedSequence::UncertainRangeInv { start, end } => {
                 write!(f, "({}_{})_({}_{})inv", start.0, start.1, end.0, end.1)
             }
+            InsertedSequence::SpecialPositionRange {
+                start,
+                end,
+                inverted,
+            } => {
+                write!(f, "{}_{}", start, end)?;
+                if *inverted {
+                    write!(f, "inv")?;
+                }
+                Ok(())
+            }
             InsertedSequence::Uncertain => write!(f, "(?)"),
             InsertedSequence::Empty => Ok(()),
         }
@@ -403,6 +433,7 @@ impl InsertedSequence {
             InsertedSequence::PositionRange { start, end } => Some((end - start + 1) as usize),
             InsertedSequence::PositionRangeInv { start, end } => Some((end - start + 1) as usize),
             InsertedSequence::UncertainRangeInv { .. } => None, // Boundaries uncertain
+            InsertedSequence::SpecialPositionRange { .. } => None, // No fixed length (special pos)
             InsertedSequence::Uncertain => None,                // Unknown
             InsertedSequence::Empty => Some(0),
         }
@@ -444,6 +475,14 @@ impl InsertedSequence {
             InsertedSequence::PositionRangeInv { start, end } => format!("{}_{}inv", start, end),
             InsertedSequence::UncertainRangeInv { start, end } => {
                 format!("({}_{})_({}_{})inv", start.0, start.1, end.0, end.1)
+            }
+            InsertedSequence::SpecialPositionRange {
+                start,
+                end,
+                inverted,
+            } => {
+                let suffix = if *inverted { "inv" } else { "" };
+                format!("{}_{}{}", start, end, suffix)
             }
             InsertedSequence::Uncertain => String::from("(?)"),
             InsertedSequence::Empty => String::new(),
