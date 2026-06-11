@@ -502,6 +502,42 @@ pub(crate) fn first_diff_position(ref_prot: &[AminoAcid], alt_prot: &[AminoAcid]
         .unwrap_or(ref_prot.len().min(alt_prot.len()))
 }
 
+/// Append the transcript's unchanged 3'UTR (`seq[cds_end..]`) to an
+/// already-built mutated CDS, so a shifted/read-through reading frame can find
+/// a stop codon that lies past the annotated CDS end. Both the frameshift and
+/// the stop-loss/extension predictors need this: without it a downstream stop
+/// in the 3'UTR is missed and the prediction degrades to `fsTer?` / `extTer?`.
+///
+/// `mut_cds` must be uppercase. The edit always lies within the CDS, so the
+/// 3'UTR slice is unchanged by it.
+pub(crate) fn mut_cds_with_3utr(
+    mut_cds: &str,
+    transcript: &Transcript,
+) -> Result<String, FerroError> {
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
+    let cds_end = transcript
+        .cds_end
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS end", transcript.id),
+        })? as usize;
+    // Guard the slice (mirrors `read_full_cds`): in the normal flow the caller
+    // has already validated the transcript via `RefProteinBundle::from_transcript`,
+    // but this is `pub(crate)` — return a clean error rather than panic if a
+    // future caller passes a transcript whose `cds_end` exceeds its sequence.
+    if cds_end > seq.len() {
+        return Err(FerroError::ProteinSequenceUnavailable {
+            accession: transcript.id.clone(),
+        });
+    }
+    Ok(format!("{mut_cds}{}", seq[cds_end..].to_ascii_uppercase()))
+}
+
 /// Compute the net number of nucleotides added (positive) or removed (negative) by `edit`.
 ///
 /// Returns `None` when the net change cannot be determined (e.g. non-literal inserted

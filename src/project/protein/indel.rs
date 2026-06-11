@@ -11,7 +11,7 @@ use crate::reference::transcript::Transcript;
 
 use super::helpers::{
     affects_initiation_codon, build_cterminal_extension, build_initiator_unknown,
-    build_mutated_cds_with_ref, first_diff_position, net_length_change,
+    build_mutated_cds_with_ref, first_diff_position, mut_cds_with_3utr, net_length_change,
     translate_full_cds_with_stop, translate_mutated_cds, translate_mutated_cds_inframe,
     RefProteinBundle,
 };
@@ -594,9 +594,13 @@ fn build_frameshift_variant(
     // `fs` — that is reserved for human-authored input with no detail. The
     // degenerate `else` (frameshift starts at/beyond the CDS end) is likewise
     // an unknown-termination case (frameshift.md:44; spec example p.Ile327Argfs*?).
+    // Scan for the new stop over the mutated CDS *plus* the unchanged 3'UTR:
+    // a frameshift's new in-frame stop commonly lies past the annotated CDS
+    // end. Scanning only the CDS-truncated `mut_cds` mis-emits `fsTer?`.
+    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
     let codon_byte_offset = first_diff * 3;
-    let ter: FrameshiftTer = if codon_byte_offset < mut_cds.len() {
-        let downstream = &mut_cds[codon_byte_offset..];
+    let ter: FrameshiftTer = if codon_byte_offset < scan_seq.len() {
+        let downstream = &scan_seq[codon_byte_offset..];
         let downstream_aas = translate_full_cds_with_stop(downstream);
         // fsTer{K}: K is the 1-based position of the Ter in the downstream
         // scan (counting the new shifted amino acid as position 1).
@@ -634,29 +638,8 @@ fn build_extension_variant(
     // tail is computed by the shared C-terminal extension builder.
     let stop_pos = (ref_protein.len() + 1) as u64;
 
-    // `mut_cds` from `build_mutated_cds_with_ref` stops at the annotated CDS
-    // end (the original stop codon). Stop-loss read-through continues into the
-    // 3'UTR, so `build_cterminal_extension` needs the mutated CDS *plus* the
-    // downstream transcript sequence to locate the new stop — without it a stop
-    // in the tail is missed and the extension degrades to `extTer?` (or a
-    // too-short count). The edit lies within the CDS, so the 3'UTR slice
-    // `seq[cds_end..]` is unchanged by it; append it. Mirrors the substitution
-    // path's `mutated_cds_with_3utr`.
-    let seq =
-        transcript
-            .sequence
-            .as_deref()
-            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
-                accession: transcript.id.clone(),
-            })?;
-    let cds_end = transcript
-        .cds_end
-        .ok_or_else(|| FerroError::ConversionError {
-            msg: format!("transcript {} has no CDS end", transcript.id),
-        })? as usize;
-    let mut_cds_with_3utr = format!("{mut_cds}{}", seq[cds_end..].to_ascii_uppercase());
-
-    build_cterminal_extension(stop_pos, &mut_cds_with_3utr, protein_accession, transcript)
+    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
+    build_cterminal_extension(stop_pos, &scan_seq, protein_accession, transcript)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1249,5 +1232,31 @@ mod tests {
             "in-frame insertion should not be frameshift, got '{}'",
             s
         );
+    }
+
+    /// Regression: a frameshift whose new in-frame stop lies in the 3'UTR
+    /// (past `cds_end`) must emit `fsTer{K}` (counting the new stop's
+    /// position from the first shifted residue), NOT `fsTer?`. Before the
+    /// 3'UTR-extension fix, `build_frameshift_variant` scanned only the
+    /// CDS-truncated `mut_cds`, so the downstream stop was never found.
+    ///
+    /// Construction (worked out codon-by-codon):
+    ///   ref CDS  "ATGAAGAAGAAGTGA" = Met Lys Lys Lys Ter   (cds 1..=15)
+    ///   3'UTR    "CTAACCC"                                  (seq 16..=22)
+    ///   delete c.4 (first A of codon-2 AAG) →
+    ///     mutated CDS  "ATGAGAAGAAGTGA"  (CDS-only: Met Arg Arg Ser … no stop)
+    ///     + 3'UTR      "ATGAGAAGAAGTGACTAACCC"
+    ///       → ATG(Met) AGA(Arg) AGA(Arg) AGT(Ser) GAC(Asp) TAA(*) — stop at
+    ///         downstream position 5 (Arg=1, Arg=2, Ser=3, Asp=4, Ter=5).
+    ///   first changed AA: Lys2 → Arg ⇒ p.(Lys2ArgfsTer5).
+    #[test]
+    fn frameshift_new_stop_in_3utr_emits_fster_count() {
+        let t = tx("ATGAAGAAGAAGTGACTAACCC", 1, 15);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2ArgfsTer5)");
     }
 }
