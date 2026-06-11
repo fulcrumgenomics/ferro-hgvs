@@ -1116,6 +1116,21 @@ impl From<CdotTranscriptSnapshot> for CdotTranscript {
     }
 }
 
+/// Which path [`CdotMapper::load_with_source`] took to produce the mapper.
+///
+/// Makes a silent fast-path → slow-path fallback impossible to ignore at the
+/// API level (the root cause of the #585 regression, where a broken binary
+/// cache silently re-parsed 512 MB of JSON on every run). A binary cache
+/// (`.rkyv` or legacy `.bin`) is the fast `Archive` path; an actual JSON parse
+/// is `JsonFallback`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CdotLoadSource {
+    /// Loaded from a fast binary archive (`.rkyv`, or legacy `.bin`).
+    Archive,
+    /// Fell back to parsing the source JSON (slow path).
+    JsonFallback,
+}
+
 /// Coordinate mapper using cdot data.
 #[derive(Debug, Clone)]
 pub struct CdotMapper {
@@ -1583,15 +1598,31 @@ impl CdotMapper {
     /// usable, then writes a fresh `.rkyv` cache. Also accepts direct `.rkyv`
     /// or `.bin` paths.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        Self::load_with_source(path).map(|(mapper, _)| mapper)
+    }
+
+    /// Like [`load`](Self::load), but also reports which path produced the
+    /// mapper. This closes the API hole that let the #585 regression go silent:
+    /// before this, a caller could not tell a fast archive load from a slow
+    /// JSON re-parse, so a silently-broken cache (re-parsing 512 MB of JSON on
+    /// every run) was invisible. The returned [`CdotLoadSource`] makes that
+    /// distinction assertable in tests and observable via `ferro check`.
+    ///
+    /// A binary cache (`.rkyv` or legacy `.bin`) counts as
+    /// [`CdotLoadSource::Archive`] — the "fast path". Only an actual JSON parse
+    /// returns [`CdotLoadSource::JsonFallback`]. Note that the JSON-fallback arm
+    /// still self-heals the sibling `.rkyv` as a side effect, so a *subsequent*
+    /// `load_with_source` on the same path reports `Archive`.
+    pub fn load_with_source<P: AsRef<Path>>(path: P) -> Result<(Self, CdotLoadSource), FerroError> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy();
 
         // Direct archive paths — no JSON fallback available.
         if path_str.ends_with(".rkyv") {
-            return Self::from_rkyv_file(path);
+            return Self::from_rkyv_file(path).map(|m| (m, CdotLoadSource::Archive));
         }
         if path_str.ends_with(".bin") {
-            return Self::from_bincode_file(path);
+            return Self::from_bincode_file(path).map(|m| (m, CdotLoadSource::Archive));
         }
 
         // Sibling cache paths next to the JSON. Replace the *single* trailing
@@ -1625,7 +1656,7 @@ impl CdotMapper {
         // 1. Prefer the rkyv archive (fastest, validated).
         if rkyv_path.exists() && cache_is_fresh(&rkyv_path) {
             match Self::from_rkyv_file(&rkyv_path) {
-                Ok(mapper) => return Ok(mapper),
+                Ok(mapper) => return Ok((mapper, CdotLoadSource::Archive)),
                 Err(e) => eprintln!(
                     "warning: cdot rkyv cache {} is unusable ({}); trying other formats",
                     rkyv_path.display(),
@@ -1647,7 +1678,7 @@ impl CdotMapper {
                             e
                         );
                     }
-                    return Ok(mapper);
+                    return Ok((mapper, CdotLoadSource::Archive));
                 }
                 Err(e) => eprintln!(
                     "warning: cdot bincode cache {} is unusable ({}); \
@@ -1676,7 +1707,7 @@ impl CdotMapper {
             );
         }
 
-        Ok(mapper)
+        Ok((mapper, CdotLoadSource::JsonFallback))
     }
 
     /// Load from any reader, defaulting to GRCh38 genome build.
@@ -3314,6 +3345,112 @@ mod tests {
                 .as_deref(),
             Some("COL1A1"),
             "load() should refresh the stale rkyv after reparsing the JSON"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Load-source observability (the #585 perf-regression gate). These assert
+    // the `CdotLoadSource` tag, not just the data — so a silent fast-path →
+    // JSON-fallback regression fails the build deterministically, with no
+    // reference data and no timing thresholds.
+    // -------------------------------------------------------------------------
+
+    /// A fresh sibling archive is taken AND reported as `Archive`, and the data
+    /// round-trips through it. Guards "layout drifted but load still claims the
+    /// fast path" (#585): a load that quietly fell back to JSON would report
+    /// `JsonFallback` and fail this.
+    #[test]
+    fn load_with_source_reports_archive_for_fresh_rkyv() {
+        let json = multi_build_cdot_json();
+        let expected = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
+
+        // Write the JSON first, then the sibling archive — so the archive is at
+        // least as new as the source and `load` prefers it.
+        std::fs::write(&json_path, json).unwrap();
+        expected.to_rkyv_file(&rkyv_path).unwrap();
+
+        let (loaded, source) = CdotMapper::load_with_source(&json_path).unwrap();
+        assert_eq!(
+            source,
+            CdotLoadSource::Archive,
+            "a fresh sibling .rkyv must load via the fast archive path"
+        );
+        // Data round-trips through the archive.
+        assert_eq!(loaded.transcript_count(), expected.transcript_count());
+        assert_eq!(loaded.primary_build, expected.primary_build);
+    }
+
+    /// A stale archive is observably *not* served: the load falls back to JSON
+    /// and reports `JsonFallback` (rather than silently re-parsing forever as in
+    /// #585), and the side-effecting self-heal makes the *next* load report
+    /// `Archive`.
+    #[test]
+    fn load_with_source_reports_json_fallback_then_self_heals() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // A stale rkyv carrying a sentinel distinct from the JSON.
+        let mut stale = original.clone();
+        stale.transcripts.get_mut("NM_000088.3").unwrap().gene_name =
+            Some("FROM_STALE_RKYV".to_string());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
+
+        std::fs::write(&json_path, json).unwrap();
+        stale.to_rkyv_file(&rkyv_path).unwrap();
+
+        // Backdate the rkyv so it is strictly older than the JSON source.
+        let backdated = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&rkyv_path)
+            .unwrap()
+            .set_modified(backdated)
+            .unwrap();
+
+        // First load: stale archive skipped → slow JSON path, observably tagged.
+        let (first, first_source) = CdotMapper::load_with_source(&json_path).unwrap();
+        assert_eq!(
+            first_source,
+            CdotLoadSource::JsonFallback,
+            "a stale archive must surface as a JSON fallback, not be silently served"
+        );
+        assert_eq!(
+            first
+                .get_transcript("NM_000088.3")
+                .unwrap()
+                .gene_name
+                .as_deref(),
+            Some("COL1A1"),
+            "the fallback must serve the real JSON data, not the stale sentinel"
+        );
+
+        // Second load: the self-heal refreshed the archive → fast path restored.
+        let (_second, second_source) = CdotMapper::load_with_source(&json_path).unwrap();
+        assert_eq!(
+            second_source,
+            CdotLoadSource::Archive,
+            "after self-heal the next load must take the fast archive path \
+             (not re-parse JSON forever, the #585 failure)"
         );
     }
 
