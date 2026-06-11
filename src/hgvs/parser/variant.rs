@@ -12,7 +12,7 @@ use crate::hgvs::location::{AminoAcid, CdsPos, ProtPos};
 use crate::hgvs::parser::accession::{
     looks_like_accession_start, parse_accession, parse_gene_symbol,
 };
-use crate::hgvs::parser::edit::{parse_na_edit, parse_protein_edit};
+use crate::hgvs::parser::edit::{parse_genome_na_edit, parse_na_edit, parse_protein_edit};
 use crate::hgvs::parser::position::{
     parse_amino_acid, parse_cds_pos, parse_genome_pos, parse_prot_pos, parse_rna_pos, parse_tx_pos,
 };
@@ -1234,8 +1234,12 @@ fn parse_genome_variant(
 
         // Predicted variant: g.(positionEdit). #241.
         if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
-            if let Ok((remaining, (interval, edit))) =
-                delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(input)
+            if let Ok((remaining, (interval, edit))) = delimited(
+                char('('),
+                (parse_genome_interval, parse_genome_na_edit),
+                char(')'),
+            )
+            .parse(input)
             {
                 return Ok((
                     remaining,
@@ -1251,7 +1255,7 @@ fn parse_genome_variant(
         let (input, interval) = parse_genome_interval(input)?;
 
         // Try to parse an edit; if no edit found, use position-only identity
-        let (input, edit) = if let Ok((remaining, edit)) = parse_na_edit(input) {
+        let (input, edit) = if let Ok((remaining, edit)) = parse_genome_na_edit(input) {
             (remaining, edit)
         } else if input.is_empty() || input.starts_with(']') || input.starts_with(';') {
             // Position-only pattern (e.g., g.12345 or g.100_200)
@@ -1377,12 +1381,17 @@ fn parse_genome_bracket_member(
         let predicted = if is_circular {
             delimited(
                 char('('),
-                (parse_genome_interval_for_circular, parse_na_edit),
+                (parse_genome_interval_for_circular, parse_genome_na_edit),
                 char(')'),
             )
             .parse(part)
         } else {
-            delimited(char('('), (parse_genome_interval, parse_na_edit), char(')')).parse(part)
+            delimited(
+                char('('),
+                (parse_genome_interval, parse_genome_na_edit),
+                char(')'),
+            )
+            .parse(part)
         };
         if let Ok((remaining, (interval, edit))) = predicted {
             if is_circular {
@@ -1396,7 +1405,7 @@ fn parse_genome_bracket_member(
     } else {
         parse_genome_interval(part)?
     };
-    let (remaining, edit) = if let Ok((r, e)) = parse_na_edit(remaining) {
+    let (remaining, edit) = if let Ok((r, e)) = parse_genome_na_edit(remaining) {
         (r, e)
     } else {
         (
@@ -3117,7 +3126,7 @@ fn parse_mt_variant(
         if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
             if let Ok((remaining, (interval, edit))) = delimited(
                 char('('),
-                (parse_genome_interval_for_circular, parse_na_edit),
+                (parse_genome_interval_for_circular, parse_genome_na_edit),
                 char(')'),
             )
             .parse(input)
@@ -3137,7 +3146,7 @@ fn parse_mt_variant(
 
         let original_input = input;
         let (input, interval) = parse_genome_interval_for_circular(input)?;
-        let (input, edit) = parse_na_edit(input)?;
+        let (input, edit) = parse_genome_na_edit(input)?;
         // Reject spec-unauthorised reversed ranges (#129).
         check_circular_reversed_range(&interval, &edit, original_input)?;
 
@@ -4544,7 +4553,7 @@ fn parse_circular_variant(
         if input.starts_with('(') && !input.starts_with("(?") && !input.starts_with("(=)") {
             if let Ok((remaining, (interval, edit))) = delimited(
                 char('('),
-                (parse_genome_interval_for_circular, parse_na_edit),
+                (parse_genome_interval_for_circular, parse_genome_na_edit),
                 char(')'),
             )
             .parse(input)
@@ -4564,7 +4573,7 @@ fn parse_circular_variant(
 
         let original_input = input;
         let (input, interval) = parse_genome_interval_for_circular(input)?;
-        let (input, edit) = parse_na_edit(input)?;
+        let (input, edit) = parse_genome_na_edit(input)?;
         // Reject spec-unauthorised reversed ranges (#129).
         check_circular_reversed_range(&interval, &edit, original_input)?;
 
@@ -5166,7 +5175,7 @@ fn parse_compact_mosaic_rhs(
 ) -> Result<Option<HgvsVariant>, FerroError> {
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::interval::Interval;
-    use crate::hgvs::parser::edit::parse_na_edit;
+    use crate::hgvs::parser::edit::{parse_genome_na_edit, parse_na_edit};
 
     /// A single-base substitution targets one position, so the inherited
     /// compact-mosaic LHS identity must be a point (`c.85=`), not a range
@@ -5318,7 +5327,16 @@ fn parse_compact_mosaic_rhs(
     }
 
     // Parse the RHS as a bare NaEdit and require we consumed all of it.
-    let (remaining, edit) = match parse_na_edit(rhs) {
+    // Genome-family LHS (g./m./o.) routes through `parse_genome_na_edit` so the
+    // reconstructed RHS edit accepts the same genome-only special-position
+    // inserted ranges as the primary parse paths; c./n./r. keep `parse_na_edit`.
+    let parse_rhs_edit = match lhs {
+        HgvsVariant::Genome(_) | HgvsVariant::Mt(_) | HgvsVariant::Circular(_) => {
+            parse_genome_na_edit
+        }
+        _ => parse_na_edit,
+    };
+    let (remaining, edit) = match parse_rhs_edit(rhs) {
         Ok((rem, e)) => (rem, e),
         Err(_) => return Ok(None),
     };
@@ -5434,7 +5452,7 @@ fn parse_variant_with_inherited_accession(
             msg: format!("Failed to parse genome interval: {:?}", e),
             diagnostic: None,
         })?;
-        let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
+        let (remaining, edit) = parse_genome_na_edit(remaining).map_err(|e| FerroError::Parse {
             pos: input.len() - remaining.len(),
             msg: format!("Failed to parse edit: {:?}", e),
             diagnostic: None,
@@ -5583,7 +5601,7 @@ fn parse_variant_with_inherited_accession(
                 msg: format!("Failed to parse mitochondrial interval: {:?}", e),
                 diagnostic: None,
             })?;
-        let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
+        let (remaining, edit) = parse_genome_na_edit(remaining).map_err(|e| FerroError::Parse {
             pos: input.len() - remaining.len(),
             msg: format!("Failed to parse edit: {:?}", e),
             diagnostic: None,
@@ -5612,7 +5630,7 @@ fn parse_variant_with_inherited_accession(
                 msg: format!("Failed to parse circular interval: {:?}", e),
                 diagnostic: None,
             })?;
-        let (remaining, edit) = parse_na_edit(remaining).map_err(|e| FerroError::Parse {
+        let (remaining, edit) = parse_genome_na_edit(remaining).map_err(|e| FerroError::Parse {
             pos: input.len() - remaining.len(),
             msg: format!("Failed to parse edit: {:?}", e),
             diagnostic: None,

@@ -7,7 +7,9 @@ use crate::hgvs::edit::{
     MethylationStatus, NaEdit, ProteinEdit, RepeatCount, RepeatUnit, Sequence,
 };
 use crate::hgvs::location::AminoAcid;
-use crate::hgvs::parser::position::{parse_amino_acid, parse_amino_acid_one_letter};
+use crate::hgvs::parser::position::{
+    parse_amino_acid, parse_amino_acid_one_letter, parse_genome_pos, special_pos_marker_len,
+};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
@@ -267,16 +269,26 @@ fn parse_deletion(input: &str) -> IResult<&str, NaEdit> {
 }
 
 /// Parse an insertion (e.g., insA, insATG, ins10, ins(10), ins(10_20), insA[10], ins[A[10];T])
-fn parse_insertion(input: &str) -> IResult<&str, NaEdit> {
+fn parse_insertion(input: &str, allow_special_positions: bool) -> IResult<&str, NaEdit> {
     let (input, _) = tag("ins").parse(input)?;
-    let (input, sequence) = parse_inserted_sequence(input)?;
+    let (input, sequence) = parse_inserted_sequence(input, allow_special_positions)?;
     Ok((input, NaEdit::Insertion { sequence }))
 }
 
 /// Parse an inserted sequence in any format
+///
+/// `allow_special_positions` gates the genome-only special-position inserted
+/// range (`pter`/`qter`/`cen` endpoints, e.g. `delins102425452_qterinv`). It is
+/// `true` only on the genome-family edit-parse path; for c./n./r./p. it is
+/// `false` so those coordinate systems reject special positions in an inserted
+/// range (they are genome-only per HGVS DNA/complex.md).
+///
 /// Optimized with byte-based dispatch to avoid trying multiple alternatives
 #[inline]
-fn parse_inserted_sequence(input: &str) -> IResult<&str, InsertedSequence> {
+fn parse_inserted_sequence(
+    input: &str,
+    allow_special_positions: bool,
+) -> IResult<&str, InsertedSequence> {
     let bytes = input.as_bytes();
 
     if bytes.is_empty() {
@@ -290,6 +302,19 @@ fn parse_inserted_sequence(input: &str) -> IResult<&str, InsertedSequence> {
     if let Some(reference) = parse_reference_location(input) {
         let ref_len = reference.len();
         return Ok((&input[ref_len..], InsertedSequence::Reference(reference)));
+    }
+
+    // Inserted genome position-range with a special-position endpoint
+    // (pter/qter/cen), e.g. `pter_26393001inv` or `102425452_qterinv`
+    // (HGVS DNA/complex.md:94-95). Genome-only: only attempted on the
+    // genome-family edit-parse path (`allow_special_positions`). This must be
+    // tried before the numeric and named-element dispatch below. It only
+    // succeeds when at least one endpoint is special, so all-numeric ranges
+    // fall through unchanged.
+    if allow_special_positions && (starts_with_special_pos(bytes) || bytes[0].is_ascii_digit()) {
+        if let Ok((remaining, seq)) = parse_special_position_range(input) {
+            return Ok((remaining, seq));
+        }
     }
 
     match bytes[0] {
@@ -864,10 +889,53 @@ fn parse_simple_count(input: &str) -> IResult<&str, InsertedSequence> {
     Ok((remaining, InsertedSequence::Count(start)))
 }
 
+/// Check whether the input starts with a special position marker (pter/qter/cen).
+#[inline]
+fn starts_with_special_pos(bytes: &[u8]) -> bool {
+    special_pos_marker_len(bytes).is_some()
+}
+
+/// Parse an inserted genome position-range where at least one endpoint is a
+/// special position (`pter`/`qter`/`cen`), with an optional trailing `inv` —
+/// e.g. `102425452_qterinv`, `pter_26393001inv` (HGVS DNA/complex.md:94-95).
+///
+/// Special positions are genome-only, so the all-numeric inserted ranges
+/// (`850_900`, `850_900inv`) are deliberately left to
+/// `PositionRange`/`PositionRangeInv`: this parser fails unless at least one
+/// endpoint is special, so it never disturbs the numeric path.
+fn parse_special_position_range(input: &str) -> IResult<&str, InsertedSequence> {
+    let (remaining, start) = parse_genome_pos(input)?;
+    let (remaining, _) = char('_').parse(remaining)?;
+    let (remaining, end) = parse_genome_pos(remaining)?;
+
+    // Genome-only construct: require at least one special endpoint so that
+    // all-numeric ranges keep their existing `PositionRange` representation.
+    if !start.is_special() && !end.is_special() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
+    let (remaining, inverted) = match tag::<_, _, nom::error::Error<&str>>("inv").parse(remaining) {
+        Ok((rest, _)) => (rest, true),
+        Err(_) => (remaining, false),
+    };
+
+    Ok((
+        remaining,
+        InsertedSequence::SpecialPositionRange {
+            start,
+            end,
+            inverted,
+        },
+    ))
+}
+
 /// Parse a delins (e.g., delinsA, delinsATG, delins10, delins(10_20), delinsA[10])
-fn parse_delins(input: &str) -> IResult<&str, NaEdit> {
+fn parse_delins(input: &str, allow_special_positions: bool) -> IResult<&str, NaEdit> {
     let (input, _) = tag("delins").parse(input)?;
-    let (input, sequence) = parse_inserted_sequence(input)?;
+    let (input, sequence) = parse_inserted_sequence(input, allow_special_positions)?;
     Ok((
         input,
         NaEdit::Delins {
@@ -885,11 +953,14 @@ fn parse_delins(input: &str) -> IResult<&str, NaEdit> {
 /// appears in databases. ferro preserves the explicit deleted sequence so
 /// `parse → Display` round-trips faithfully; `canonicalize_edit` strips it
 /// back to the short form when canonicalization is requested.
-fn parse_delins_with_deleted_seq(input: &str) -> IResult<&str, NaEdit> {
+fn parse_delins_with_deleted_seq(
+    input: &str,
+    allow_special_positions: bool,
+) -> IResult<&str, NaEdit> {
     let (input, _) = tag("del").parse(input)?;
     let (input, deleted_seq) = parse_sequence(input)?;
     let (input, _) = tag("ins").parse(input)?;
-    let (input, inserted_seq) = parse_inserted_sequence(input)?;
+    let (input, inserted_seq) = parse_inserted_sequence(input, allow_special_positions)?;
 
     Ok((
         input,
@@ -905,11 +976,14 @@ fn parse_delins_with_deleted_seq(input: &str) -> IResult<&str, NaEdit> {
 ///
 /// As with explicit deleted sequence, the spec prefers the short form but
 /// ferro preserves the count for round-trip fidelity.
-fn parse_delins_with_deleted_count(input: &str) -> IResult<&str, NaEdit> {
+fn parse_delins_with_deleted_count(
+    input: &str,
+    allow_special_positions: bool,
+) -> IResult<&str, NaEdit> {
     let (input, _) = tag("del").parse(input)?;
     let (input, deleted_count_str) = digit1.parse(input)?;
     let (input, _) = tag("ins").parse(input)?;
-    let (input, inserted_seq) = parse_inserted_sequence(input)?;
+    let (input, inserted_seq) = parse_inserted_sequence(input, allow_special_positions)?;
 
     let deleted_count: u64 = deleted_count_str.parse().unwrap_or(0);
 
@@ -926,9 +1000,9 @@ fn parse_delins_with_deleted_count(input: &str) -> IResult<&str, NaEdit> {
 /// Parse a dupins (duplication followed by insertion, e.g., dupinsCTCA)
 /// This is a non-standard but commonly used notation in databases like ClinVar
 #[inline]
-fn parse_dupins(input: &str) -> IResult<&str, NaEdit> {
+fn parse_dupins(input: &str, allow_special_positions: bool) -> IResult<&str, NaEdit> {
     let (input, _) = tag("dupins").parse(input)?;
-    let (input, sequence) = parse_inserted_sequence(input)?;
+    let (input, sequence) = parse_inserted_sequence(input, allow_special_positions)?;
     Ok((input, NaEdit::DupIns { sequence }))
 }
 
@@ -1515,16 +1589,39 @@ fn parse_reference_sequence(input: &str) -> IResult<&str, NaEdit> {
 
 /// Parse any nucleic acid edit
 pub fn parse_na_edit(input: &str) -> IResult<&str, NaEdit> {
+    // Non-genome coordinate systems (c./n./r.): special positions
+    // (pter/qter/cen) are not allowed in an inserted range.
+    parse_na_edit_inner(input, false)
+}
+
+/// Parse a nucleic-acid edit on the genome-family axis (g./m./o.).
+///
+/// Identical to [`parse_na_edit`] except that special-position inserted ranges
+/// (`pter`/`qter`/`cen` endpoints, e.g. `delins102425452_qterinv`) are allowed,
+/// since special positions are genome-only (HGVS DNA/complex.md).
+pub fn parse_genome_na_edit(input: &str) -> IResult<&str, NaEdit> {
+    parse_na_edit_inner(input, true)
+}
+
+/// Shared implementation of the nucleic-acid edit parser.
+///
+/// `allow_special_positions` is threaded into the inserted-sequence parser so
+/// that the genome-only special-position inserted range is accepted only on the
+/// genome-family axis (see [`parse_genome_na_edit`]).
+fn parse_na_edit_inner(input: &str, allow_special_positions: bool) -> IResult<&str, NaEdit> {
     alt((
         parse_substitution,
         parse_substitution_no_ref,    // Substitution without ref (e.g., >A)
         parse_multibase_substitution, // Must come after substitution (e.g., GG>G)
-        parse_delins_with_deleted_seq, // Must come before delins and deletion (e.g., delAinsT)
-        parse_delins_with_deleted_count, // Must come before delins and deletion (e.g., del35insTA)
-        parse_delins,                 // Must come before deletion
+        // Must come before delins and deletion (e.g., delAinsT)
+        |i| parse_delins_with_deleted_seq(i, allow_special_positions),
+        // Must come before delins and deletion (e.g., del35insTA)
+        |i| parse_delins_with_deleted_count(i, allow_special_positions),
+        |i| parse_delins(i, allow_special_positions), // Must come before deletion
         parse_deletion,
-        parse_insertion,
-        parse_dupins, // Must come before duplication (dupins starts with dup)
+        |i| parse_insertion(i, allow_special_positions),
+        // Must come before duplication (dupins starts with dup)
+        |i| parse_dupins(i, allow_special_positions),
         parse_duplication,
         parse_inversion,
         parse_conversion,  // Gene conversion
