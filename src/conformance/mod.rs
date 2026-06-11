@@ -11,6 +11,7 @@
 //! `examples/` generator can share them; they are not part of the runtime API.
 
 pub mod biocommons;
+pub mod hgvs_rs_projection;
 pub mod mutalyzer;
 pub mod schema;
 pub mod summary;
