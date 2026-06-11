@@ -36,6 +36,280 @@ use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use superintervals::IntervalMap;
 
+/// rkyv-archivable mirror of the cdot cache. Kept fully separate from the
+/// domain types (`CdotTranscript`, `Strand`, `CigarOp`) so the rkyv derives —
+/// and the choice of an `i8` strand / flattened cigar encoding — stay contained
+/// to the cache layer. `from_rkyv_file`/`to_rkyv_file` convert at the boundary.
+mod rkyv_cache {
+    use super::{CdotMapper, CdotTranscript, CigarOp};
+    use crate::error::FerroError;
+    use crate::reference::Strand;
+    use rkyv::{Archive, Deserialize, Serialize};
+    use std::collections::HashMap;
+
+    /// Bump whenever the layout below changes so a stale archive is rejected by
+    /// the version check (in addition to rkyv's own structural validation) and
+    /// regenerated rather than mis-read.
+    pub(super) const RKYV_FORMAT_VERSION: u32 = 1;
+
+    #[derive(Archive, Serialize, Deserialize)]
+    pub(super) struct RkyvCigar {
+        /// 0 = Match, 1 = Insertion, 2 = Deletion.
+        op: u8,
+        len: u64,
+    }
+
+    #[derive(Archive, Serialize, Deserialize)]
+    pub(super) struct RkyvTx {
+        gene_name: Option<String>,
+        contig: String,
+        /// 1 = Plus, -1 = Minus, 0 = Unknown.
+        strand: i8,
+        exons: Vec<[u64; 4]>,
+        cds_start: Option<u64>,
+        cds_end: Option<u64>,
+        exon_cigars: Vec<Option<Vec<RkyvCigar>>>,
+        gene_id: Option<String>,
+        protein: Option<String>,
+    }
+
+    #[derive(Archive, Serialize, Deserialize)]
+    pub(super) struct RkyvSnapshot {
+        /// Format version — first field so a mismatch is a clean signal.
+        pub(super) format_version: u32,
+        pub(super) transcripts: HashMap<String, RkyvTx>,
+        pub(super) contig_index: HashMap<String, Vec<String>>,
+        pub(super) contig_alias_to_canonical: HashMap<String, String>,
+        pub(super) base_to_versioned: HashMap<String, String>,
+        pub(super) lrg_to_refseq: HashMap<String, String>,
+        pub(super) primary_build: Option<String>,
+        pub(super) alt_build_transcripts: HashMap<String, HashMap<String, RkyvTx>>,
+    }
+
+    fn strand_to_i8(s: Strand) -> i8 {
+        match s {
+            Strand::Plus => 1,
+            Strand::Minus => -1,
+            Strand::Unknown => 0,
+        }
+    }
+    /// Reject unknown tags rather than coercing them: a corrupt `.rkyv` whose
+    /// strand byte is out of range must be regenerated, not silently read back
+    /// as `Strand::Unknown`.
+    fn strand_from_i8(v: i8) -> Result<Strand, FerroError> {
+        match v {
+            1 => Ok(Strand::Plus),
+            -1 => Ok(Strand::Minus),
+            0 => Ok(Strand::Unknown),
+            other => Err(FerroError::Io {
+                msg: format!("cdot rkyv archive has invalid strand tag {other}"),
+            }),
+        }
+    }
+    fn cigar_to_rkyv(c: &CigarOp) -> RkyvCigar {
+        match *c {
+            CigarOp::Match(n) => RkyvCigar { op: 0, len: n },
+            CigarOp::Insertion(n) => RkyvCigar { op: 1, len: n },
+            CigarOp::Deletion(n) => RkyvCigar { op: 2, len: n },
+        }
+    }
+
+    pub(super) fn tx_to_rkyv(t: &CdotTranscript) -> RkyvTx {
+        RkyvTx {
+            gene_name: t.gene_name.clone(),
+            contig: t.contig.clone(),
+            strand: strand_to_i8(t.strand),
+            exons: t.exons.clone(),
+            cds_start: t.cds_start,
+            cds_end: t.cds_end,
+            exon_cigars: t
+                .exon_cigars
+                .iter()
+                .map(|opt| opt.as_ref().map(|v| v.iter().map(cigar_to_rkyv).collect()))
+                .collect(),
+            gene_id: t.gene_id.clone(),
+            protein: t.protein.clone(),
+        }
+    }
+
+    /// Reject unknown op tags rather than coercing them to `Match`, for the same
+    /// reason as [`strand_from_i8`].
+    fn cigar_from_archived(a: &ArchivedRkyvCigar) -> Result<CigarOp, FerroError> {
+        let len = a.len.to_native();
+        match a.op {
+            0 => Ok(CigarOp::Match(len)),
+            1 => Ok(CigarOp::Insertion(len)),
+            2 => Ok(CigarOp::Deletion(len)),
+            other => Err(FerroError::Io {
+                msg: format!("cdot rkyv archive has invalid cigar op tag {other}"),
+            }),
+        }
+    }
+
+    /// Build a `CdotTranscript` directly from the archived form — a single pass,
+    /// avoiding an intermediate owned `RkyvTx`. Returns an error if any archived
+    /// enum tag (strand, cigar op) is out of range, so a corrupt archive is
+    /// rejected and regenerated rather than materialized with wrong data.
+    fn tx_from_archived(a: &ArchivedRkyvTx) -> Result<CdotTranscript, FerroError> {
+        Ok(CdotTranscript {
+            gene_name: a.gene_name.as_ref().map(|s| s.as_str().to_string()),
+            contig: a.contig.as_str().to_string(),
+            strand: strand_from_i8(a.strand)?,
+            exons: a
+                .exons
+                .iter()
+                .map(|e| {
+                    [
+                        e[0].to_native(),
+                        e[1].to_native(),
+                        e[2].to_native(),
+                        e[3].to_native(),
+                    ]
+                })
+                .collect(),
+            cds_start: a.cds_start.as_ref().map(|v| v.to_native()),
+            cds_end: a.cds_end.as_ref().map(|v| v.to_native()),
+            exon_cigars: a
+                .exon_cigars
+                .iter()
+                .map(|opt| {
+                    opt.as_ref()
+                        .map(|v| {
+                            v.iter()
+                                .map(cigar_from_archived)
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            gene_id: a.gene_id.as_ref().map(|s| s.as_str().to_string()),
+            protein: a.protein.as_ref().map(|s| s.as_str().to_string()),
+        })
+    }
+
+    /// Owned cdot maps materialized directly from an archive (one pass).
+    pub(super) struct CdotMaps {
+        pub transcripts: HashMap<String, CdotTranscript>,
+        pub contig_index: HashMap<String, Vec<String>>,
+        pub contig_alias_to_canonical: HashMap<String, String>,
+        pub base_to_versioned: HashMap<String, String>,
+        pub lrg_to_refseq: HashMap<String, String>,
+        pub primary_build: Option<String>,
+        pub alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscript>>,
+    }
+
+    pub(super) fn version_of(a: &ArchivedRkyvSnapshot) -> u32 {
+        a.format_version.to_native()
+    }
+
+    /// Materialize owned cdot maps from a validated archive in a single pass.
+    /// Returns an error if any transcript carries an out-of-range enum tag.
+    pub(super) fn maps_from_archived(a: &ArchivedRkyvSnapshot) -> Result<CdotMaps, FerroError> {
+        let txs = |m: &rkyv::collections::swiss_table::ArchivedHashMap<
+            rkyv::string::ArchivedString,
+            ArchivedRkyvTx,
+        >|
+         -> Result<HashMap<String, CdotTranscript>, FerroError> {
+            m.iter()
+                .map(|(k, v)| Ok((k.as_str().to_string(), tx_from_archived(v)?)))
+                .collect()
+        };
+        let str_map = |m: &rkyv::collections::swiss_table::ArchivedHashMap<
+            rkyv::string::ArchivedString,
+            rkyv::string::ArchivedString,
+        >|
+         -> HashMap<String, String> {
+            m.iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.as_str().to_string()))
+                .collect()
+        };
+        Ok(CdotMaps {
+            transcripts: txs(&a.transcripts)?,
+            contig_index: a
+                .contig_index
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.as_str().to_string(),
+                        v.iter().map(|s| s.as_str().to_string()).collect(),
+                    )
+                })
+                .collect(),
+            contig_alias_to_canonical: str_map(&a.contig_alias_to_canonical),
+            base_to_versioned: str_map(&a.base_to_versioned),
+            lrg_to_refseq: str_map(&a.lrg_to_refseq),
+            primary_build: a.primary_build.as_ref().map(|s| s.as_str().to_string()),
+            alt_build_transcripts: a
+                .alt_build_transcripts
+                .iter()
+                .map(|(b, m)| Ok((b.as_str().to_string(), txs(m)?)))
+                .collect::<Result<HashMap<_, _>, FerroError>>()?,
+        })
+    }
+
+    /// Build the rkyv snapshot mirror from a populated mapper (serialize side).
+    pub(super) fn snapshot_from_mapper(m: &CdotMapper) -> RkyvSnapshot {
+        let map = |src: &HashMap<String, CdotTranscript>| -> HashMap<String, RkyvTx> {
+            src.iter()
+                .map(|(k, v)| (k.clone(), tx_to_rkyv(v)))
+                .collect()
+        };
+        RkyvSnapshot {
+            format_version: RKYV_FORMAT_VERSION,
+            transcripts: map(&m.transcripts),
+            contig_index: m.contig_index.clone(),
+            contig_alias_to_canonical: m.contig_alias_to_canonical.clone(),
+            base_to_versioned: m.base_to_versioned.clone(),
+            lrg_to_refseq: m.lrg_to_refseq.clone(),
+            primary_build: m.primary_build.clone(),
+            alt_build_transcripts: m
+                .alt_build_transcripts
+                .iter()
+                .map(|(b, txs)| (b.clone(), map(txs)))
+                .collect(),
+        }
+    }
+
+    /// Serialize a current-version archive carrying a single transcript whose
+    /// `strand` / `cigar op` bytes are forced to the given (possibly invalid)
+    /// raw tags. Lets tests exercise the archive-tag rejection path without
+    /// going through `strand_to_i8` / `cigar_to_rkyv`, whose construction can
+    /// only ever produce valid tags. The archive passes structural and version
+    /// validation, so any rejection comes purely from tag checking.
+    #[cfg(test)]
+    pub(super) fn archive_bytes_with_tags(strand: i8, cigar_op: u8) -> Vec<u8> {
+        let tx = RkyvTx {
+            gene_name: None,
+            contig: "NC_000017.11".to_string(),
+            strand,
+            exons: vec![[50184096, 50184169, 0, 73]],
+            cds_start: Some(10),
+            cds_end: Some(60),
+            exon_cigars: vec![Some(vec![RkyvCigar {
+                op: cigar_op,
+                len: 73,
+            }])],
+            gene_id: None,
+            protein: None,
+        };
+        let mut transcripts = HashMap::new();
+        transcripts.insert("NM_000088.3".to_string(), tx);
+        let snapshot = RkyvSnapshot {
+            format_version: RKYV_FORMAT_VERSION,
+            transcripts,
+            contig_index: HashMap::new(),
+            contig_alias_to_canonical: HashMap::new(),
+            base_to_versioned: HashMap::new(),
+            lrg_to_refseq: HashMap::new(),
+            primary_build: None,
+            alt_build_transcripts: HashMap::new(),
+        };
+        rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
+            .expect("serialize test archive")
+            .to_vec()
+    }
+}
+
 /// Magic bytes prefixing a cdot bincode cache file, followed by a `u32`
 /// schema version. The version MUST be bumped whenever the serialized layout
 /// of [`CdotMapperSnapshot`] changes (a field added/removed/reordered, or a
@@ -1175,59 +1449,200 @@ impl CdotMapper {
         })
     }
 
-    /// Load a cdot file, preferring a sibling `.bin` (bincode) file if available.
+    /// `mmap`-backed load from a pre-serialized rkyv archive.
     ///
-    /// Given a path to a `.json` or `.json.gz` file, checks for a `.bin` file in the
-    /// same directory. If the bincode file exists, loads from it (much faster). Otherwise
-    /// falls back to JSON parsing. Also handles `.bin` paths directly.
+    /// Maps the archive file into memory (one `unsafe` `memmap2::Mmap::map`
+    /// call) then validates and deserializes it in a single pass, rejects stale
+    /// or corrupt archives so [`load`](Self::load) can regenerate them, and is
+    /// ~3-4x faster than the bincode path because rkyv's layout skips the
+    /// byte-stream decode.
+    pub fn from_rkyv_file<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        use rkyv::rancor::Error as RkyvError;
+
+        let file = std::fs::File::open(path.as_ref()).map_err(|e| FerroError::Io {
+            msg: format!("Failed to open cdot rkyv file: {}", e),
+        })?;
+        // mmap (page-aligned, satisfies rkyv's alignment) so the 260MB+ archive
+        // isn't read+copied up front — pages fault in lazily as `deserialize`
+        // touches them. The mapping is dropped once we own the data below.
+        // SAFETY: concurrent writers use `rename` (new inode) so an active
+        // mapping is never invalidated by a parallel cache refresh; external
+        // truncation of the file is not guarded against.
+        let mmap = unsafe {
+            memmap2::Mmap::map(&file).map_err(|e| FerroError::Io {
+                msg: format!("Failed to mmap cdot rkyv file: {}", e),
+            })?
+        };
+
+        let archived = rkyv::access::<rkyv_cache::ArchivedRkyvSnapshot, RkyvError>(&mmap[..])
+            .map_err(|e| FerroError::Io {
+                msg: format!("cdot rkyv archive failed validation: {}", e),
+            })?;
+        let version = rkyv_cache::version_of(archived);
+        if version != rkyv_cache::RKYV_FORMAT_VERSION {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "cdot rkyv schema version {} != expected {}",
+                    version,
+                    rkyv_cache::RKYV_FORMAT_VERSION
+                ),
+            });
+        }
+
+        // Materialize owned cdot maps directly from the archive (single pass).
+        // Rejects (rather than coerces) any out-of-range enum tag, so a corrupt
+        // archive surfaces as an error and is regenerated by the caller.
+        let maps = rkyv_cache::maps_from_archived(archived)?;
+        Ok(Self {
+            transcripts: maps.transcripts,
+            contig_index: maps.contig_index,
+            contig_alias_to_canonical: maps.contig_alias_to_canonical,
+            base_to_versioned: maps.base_to_versioned,
+            lrg_to_refseq: maps.lrg_to_refseq,
+            alt_build_transcripts: maps.alt_build_transcripts,
+            primary_build: maps.primary_build,
+            contig_query_index: OnceCell::new(),
+            transcript_genome_spans: OnceCell::new(),
+        })
+    }
+
+    /// Cheap check: does `path` begin with a current, structurally valid rkyv
+    /// archive? Reads and validates (the archive must be parsed to reach the
+    /// version field), so it is not free — but far cheaper than a full load,
+    /// and lets `prepare` decide whether to regenerate.
+    pub fn rkyv_is_current<P: AsRef<Path>>(path: P) -> bool {
+        let Ok(file) = std::fs::File::open(path.as_ref()) else {
+            return false;
+        };
+        // SAFETY: concurrent writers use `rename` (new inode) so an active
+        // mapping is never invalidated by a parallel cache refresh; external
+        // truncation of the file is not guarded against.
+        let Ok(mmap) = (unsafe { memmap2::Mmap::map(&file) }) else {
+            return false;
+        };
+        match rkyv::access::<rkyv_cache::ArchivedRkyvSnapshot, rkyv::rancor::Error>(&mmap[..]) {
+            Ok(a) => a.format_version.to_native() == rkyv_cache::RKYV_FORMAT_VERSION,
+            Err(_) => false,
+        }
+    }
+
+    /// Write the mapper to an rkyv archive (atomically), for fast loading.
+    pub fn to_rkyv_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FerroError> {
+        let snapshot = rkyv_cache::snapshot_from_mapper(self);
+        let bytes =
+            rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).map_err(|e| FerroError::Io {
+                msg: format!("Failed to serialize cdot rkyv: {}", e),
+            })?;
+
+        // Unique temp sibling (pid + process-global counter) so concurrent
+        // writers in the same process never collide — see `to_bincode_file`.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let path = path.as_ref();
+        let mut tmp = path.to_path_buf();
+        let tmp_name = format!(
+            "{}.tmp.{}.{}",
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "cdot.rkyv".to_string()),
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        tmp.set_file_name(tmp_name);
+
+        if let Err(e) = std::fs::write(&tmp, &bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(FerroError::Io {
+                msg: format!("Failed to write cdot rkyv temp file: {}", e),
+            });
+        }
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            FerroError::Io {
+                msg: format!("Failed to finalize cdot rkyv file: {}", e),
+            }
+        })
+    }
+
+    /// Load a cdot file using the fastest available cache format.
+    ///
+    /// Given a path to a `.json` or `.json.gz` file, checks for sibling cache
+    /// files in order: `.rkyv` (fastest, preferred) then `.bin` (legacy
+    /// bincode). If only `.bin` exists, loads from it and promotes it to
+    /// `.rkyv` for future runs. Falls back to JSON if no cache is present or
+    /// usable, then writes a fresh `.rkyv` cache. Also accepts direct `.rkyv`
+    /// or `.bin` paths.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy();
 
-        // Direct bincode path — no JSON fallback available
+        // Direct archive paths — no JSON fallback available.
+        if path_str.ends_with(".rkyv") {
+            return Self::from_rkyv_file(path);
+        }
         if path_str.ends_with(".bin") {
             return Self::from_bincode_file(path);
         }
 
-        // Compute the canonical sibling .bin path:
-        // - foo.json.gz -> foo.bin (strip .gz then replace .json with .bin)
-        // - foo.json    -> foo.bin
-        let bin_path = if path_str.ends_with(".json.gz") {
-            path.with_extension("").with_extension("bin")
+        // Sibling cache paths next to the JSON. Replace the *single* trailing
+        // extension (`.json`, or `.json` after stripping `.gz`); the accession
+        // stem itself contains dots (e.g. `cdot-0.2.32.refseq.GRCh38`) so we
+        // must not over-strip.
+        let (rkyv_path, bin_path) = if path_str.ends_with(".json.gz") {
+            let stem = path.with_extension(""); // foo.json.gz -> foo.json
+            (stem.with_extension("rkyv"), stem.with_extension("bin"))
         } else {
-            path.with_extension("bin")
+            (path.with_extension("rkyv"), path.with_extension("bin"))
         };
-        if bin_path.exists() {
-            match Self::from_bincode_file(&bin_path) {
+
+        // 1. Prefer the rkyv archive (fastest, validated).
+        if rkyv_path.exists() {
+            match Self::from_rkyv_file(&rkyv_path) {
                 Ok(mapper) => return Ok(mapper),
-                Err(e) => {
-                    // Loud (stderr, not just `log`) — the binary may not
-                    // initialize a logger, and silently eating the ~10x JSON
-                    // parse on every run is exactly the failure mode this guards.
-                    eprintln!(
-                        "warning: cdot bincode cache {} is unusable ({}); \
-                         parsing JSON (much slower) and refreshing the cache",
-                        bin_path.display(),
-                        e
-                    );
-                }
+                Err(e) => eprintln!(
+                    "warning: cdot rkyv cache {} is unusable ({}); trying other formats",
+                    rkyv_path.display(),
+                    e
+                ),
             }
         }
 
-        // Fall back to JSON.
+        // 2. Legacy bincode cache — usable, but upgrade to rkyv for next time.
+        if bin_path.exists() {
+            match Self::from_bincode_file(&bin_path) {
+                Ok(mapper) => {
+                    if let Err(e) = mapper.to_rkyv_file(&rkyv_path) {
+                        eprintln!(
+                            "note: could not write cdot rkyv cache {}: {} (continuing)",
+                            rkyv_path.display(),
+                            e
+                        );
+                    }
+                    return Ok(mapper);
+                }
+                Err(e) => eprintln!(
+                    "warning: cdot bincode cache {} is unusable ({}); \
+                     parsing JSON (much slower) and refreshing the cache",
+                    bin_path.display(),
+                    e
+                ),
+            }
+        }
+
+        // 3. Fall back to JSON.
         let mapper = if path_str.ends_with(".gz") {
             Self::from_json_gz(path)?
         } else {
             Self::from_json_file(path)?
         };
 
-        // Self-heal: best-effort refresh of the sibling bincode cache so the
-        // next load takes the fast path. Failures here (e.g. a read-only
-        // reference mount) are non-fatal — we already have a usable mapper.
-        if let Err(e) = mapper.to_bincode_file(&bin_path) {
+        // Self-heal: best-effort refresh of the sibling rkyv cache so the next
+        // load takes the fast path. Failures (e.g. a read-only mount) are
+        // non-fatal — we already have a usable mapper.
+        if let Err(e) = mapper.to_rkyv_file(&rkyv_path) {
             eprintln!(
-                "note: could not refresh cdot bincode cache {}: {} (continuing)",
-                bin_path.display(),
+                "note: could not refresh cdot rkyv cache {}: {} (continuing)",
+                rkyv_path.display(),
                 e
             );
         }
@@ -2617,6 +3032,67 @@ mod tests {
     }
 
     #[test]
+    fn test_concurrent_to_rkyv_file_same_path() {
+        // Multiple threads writing the same rkyv cache path concurrently must
+        // not collide on their temp siblings or leave a half-written archive:
+        // the final cache must always be loadable and complete.  Mirrors the
+        // bincode variant above; `to_rkyv_file` uses the same pid-counter-rename
+        // pattern.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = std::sync::Arc::new(CdotMapper::from_reader(json.as_bytes()).unwrap());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let rkyv_path = std::sync::Arc::new(temp_dir.path().join("concurrent.rkyv"));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let original = std::sync::Arc::clone(&original);
+                let rkyv_path = std::sync::Arc::clone(&rkyv_path);
+                std::thread::spawn(move || original.to_rkyv_file(rkyv_path.as_path()))
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .unwrap()
+                .expect("concurrent rkyv write should succeed");
+        }
+
+        // The final archive is complete and loadable, and no temp siblings leaked.
+        assert!(
+            CdotMapper::rkyv_is_current(rkyv_path.as_path()),
+            "rkyv cache must be current after concurrent writes"
+        );
+        let loaded = CdotMapper::from_rkyv_file(rkyv_path.as_path()).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert!(loaded.get_transcript("NM_000088.3").is_some());
+
+        let leftover_tmp: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            leftover_tmp.is_empty(),
+            "temp siblings leaked: {:?}",
+            leftover_tmp
+        );
+    }
+
+    #[test]
     fn test_load_prefers_bincode() {
         let json = r#"
         {
@@ -2667,6 +3143,106 @@ mod tests {
     }
 
     #[test]
+    fn test_load_prefers_rkyv_over_bincode() {
+        // When both a .rkyv sibling and a .bin sibling exist, load() must pick
+        // the .rkyv one. Each on-disk representation carries a unique sentinel in
+        // gene_name so the returned value identifies which path was taken.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        // Build distinct mappers for each on-disk format.
+        let mut from_bin = original.clone();
+        from_bin
+            .transcripts
+            .get_mut("NM_000088.3")
+            .unwrap()
+            .gene_name = Some("FROM_BIN".to_string());
+
+        let mut from_rkyv = original.clone();
+        from_rkyv
+            .transcripts
+            .get_mut("NM_000088.3")
+            .unwrap()
+            .gene_name = Some("FROM_RKYV".to_string());
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let bin_path = temp_dir.path().join("cdot.bin");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
+
+        std::fs::write(&json_path, json).unwrap();
+        from_bin.to_bincode_file(&bin_path).unwrap();
+        from_rkyv.to_rkyv_file(&rkyv_path).unwrap();
+
+        // With all three siblings present, load() must prefer .rkyv.
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(
+            loaded
+                .get_transcript("NM_000088.3")
+                .unwrap()
+                .gene_name
+                .as_deref(),
+            Some("FROM_RKYV"),
+            "load() should prefer .rkyv over .bin and JSON"
+        );
+    }
+
+    #[test]
+    fn test_load_bin_upgrades_to_rkyv() {
+        // When only a .bin sibling is present (no .rkyv), load() must load from
+        // .bin and then write a .rkyv sibling for future runs.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let original = CdotMapper::from_reader(json.as_bytes()).unwrap();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("cdot.json");
+        let bin_path = temp_dir.path().join("cdot.bin");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
+
+        std::fs::write(&json_path, json).unwrap();
+        original.to_bincode_file(&bin_path).unwrap();
+
+        // No .rkyv exists yet.
+        assert!(!rkyv_path.exists(), ".rkyv must not exist before load()");
+
+        let loaded = CdotMapper::load(&json_path).unwrap();
+        assert_eq!(loaded.transcript_count(), 1);
+        assert!(loaded.get_transcript("NM_000088.3").is_some());
+
+        // load() must have written the .rkyv promotion.
+        assert!(
+            CdotMapper::rkyv_is_current(&rkyv_path),
+            "load() should promote .bin to a valid .rkyv sibling"
+        );
+    }
+
+    #[test]
     fn test_load_falls_back_to_json() {
         let json = r#"
         {
@@ -2711,24 +3287,26 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let json_path = temp_dir.path().join("cdot.json");
         let bin_path = temp_dir.path().join("cdot.bin");
+        let rkyv_path = temp_dir.path().join("cdot.rkyv");
 
-        // Write valid JSON and corrupt bincode
+        // Write valid JSON and a corrupt bincode cache; no rkyv cache yet.
         std::fs::write(&json_path, json).unwrap();
         std::fs::write(&bin_path, b"not valid bincode data").unwrap();
 
-        // load() should fall back to JSON despite corrupt .bin
+        // load() should fall back to JSON despite the corrupt .bin.
         let loaded = CdotMapper::load(&json_path).unwrap();
         assert_eq!(loaded.transcript_count(), 1);
         assert!(loaded.get_transcript("NM_000088.3").is_some());
 
-        // Self-heal: the corrupt cache must have been refreshed to a current
-        // one, so a second load takes the fast bincode path.
+        // Self-heal now writes the fast rkyv cache, so a second load takes the
+        // fast path.
         assert!(
-            CdotMapper::bincode_is_current(&bin_path),
-            "corrupt cache should be refreshed after the JSON fallback"
+            CdotMapper::rkyv_is_current(&rkyv_path),
+            "an rkyv cache should be written after the JSON fallback"
         );
-        let reloaded = CdotMapper::from_bincode_file(&bin_path).unwrap();
+        let reloaded = CdotMapper::from_rkyv_file(&rkyv_path).unwrap();
         assert_eq!(reloaded.transcript_count(), 1);
+        assert!(reloaded.get_transcript("NM_000088.3").is_some());
     }
 
     #[test]
@@ -2778,6 +3356,97 @@ mod tests {
             "alt-build resolution must survive bincode roundtrip"
         );
         assert_eq!(got, Some(("NC_000017.10".to_string(), Some(10))));
+    }
+
+    #[test]
+    fn test_rkyv_roundtrip_preserves_data() {
+        // Same transcript as the bincode test, plus a per-exon CIGAR ("M73"),
+        // so the rkyv path is verified to preserve exons, strand, CDS, the
+        // per-exon cigar, AND the alt-build (GRCh37) map.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000017.10",
+                            "strand": "-",
+                            "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                        },
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "-",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let from_json = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.rkyv");
+        from_json.to_rkyv_file(&p).unwrap();
+        assert!(CdotMapper::rkyv_is_current(&p));
+        let from_rkyv = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        // Primary-build transcript must be byte-identical across the roundtrip,
+        // including strand, exons, CDS, and the per-exon cigars.
+        let a = from_json.get_transcript("NM_000088.3").unwrap();
+        let b = from_rkyv.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(a.contig, b.contig);
+        assert_eq!(a.strand, b.strand);
+        assert_eq!(a.exons, b.exons);
+        assert_eq!((a.cds_start, a.cds_end), (b.cds_start, b.cds_end));
+        assert_eq!(a.exon_cigars, b.exon_cigars);
+        assert_eq!(a.gene_name, b.gene_name);
+
+        // Alt-build (GRCh37) resolution must survive too.
+        let want = from_json
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .map(|t| (t.contig.clone(), t.strand, t.cds_start));
+        let got = from_rkyv
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .map(|t| (t.contig.clone(), t.strand, t.cds_start));
+        assert_eq!(want, got, "alt-build must survive the rkyv roundtrip");
+    }
+
+    #[test]
+    fn test_rkyv_rejects_invalid_strand_tag() {
+        // A structurally valid, current-version archive whose strand byte is out
+        // of range must be rejected (not coerced to Strand::Unknown), so a
+        // corrupt cache is regenerated rather than materialized with wrong data.
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.rkyv");
+        let bytes = rkyv_cache::archive_bytes_with_tags(7, 0);
+        std::fs::write(&p, &bytes).unwrap();
+
+        // The archive itself is current — rejection comes from the tag check.
+        assert!(CdotMapper::rkyv_is_current(&p));
+        let err = CdotMapper::from_rkyv_file(&p).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid strand tag"),
+            "expected invalid-strand rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_rkyv_rejects_invalid_cigar_op_tag() {
+        // Same as above, but for an out-of-range per-exon cigar op tag.
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.rkyv");
+        let bytes = rkyv_cache::archive_bytes_with_tags(1, 9);
+        std::fs::write(&p, &bytes).unwrap();
+
+        assert!(CdotMapper::rkyv_is_current(&p));
+        let err = CdotMapper::from_rkyv_file(&p).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid cigar op tag"),
+            "expected invalid-cigar-op rejection, got: {err}"
+        );
     }
 
     #[test]

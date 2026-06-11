@@ -738,27 +738,26 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
         true
     };
 
-    // Parse JSON and serialize to bincode for fast subsequent loading.
-    // Always regenerate bincode when JSON was freshly downloaded to avoid stale cache.
-    let bin_path = json_path.with_extension("bin");
+    // Parse JSON and serialize to an rkyv archive for fast subsequent loading.
     // Only skip when an existing cache is actually *current* — a stale cache
-    // (written by a build with a different snapshot layout) fails to load and
-    // silently forces a ~10x JSON parse on every run, so it must be regenerated.
-    let bin_is_current =
-        bin_path.exists() && crate::data::cdot::CdotMapper::bincode_is_current(&bin_path);
-    if !json_is_fresh && skip_existing && bin_is_current {
-        eprintln!("  Skipping cdot bincode conversion (up to date)");
+    // (written by a build with a different layout) fails to load and silently
+    // forces the slow JSON parse on every run, so it must be regenerated.
+    let rkyv_path = json_path.with_extension("rkyv");
+    let rkyv_is_current =
+        rkyv_path.exists() && crate::data::cdot::CdotMapper::rkyv_is_current(&rkyv_path);
+    if !json_is_fresh && skip_existing && rkyv_is_current {
+        eprintln!("  Skipping cdot cache conversion (up to date)");
     } else {
-        if bin_path.exists() && !bin_is_current {
-            eprintln!("  Existing cdot bincode is stale; regenerating...");
+        if rkyv_path.exists() && !rkyv_is_current {
+            eprintln!("  Existing cdot cache is stale; regenerating...");
         }
-        eprintln!("  Converting cdot JSON to bincode for fast loading...");
+        eprintln!("  Converting cdot JSON to rkyv archive for fast loading...");
         let mapper = crate::data::cdot::CdotMapper::from_json_file(&json_path).map_err(|e| {
             FerroError::Io {
                 msg: format!("Failed to parse cdot JSON: {}", e),
             }
         })?;
-        mapper.to_bincode_file(&bin_path)?;
+        mapper.to_rkyv_file(&rkyv_path)?;
         eprintln!("  Done.");
     }
 
