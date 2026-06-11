@@ -134,6 +134,58 @@ pub fn create_reference_provider(
     }
 }
 
+/// Report which path the cdot cache loads from for a prepared reference dir.
+///
+/// Resolves the `cdot_json` entry of `<reference_dir>/manifest.json` (relative
+/// entries are resolved against the manifest's directory, mirroring
+/// [`MultiFastaProvider::from_manifest`]) and loads it via
+/// [`CdotMapper::load_with_source`], returning the [`CdotLoadSource`]. Returns
+/// `Ok(None)` when there is nothing to report — no manifest, no `cdot_json`
+/// entry, or the referenced cdot file is missing.
+///
+/// `ferro check` uses this to surface a silent fast-path → JSON-fallback
+/// regression (#585), and the nightly perf gate uses it as a timing-free
+/// co-assertion that the prepared cache is actually on the fast path.
+pub fn cdot_cache_load_source(
+    reference_dir: &Path,
+) -> Result<Option<crate::data::CdotLoadSource>, FerroError> {
+    let manifest_path = reference_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let base_dir = manifest_path.parent().unwrap_or(Path::new("."));
+    let file = File::open(&manifest_path).map_err(|e| FerroError::Io {
+        msg: format!("Failed to open manifest {}: {}", manifest_path.display(), e),
+    })?;
+    let manifest: serde_json::Value =
+        serde_json::from_reader(file).map_err(|e| FerroError::Io {
+            msg: format!(
+                "Failed to parse manifest {}: {}",
+                manifest_path.display(),
+                e
+            ),
+        })?;
+
+    let Some(cdot_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) else {
+        return Ok(None);
+    };
+    let cdot_path = {
+        let p = std::path::PathBuf::from(cdot_str);
+        if p.is_absolute() {
+            p
+        } else {
+            base_dir.join(p)
+        }
+    };
+    if !cdot_path.exists() {
+        return Ok(None);
+    }
+
+    let (_mapper, source) = crate::data::CdotMapper::load_with_source(&cdot_path)?;
+    Ok(Some(source))
+}
+
 /// Normalize variants from a file.
 ///
 /// # Arguments
@@ -469,5 +521,78 @@ mod tests {
         assert_eq!(timing.failed, 10);
         assert!((timing.elapsed_seconds - 2.0).abs() < 0.001);
         assert!((timing.variants_per_second - 50.0).abs() < 0.001);
+    }
+
+    const MINIMAL_CDOT_JSON: &str = r#"
+    {
+        "transcripts": {
+            "NM_000088.3": {
+                "gene_name": "COL1A1",
+                "contig": "NC_000017.11",
+                "strand": "+",
+                "exons": [[50184096, 50184169, 0, 73]],
+                "cds_start": 10,
+                "cds_end": 60
+            }
+        }
+    }
+    "#;
+
+    #[test]
+    fn cdot_cache_load_source_is_none_without_manifest() {
+        let dir = TempDir::new().unwrap();
+        assert!(cdot_cache_load_source(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn cdot_cache_load_source_is_none_without_cdot_entry() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"genome_fasta": "x.fa"}"#,
+        )
+        .unwrap();
+        assert!(cdot_cache_load_source(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn cdot_cache_load_source_reports_archive_for_fresh_cache() {
+        use crate::data::CdotLoadSource;
+        let dir = TempDir::new().unwrap();
+        let cdot_json = dir.path().join("cdot.json");
+        std::fs::write(&cdot_json, MINIMAL_CDOT_JSON).unwrap();
+        // Prime the cache: the first load self-heals a fresh sibling .rkyv.
+        crate::data::CdotMapper::load(&cdot_json).unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"cdot_json": "cdot.json"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            cdot_cache_load_source(dir.path()).unwrap(),
+            Some(CdotLoadSource::Archive),
+            "a prepared cdot with a fresh sibling archive must report archive"
+        );
+    }
+
+    #[test]
+    fn cdot_cache_load_source_reports_json_fallback_without_archive() {
+        use crate::data::CdotLoadSource;
+        let dir = TempDir::new().unwrap();
+        let cdot_json = dir.path().join("cdot.json");
+        std::fs::write(&cdot_json, MINIMAL_CDOT_JSON).unwrap();
+        // No sibling .rkyv exists yet → the load must fall back to JSON.
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"cdot_json": "cdot.json"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            cdot_cache_load_source(dir.path()).unwrap(),
+            Some(CdotLoadSource::JsonFallback),
+            "a cdot with no usable archive must report json-fallback, not archive"
+        );
     }
 }
