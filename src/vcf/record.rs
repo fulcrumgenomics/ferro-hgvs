@@ -272,7 +272,10 @@ impl fmt::Display for VcfRecord {
         if self.info.is_empty() {
             write!(f, "\t.")?;
         } else {
-            let info_str: Vec<String> = self
+            // `info` is a HashMap, whose iteration order is randomized per run.
+            // Emit fields sorted by key so VCF output is deterministic and
+            // diffable (the field order is not semantically meaningful).
+            let mut info_str: Vec<String> = self
                 .info
                 .iter()
                 .map(|(k, v)| {
@@ -283,6 +286,11 @@ impl fmt::Display for VcfRecord {
                     }
                 })
                 .collect();
+            info_str.sort_by(|a, b| {
+                let key_a = a.split('=').next().unwrap_or(a.as_str());
+                let key_b = b.split('=').next().unwrap_or(b.as_str());
+                key_a.cmp(key_b)
+            });
             write!(f, "\t{}", info_str.join(";"))?;
         }
 
@@ -422,6 +430,46 @@ mod tests {
         assert!(s.contains("rs123"));
         assert!(s.contains("A"));
         assert!(s.contains("G"));
+    }
+
+    #[test]
+    fn test_display_info_fields_are_key_sorted() {
+        // INFO is a HashMap; insertion order is irrelevant and iteration order
+        // is randomized per run. The Display output must be key-sorted so VCFs
+        // are reproducible/diffable regardless of insert order.
+        let mut record = VcfRecord::snv("chr1", 100, 'A', 'G');
+        record.info.insert(
+            "TRANSCRIPT".to_string(),
+            InfoValue::String("NM_1".to_string()),
+        );
+        record
+            .info
+            .insert("GENE".to_string(), InfoValue::String("BRCA1".to_string()));
+        record.info.insert(
+            "CONSEQUENCE".to_string(),
+            InfoValue::String("missense".to_string()),
+        );
+        record.info.insert("DB".to_string(), InfoValue::Flag);
+
+        let s = format!("{}", record);
+        let info_col = s.split('\t').nth(7).expect("INFO column");
+        assert_eq!(
+            info_col,
+            "CONSEQUENCE=missense;DB;GENE=BRCA1;TRANSCRIPT=NM_1"
+        );
+
+        // A non-flag key whose name is a prefix of a flag key must still sort
+        // before it: "AF" (with value) < "AF1" (flag). The bare-key sort avoids
+        // comparing the '=' separator against the digit '1', which would
+        // otherwise place "AF1" before "AF=0.5".
+        let mut record2 = VcfRecord::snv("chr1", 100, 'A', 'G');
+        record2.info.insert("AF1".to_string(), InfoValue::Flag);
+        record2
+            .info
+            .insert("AF".to_string(), InfoValue::String("0.5".to_string()));
+        let s2 = format!("{}", record2);
+        let info_col2 = s2.split('\t').nth(7).expect("INFO column");
+        assert_eq!(info_col2, "AF=0.5;AF1");
     }
 
     #[test]

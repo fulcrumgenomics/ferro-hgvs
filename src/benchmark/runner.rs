@@ -267,7 +267,11 @@ pub fn run_benchmark(config: &MutalyzerBenchmarkConfig) -> Result<BenchmarkSumma
             "Copying {} successful results from existing file...",
             existing.successful_count()
         );
-        for result in existing.successful.values() {
+        // Sort by key so the copied results land in the output file in a
+        // deterministic order (`successful` is a HashMap).
+        let mut successful: Vec<_> = existing.successful.iter().collect();
+        successful.sort_by(|a, b| a.0.cmp(b.0));
+        for (_, result) in successful {
             writer.write(result)?;
             copied_successful += 1;
         }
@@ -278,7 +282,9 @@ pub fn run_benchmark(config: &MutalyzerBenchmarkConfig) -> Result<BenchmarkSumma
                 "Copying {} failed results from existing file (skip_failed=true)...",
                 existing.failed_count()
             );
-            for result in existing.failed.values() {
+            let mut failed: Vec<_> = existing.failed.iter().collect();
+            failed.sort_by(|a, b| a.0.cmp(b.0));
+            for (_, result) in failed {
                 writer.write(result)?;
                 copied_failed += 1;
             }
