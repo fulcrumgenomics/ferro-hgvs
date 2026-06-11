@@ -1,0 +1,171 @@
+name: Nightly perf budget
+
+# Real-data startup-regression gate for `ferro normalize`.
+#
+# Why this exists: PR #585 fixed a silent perf regression where the cdot cache
+# fell back to re-parsing a 512 MB JSON on every run, inflating startup ~1s ->
+# ~4.8s for months with nothing failing. No CI job exercised real-data startup.
+# This workflow does, nightly, so that class of regression fails loudly.
+#
+# Two gates, both hard-failing (unlike nightly-mutalyzer.yml, which is
+# continue-on-error and only reports drift):
+#   1. Cache-path co-gate: `ferro check --build-cache` must report
+#      `cdot cache: archive`. A `json-fallback` after building the cache means
+#      the fast archive is genuinely unusable (the #585 class) — independent of
+#      runner speed.
+#   2. Startup budget: min-of-7 `ferro normalize` startup must stay under a
+#      fixed ceiling. Catches a gross real-data regression the structural unit
+#      tests can't see.
+#
+# Reference data: reuses the prepared-manifest cache populated by
+# nightly-mutalyzer.yml. The `Cache prepared reference manifest` step below
+# shares its cache key BYTE-FOR-BYTE (GitHub Actions cache is repo-scoped), so
+# no second multi-GB `ferro prepare` is needed on a warm cache.
+
+on:
+  schedule:
+    # 05:00 UTC — one hour after nightly-mutalyzer (04:00) so the shared
+    # manifest cache is warm. Clear of the Sunday 00:00 external-validation run.
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-perf-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # SHARED with nightly-mutalyzer.yml — keep identical, bump together.
+  MANIFEST_CACHE_VERSION: v1
+  # Budget knobs (seconds). Today's startup floor is ~1.0s; the #585 bug was
+  # ~4.8s. 2.5s sits ~2.5x above healthy and ~2x below the bug — outside runner
+  # noise in both directions.
+  STARTUP_BUDGET_MAX: '2.5'   # hard-fail if min-of-N exceeds this
+  STARTUP_WARN_MEDIAN: '1.5'  # warn-only (summary) if median exceeds this
+  STARTUP_RUNS: '7'
+
+jobs:
+  startup-budget:
+    name: ferro normalize startup budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: true
+          lfs: true
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-nightly
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache prepared reference manifest
+        # SHARED cache key with nightly-mutalyzer.yml — DO NOT diverge. GitHub
+        # Actions cache is repo-scoped, so this restores the same benchmark-output/
+        # the mutalyzer nightly prepared. Keep the key and MANIFEST_CACHE_VERSION
+        # identical across both files; bump them together.
+        id: cache-manifest
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: benchmark-output/
+          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs') }}
+
+      - name: Build ferro (release)
+        run: cargo build --release --bin ferro
+
+      - name: Run `ferro prepare` (cache miss only)
+        if: steps.cache-manifest.outputs.cache-hit != 'true'
+        run: |
+          ./target/release/ferro prepare \
+            --output-dir benchmark-output \
+            --genome grch38
+
+      - name: Confirm manifest present
+        run: |
+          test -f benchmark-output/manifest.json || \
+            (echo "::error::manifest.json missing after prepare step"; exit 1)
+
+      - name: Warm cache + cache-path co-gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `--build-cache` builds/refreshes the on-disk rkyv cache, then prints
+          # the load source. After a successful build the source MUST be the
+          # archive; a `json-fallback` here means the freshly built archive is
+          # unusable (layout drift / unwritable) — the #585 failure mode.
+          # Tolerate a non-zero exit so we can emit a clear diagnostic below; an
+          # absent/`json-fallback` cache line then fails the gate explicitly.
+          out="$(./target/release/ferro check --reference benchmark-output --build-cache 2>&1 || true)"
+          echo "$out"
+          line="$(printf '%s\n' "$out" | grep 'cdot cache:' || true)"
+          if [[ "$line" != *"archive"* ]]; then
+            echo "::error::cdot cache did not load from archive after --build-cache (silent fallback / #585 class). Got: ${line:-<none>}"
+            exit 1
+          fi
+          echo "cache-path co-gate OK: ${line}"
+
+      - name: Startup wall-time budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'NM_000088.3:c.589G>T' \
+            'NM_000088.3:c.10A>G' \
+            'NC_000001.11:g.12345A>G' > /tmp/perf_in.txt
+
+          bin=./target/release/ferro
+          ref=benchmark-output
+          run() { "$bin" normalize --reference "$ref" --error-mode lenient -i /tmp/perf_in.txt >/dev/null 2>&1 || true; }
+
+          # Warmup (untimed) — prime OS page cache so we measure code, not disk.
+          run
+
+          : > /tmp/perf_times.txt
+          for _ in $(seq 1 "${STARTUP_RUNS}"); do
+            start=$(date +%s.%N)
+            run
+            end=$(date +%s.%N)
+            awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f\n", e - s }' >> /tmp/perf_times.txt
+          done
+
+          min=$(sort -n /tmp/perf_times.txt | head -1)
+          median=$(sort -n /tmp/perf_times.txt | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}')
+
+          {
+            echo "### ferro normalize startup"
+            echo ""
+            echo "| metric | seconds |"
+            echo "|--------|---------|"
+            echo "| min (gate) | ${min} |"
+            echo "| median | ${median} |"
+            echo "| budget max | ${STARTUP_BUDGET_MAX} |"
+            echo ""
+            echo "runs: $(paste -sd' ' /tmp/perf_times.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if awk -v m="$min" -v b="${STARTUP_BUDGET_MAX}" 'BEGIN { exit !(m > b) }'; then
+            echo "::error::startup min ${min}s exceeds budget ${STARTUP_BUDGET_MAX}s (#585-class regression)"
+            exit 1
+          fi
+          if awk -v m="$median" -v w="${STARTUP_WARN_MEDIAN}" 'BEGIN { exit !(m > w) }'; then
+            echo "::warning::startup median ${median}s exceeds warn threshold ${STARTUP_WARN_MEDIAN}s"
+          fi
+          echo "startup OK: min=${min}s median=${median}s"

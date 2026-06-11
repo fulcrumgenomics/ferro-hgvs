@@ -68,6 +68,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache prepared reference manifest
+        # SHARED cache key with .github/workflows/nightly-perf.yml — keep this
+        # key and MANIFEST_CACHE_VERSION identical across both files so the perf
+        # gate reuses the manifest this job prepares; bump them together.
         id: cache-manifest
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:

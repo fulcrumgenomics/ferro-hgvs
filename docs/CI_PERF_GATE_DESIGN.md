@@ -191,7 +191,9 @@ restore, avoiding two concurrent cold `prepare`s. (Also clear of the Sunday
 
 ### Measurement protocol
 
-- **Command measured:** `ferro normalize` with `FERRO_MANIFEST=$GITHUB_WORKSPACE/benchmark-output/manifest.json`,
+- **Command measured:** `ferro normalize --reference benchmark-output` (the
+  `ferro` binary takes a reference *directory* via `--reference`; it does not
+  read the `FERRO_MANIFEST` env var, which is a test-harness-only convention),
   fed a tiny fixed input written to `/tmp` from a heredoc (3–5 `c.`/`g.` variants).
   Startup is ~90% of wall time, so input size is irrelevant — we are deliberately
   measuring **startup**, which is where #585 lived.
