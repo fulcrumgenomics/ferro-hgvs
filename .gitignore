@@ -77,3 +77,9 @@ manuscript/
 # Generated reference caches (cdot rkyv, TranscriptDb)
 *.tdb
 *.rkyv
+
+# Local, untracked third-party corpus checkouts (e.g. the full hgvs-rs
+# projection corpus consumed by scripts/refresh-hgvs-rs-projection-fixtures.py).
+# Only the curated tests/fixtures/hgvs-rs-projection/cases.json is committed;
+# the bulk corpus must never be added to git.
+/vendor/
