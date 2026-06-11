@@ -613,6 +613,25 @@ fn build_frameshift_variant(
         FrameshiftTer::Unknown
     };
 
+    // Spec (frameshift.md:22, 36-39): `fsTer1` is illegal — the minimum
+    // frameshift count is `fsTer2`. A shifted frame whose first changed codon
+    // is immediately a stop is a NONSENSE substitution `p.(<aa><pos>Ter)`, not
+    // a frameshift. Emit the nonsense form (mirrors `predict_substitution`'s
+    // `Ter` substitution) rather than the invalid `fsTer1`.
+    if matches!(ter, FrameshiftTer::At(1)) {
+        let nonsense_edit = ProteinEdit::Substitution {
+            reference: ref_aa,
+            alternative: AminoAcid::Ter,
+        };
+        let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_pos));
+        let accession = parse_accession(protein_accession);
+        return Ok(HgvsVariant::Protein(ProteinVariant {
+            accession,
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(loc, nonsense_edit),
+        }));
+    }
+
     let protein_edit = ProteinEdit::Frameshift { new_aa, ter };
     let loc = ProtInterval::point(ProtPos::new(ref_aa, aa_pos));
     let accession = parse_accession(protein_accession);
@@ -1258,5 +1277,22 @@ mod tests {
         };
         let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2ArgfsTer5)");
+    }
+
+    /// Spec (frameshift.md:22, 36-39): a frameshift whose first changed residue
+    /// is immediately a stop is a NONSENSE substitution (`p.(<aa><pos>Ter)`),
+    /// never `fsTer1` — `fsTer1` is an illegal count (the minimum is `fsTer2`).
+    /// `c.3_4insT` on Met-Lys-Ter shifts the frame so codon 2 reads TAA: the
+    /// mutated CDS "ATGTAAATAA" translates Met then an immediate stop at the
+    /// first changed codon ⇒ `p.(Lys2Ter)`, not `p.(Lys2fsTer1)`.
+    #[test]
+    fn frameshift_immediate_stop_is_nonsense_not_fster1() {
+        let t = tx("ATGAAATAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "T".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
     }
 }
