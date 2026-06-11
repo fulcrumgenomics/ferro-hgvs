@@ -5,11 +5,22 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+
+use bincode::Options;
+use serde::{Deserialize, Serialize};
 
 use crate::error::FerroError;
-use crate::reference::transcript::{GenomeBuild, ManeStatus, Transcript};
+use crate::reference::annotation::AnnotationFormat;
+use crate::reference::transcript::{GenomeBuild, ManeStatus, Strand, Transcript};
+
+/// Magic + schema version prefixing a TranscriptDb binary cache. Bump the
+/// version whenever the serialized layout of [`TranscriptDb`] (or `Transcript`)
+/// changes, so a stale cache is detected and regenerated rather than mis-read —
+/// the same guard the cdot cache uses.
+const TDB_CACHE_MAGIC: [u8; 4] = *b"FTDB";
+const TDB_CACHE_VERSION: u32 = 1;
 
 /// Statistics about MANE transcript coverage in the database
 #[derive(Debug, Clone, Default)]
@@ -31,6 +42,117 @@ impl ManeStats {
             0.0
         } else {
             (self.genes_with_mane_select as f64 / self.total_genes as f64) * 100.0
+        }
+    }
+}
+
+/// Bincode-friendly snapshot of a `Transcript` — the domain type carries many
+/// `#[serde(skip_serializing_if)]` attributes, which bincode (a positional
+/// format) cannot round-trip, so the cache serializes this no-skip mirror
+/// instead. `exon_cigars` and `cached_introns` are intentionally omitted: the
+/// former is empty for GFF/GTF-loaded transcripts and the latter is rebuilt
+/// lazily.
+#[derive(Serialize, Deserialize)]
+struct TranscriptSnapshot {
+    id: String,
+    gene_symbol: Option<String>,
+    strand: Strand,
+    sequence: Option<String>,
+    cds_start: Option<u64>,
+    cds_end: Option<u64>,
+    exons: Vec<ExonSnapshot>,
+    chromosome: Option<String>,
+    genomic_start: Option<u64>,
+    genomic_end: Option<u64>,
+    genome_build: GenomeBuild,
+    mane_status: ManeStatus,
+    refseq_match: Option<String>,
+    ensembl_match: Option<String>,
+    protein_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ExonSnapshot {
+    number: u32,
+    start: u64,
+    end: u64,
+    genomic_start: Option<u64>,
+    genomic_end: Option<u64>,
+}
+
+/// Bincode-friendly snapshot of [`TranscriptDb`]. The index maps carry no skip
+/// attributes, so only `transcripts` needs the mirror above.
+#[derive(Serialize, Deserialize)]
+struct TranscriptDbSnapshot {
+    transcripts: HashMap<String, TranscriptSnapshot>,
+    gene_index: HashMap<String, Vec<String>>,
+    region_index: HashMap<String, Vec<(u64, u64, String)>>,
+    mane_select_index: HashMap<String, String>,
+    mane_plus_clinical_index: HashMap<String, Vec<String>>,
+    genome_build: GenomeBuild,
+}
+
+impl From<&Transcript> for TranscriptSnapshot {
+    fn from(t: &Transcript) -> Self {
+        Self {
+            id: t.id.clone(),
+            gene_symbol: t.gene_symbol.clone(),
+            strand: t.strand,
+            sequence: t.sequence.clone(),
+            cds_start: t.cds_start,
+            cds_end: t.cds_end,
+            exons: t
+                .exons
+                .iter()
+                .map(|e| ExonSnapshot {
+                    number: e.number,
+                    start: e.start,
+                    end: e.end,
+                    genomic_start: e.genomic_start,
+                    genomic_end: e.genomic_end,
+                })
+                .collect(),
+            chromosome: t.chromosome.clone(),
+            genomic_start: t.genomic_start,
+            genomic_end: t.genomic_end,
+            genome_build: t.genome_build,
+            mane_status: t.mane_status,
+            refseq_match: t.refseq_match.clone(),
+            ensembl_match: t.ensembl_match.clone(),
+            protein_id: t.protein_id.clone(),
+        }
+    }
+}
+
+impl From<TranscriptSnapshot> for Transcript {
+    fn from(s: TranscriptSnapshot) -> Self {
+        Transcript {
+            id: s.id,
+            gene_symbol: s.gene_symbol,
+            strand: s.strand,
+            sequence: s.sequence,
+            cds_start: s.cds_start,
+            cds_end: s.cds_end,
+            exons: s
+                .exons
+                .into_iter()
+                .map(|e| crate::reference::transcript::Exon {
+                    number: e.number,
+                    start: e.start,
+                    end: e.end,
+                    genomic_start: e.genomic_start,
+                    genomic_end: e.genomic_end,
+                })
+                .collect(),
+            chromosome: s.chromosome,
+            genomic_start: s.genomic_start,
+            genomic_end: s.genomic_end,
+            genome_build: s.genome_build,
+            mane_status: s.mane_status,
+            refseq_match: s.refseq_match,
+            ensembl_match: s.ensembl_match,
+            protein_id: s.protein_id,
+            ..Default::default()
         }
     }
 }
@@ -64,6 +186,173 @@ impl TranscriptDb {
             genome_build: build,
             ..Default::default()
         }
+    }
+
+    /// Sibling binary-cache path for a source annotation file at `build` parsed
+    /// as `format` (`<source>.<build>.<format>.tdb`). Building the cache key off
+    /// the full path (not `with_extension`) avoids over-stripping multi-dot
+    /// filenames. The `format` component keeps a cache built for one parser
+    /// format from being served for a different requested format when the same
+    /// source path is loaded with an explicit `with_format` override.
+    pub fn cache_path_for<P: AsRef<Path>>(
+        source: P,
+        build: GenomeBuild,
+        format: AnnotationFormat,
+    ) -> PathBuf {
+        let format_tag = match format {
+            AnnotationFormat::Gff3 => "gff3",
+            AnnotationFormat::Gtf => "gtf",
+        };
+        PathBuf::from(format!(
+            "{}.{}.{}.tdb",
+            source.as_ref().display(),
+            build,
+            format_tag
+        ))
+    }
+
+    /// Whether `cache_path` is a usable, up-to-date cache for `source`: it must
+    /// exist, carry the current magic+version, and be at least as new as the
+    /// source file (so editing the GFF/GTF invalidates the cache).
+    pub fn cache_is_fresh<P: AsRef<Path>, Q: AsRef<Path>>(cache_path: P, source: Q) -> bool {
+        let cache_path = cache_path.as_ref();
+        let Ok(cache_meta) = std::fs::metadata(cache_path) else {
+            return false;
+        };
+        // Treat an unreadable mtime (cache or source) as "not fresh": if the
+        // source file is missing or unreadable we must not serve a stale cache,
+        // and `load_annotations` returns early on a fresh cache, so falling
+        // through here would mask the source-file error.
+        let Ok(cm) = cache_meta.modified() else {
+            return false;
+        };
+        let Ok(sm) = std::fs::metadata(source.as_ref()).and_then(|m| m.modified()) else {
+            return false;
+        };
+        if cm < sm {
+            return false; // source edited after the cache was written
+        }
+        // Verify the header.
+        let Ok(mut file) = File::open(cache_path) else {
+            return false;
+        };
+        let mut header = [0u8; 8];
+        if file.read_exact(&mut header).is_err() {
+            return false;
+        }
+        header[..4] == TDB_CACHE_MAGIC
+            && u32::from_le_bytes([header[4], header[5], header[6], header[7]]) == TDB_CACHE_VERSION
+    }
+
+    /// Load a `TranscriptDb` from a binary cache, verifying the magic+version
+    /// header first so a stale/foreign file is rejected cleanly.
+    pub fn from_cache_file<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        let file = File::open(path.as_ref()).map_err(|e| FerroError::Io {
+            msg: format!("Failed to open TranscriptDb cache: {}", e),
+        })?;
+        let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut reader = BufReader::new(file);
+
+        let mut header = [0u8; 8];
+        reader.read_exact(&mut header).map_err(|e| FerroError::Io {
+            msg: format!("TranscriptDb cache too short for a header: {}", e),
+        })?;
+        if header[..4] != TDB_CACHE_MAGIC {
+            return Err(FerroError::Io {
+                msg: "TranscriptDb cache has no valid magic".to_string(),
+            });
+        }
+        let version = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        if version != TDB_CACHE_VERSION {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "TranscriptDb cache version {} != expected {}",
+                    version, TDB_CACHE_VERSION
+                ),
+            });
+        }
+
+        // 40x: TranscriptDb carries five HashMap indexes (transcripts, by_name,
+        // by_chrom, canonical_ids, gene_to_transcripts) vs cdot's one, so the
+        // in-memory size relative to the serialized file is proportionally larger.
+        let size_limit = file_size.saturating_mul(40).max(1024 * 1024);
+        let snap: TranscriptDbSnapshot = bincode::options()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(size_limit)
+            .deserialize_from(reader)
+            .map_err(|e| FerroError::Io {
+                msg: format!("Failed to deserialize TranscriptDb cache: {}", e),
+            })?;
+        Ok(TranscriptDb {
+            transcripts: snap
+                .transcripts
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            gene_index: snap.gene_index,
+            region_index: snap.region_index,
+            mane_select_index: snap.mane_select_index,
+            mane_plus_clinical_index: snap.mane_plus_clinical_index,
+            genome_build: snap.genome_build,
+        })
+    }
+
+    /// Write this database to a binary cache (atomically: temp + rename).
+    pub fn to_cache_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FerroError> {
+        // Unique temp sibling (pid + process-global counter) so concurrent
+        // writers in the same process never collide on the temp name.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let path = path.as_ref();
+        let mut tmp = path.to_path_buf();
+        let tmp_name = format!(
+            "{}.tmp.{}.{}",
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "transcriptdb.tdb".to_string()),
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        tmp.set_file_name(tmp_name);
+
+        let file = File::create(&tmp).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create TranscriptDb cache temp file: {}", e),
+        })?;
+        let snap = TranscriptDbSnapshot {
+            transcripts: self
+                .transcripts
+                .iter()
+                .map(|(k, v)| (k.clone(), TranscriptSnapshot::from(v)))
+                .collect(),
+            gene_index: self.gene_index.clone(),
+            region_index: self.region_index.clone(),
+            mane_select_index: self.mane_select_index.clone(),
+            mane_plus_clinical_index: self.mane_plus_clinical_index.clone(),
+            genome_build: self.genome_build,
+        };
+        let mut writer = std::io::BufWriter::new(file);
+        let result = (|| -> std::io::Result<()> {
+            writer.write_all(&TDB_CACHE_MAGIC)?;
+            writer.write_all(&TDB_CACHE_VERSION.to_le_bytes())?;
+            bincode::options()
+                .with_fixint_encoding()
+                .serialize_into(&mut writer, &snap)
+                .map_err(std::io::Error::other)?;
+            writer.flush()
+        })();
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(FerroError::Io {
+                msg: format!("Failed to serialize TranscriptDb cache: {}", e),
+            });
+        }
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            FerroError::Io {
+                msg: format!("Failed to finalize TranscriptDb cache: {}", e),
+            }
+        })
     }
 
     /// Add a transcript to the database
@@ -332,6 +621,89 @@ mod tests {
 
         assert_eq!(db.len(), 1);
         assert!(db.get("NM_000088.3").is_some());
+    }
+
+    #[test]
+    fn test_transcript_db_cache_roundtrip() {
+        let mut db = TranscriptDb::with_build(GenomeBuild::GRCh37);
+        db.add(Transcript {
+            id: "NM_000088.3".to_string(),
+            gene_symbol: Some("COL1A1".to_string()),
+            strand: Strand::Minus,
+            sequence: None,
+            cds_start: Some(5),
+            cds_end: Some(40),
+            exons: vec![Exon::new(1, 1, 50), Exon::new(2, 51, 100)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(2000),
+            genome_build: GenomeBuild::GRCh37,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: Some("NP_000079.2".to_string()),
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let src = temp.path().join("anno.gff");
+        std::fs::write(&src, b"# source").unwrap();
+        let cache = TranscriptDb::cache_path_for(&src, GenomeBuild::GRCh37, AnnotationFormat::Gff3);
+        // cache_path_for must use the stable Display impl ("GRCh37"), not Debug,
+        // and append the format tag so caches don't collide across formats.
+        assert!(
+            cache.to_str().unwrap().ends_with(".GRCh37.gff3.tdb"),
+            "cache path must end with .GRCh37.gff3.tdb, got {}",
+            cache.display()
+        );
+        db.to_cache_file(&cache).unwrap();
+        assert!(TranscriptDb::cache_is_fresh(&cache, &src));
+
+        let loaded = TranscriptDb::from_cache_file(&cache).unwrap();
+        assert_eq!(loaded.len(), db.len());
+        assert_eq!(loaded.genome_build, GenomeBuild::GRCh37);
+        let a = db.get("NM_000088.3").unwrap();
+        let b = loaded.get("NM_000088.3").unwrap();
+        assert_eq!(a.strand, b.strand);
+        assert_eq!((a.cds_start, a.cds_end), (b.cds_start, b.cds_end));
+        assert_eq!(
+            (a.genomic_start, a.genomic_end),
+            (b.genomic_start, b.genomic_end)
+        );
+        assert_eq!(a.exons.len(), b.exons.len());
+        assert_eq!(a.protein_id, b.protein_id);
+        // The region index is rebuilt correctly from the cache.
+        assert!(!loaded.get_by_region("chr1", 1500, 1500).is_empty());
+
+        // A magic-less / corrupt cache is rejected cleanly (not mis-read).
+        std::fs::write(&cache, b"garbage-without-magic").unwrap();
+        assert!(!TranscriptDb::cache_is_fresh(&cache, &src));
+        assert!(TranscriptDb::from_cache_file(&cache).is_err());
+    }
+
+    #[test]
+    fn cache_is_not_fresh_when_source_mtime_unreadable() {
+        // A valid, current cache whose source file has gone missing must NOT be
+        // reported fresh: load_annotations returns early on a fresh cache, so a
+        // false positive here would silently serve stale annotations instead of
+        // surfacing the missing-source error.
+        let db = TranscriptDb::with_build(GenomeBuild::GRCh38);
+        let temp = tempfile::TempDir::new().unwrap();
+        let src = temp.path().join("anno.gff");
+        std::fs::write(&src, b"# source").unwrap();
+        let cache = TranscriptDb::cache_path_for(&src, GenomeBuild::GRCh38, AnnotationFormat::Gff3);
+        db.to_cache_file(&cache).unwrap();
+
+        // Cache is fresh while the source exists...
+        assert!(TranscriptDb::cache_is_fresh(&cache, &src));
+
+        // ...but not once the source is unreadable/missing.
+        std::fs::remove_file(&src).unwrap();
+        assert!(
+            !TranscriptDb::cache_is_fresh(&cache, &src),
+            "an unreadable source mtime must make the cache stale, not fresh"
+        );
     }
 
     #[test]

@@ -530,7 +530,9 @@ pub(crate) fn mut_cds_with_3utr(
     // has already validated the transcript via `RefProteinBundle::from_transcript`,
     // but this is `pub(crate)` — return a clean error rather than panic if a
     // future caller passes a transcript whose `cds_end` exceeds its sequence.
-    if cds_end > seq.len() {
+    // A `cds_end` of 0 is equally degenerate: `seq[0..]` would append the whole
+    // transcript as if it were 3'UTR, so reject it here too.
+    if cds_end == 0 || cds_end > seq.len() {
         return Err(FerroError::ProteinSequenceUnavailable {
             accession: transcript.id.clone(),
         });
