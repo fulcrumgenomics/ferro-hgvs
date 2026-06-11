@@ -20,6 +20,8 @@ use crate::hgvs::variant::{
     LocEdit, MtVariant, ProteinVariant, RnaFusionBreakpoint, RnaFusionVariant, RnaVariant,
     TxVariant,
 };
+use std::collections::HashSet;
+
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -1898,20 +1900,6 @@ where
                     }
                     cis_members.push(v);
                 }
-                // HGVS DNA/alleles.md: the "not changed" `=` indication is
-                // used only when a single variant is identified per allele.
-                // Spelling the other allele's variant as `=` inside a
-                // multi-variant cis group is invalid (the spec flags
-                // `[2376G>C;3103=];[2376=;3103del]` as not correct). Reject a
-                // nested cis group that carries a position-identity member
-                // rather than accept the discouraged cross-spelled form.
-                // (The all-identity-allele edge `[a=;b=]` is deferred.)
-                if cis_members.iter().any(is_lhs_position_identity) {
-                    return Err(nom::Err::Error(nom::error::Error::new(
-                        content,
-                        nom::error::ErrorKind::Verify,
-                    )));
-                }
                 HgvsVariant::Allele(AlleleVariant::new(cis_members, AllelePhase::Cis))
             } else {
                 let (final_remaining, variant) = parse_member(content)?;
@@ -1956,10 +1944,112 @@ where
         )));
     }
 
+    // HGVS DNA/alleles.md: the "not changed" `=` indication is used only
+    // when a single variant is identified per allele. Spelling the *other*
+    // allele's variant position as `=` is the invalid "cross-spelled" form
+    // (`[2376G>C;3103=];[2376=;3103del]`). Reject precisely that: a position
+    // that carries a concrete edit in one place and a position-identity (`=`)
+    // in another. An all-identity allele (`[a=;b=]`) paired with a variant at
+    // a *different* position is valid and accepted.
+    if trans_has_cross_spelled_identity(&variants) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+
     Ok((
         remaining,
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Trans)),
     ))
+}
+
+/// True iff a trans allele cross-spells a position: a concrete edit at some
+/// position in one place and a position-identity (`=`) at the *same* position
+/// inside a multi-variant cis group elsewhere. This is the spec-invalid
+/// redundant-`=` form (`[A;B=];[A=;B]`, DNA/alleles.md).
+///
+/// Only `=` members of a multi-variant *cis group* count as cross-spell
+/// identities — a standalone single-variant `=` allele (`[A];[A=]`) is the
+/// spec's sanctioned "not changed when one variant is identified" form and
+/// must NOT be rejected. Concrete edits count from any member. The position
+/// key is the leaf's location rendering (positions compared as written).
+fn trans_has_cross_spelled_identity(members: &[HgvsVariant]) -> bool {
+    let mut concrete: HashSet<String> = HashSet::new();
+    let mut group_identity: HashSet<String> = HashSet::new();
+    for member in members {
+        // Only a *multi-variant* cis group's `=` counts as a cross-spell
+        // identity. A single-member cis group (`[A=]`) is the spec's
+        // sanctioned "not changed when one variant is identified" form and
+        // must not be rejected. The compact-prefix path unwraps single
+        // members to bare variants, but the fully-qualified path
+        // (`parse_trans_allele`) keeps them wrapped in a one-member
+        // `Allele`, so gate on `len() > 1` to stay spelling-independent.
+        let (leaves, in_cis_group): (&[HgvsVariant], bool) = match member {
+            HgvsVariant::Allele(a) => (&a.variants, a.variants.len() > 1),
+            HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => (&[], false),
+            other => (std::slice::from_ref(other), false),
+        };
+        for leaf in leaves {
+            if let Some((pos_key, is_identity)) = leaf_position_and_identity(leaf) {
+                if is_identity {
+                    if in_cis_group {
+                        group_identity.insert(pos_key);
+                    }
+                } else {
+                    concrete.insert(pos_key);
+                }
+            }
+        }
+    }
+    concrete.intersection(&group_identity).next().is_some()
+}
+
+/// For a leaf variant, return `(position-key, is_position_identity)` where the
+/// position key is the location rendering. `None` for non-leaf / non-coord
+/// variants. Used by [`trans_has_cross_spelled_identity`].
+///
+/// For NA arms, `is_position_identity` delegates to [`is_lhs_position_identity`]
+/// to avoid duplicating the `NaEdit::Identity { whole_entity: false, .. }` predicate.
+fn leaf_position_and_identity(v: &HgvsVariant) -> Option<(String, bool)> {
+    use crate::hgvs::edit::ProteinEdit;
+    match v {
+        HgvsVariant::Genome(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Cds(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Tx(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Rna(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Mt(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Circular(x) => Some((
+            format!("{}", x.loc_edit.location),
+            is_lhs_position_identity(v),
+        )),
+        HgvsVariant::Protein(x) => {
+            let is_identity = matches!(
+                x.loc_edit.edit.inner(),
+                Some(ProteinEdit::Identity {
+                    whole_protein: false,
+                    ..
+                })
+            );
+            Some((format!("{}", x.loc_edit.location), is_identity))
+        }
+        _ => None,
+    }
 }
 
 fn parse_genome_trans_allele_shorthand(
@@ -4800,6 +4890,19 @@ fn parse_trans_allele(input: &str) -> Result<HgvsVariant, FerroError> {
         return Err(FerroError::Parse {
             pos: 0,
             msg: "Trans allele requires at least two variants".to_string(),
+            diagnostic: None,
+        });
+    }
+
+    // Reject the spec-invalid cross-spelled `=` form regardless of spelling:
+    // this fully-qualified entrypoint must reject the same allele that the
+    // compact-prefix path rejects via `trans_has_cross_spelled_identity`
+    // (e.g. `[NM_000088.3:c.[2376G>C;3103=]];[NM_000088.3:c.[2376=;3103del]]`).
+    // See `parse_trans_allele_shorthand_generic` for the rationale.
+    if trans_has_cross_spelled_identity(&variants) {
+        return Err(FerroError::Parse {
+            pos: 0,
+            msg: "Invalid cross-spelled `=` in trans allele".to_string(),
             diagnostic: None,
         });
     }

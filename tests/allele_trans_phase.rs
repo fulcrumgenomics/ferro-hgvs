@@ -103,17 +103,62 @@ fn test_trans_of_cis_groups_round_trips() {
 /// The spec (DNA/alleles.md) marks the redundant cross-spelled `=` form as
 /// invalid: "do not use `c.[2376G>C;3103=];[2376=;3103del]`". A multi-variant
 /// cis group containing a position-identity (`=`) member must stay rejected
-/// rather than round-trip the discouraged form.
+/// rather than round-trip the discouraged form. Rejection must not depend on
+/// spelling: both the compact-prefix form and the fully-qualified form (each
+/// arm a bracketed, accession-qualified cis group) describe the same invalid
+/// cross-spelled allele and must reject alike.
 #[test]
 fn test_trans_of_cis_with_identity_member_is_rejected() {
     for s in [
         "LRG_199t1:c.[2376G>C;3103=];[2376=;3103del]",
         "NM_004006.2:c.[2376G>C;3103=];[2376=;3103del]",
+        "[NM_000088.3:c.[2376G>C;3103=]];[NM_000088.3:c.[2376=;3103del]]",
     ] {
         assert!(
             parse_hgvs(s).is_err(),
             "spec-invalid cross-spelled `=` trans form must reject: `{s}`"
         );
+    }
+}
+
+/// A trans allele where one allele is described as reference across regions
+/// (all-identity cis group) is valid — no position is cross-spelled (variant
+/// in one allele, `=` in the other). `[633A>G];[531_648=;961_1149=]` must
+/// parse and round-trip (HGVS DNA/alleles.md). Contrast with the rejected
+/// cross-spelled form above.
+///
+/// Both the compact-prefix spelling and the fully-qualified spelling (each arm
+/// a bracketed, accession-qualified cis group) must be accepted and round-trip
+/// to the canonical compact form. This pins the `parse_trans_allele` code path
+/// for the all-identity acceptance case alongside `parse_trans_allele_shorthand_generic`.
+#[test]
+fn test_trans_of_cis_all_identity_allele_round_trips() {
+    let canonical = "LRG_199t1:c.[633A>G];[531_648=;961_1149=]";
+    for s in [
+        canonical,
+        "[LRG_199t1:c.[633A>G]];[LRG_199t1:c.[531_648=;961_1149=]]",
+    ] {
+        assert_eq!(parse_to_string(s), canonical, "round-trip for `{s}`");
+        assert_eq!(parse_phase(s), AllelePhase::Trans, "phase for `{s}`");
+    }
+}
+
+/// The cross-spell validator must only reject a *multi-variant* cis group's
+/// `=`. A single-variant `=` arm (`[2376G>C];[2376=]`, the spec's "not changed
+/// when one variant is identified" form) is valid in *both* spellings: the
+/// compact-prefix form and the fully-qualified form where each arm repeats the
+/// accession and brackets a single member. Both must round-trip to the compact
+/// canonical form. Guards against the validator keying off the `[...]` wrapper
+/// rather than the member count.
+#[test]
+fn test_trans_single_variant_identity_arm_round_trips_either_spelling() {
+    let canonical = "NM_004006.2:c.[2376G>C];[2376=]";
+    for s in [
+        canonical,
+        "[NM_004006.2:c.[2376G>C]];[NM_004006.2:c.[2376=]]",
+    ] {
+        assert_eq!(parse_to_string(s), canonical, "round-trip for `{s}`");
+        assert_eq!(parse_phase(s), AllelePhase::Trans, "phase for `{s}`");
     }
 }
 
