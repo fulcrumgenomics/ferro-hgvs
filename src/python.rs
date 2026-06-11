@@ -3717,17 +3717,16 @@ mod tests {
         let cases: Vec<(crate::normalize::NormalizationWarning, &str)> = vec![
             (
                 crate::normalize::NormalizationWarning::RefSeqMismatch {
-                    message: "stated A but reference is T".to_string(),
                     stated_ref: "A".to_string(),
                     actual_ref: "T".to_string(),
                     position: "100".to_string(),
                     corrected: true,
+                    details: Some("stated A but reference is T".to_string()),
                 },
                 "REFSEQ_MISMATCH",
             ),
             (
                 crate::normalize::NormalizationWarning::OverlapConflict {
-                    message: "two coincident edits".to_string(),
                     accession: "NC_000001.11".to_string(),
                     coordinate_system: "g".to_string(),
                     location: "100".to_string(),
@@ -3737,7 +3736,6 @@ mod tests {
             ),
             (
                 crate::normalize::NormalizationWarning::PositionPastEnd {
-                    message: "past cds-end".to_string(),
                     accession: "NM_X.1".to_string(),
                     coordinate_system: "c".to_string(),
                     position: "946".to_string(),
