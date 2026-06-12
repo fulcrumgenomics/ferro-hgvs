@@ -187,5 +187,6 @@ therefore uses the simpler `<input>\t<ferro_output_or_error>` shape.
 |---|---|---|---|
 | mutalyzer | `tests/fixtures/mutalyzer-normalize/` | no (fixed config) | — |
 | biocommons | `tests/fixtures/biocommons-normalize/` | yes (`shuffle_direction`, `cross_boundaries`) | — |
+| hgvs-rs-projection | `tests/fixtures/hgvs-rs-projection/` | no (fixed config) | — |
 
 Add a row when importing a new corpus.

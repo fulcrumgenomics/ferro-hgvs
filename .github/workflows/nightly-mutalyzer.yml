@@ -1,7 +1,8 @@
 name: Nightly reference-aware tests
 
-# Runs the mutalyzer / biocommons reference-aware test suites against a
-# real ferro-prepared manifest. PR CI silently skips these tests (see
+# Runs the mutalyzer / biocommons / hgvs-rs-projection reference-aware test
+# suites against a real ferro-prepared manifest. PR CI silently skips these
+# tests (see
 # the `::notice::` annotation in `ci.yml`) because provisioning a
 # multi-GB reference manifest would multiply PR CI time. This workflow
 # runs nightly so manifest-dependent regressions surface within 24h.
@@ -113,7 +114,7 @@ jobs:
           FERRO_MANIFEST: ${{ github.workspace }}/benchmark-output/manifest.json
         run: |
           cargo nextest run --features dev \
-            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/)'
+            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'
 
       - name: Upload xfail reports
         if: always()

@@ -1,0 +1,7 @@
+NM_000051.3:c.9170_9171delGA	project error: Reference not found: NM_000051.3
+NM_000249.3:c.-7_*46del	project error: Reference not found: NM_000249.3
+NM_000249.3:c.2266_2269dupTGTT	project error: Reference not found: NM_000249.3
+NM_000249.3:c.2269dupT	project error: Reference not found: NM_000249.3
+NM_000425.3:c.3772dupT	project error: Reference not found: NM_000425.3
+NM_000488.3:c.1391dupA	project error: Reference not found: NM_000488.3
+NM_152263.2:c.855delA	project error: Reference not found: NM_152263.2

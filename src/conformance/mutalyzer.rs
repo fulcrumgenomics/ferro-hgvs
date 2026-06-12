@@ -190,6 +190,7 @@ pub struct Case {
 pub enum Axis {
     Normalized,
     Genomic,
+    Coding,
     ProteinDescription,
     CodingProteinDescriptions,
     RnaDescription,
@@ -206,6 +207,7 @@ impl Axis {
         match self {
             Axis::Normalized => "normalized",
             Axis::Genomic => "genomic",
+            Axis::Coding => "coding",
             Axis::ProteinDescription => "protein_description",
             Axis::CodingProteinDescriptions => "coding_protein_descriptions",
             Axis::RnaDescription => "rna_description",
