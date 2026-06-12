@@ -10,6 +10,15 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
+/// Iterate a map's entries in a deterministic (key-sorted) order. Report tables
+/// are written to files, so iterating the `HashMap` directly would emit dataset
+/// rows in a per-run-random order.
+fn sorted_by_key<V>(map: &HashMap<String, V>) -> Vec<(&String, &V)> {
+    let mut entries: Vec<(&String, &V)> = map.iter().collect();
+    entries.sort_by_key(|e| e.0);
+    entries
+}
+
 /// Generate a full benchmark summary from comparison files.
 pub fn generate_summary<P: AsRef<Path>>(
     parsing_dir: P,
@@ -182,7 +191,7 @@ pub fn generate_report<P: AsRef<Path>>(
             "|---------|------:|:-------------:|:---------:|--------:|"
         )?;
 
-        for (name, comp) in &summary.parsing {
+        for (name, comp) in sorted_by_key(&summary.parsing) {
             let mut_rate = comp
                 .mutalyzer
                 .as_ref()
@@ -219,7 +228,7 @@ pub fn generate_report<P: AsRef<Path>>(
             "|---------|------------:|:-------------:|:---------:|:---------:|"
         )?;
 
-        for (name, comp) in &summary.normalization {
+        for (name, comp) in sorted_by_key(&summary.normalization) {
             let mut_rate = comp
                 .mutalyzer
                 .as_ref()
@@ -348,7 +357,7 @@ pub fn generate_readme_tables<P: AsRef<Path>>(
         let mut total = 0usize;
         let mut total_success = 0usize;
 
-        for (name, comp) in &summary.parsing {
+        for (name, comp) in sorted_by_key(&summary.parsing) {
             writeln!(
                 writer,
                 "| {} | {} | {:.4}% |",
