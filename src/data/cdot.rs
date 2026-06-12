@@ -1324,11 +1324,45 @@ pub struct CdotMapper {
     /// will be missing from the index — `add_transcript` clears the cell to
     /// guard against that.
     contig_query_index: OnceCell<HashMap<String, IntervalMap<u32>>>,
+    /// Lazily-built per-contig stab-query index for the NON-primary builds.
+    ///
+    /// Mirrors [`Self::contig_query_index`] but covers the contigs that only
+    /// appear in [`Self::alt_build_transcripts`] (e.g. the GRCh37 `NC_*.11`
+    /// accessions when the primary build is GRCh38). GRCh37 and GRCh38 contig
+    /// accessions are distinct, so a contig is owned by exactly one build and
+    /// `transcripts_at_position` can route to the owning build purely from the
+    /// contig name.
+    ///
+    /// Derived entirely from `alt_build_transcripts`, so it is rebuilt lazily
+    /// rather than persisted — this keeps the rkyv/bincode snapshot schema
+    /// unchanged (snapshots already carry `alt_build_transcripts`, so a
+    /// reloaded mapper rebuilds this index on first query). Cleared alongside
+    /// `contig_query_index` whenever the transcript maps change.
+    ///
+    /// The inner `Vec<String>` is the accession list for the contig in the
+    /// owning build's map; the `IntervalMap` payload is an index into it.
+    alt_build_query_index: OnceCell<HashMap<String, AltBuildContigStab>>,
     /// Lazily-built per-transcript `(min_genome_start, max_genome_end)`
     /// cache so `VariantProjector::project_single_inner` doesn't re-fold the
     /// exon table on every projection. Sharing the same `OnceCell` build
     /// trigger as `contig_query_index` keeps the two views in sync.
     transcript_genome_spans: OnceCell<HashMap<String, (u64, u64)>>,
+}
+
+/// Per-contig stab-query index entry for a non-primary build, used by
+/// [`CdotMapper::transcripts_at_position`] to route alt-build contig queries.
+///
+/// Holds the owning build name, the accession list for the contig in that
+/// build's [`CdotMapper::alt_build_transcripts`] map, and a SuperIntervals
+/// index whose `u32` payload indexes into `accessions`.
+#[derive(Debug, Clone)]
+struct AltBuildContigStab {
+    /// Genome build that owns this contig (key into `alt_build_transcripts`).
+    build: String,
+    /// Accessions on this contig, in the order the `IntervalMap` payloads index.
+    accessions: Vec<String>,
+    /// Stab-query index; payload is an index into `accessions`.
+    index: IntervalMap<u32>,
 }
 
 impl CdotMapper {
@@ -1343,6 +1377,7 @@ impl CdotMapper {
             alt_build_transcripts: HashMap::new(),
             primary_build: Some("GRCh38".to_string()),
             contig_query_index: OnceCell::new(),
+            alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         }
     }
@@ -1530,6 +1565,7 @@ impl CdotMapper {
             // claiming a fabricated GRCh38 (#389 follow-up).
             primary_build: snapshot.primary_build,
             contig_query_index: OnceCell::new(),
+            alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         })
     }
@@ -1668,6 +1704,7 @@ impl CdotMapper {
             alt_build_transcripts: maps.alt_build_transcripts,
             primary_build: maps.primary_build,
             contig_query_index: OnceCell::new(),
+            alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
         })
     }
@@ -1849,6 +1886,100 @@ impl CdotMapper {
         Ok(Self::from_raw_cdot_file(raw_file, genome_build))
     }
 
+    /// Load a second cdot file as a NON-primary build, layering its
+    /// transcripts onto this mapper without disturbing the primary build.
+    ///
+    /// The real reference manifest ships GRCh37 and GRCh38 cdot files
+    /// separately (single-build each), so after loading the primary (GRCh38)
+    /// cdot we layer the GRCh37 file here. The loaded transcripts go into
+    /// [`Self::alt_build_transcripts`]`[build_name]` — they are NOT merged into
+    /// the primary [`Self::transcripts`] map, because the same accession exists
+    /// on both builds with different coordinates and a merge would corrupt the
+    /// primary build (collision safety).
+    ///
+    /// Honors the same archive/JSON path handling as [`Self::load`] (`.rkyv`,
+    /// `.bin`, `.json`, `.json.gz`). Returns the number of transcripts loaded
+    /// into the secondary build.
+    pub fn load_secondary_build<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        build_name: &str,
+    ) -> Result<usize, FerroError> {
+        // Reuse the full `load` path so caches and `.gz`/`.rkyv`/`.bin` are
+        // handled identically to the primary load. The loaded mapper's
+        // `transcripts` map holds the secondary build's data (its primary
+        // build); we then absorb it as our alt build.
+        let other = Self::load(path.as_ref())?;
+        Ok(self.absorb_secondary_build(other, build_name))
+    }
+
+    /// Reader-based variant of [`Self::load_secondary_build`] for tests and
+    /// in-memory callers. Parses a single-build cdot JSON from `reader` and
+    /// layers it as `build_name`.
+    pub fn load_secondary_build_from_reader<R: Read>(
+        &mut self,
+        reader: R,
+        build_name: &str,
+    ) -> Result<usize, FerroError> {
+        let other = Self::from_reader_with_build(reader, build_name)?;
+        Ok(self.absorb_secondary_build(other, build_name))
+    }
+
+    /// Absorb the transcripts of an independently-loaded `other` mapper as the
+    /// non-primary build `build_name`. The `other` mapper's primary
+    /// `transcripts` become this mapper's `alt_build_transcripts[build_name]`;
+    /// any builds `other` itself nested under `genome_builds` are also merged
+    /// in (so a multi-build secondary file still contributes its nested views).
+    /// Clears the lazy overlap indexes so they rebuild with the new contigs.
+    fn absorb_secondary_build(&mut self, other: Self, build_name: &str) -> usize {
+        let CdotMapper {
+            transcripts: other_transcripts,
+            alt_build_transcripts: other_alt,
+            lrg_to_refseq: other_lrg,
+            contig_alias_to_canonical: other_aliases,
+            ..
+        } = other;
+
+        let target = self
+            .alt_build_transcripts
+            .entry(build_name.to_string())
+            .or_default();
+        let mut loaded = 0usize;
+        for (acc, tx) in other_transcripts {
+            target.insert(acc, tx);
+            loaded += 1;
+        }
+        // Fold in any builds the secondary file nested under `genome_builds`,
+        // EXCEPT the primary build of this mapper (that data is authoritative
+        // here and must not be overwritten by a secondary file's view).
+        for (nested_build, txs) in other_alt {
+            if Some(nested_build.as_str()) == self.primary_build.as_deref() {
+                continue;
+            }
+            let dest = self.alt_build_transcripts.entry(nested_build).or_default();
+            for (acc, tx) in txs {
+                dest.insert(acc, tx);
+            }
+        }
+
+        // Carry over the secondary build's contig aliases (e.g. chr17 ↔
+        // NC_000017.10) so alt-build contig lookups can resolve UCSC/Ensembl
+        // names too. Do not overwrite an existing primary-build alias.
+        for (alias, canonical) in other_aliases {
+            self.contig_alias_to_canonical
+                .entry(alias)
+                .or_insert(canonical);
+        }
+        // Merge LRG mappings the secondary file may carry; keep existing ones.
+        for (lrg, refseq) in other_lrg {
+            self.lrg_to_refseq.entry(lrg).or_insert(refseq);
+        }
+
+        // The new alt-build contigs invalidate the lazy overlap indexes.
+        self.alt_build_query_index = OnceCell::new();
+        loaded
+    }
+
     /// Create from a raw CdotFile, converting to internal format.
     ///
     /// Captures both the primary build's data (into [`Self::transcripts`])
@@ -1944,8 +2075,12 @@ impl CdotMapper {
         self.transcripts.insert(accession, transcript);
 
         // Any previously-built query index is stale now. The next query will
-        // rebuild it from the updated `contig_index` + `transcripts`.
+        // rebuild it from the updated `contig_index` + `transcripts`. The
+        // alt-build index is derived from `alt_build_transcripts`, which
+        // `add_transcript` does not touch, but clear it too so any consumer
+        // that mixes `add_transcript` with alt-build mutation stays consistent.
         self.contig_query_index = OnceCell::new();
+        self.alt_build_query_index = OnceCell::new();
         self.transcript_genome_spans = OnceCell::new();
     }
 
@@ -2250,26 +2385,49 @@ impl CdotMapper {
     /// that re-folded every transcript's exon table on every query.
     pub fn transcripts_at_position(&self, contig: &str, pos: u64) -> Vec<(&str, &CdotTranscript)> {
         let canonical = self.resolve_contig(contig);
-        let by_contig = self
-            .contig_query_index
-            .get_or_init(|| self.build_query_index());
-        let Some(im) = by_contig.get(canonical) else {
-            return Vec::new();
-        };
-        let Some(accessions) = self.contig_index.get(canonical) else {
-            return Vec::new();
-        };
         // i32 fits every chromosome in any current build (max ~250M < 2.1B).
         // Positions outside i32 cannot overlap a real transcript span anyway.
         let Ok(p) = i32::try_from(pos) else {
             return Vec::new();
         };
+
+        // Primary build: the contig lives in `contig_index` / `transcripts`.
+        let by_contig = self
+            .contig_query_index
+            .get_or_init(|| self.build_query_index());
+        if let (Some(im), Some(accessions)) =
+            (by_contig.get(canonical), self.contig_index.get(canonical))
+        {
+            let mut hits: Vec<u32> = Vec::with_capacity(16);
+            im.search_stabbed(p, &mut hits);
+            return hits
+                .into_iter()
+                .filter_map(|idx| {
+                    let acc = accessions.get(idx as usize)?;
+                    let tx = self.transcripts.get(acc)?;
+                    Some((acc.as_str(), tx))
+                })
+                .collect();
+        }
+
+        // Non-primary build: GRCh37/GRCh38 contig accessions are distinct, so
+        // the contig itself names the owning build. Route the query into that
+        // build's `alt_build_transcripts` map.
+        let alt_by_contig = self
+            .alt_build_query_index
+            .get_or_init(|| self.build_alt_build_query_index());
+        let Some(stab) = alt_by_contig.get(canonical) else {
+            return Vec::new();
+        };
+        let Some(alt) = self.alt_build_transcripts.get(&stab.build) else {
+            return Vec::new();
+        };
         let mut hits: Vec<u32> = Vec::with_capacity(16);
-        im.search_stabbed(p, &mut hits);
+        stab.index.search_stabbed(p, &mut hits);
         hits.into_iter()
             .filter_map(|idx| {
-                let acc = accessions.get(idx as usize)?;
-                let tx = self.transcripts.get(acc)?;
+                let acc = stab.accessions.get(idx as usize)?;
+                let tx = alt.get(acc)?;
                 Some((acc.as_str(), tx))
             })
             .collect()
@@ -2370,6 +2528,67 @@ impl CdotMapper {
             }
             im.build();
             by_contig.insert(contig.clone(), im);
+        }
+        by_contig
+    }
+
+    /// Construct the per-contig stab-query index for the non-primary builds,
+    /// derived from [`Self::alt_build_transcripts`]. Mirrors
+    /// [`Self::build_query_index`] but groups by `(build, contig)` so a query
+    /// on an alt-build contig can recover both the owning build and the
+    /// accession.
+    ///
+    /// Because GRCh37 and GRCh38 contig accessions are distinct, no contig is
+    /// claimed by two builds; the per-contig map is therefore unambiguous. If
+    /// a future build did share a contig accession, the last build iterated
+    /// would win for that contig — acceptable until such a build exists.
+    fn build_alt_build_query_index(&self) -> HashMap<String, AltBuildContigStab> {
+        let mut by_contig: HashMap<String, AltBuildContigStab> = HashMap::new();
+        for (build, transcripts) in &self.alt_build_transcripts {
+            // Group this build's transcripts by contig so each contig gets its
+            // own accession list + interval index.
+            let mut accessions_by_contig: HashMap<String, Vec<String>> = HashMap::new();
+            for acc in transcripts.keys() {
+                let Some(tx) = transcripts.get(acc) else {
+                    continue;
+                };
+                accessions_by_contig
+                    .entry(tx.contig.clone())
+                    .or_default()
+                    .push(acc.clone());
+            }
+            for (contig, mut accessions) in accessions_by_contig {
+                // Deterministic order so the `u32` payload→accession mapping is
+                // stable across runs (HashMap key iteration is not).
+                accessions.sort();
+                let mut im: IntervalMap<u32> = IntervalMap::new();
+                for (idx, acc) in accessions.iter().enumerate() {
+                    let Some(tx) = transcripts.get(acc) else {
+                        continue;
+                    };
+                    if tx.exons.is_empty() {
+                        continue;
+                    }
+                    let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
+                    let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
+                    if max <= min {
+                        continue;
+                    }
+                    let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
+                        continue;
+                    };
+                    im.add(s, e, idx as u32);
+                }
+                im.build();
+                by_contig.insert(
+                    contig,
+                    AltBuildContigStab {
+                        build: build.clone(),
+                        accessions,
+                        index: im,
+                    },
+                );
+            }
         }
         by_contig
     }
@@ -4342,5 +4561,148 @@ mod tests {
                 "tx {t} is matched and must not report an insertion gap"
             );
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-build overlap discovery: `transcripts_at_position` must route by
+    // contig to the build that owns it. GRCh37 and GRCh38 have distinct contig
+    // accessions (NC_000017.10 vs .11), so the contig disambiguates the build.
+    // Pre-fix, the stab index was built from the primary build's `contig_index`
+    // only, so a GRCh37 contig query returned empty.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_transcripts_at_position_routes_to_owning_build_by_contig() {
+        // Primary build = GRCh38; the same NM lives on GRCh37 in the alt map.
+        let mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+
+        // Primary (GRCh38) contig: a position inside the GRCh38 exon must hit.
+        let hits38 = mapper.transcripts_at_position("NC_000017.11", 50184100);
+        let ids38: Vec<&str> = hits38.iter().map(|(acc, _)| *acc).collect();
+        assert_eq!(
+            ids38,
+            vec!["NM_000088.3"],
+            "primary-build overlap must still resolve"
+        );
+        // The returned transcript carries the GRCh38 alignment.
+        assert_eq!(hits38[0].1.contig, "NC_000017.11");
+
+        // Alt (GRCh37) contig: a position inside the GRCh37 exon must hit, and
+        // the returned transcript must carry the GRCh37 alignment.
+        let hits37 = mapper.transcripts_at_position("NC_000017.10", 48263050);
+        let ids37: Vec<&str> = hits37.iter().map(|(acc, _)| *acc).collect();
+        assert_eq!(
+            ids37,
+            vec!["NM_000088.3"],
+            "alt-build overlap must resolve via the contig (pre-fix returned empty)"
+        );
+        assert_eq!(hits37[0].1.contig, "NC_000017.10");
+
+        // A contig owned by neither build resolves to empty.
+        assert!(
+            mapper
+                .transcripts_at_position("NC_000099.9", 1000)
+                .is_empty(),
+            "unknown contig must return empty"
+        );
+
+        // A position outside the alt-build exon on a known alt contig is empty.
+        assert!(
+            mapper
+                .transcripts_at_position("NC_000017.10", 1_000)
+                .is_empty(),
+            "position outside the alt-build exon must return empty"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Loading a second, single-build cdot file as a non-primary build. The
+    // real manifest ships GRCh37 and GRCh38 cdot files separately (single-build
+    // each, not nested `genome_builds`), so the loader must be able to layer a
+    // second file onto an already-loaded primary mapper.
+    // -------------------------------------------------------------------------
+
+    fn single_build_grch38_json() -> &'static str {
+        r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73, "M73"]],
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#
+    }
+
+    fn single_build_grch37_json() -> &'static str {
+        r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.10",
+                    "strand": "+",
+                    "exons": [[48263025, 48263098, 0, 73, "M73"]],
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#
+    }
+
+    #[test]
+    fn test_load_secondary_build_layers_second_cdot_file() {
+        // Primary build = GRCh38, loaded from a single-build file.
+        let mut mapper = CdotMapper::from_reader(single_build_grch38_json().as_bytes()).unwrap();
+        // Sanity: only GRCh38 known before layering.
+        assert_eq!(
+            mapper.available_builds_for("NM_000088.3"),
+            vec!["GRCh38".to_string()]
+        );
+
+        // Layer GRCh37 on top.
+        let count = mapper
+            .load_secondary_build_from_reader(single_build_grch37_json().as_bytes(), "GRCh37")
+            .unwrap();
+        assert_eq!(count, 1, "one GRCh37 transcript loaded");
+
+        // Both builds now available, and each returns its own contig.
+        let mut builds = mapper.available_builds_for("NM_000088.3");
+        builds.sort();
+        assert_eq!(builds, vec!["GRCh37".to_string(), "GRCh38".to_string()]);
+
+        assert_eq!(
+            mapper
+                .get_transcript_on_build("NM_000088.3", "GRCh38")
+                .unwrap()
+                .contig,
+            "NC_000017.11"
+        );
+        assert_eq!(
+            mapper
+                .get_transcript_on_build("NM_000088.3", "GRCh37")
+                .unwrap()
+                .contig,
+            "NC_000017.10"
+        );
+
+        // The primary `transcripts` map must NOT be clobbered: the GRCh38
+        // record's contig is unchanged (collision safety).
+        assert_eq!(
+            mapper.get_transcript("NM_000088.3").unwrap().contig,
+            "NC_000017.11"
+        );
+
+        // Overlap discovery routes by contig to the freshly-loaded GRCh37 build.
+        let hits = mapper.transcripts_at_position("NC_000017.10", 48263050);
+        let ids: Vec<&str> = hits.iter().map(|(acc, _)| *acc).collect();
+        assert_eq!(ids, vec!["NM_000088.3"]);
+        assert_eq!(hits[0].1.contig, "NC_000017.10");
     }
 }
