@@ -1,15 +1,15 @@
-//! Differential identity test: `parse_hgvs_fast` must agree with `parse_hgvs`.
+//! Differential identity test: the default `parse_hgvs` (which now routes
+//! through the fast path) must agree with the generic `parse_variant`.
 //!
-//! `parse_hgvs` routes through the full nom parser (`parse_variant`).
-//! `parse_hgvs_fast` first tries a specialized substitution parser
-//! (`fast_path::try_fast_path`) and falls back to `parse_variant` for
-//! everything it does not recognize.
+//! `parse_variant` is the full nom parser — the source of truth. `parse_hgvs`
+//! first tries a specialized substitution parser (`fast_path::try_fast_path`)
+//! and falls back to `parse_variant` for everything it does not recognize.
 //!
-//! Making the fast path the *default* (`C1`) is only sound if the two entry
-//! points are observationally identical for **every** input — i.e. for any
-//! string they either both reject, or both accept and yield the same
-//! [`HgvsVariant`]. A single divergence (one accepts where the other rejects,
-//! or they produce different ASTs) would be a behavior change, not a perf win.
+//! The fast path being the default is only sound if it is observationally
+//! identical to the generic parser for **every** input — i.e. for any string
+//! they either both reject, or both accept and yield the same [`HgvsVariant`].
+//! A single divergence (one accepts where the other rejects, or they produce
+//! different ASTs) would be a behavior change, not a perf win.
 //!
 //! This test pins that invariant two ways:
 //!   1. a deterministic table covering each documented fast-path pattern and
@@ -18,22 +18,20 @@
 //!      inv that must route to the generic parser), and
 //!   2. a `proptest` fuzzer that assembles structurally-varied HGVS strings
 //!      and asserts agreement on each.
-//!
-//! It is intentionally a pure correctness gate: it does not flip the default,
-//! it proves whether the default *could* be flipped safely.
 
-use ferro_hgvs::{parse_hgvs, parse_hgvs_fast};
+use ferro_hgvs::hgvs::parser::variant::parse_variant;
+use ferro_hgvs::parse_hgvs;
 use proptest::prelude::*;
 
-/// Assert that the standard and fast entry points agree on `input`.
+/// Assert that the generic parser and the (fast-path) default agree on `input`.
 ///
 /// Agreement means: both `Err`, or both `Ok` with equal variants. Returns a
 /// human-readable description of the divergence on mismatch (so both the
 /// table test and the proptest fuzzer can surface the exact offending input)
 /// or `None` when they agree.
 fn divergence(input: &str) -> Option<String> {
-    let standard = parse_hgvs(input);
-    let fast = parse_hgvs_fast(input);
+    let standard = parse_variant(input);
+    let fast = parse_hgvs(input);
     match (standard, fast) {
         (Ok(a), Ok(b)) if a == b => None,
         (Err(_), Err(_)) => None,

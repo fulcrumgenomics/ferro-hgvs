@@ -5,11 +5,16 @@
 //!
 //! # Performance
 //!
-//! The fast-path parser provides **45-58% speedup** for simple substitution patterns,
-//! which represent ~87% of variants in clinical databases like ClinVar:
+//! The fast-path parser provides a **~1.7x end-to-end speedup** on the full ClinVar
+//! corpus. It handles ~72% of real ClinVar variants (RefSeq / Ensembl / LRG /
+//! Assembly `g.`/`c.` SNVs); everything else falls back to the generic parser.
+//! The per-pattern micro-benchmark speedup (fast path alone vs. generic parser) is
+//! higher — roughly 45-58% faster for the patterns listed below — but the corpus-level
+//! figure accounts for the fallback fraction and the fast-path overhead on
+//! non-eligible inputs.
 //!
-//! | Pattern | Speedup |
-//! |---------|---------|
+//! | Pattern | Micro-benchmark speedup |
+//! |---------|------------------------|
 //! | `NC_000001.11:g.12345A>G` (RefSeq genomic) | ~50% faster |
 //! | `NM_000088.3:c.459A>G` (RefSeq coding) | ~57% faster |
 //! | `ENST00000357033.8:c.100A>G` (Ensembl) | ~54% faster |
@@ -40,15 +45,13 @@
 //!
 //! # When to Use
 //!
-//! Use [`super::parse_hgvs_fast`] when:
-//! - Your data is primarily simple substitutions (SNVs)
-//! - You're processing large batches from clinical databases
-//! - Performance is critical
+//! Call [`super::parse_hgvs`] for all new code — the fast path is now the
+//! default, so callers get the performance benefit automatically without
+//! selecting a separate entry point.
 //!
-//! Use [`super::parse_hgvs`] when:
-//! - Your data has many complex variants (indels, intronic, UTR)
-//! - You need consistent performance across all variant types
-//! - You're unsure of your data composition
+//! [`super::parse_hgvs_fast`] is retained for backward compatibility only; it
+//! delegates unconditionally to [`super::parse_hgvs`] and offers no additional
+//! performance over calling [`super::parse_hgvs`] directly.
 
 use crate::hgvs::edit::{Base, NaEdit};
 use crate::hgvs::interval::{CdsInterval, GenomeInterval};

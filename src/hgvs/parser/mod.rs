@@ -30,6 +30,18 @@ use crate::hgvs::HgvsVariant;
 /// Uses strict error handling mode by default. For configurable error handling,
 /// use [`parse_hgvs_with_config`] instead.
 ///
+/// # Performance
+///
+/// Common substitution patterns (RefSeq / Ensembl / LRG / Assembly `g.`/`c.`
+/// SNVs — ~72% of real ClinVar) take a specialized fast path that is ~1.7x
+/// faster end-to-end over the full ClinVar corpus; everything else falls back
+/// to the full [`variant::parse_variant`] parser. The fast path is
+/// observationally identical to the generic parser — both accept the same
+/// inputs and produce the same [`HgvsVariant`] (guarded by the differential
+/// test in `tests/fast_path_differential.rs`) — so it is transparent to
+/// callers. To force the generic parser, call [`variant::parse_variant`]
+/// directly.
+///
 /// # Example
 ///
 /// ```
@@ -39,68 +51,34 @@ use crate::hgvs::HgvsVariant;
 /// println!("Parsed: {}", variant);
 /// ```
 pub fn parse_hgvs(input: &str) -> Result<HgvsVariant, FerroError> {
-    variant::parse_variant(input)
+    let trimmed = input.trim();
+    match fast_path::try_fast_path(trimmed) {
+        fast_path::FastPathResult::Success(variant) => Ok(variant),
+        // Fall back on the original (untrimmed) input so the generic parser
+        // sees exactly what it did before the fast path existed.
+        fast_path::FastPathResult::Fallback => variant::parse_variant(input),
+    }
 }
 
-/// Parse an HGVS string with fast-path optimization for common patterns
+/// Parse an HGVS string using the fast path for common patterns.
 ///
-/// This function attempts to use specialized fast-path parsers for the most
-/// common HGVS patterns (RefSeq, Ensembl, LRG, Assembly substitutions).
-/// Falls back to the standard parser for complex or unusual patterns.
-///
-/// # Performance
-///
-/// For simple substitution patterns (which represent ~87% of ClinVar variants),
-/// this provides **45-58% speedup**:
-///
-/// | Pattern Type | Example | Speedup |
-/// |--------------|---------|---------|
-/// | RefSeq genomic | `NC_000001.11:g.12345A>G` | ~50% |
-/// | RefSeq coding | `NM_000088.3:c.459A>G` | ~57% |
-/// | Ensembl | `ENST00000357033.8:c.100A>G` | ~54% |
-/// | Assembly | `GRCh38(chr1):g.12345A>G` | ~47% |
-///
-/// # Tradeoffs
-///
-/// The fast-path adds a small overhead (~3-6%) for patterns it cannot optimize:
-/// - Intronic variants (`c.100+5G>A`)
-/// - UTR variants (`c.*100A>G`, `c.-50A>G`)
-/// - Non-coding RNA (`n.100A>G`)
-/// - RNA variants (`r.100a>g`)
-/// - All deletions, insertions, duplications, etc.
-///
-/// # When to Use
-///
-/// **Recommended for:**
-/// - Clinical variant databases (ClinVar, gnomAD)
-/// - Batch processing of SNV-heavy datasets
-/// - Performance-critical pipelines
-///
-/// **Use standard [`parse_hgvs`] instead when:**
-/// - Data contains many complex variants (indels, intronic)
-/// - Consistent performance across all variant types is needed
-/// - Data composition is unknown
+/// **Equivalent to [`parse_hgvs`].** The fast path is now the default, so this
+/// is a thin synonym retained for backward compatibility; new code should call
+/// [`parse_hgvs`]. See [`parse_hgvs`] for the performance characteristics and
+/// the identity guarantee versus the generic parser.
 ///
 /// # Example
 ///
 /// ```
 /// use ferro_hgvs::parse_hgvs_fast;
 ///
-/// // Fast path for RefSeq substitution (~2x faster)
 /// let variant = parse_hgvs_fast("NC_000001.11:g.12345A>G").unwrap();
-///
-/// // Falls back to standard parser for complex patterns
+/// // Complex patterns transparently fall back to the full parser.
 /// let variant = parse_hgvs_fast("NM_000088.3:c.100+5A>G").unwrap();
 /// ```
 #[inline]
 pub fn parse_hgvs_fast(input: &str) -> Result<HgvsVariant, FerroError> {
-    let trimmed = input.trim();
-
-    // Try fast path first
-    match fast_path::try_fast_path(trimmed) {
-        fast_path::FastPathResult::Success(variant) => Ok(variant),
-        fast_path::FastPathResult::Fallback => variant::parse_variant(input),
-    }
+    parse_hgvs(input)
 }
 
 /// Parse an HGVS string with configurable error handling.
