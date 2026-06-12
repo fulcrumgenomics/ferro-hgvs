@@ -132,6 +132,10 @@ pub fn create_app(config: ServiceConfig) -> Result<(Router, AppState), ServiceEr
         .route("/", get(index_handler))
         .route("/static/css/styles.css", get(styles_css_handler))
         .route("/static/js/main.js", get(main_js_handler))
+        .route(
+            "/static/data/tool_support_matrix.json",
+            get(tool_support_matrix_handler),
+        )
         // Health endpoints
         .route("/health", get(handlers::health::health_check))
         .route(
@@ -215,6 +219,14 @@ async fn main_js_handler() -> impl IntoResponse {
             "application/javascript; charset=utf-8",
         )],
         include_str!("web/static/js/main.js"),
+    )
+}
+
+/// Serve the generated tool-support matrix consumed by the help tab.
+async fn tool_support_matrix_handler() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        include_str!("web/static/data/tool_support_matrix.json"),
     )
 }
 

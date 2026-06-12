@@ -1,0 +1,597 @@
+{
+  "categories": [
+    {
+      "footnotes": [
+        {
+          "marker": "*",
+          "text": "mutalyzer protein normalization requires network access for NP_→NM_ lookups (cannot be cached locally)."
+        }
+      ],
+      "id": "reference_types",
+      "rows": [
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "NM_000088.3",
+          "key": "NM_",
+          "label": "Coding transcript (mRNA)",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "NR_024540.1",
+          "key": "NR_",
+          "label": "Non-coding transcript",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "NC_000001.11",
+          "key": "NC_",
+          "label": "Genomic chromosome",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "NG_007400.1",
+          "key": "NG_",
+          "label": "Genomic gene region",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "*",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            }
+          ],
+          "example": "NP_000079.2",
+          "key": "NP_",
+          "label": "Protein",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "LRG_1",
+          "key": "LRG_",
+          "label": "Locus Reference Genomic",
+          "spec_url": null
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            }
+          ],
+          "example": "ENST00000357033",
+          "key": "ENST",
+          "label": "Ensembl transcript",
+          "spec_url": null
+        }
+      ],
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "title": "Reference Types"
+    },
+    {
+      "footnotes": [
+        {
+          "marker": "*",
+          "text": "mutalyzer protein normalization requires network access for NP_→NM_ lookups (cannot be cached locally)."
+        },
+        {
+          "marker": "**",
+          "text": "mutalyzer intronic support is enabled by default via genomic-context rewriting; disable with --no-rewrite-intronic."
+        }
+      ],
+      "id": "coordinate_types",
+      "rows": [
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589G>T",
+          "key": "c",
+          "label": "Coding DNA (relative to CDS)",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "g.12345A>G",
+          "key": "g",
+          "label": "Genomic (absolute position)",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "n.100del",
+          "key": "n",
+          "label": "Non-coding transcript",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "*",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            }
+          ],
+          "example": "p.Gly12Val",
+          "key": "p",
+          "label": "Protein",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "m.8993T>G",
+          "key": "m",
+          "label": "Mitochondrial",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "r.76a>u",
+          "key": "r",
+          "label": "RNA",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/RNA/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "**",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            }
+          ],
+          "example": "c.100+5G>A",
+          "key": "intronic",
+          "label": "Intronic positions",
+          "spec_url": null
+        }
+      ],
+      "spec_url": null,
+      "title": "Coordinate Types"
+    },
+    {
+      "footnotes": [],
+      "id": "variant_types",
+      "rows": [
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589G>T",
+          "key": "substitution",
+          "label": "Substitution",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/substitution/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589del",
+          "key": "deletion",
+          "label": "Deletion",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/deletion/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589_590insA",
+          "key": "insertion",
+          "label": "Insertion",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/insertion/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589dup",
+          "key": "duplication",
+          "label": "Duplication",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/duplication/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589delinsAT",
+          "key": "delins",
+          "label": "Delins",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/delins/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            }
+          ],
+          "example": "c.589_600inv",
+          "key": "inversion",
+          "label": "Inversion",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/inversion/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "-"
+            },
+            {
+              "footnote": "",
+              "glyph": "-"
+            }
+          ],
+          "example": "c.589CAG[23]",
+          "key": "repeat",
+          "label": "Repeat",
+          "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/repeated/"
+        },
+        {
+          "cells": [
+            {
+              "footnote": "",
+              "glyph": "V/N"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "V"
+            },
+            {
+              "footnote": "",
+              "glyph": "-"
+            }
+          ],
+          "example": "c.589_600con",
+          "key": "conversion",
+          "label": "Conversion",
+          "spec_url": null
+        }
+      ],
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/variant/",
+      "title": "Variant Types"
+    }
+  ],
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "ferro",
+      "name": "ferro",
+      "url": "https://github.com/fulcrumgenomics/ferro-hgvs",
+      "version": "0.6.0"
+    },
+    {
+      "id": "mutalyzer",
+      "name": "mutalyzer",
+      "url": "https://mutalyzer.nl/",
+      "version": "3.1.1"
+    },
+    {
+      "id": "biocommons",
+      "name": "biocommons",
+      "url": "https://github.com/biocommons/hgvs",
+      "version": "main @ fa02ca5 (post-1.5.3)"
+    },
+    {
+      "id": "hgvs-rs",
+      "name": "hgvs-rs",
+      "url": "https://github.com/varfish-org/hgvs-rs",
+      "version": "0.20.2"
+    }
+  ]
+}

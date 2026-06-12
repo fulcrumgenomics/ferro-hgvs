@@ -65,19 +65,20 @@ Results in this guide were generated with:
 
 ### Normalization Capabilities by Tool
 
-| Pattern Type | ferro | hgvs-rs | biocommons | mutalyzer |
-|--------------|:-----:|:-------:|:----------:|:---------:|
+<!-- DO NOT EDIT — generated from docs/tool_support_matrix.json by `generate_tool_support_tables`. -->
+<!-- BEGIN tool-support:normalization_capabilities -->
+| Pattern Type | ferro | mutalyzer | biocommons | hgvs-rs |
+|--------------|:-----:|:---------:|:----------:|:-------:|
 | Genomic (g.) | ✓ | ✓ | ✓ | ✓ |
 | Coding (c.) exonic | ✓ | ✓ | ✓ | ✓ |
-| Coding (c.) intronic | ✓ | ✗ | ✗ | ✓* |
+| Coding (c.) intronic | ✓ | ✓* | ✗ | ✗ |
 | Non-coding (n.) | ✓ | ✓ | ✓ | ✓ |
 | RNA (r.) | ✓ | ✓ | ✓ | ✓ |
-| Protein (p.) | ✓ | ✓ | ✗ | Net** |
+| Protein (p.) | ✓ | Net** | ✗ | ✗ |
 
-\* mutalyzer intronic support enabled by default via genomic context rewriting.
-Use `--no-rewrite-intronic` to disable.
-
-\** mutalyzer protein normalization requires network access for NP_→NM_ lookups (see Design Limitations).
+\* mutalyzer intronic support is enabled by default via genomic-context rewriting; disable with --no-rewrite-intronic.
+\*\* mutalyzer protein normalization requires network access for NP_→NM_ lookups (cannot be cached locally).
+<!-- END tool-support:normalization_capabilities -->
 
 ### Design Limitations
 
