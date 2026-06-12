@@ -51,17 +51,18 @@ fn normalization_view_renders_expected() {
 |--------------|:-----:|:---------:|:----------:|:-------:|
 | Genomic (g.) | ✓ | ✓ | ✓ | ✓ |
 | Coding (c.) exonic | ✓ | ✓ | ✓ | ✓ |
-| Coding (c.) intronic | ✓ | ✓* | ✗ | ✗ |
+| Coding (c.) intronic | ✓ | ✓** | ✗ | ✗ |
 | Non-coding (n.) | ✓ | ✓ | ✓ | ✓ |
 | RNA (r.) | ✓ | ✓ | ✓ | ✓ |
-| Protein (p.) | ✓ | Net** | ✗ | ✗ |
+| Protein (p.) | ✓ | Net* | ✗ | ✗ |
 ";
     // Compare the table portion (ignore the trailing footnote legend, which is
     // asserted separately to avoid coupling to exact footnote prose).
     let table: String = out.lines().take(8).collect::<Vec<_>>().join("\n");
     assert_eq!(table, expected.trim_end());
-    assert!(out.contains("\\* mutalyzer intronic support is enabled by default"));
-    assert!(out.contains("\\*\\* mutalyzer protein normalization requires network access"));
+    // Canonical marker order (sorted keys: `net` < `rewrite`): * = net, ** = rewrite.
+    assert!(out.contains("\\* mutalyzer protein normalization requires network access"));
+    assert!(out.contains("\\*\\* mutalyzer intronic support is enabled by default"));
 }
 
 #[test]
