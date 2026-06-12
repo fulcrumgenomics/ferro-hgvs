@@ -3967,25 +3967,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             (g_start, g_end)
         };
 
-        // Get a window of genomic sequence around the variant for normalization
-        // Use the same window size as for exonic normalization
-        let window = self.config.window_size;
-        let seq_start = g_start.saturating_sub(window);
-        let seq_end = g_end.saturating_add(window);
-
-        // Fetch genomic sequence
-        let genomic_seq = self
-            .provider
-            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
-
-        // Calculate the variant position relative to the fetched sequence
-        let rel_start = (g_start - seq_start) + 1; // 1-based
-        let rel_end = (g_end - seq_start) + 1;
-
-        // Define boundaries within the intron
-        // For intronic variants, we can shift within the intron but not into exons
-        // Find the intron boundaries
-        // Use exon-aware CDS-to-tx mapping to account for cdot's gap positions
+        // Find the enclosing intron boundaries first (genomic coordinates), so
+        // the fetched window can be sized to cover them. A variant-only window
+        // leaves a large intron's far edge outside the fetched bases, which
+        // fails the minus-strand shuffle boundary check (issue #573). The
+        // intron lookup needs only the transcript/mapper, not the sequence.
+        // Use exon-aware CDS-to-tx mapping to account for cdot's gap positions.
         let tx_pos = mapper.cds_to_tx(start_pos)?;
         let tx_start = u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
             msg: format!(
@@ -4010,9 +3997,47 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         };
 
-        // Calculate relative intron boundaries
-        let intron_rel_start = intron_g_start.saturating_sub(seq_start) + 1;
-        let intron_rel_end = intron_g_end.saturating_sub(seq_start) + 1;
+        // Get a window of genomic sequence around the variant, extended to
+        // cover the enclosing intron boundaries (capped for huge introns).
+        let window = self.config.window_size;
+        let (seq_start, seq_end) =
+            intronic_window_bounds(g_start, g_end, intron_g_start, intron_g_end, window);
+
+        // Fetch genomic sequence
+        let genomic_seq = self
+            .provider
+            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+
+        // Calculate the variant position relative to the fetched sequence
+        let rel_start = (g_start - seq_start) + 1; // 1-based
+        let rel_end = (g_end - seq_start) + 1;
+
+        // Calculate relative intron boundaries (now within the fetched window).
+        // Guard against an inverted intron span before any subtraction: the intron
+        // builder only sets genomic coords when `genomic_end >= genomic_start`, so
+        // a valid intron is never inverted, but defend against malformed boundaries
+        // (e.g. injected via the public `Intron` fields) that would otherwise make
+        // `intron_g_end - seq_start` underflow (debug panic / release wraparound).
+        if intron_g_end < intron_g_start {
+            return Err(FerroError::ConversionError {
+                msg: format!("inverted intron span ({intron_g_start}..{intron_g_end})"),
+            });
+        }
+        // When the huge-intron cap fires, `intronic_window_bounds` falls back to
+        // the variant-only window, which may not include one or both intron edges.
+        // Silently using `saturating_sub` in that case clamps the boundary to 1,
+        // which passes the `flip_intronic_for_strand` in-window guard on minus-strand
+        // transcripts and produces incorrect normalization. Return an error instead.
+        if intron_g_start < seq_start || intron_g_end.saturating_add(1) > seq_end {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "intron span ({intron_g_start}..{intron_g_end}) exceeds \
+                     intronic shuffle window ({seq_start}..{seq_end})"
+                ),
+            });
+        }
+        let intron_rel_start = intron_g_start - seq_start + 1;
+        let intron_rel_end = intron_g_end - seq_start + 1;
         let boundaries = Boundaries::new(intron_rel_start, intron_rel_end);
 
         // On minus-strand transcripts the genomic-strand sequence is the
@@ -4145,21 +4170,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
             (g_start, g_end)
         };
 
-        // Get a window of genomic sequence around the variant
-        let window = self.config.window_size;
-        let seq_start = g_start.saturating_sub(window);
-        let seq_end = g_end.saturating_add(window);
-
-        // Fetch genomic sequence
-        let genomic_seq = self
-            .provider
-            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
-
-        // Calculate the variant position relative to the fetched sequence
-        let rel_start = (g_start - seq_start) + 1; // 1-based
-        let rel_end = (g_end - seq_start) + 1;
-
-        // Find the intron boundaries for normalization limits
+        // Find the enclosing intron boundaries first so the fetched window can
+        // be sized to cover them (issue #573); see `normalize_intronic_cds`.
         let tx_start = u64::try_from(start_pos.base).map_err(|_| FerroError::ConversionError {
             msg: format!(
                 "Negative transcript position {} during intronic normalization",
@@ -4183,9 +4195,40 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         };
 
-        // Calculate relative intron boundaries
-        let intron_rel_start = intron_g_start.saturating_sub(seq_start) + 1;
-        let intron_rel_end = intron_g_end.saturating_sub(seq_start) + 1;
+        // Get a window of genomic sequence around the variant, extended to
+        // cover the enclosing intron boundaries (capped for huge introns).
+        let window = self.config.window_size;
+        let (seq_start, seq_end) =
+            intronic_window_bounds(g_start, g_end, intron_g_start, intron_g_end, window);
+
+        // Fetch genomic sequence
+        let genomic_seq = self
+            .provider
+            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+
+        // Calculate the variant position relative to the fetched sequence
+        let rel_start = (g_start - seq_start) + 1; // 1-based
+        let rel_end = (g_end - seq_start) + 1;
+
+        // Calculate relative intron boundaries (now within the fetched window).
+        // See `normalize_intronic_cds`: same inverted-span guard applies here,
+        // defending against an `intron_g_end - seq_start` underflow.
+        if intron_g_end < intron_g_start {
+            return Err(FerroError::ConversionError {
+                msg: format!("inverted intron span ({intron_g_start}..{intron_g_end})"),
+            });
+        }
+        // See `normalize_intronic_cds`: same cap-fallback guard applies here.
+        if intron_g_start < seq_start || intron_g_end.saturating_add(1) > seq_end {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "intron span ({intron_g_start}..{intron_g_end}) exceeds \
+                     intronic shuffle window ({seq_start}..{seq_end})"
+                ),
+            });
+        }
+        let intron_rel_start = intron_g_start - seq_start + 1;
+        let intron_rel_end = intron_g_end - seq_start + 1;
         let boundaries = Boundaries::new(intron_rel_start, intron_rel_end);
 
         // See `normalize_intronic_cds`: same orientation fix for #98.
@@ -5996,6 +6039,39 @@ fn single_variant_shift_info(
         original_position,
         normalized_position,
     })
+}
+
+/// Maximum genomic span fetched for intronic shuffle normalization. Sizing
+/// the window to the enclosing intron (issue #573) lets the minus-strand
+/// boundary check see the intron edges; a pathologically large intron is
+/// capped here, in which case the variant-sized window is used and the
+/// downstream guard returns a clean `Err` rather than fetching megabases.
+const MAX_INTRONIC_SHUFFLE_WINDOW: u64 = 64 * 1024;
+
+/// Genomic `[seq_start, seq_end]` window for intronic normalization, sized to
+/// cover both the variant (± `window`) and the enclosing intron boundaries so
+/// the 3'-shift boundary check has the intron edges in-window. Falls back to
+/// the variant-sized window when the intron span exceeds
+/// [`MAX_INTRONIC_SHUFFLE_WINDOW`].
+fn intronic_window_bounds(
+    g_start: u64,
+    g_end: u64,
+    intron_g_start: u64,
+    intron_g_end: u64,
+    window: u64,
+) -> (u64, u64) {
+    let var_start = g_start.saturating_sub(window);
+    let var_end = g_end.saturating_add(window);
+    let want_start = var_start.min(intron_g_start);
+    // The fetch is end-exclusive (relative length = `seq_end - seq_start`), so
+    // the far intron edge `intron_g_end` only lands inside the 1-based window
+    // when `seq_end > intron_g_end`. Extend one past it.
+    let want_end = var_end.max(intron_g_end.saturating_add(1));
+    if want_end.saturating_sub(want_start) <= MAX_INTRONIC_SHUFFLE_WINDOW {
+        (want_start, want_end)
+    } else {
+        (var_start, var_end)
+    }
 }
 
 /// Flip a fetched intronic genomic-strand window into transcript-view
@@ -8278,6 +8354,37 @@ mod tests {
         assert!(
             matches!(result, Err(FerroError::ConversionError { .. })),
             "out-of-window boundary must yield ConversionError, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn intronic_window_bounds_covers_intron_and_caps() {
+        // Common case: the intron fits inside the variant window, so the
+        // window is unchanged (the fix is a no-op here).
+        assert_eq!(
+            intronic_window_bounds(1000, 1010, 990, 1020, 100),
+            (900, 1110)
+        );
+
+        // Large intron: the window extends to cover the far intron edge, plus
+        // one (the fetch is end-exclusive, so the edge must be < seq_end to
+        // land inside the 1-based window) — issue #573.
+        let (s, e) = intronic_window_bounds(1000, 1010, 200, 5000, 100);
+        assert_eq!((s, e), (200, 5001));
+
+        // Asymmetric extension: only the start edge is outside the variant
+        // window (intron_g_start < var_start, intron_g_end is within reach).
+        // This is the shape closest to the #573 bug — variant near the far end
+        // of a moderately large intron, where only one edge needs extending.
+        let (s2, e2) = intronic_window_bounds(1000, 1010, 850, 1050, 100);
+        assert_eq!((s2, e2), (850, 1110));
+
+        // Pathologically large intron beyond the cap: fall back to the
+        // variant-sized window (the downstream guard then returns a clean Err
+        // rather than forcing a huge fetch).
+        assert_eq!(
+            intronic_window_bounds(1_000_000, 1_000_010, 1, 5_000_000, 100),
+            (999_900, 1_000_110)
         );
     }
 
