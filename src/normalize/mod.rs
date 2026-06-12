@@ -1789,8 +1789,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let accession = variant.accession.transcript_accession();
         let transcript_for_intronic =
             || -> Result<std::sync::Arc<crate::reference::transcript::Transcript>, FerroError> {
+                // Resolve directly from the accession — the build-aware lookup
+                // only needs the accession, so we avoid cloning the whole
+                // variant just to satisfy the by-variant signature.
                 self.provider
-                    .get_transcript_for_variant(&HV::Cds(variant.clone()))
+                    .get_transcript_for_accession(&variant.accession)
             };
         let transcript_opt = self.provider.get_transcript(&accession).ok();
         if self.config.should_reject_position_past_end()
@@ -1877,8 +1880,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Handle intronic variants specially
         if start_pos.is_intronic() || end_pos.is_intronic() {
-            // Switch to the variant-aware lookup so an NG/NC-parented input
-            // gets the build-correct chromosome. If the variant-aware lookup
+            // Switch to the accession-aware lookup so an NG/NC-parented input
+            // gets the build-correct chromosome. If the accession-aware lookup
             // fails, fall back to the plain transcript we already fetched.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
             // Check if both positions are intronic and in the same intron
@@ -2389,8 +2392,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let accession = variant.accession.transcript_accession();
         let transcript_for_intronic =
             || -> Result<std::sync::Arc<crate::reference::transcript::Transcript>, FerroError> {
+                // Resolve directly from the accession — avoids cloning the
+                // whole variant just to call the by-variant lookup.
                 self.provider
-                    .get_transcript_for_variant(&HV::Tx(variant.clone()))
+                    .get_transcript_for_accession(&variant.accession)
             };
         let transcript_opt = self.provider.get_transcript(&accession).ok();
         if self.config.should_reject_position_past_end()
@@ -2471,7 +2476,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         if start_pos.is_intronic() || end_pos.is_intronic() {
-            // Switch to the variant-aware lookup so an NG/NC-parented input
+            // Switch to the accession-aware lookup so an NG/NC-parented input
             // gets the build-correct chromosome.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
             // Route intronic tx variants to the intronic normalization path

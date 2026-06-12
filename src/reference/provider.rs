@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::error::FerroError;
-use crate::hgvs::variant::HgvsVariant;
+use crate::hgvs::variant::{Accession, HgvsVariant};
 use crate::reference::transcript::Transcript;
 
 /// Trait for providing reference sequence data
@@ -49,6 +49,28 @@ pub trait ReferenceProvider {
             .ok_or_else(|| FerroError::ReferenceNotFound {
                 id: format!("{}", variant),
             })?;
+        self.get_transcript_for_accession(accession)
+    }
+
+    /// Get the transcript for the given accession, using its `genomic_context`
+    /// parent (NG/NC) to pick a cdot build that has the transcript with a
+    /// chromosome populated.
+    ///
+    /// This is the build-aware resolution that backs
+    /// [`get_transcript_for_variant`](Self::get_transcript_for_variant), exposed
+    /// directly so callers that already hold an [`Accession`] (e.g. the intronic
+    /// normalization path) can resolve without cloning a whole variant just to
+    /// satisfy the by-variant signature.
+    ///
+    /// The default implementation delegates to
+    /// [`get_transcript`](Self::get_transcript), preserving existing behavior
+    /// for inputs that do not carry a `genomic_context`. Build-aware providers
+    /// (e.g. [`crate::reference::multi_fasta::MultiFastaProvider`]) override this
+    /// to consult the parent accession first. See issue #332.
+    fn get_transcript_for_accession(
+        &self,
+        accession: &Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
         self.get_transcript(&accession.transcript_accession())
     }
 
@@ -241,6 +263,13 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
         variant: &HgvsVariant,
     ) -> Result<Arc<Transcript>, FerroError> {
         (**self).get_transcript_for_variant(variant)
+    }
+
+    fn get_transcript_for_accession(
+        &self,
+        accession: &Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        (**self).get_transcript_for_accession(accession)
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
