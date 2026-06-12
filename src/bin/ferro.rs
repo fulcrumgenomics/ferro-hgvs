@@ -2847,6 +2847,22 @@ fn run_check(reference: &Path, build_cache: bool) -> Result<(), Box<dyn std::err
         eprintln!("Reference cache ready in {:.1?}.", started.elapsed());
     }
 
+    // Report which path the cdot cache loads from, so a silent fast-path →
+    // JSON-fallback regression (the #585 class) is visible rather than only
+    // showing up as a slow startup. The nightly perf gate parses this line as a
+    // timing-free co-assertion that the prepared cache is on the fast path.
+    // Printed after `--build-cache` so it reflects the freshly built cache.
+    match ferro_hgvs::commands::cdot_cache_load_source(reference) {
+        Ok(Some(ferro_hgvs::data::CdotLoadSource::Archive)) => {
+            println!("cdot cache: archive");
+        }
+        Ok(Some(ferro_hgvs::data::CdotLoadSource::JsonFallback)) => {
+            println!("cdot cache: json-fallback");
+        }
+        Ok(None) => {} // No manifest or cdot entry — nothing to report.
+        Err(e) => eprintln!("warning: could not determine cdot cache source: {}", e),
+    }
+
     Ok(())
 }
 
