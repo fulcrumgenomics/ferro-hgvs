@@ -6046,6 +6046,10 @@ fn parse_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError> {
     }
 
     let mut variants: Vec<HgvsVariant> = Vec::with_capacity(chunks.len());
+    // The accession + coord-type stem of the first operand that carries one,
+    // inherited by bare bracketed operands (e.g. the `[(Asn158Val)]` in
+    // `ACC:p.[..]^[(Asn158Val)]`).
+    let mut anchor_prefix: Option<String> = None;
     for chunk in chunks {
         let chunk = chunk.trim();
         if chunk.is_empty() {
@@ -6055,7 +6059,53 @@ fn parse_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError> {
                 diagnostic: None,
             });
         }
-        variants.push(parse_variant(chunk)?);
+
+        if looks_like_accession_start(chunk) {
+            // Operand carries its own *leading* accession (incl. cross-reference
+            // forms). A `:` buried inside the chunk — e.g. an inner-accession
+            // edit like `[..delins[ACC:g.X_Y]]` — does *not* qualify the
+            // operand; only a leading accession stem does, so such bare
+            // bracketed operands fall through to the inherited-prefix path.
+            let variant = parse_variant(chunk)?;
+            if anchor_prefix.is_none() {
+                if let Some(leaf) = crate::hgvs::variant::first_leaf_with_accession(&variant) {
+                    if let Some(acc) = leaf.accession() {
+                        anchor_prefix = Some(format!("{}:{}.", acc.full(), leaf.variant_type()));
+                    }
+                }
+            }
+            variants.push(variant);
+            continue;
+        }
+
+        // Bare operand: inherit the accession + coord type from the first
+        // operand. Used for bracketed allele operands `[..]` that omit the
+        // shared accession.
+        let prefix = anchor_prefix.clone().ok_or_else(|| FerroError::Parse {
+            pos: 0,
+            msg: "And/or operand without an accession must follow one that has it".to_string(),
+            diagnostic: None,
+        })?;
+        let reconstructed = format!("{}{}", prefix, chunk);
+        match parse_variant(&reconstructed) {
+            Ok(variant) => variants.push(variant),
+            Err(e) => {
+                // A single-member bracket `[X]` is not a standalone allele
+                // (the spec uses it only as an operand). Parse the inner
+                // member with the inherited prefix and wrap it as a
+                // one-member allele so the `[..]` round-trips.
+                if chunk.starts_with('[') && chunk.ends_with(']') {
+                    let inner = chunk[1..chunk.len() - 1].trim();
+                    let member = parse_variant(&format!("{}{}", prefix, inner))?;
+                    variants.push(HgvsVariant::Allele(AlleleVariant::new(
+                        vec![member],
+                        AllelePhase::Cis,
+                    )));
+                } else {
+                    return Err(e);
+                }
+            }
+        }
     }
 
     Ok(HgvsVariant::Allele(AlleleVariant::new(
