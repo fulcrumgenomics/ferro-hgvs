@@ -257,6 +257,7 @@ pub const NO_FERRO_EQUIV: &[&str] = &[
 /// shape, ferro's split between transcript and protein reference lookups)
 /// that mutalyzer's error taxonomy does not model.
 pub const FERRO_NO_MUTALYZER_EQUIV: &[&str] = &[
+    "AlignmentGap",
     "ConversionError",
     "ExonIntronBoundary",
     "GenomicReferenceNotAvailable",
@@ -397,7 +398,8 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
         FerroError::AminoAcidMismatch { .. } => &["EAMINOACIDMISMATCH"],
 
         // No mutalyzer equivalent — see FERRO_NO_MUTALYZER_EQUIV.
-        FerroError::ExonIntronBoundary { .. }
+        FerroError::AlignmentGap { .. }
+        | FerroError::ExonIntronBoundary { .. }
         | FerroError::UtrCdsBoundary { .. }
         | FerroError::GenomicReferenceNotAvailable { .. }
         | FerroError::ProteinReferenceNotAvailable { .. }
@@ -502,6 +504,9 @@ mod tests {
     fn sample_ferro_errors() -> Vec<FerroError> {
         vec![
             FerroError::parse(0, "sample"),
+            FerroError::AlignmentGap {
+                msg: "sample".to_string(),
+            },
             FerroError::ReferenceNotFound {
                 id: "NM_TEST.1".to_string(),
             },
@@ -582,6 +587,7 @@ mod tests {
     fn debug_variant_name(err: &FerroError) -> &'static str {
         match err {
             FerroError::Parse { .. } => "Parse",
+            FerroError::AlignmentGap { .. } => "AlignmentGap",
             FerroError::ReferenceNotFound { .. } => "ReferenceNotFound",
             FerroError::TranscriptVersionNotExact { .. } => "TranscriptVersionNotExact",
             FerroError::ExonIntronBoundary { .. } => "ExonIntronBoundary",
