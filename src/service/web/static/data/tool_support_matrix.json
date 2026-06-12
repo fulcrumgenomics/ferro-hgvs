@@ -585,7 +585,7 @@
       "id": "biocommons",
       "name": "biocommons",
       "url": "https://github.com/biocommons/hgvs",
-      "version": "main @ fa02ca5 (post-1.5.3)"
+      "version": "fa02ca5ec0c9e28a1a6377b551e41ae77b450ce9"
     },
     {
       "id": "hgvs-rs",

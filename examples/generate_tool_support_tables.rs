@@ -40,7 +40,7 @@ struct Cli {
     today: String,
     /// Staleness window in months.
     #[arg(long, default_value_t = 6)]
-    stale_months: i64,
+    stale_months: u64,
 }
 
 const VIEW: &str = "normalization_capabilities";
@@ -117,7 +117,7 @@ fn main() -> ExitCode {
     }
 
     // Staleness warnings (never fail).
-    for s in m.stale_cells(&cli.today, cli.stale_months) {
+    for s in m.stale_cells(&cli.today, cli.stale_months as i64) {
         eprintln!(
             "warning: stale tool-support cell {s} (>{} months)",
             cli.stale_months
@@ -134,7 +134,17 @@ fn main() -> ExitCode {
 
     let mut drift = false;
     for t in &targets {
-        let on_disk = std::fs::read_to_string(&t.path).unwrap_or_default();
+        // In --check mode a missing target is a distinct, actionable error
+        // (someone deleted a generated file) rather than silently "out of date".
+        let on_disk = match std::fs::read_to_string(&t.path) {
+            Ok(content) => content,
+            Err(e) if cli.check => {
+                drift = true;
+                eprintln!("error: {} is missing or unreadable: {e}", t.path);
+                continue;
+            }
+            Err(_) => String::new(), // non-check: the file is (re)created below
+        };
         if cli.check {
             if on_disk != t.content {
                 drift = true;
