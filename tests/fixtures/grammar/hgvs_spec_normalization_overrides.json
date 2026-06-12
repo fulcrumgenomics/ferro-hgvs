@@ -20,11 +20,11 @@
     },
     "NC_000012.12:g.6128479_6128749con[NC_000022.11:g.17178616_17178886]": {
       "status": "needs-reference",
-      "note": "Spec has no canonical output for this consultation example (`spec_expected: null`), so auto-classification yields `false-acceptance`. In practice the row parses and the normalizer surfaces a `cross-reference` / `follow-up` deferral — that is a `needs-reference` outcome, not an accepted-bad-input. Override pins the semantically correct bucket (#365)."
+      "note": "Spec has no canonical output for this consultation example (`spec_expected: null`), so auto-classification yields `false-acceptance`. In practice the row parses and the normalizer surfaces a `cross-reference` / `follow-up` deferral \u2014 that is a `needs-reference` outcome, not an accepted-bad-input. Override pins the semantically correct bucket (#365)."
     },
     "NC_000022.10:g.42522624_42522669con42536337_42536382": {
       "status": "needs-reference",
-      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference `con` source requires provider sequence to drive `con` → `delins` → ins-expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
+      "note": "Spec has no canonical output (`spec_expected: null`); auto-classification yields `false-acceptance`. Same-reference `con` source requires provider sequence to drive `con` \u2192 `delins` \u2192 ins-expand; with the empty MockProvider the normalizer surfaces a provider-lookup error. That is a `needs-reference` outcome (#365)."
     },
     "g.456_457ins123_456": {
       "status": "needs-reference",
@@ -33,6 +33,70 @@
     "chr8:g.128746677_128749160dupinv": {
       "spec_expected": null,
       "note": "Harvested from the SVD-WG004 consultation proposal, which is banner-flagged `not updated` and superseded by DNA/complex.md. The adopted recommendation rejects `dupinv` (`<code class=\"invalid\">` at DNA/inversion.md:19, RNA/inversion.md:19) and re-expresses this exact orientation-reversed duplication as an inverted insertion (`NC_000008.11:g.(131500001_136400000)ins(127300001_131500000)_(131500001_136400000)inv`, DNA/complex.md). The seeded `spec_expected` was a fixture bug; force spec-rejects so ferro correctly rejecting `dupinv` reads as `correctly-rejected`, not `parse-error`. ferro supports the spec-correct `ins(...)_(...)inv` form instead (#546)."
+    },
+    "chr11:g.pter_15,825,272::chr2:g.8,247,757_cen_qter": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: comma-thousands are not valid HGVS (DNA/complex.md:46-47) and cross-chromosome `::` was removed in ISCN2020; HGVS uses the adjacent `delins[ACC:g....]` form (DNA/complex.md:62-64). ferro rejects it; force spec-rejects so it reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr14:g.29,745,314_qterinv::CATTTGTTCAAATTTAGTTCAAATGA::chr3:g.36,969,142_cen_qter": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: comma-thousands are not valid HGVS (DNA/complex.md:46-47) and cross-chromosome `::` was removed in ISCN2020; HGVS uses the adjacent `delins[ACC:g....]` form (DNA/complex.md:62-64). ferro rejects it; force spec-rejects so it reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr14:g.pter_cen_29,745,313::chr3:g.pter_36,969,141inv": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: comma-thousands are not valid HGVS (DNA/complex.md:46-47) and cross-chromosome `::` was removed in ISCN2020; HGVS uses the adjacent `delins[ACC:g....]` form (DNA/complex.md:62-64). ferro rejects it; force spec-rejects so it reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr2:g.pter_8,247,756::chr11:g.15,825,273_cen_qter": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: comma-thousands are not valid HGVS (DNA/complex.md:46-47) and cross-chromosome `::` was removed in ISCN2020; HGVS uses the adjacent `delins[ACC:g....]` form (DNA/complex.md:62-64). ferro rejects it; force spec-rejects so it reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr11:g.pter_cen_108111981::chr2:g.174500099_qter": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: cross-chromosome `::` was removed in ISCN2020 (DNA/complex.md:38-41, where `::` now denotes only a ring-chromosome junction) and HGVS describes translocations exclusively with the `delins` form (DNA/complex.md:62-64). The HGVS-proper rendering is the adjacent `delins[ACC:g....]` row. ferro rejects this ISCN form; force spec-rejects so the rejection reads as `correctly-rejected`, not `parse-error` (#546)."
+    },
+    "chr2:g.pter_cen_174500098::chr11:g.108111987_qter": {
+      "spec_expected": null,
+      "note": "ISCN-only rendering: cross-chromosome `::` was removed in ISCN2020 (DNA/complex.md:38-41, where `::` now denotes only a ring-chromosome junction) and HGVS describes translocations exclusively with the `delins` form (DNA/complex.md:62-64). The HGVS-proper rendering is the adjacent `delins[ACC:g....]` row. ferro rejects this ISCN form; force spec-rejects so the rejection reads as `correctly-rejected`, not `parse-error` (#546)."
+    },
+    "g.[chr11:pter_15825272::chr2:8247757_cen_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr11:pter_cen_108111981::chr2:174500099_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr14:29745314_qterinv::CATTTGTTCAAATTTAGTTCAAATGA::chr3:36969142_cen_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr14:pter_cen_29745313::chr3:pter_36969141inv]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr2:pter_8247756::chr11:15825273_cen_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr2:pter_cen_174500098::chr11:108111987_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the SVD-WG004 consultation proposal, banner-flagged `not updated` and superseded by DNA/complex.md. It is a cross-chromosome `::` translocation, which ISCN2020 removed; the adopted form is `delins` (DNA/complex.md:62-64). ferro rejects it; force spec-rejects (#546)."
+    },
+    "g.[chr9:102425452_qterinv::chr9:26393002_cen_qter]": {
+      "spec_expected": null,
+      "note": "Harvested from the superseded SVD-WG004 proposal (banner-flagged `not updated`, see DNA/complex.md). A homologous-chromosome translocation `t(9;9)` rendered with `::` plus the ISCN-only `cen`/`pter_cen` multi-anchor coordinates; ISCN2020 removed the translocation meaning of `::` and HGVS uses the `delins` form instead (the adopted rendering is `NC_000009.12:g.pter_26393001delins102425452_qterinv`, complex.md:94-95). ferro rejects this ISCN form; force spec-rejects so the rejection reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "g.[chr9:pter_cen_102425451::chr9:26393001pterinv]": {
+      "spec_expected": null,
+      "note": "Harvested from the superseded SVD-WG004 proposal (banner-flagged `not updated`, see DNA/complex.md). A homologous-chromosome translocation `t(9;9)` rendered with `::` plus the ISCN-only `cen`/`pter_cen` multi-anchor coordinates; ISCN2020 removed the translocation meaning of `::` and HGVS uses the `delins` form instead (the adopted rendering is `NC_000009.12:g.pter_26393001delins102425452_qterinv`, complex.md:94-95). ferro rejects this ISCN form; force spec-rejects so the rejection reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr14:g.[pter_cen_qter]add": {
+      "spec_expected": null,
+      "note": "Harvested from the superseded SVD-WG004 proposal; `add` is the deprecated ISCN2016 marker, replaced by `sup` in ISCN2020 (DNA/complex.md:33-34). ferro does not parse `add`; force spec-rejects so the rejection reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "chr22:g.[pter_10000000del::40000000_qterdel]add": {
+      "spec_expected": null,
+      "note": "Harvested from the superseded SVD-WG004 proposal; `add` is the deprecated ISCN2016 marker, replaced by `sup` in ISCN2020 (DNA/complex.md:33-34). ferro does not parse `add`; force spec-rejects so the rejection reads as `correctly-rejected` not `parse-error` (#546)."
     }
   }
 }
