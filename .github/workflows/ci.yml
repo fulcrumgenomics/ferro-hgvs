@@ -259,6 +259,8 @@ jobs:
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
         run: cargo run --features dev --example generate_tool_support_tables -- --check
+      - name: Perf tables up to date
+        run: cargo run --features dev --example generate_perf_tables -- --check
       - name: Install dev dependencies
         run: uv sync --group dev --locked --no-install-project
       - name: Run Python tests

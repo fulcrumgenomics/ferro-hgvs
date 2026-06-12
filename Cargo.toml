@@ -200,6 +200,10 @@ anyhow = "1"
 name = "generate_tool_support_tables"
 required-features = ["dev"]
 
+[[example]]
+name = "generate_perf_tables"
+required-features = ["dev"]
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

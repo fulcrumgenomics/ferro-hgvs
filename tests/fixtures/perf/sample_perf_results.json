@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "generated": "2026-06-12T00:00:00Z", "corpus_id": "clinvar_patterns",
+    "corpus_sha": "PLACEHOLDER", "machine": "Apple M2 Max (12 cores)", "os": "darwin-arm64",
+    "tool_versions": {"ferro":"0.6.0","mutalyzer":"3.1.1","biocommons":"fa02ca5","hgvs-rs":"0.20.2"}
+  },
+  "operations": {
+    "parse": {
+      "sample_size_slow": 1000, "ferro_full_population_n": 1000000, "ferro_full_population_pps": 4200000.0,
+      "by_workers": {
+        "1": {"tools": {
+          "ferro": {"median_pps": 1200000.0, "min_pps": 1150000.0, "max_pps": 1250000.0, "reps": 10, "success_rate": 1.0},
+          "mutalyzer": {"median_pps": 21.0, "min_pps": 20.0, "max_pps": 22.0, "reps": 5, "success_rate": 0.994},
+          "biocommons": {"median_pps": 20.0, "min_pps": 19.0, "max_pps": 21.0, "reps": 5, "success_rate": 0.994},
+          "hgvs-rs": {"median_pps": 2.0, "min_pps": 1.8, "max_pps": 2.2, "reps": 5, "success_rate": 0.994}
+        }},
+        "8": {"tools": {
+          "ferro": {"median_pps": 8000000.0, "min_pps": 7800000.0, "max_pps": 8200000.0, "reps": 10, "success_rate": 1.0},
+          "mutalyzer": {"median_pps": 150.0, "min_pps": 140.0, "max_pps": 160.0, "reps": 5, "success_rate": 0.994},
+          "biocommons": {"median_pps": 140.0, "min_pps": 130.0, "max_pps": 150.0, "reps": 5, "success_rate": 0.994},
+          "hgvs-rs": {"median_pps": 14.0, "min_pps": 13.0, "max_pps": 15.0, "reps": 5, "success_rate": 0.994}
+        }}
+      },
+      "ferro_scaling": {"1": 1200000.0, "2": 2300000.0, "4": 4400000.0, "8": 8000000.0}
+    },
+    "normalize": {
+      "sample_size_slow": 1000, "ferro_full_population_n": 1000000, "ferro_full_population_pps": 900000.0,
+      "by_workers": {
+        "1": {"tools": {
+          "ferro": {"median_pps": 250000.0, "min_pps": 240000.0, "max_pps": 260000.0, "reps": 10, "success_rate": 1.0},
+          "mutalyzer": {"median_pps": 19.0, "min_pps": 18.0, "max_pps": 20.0, "reps": 5, "success_rate": 0.99},
+          "biocommons": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"},
+          "hgvs-rs": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"}
+        }},
+        "8": {"tools": {
+          "ferro": {"median_pps": 1800000.0, "min_pps": 1750000.0, "max_pps": 1850000.0, "reps": 10, "success_rate": 1.0},
+          "mutalyzer": {"median_pps": 140.0, "min_pps": 130.0, "max_pps": 150.0, "reps": 5, "success_rate": 0.99},
+          "biocommons": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"},
+          "hgvs-rs": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"}
+        }}
+      },
+      "ferro_scaling": {"1": 250000.0, "2": 480000.0, "4": 920000.0, "8": 1800000.0}
+    }
+  }
+}
