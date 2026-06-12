@@ -49,6 +49,10 @@ pub mod mave;
 pub mod normalize;
 #[cfg(feature = "parallel")]
 pub mod parallel;
+/// Performance-comparison table types + rendering (used by the
+/// `generate_perf_tables` example and its tests).
+#[cfg(feature = "dev")]
+pub mod perf_table;
 pub mod prepare;
 pub mod project;
 #[cfg(feature = "python")]
