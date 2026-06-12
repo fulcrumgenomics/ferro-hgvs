@@ -335,6 +335,12 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
                 (anchor_pos, ref_allele, vec![alt_allele])
             }
+            NaEdit::BreakpointInsertion { .. } => {
+                return Err(FerroError::ConversionError {
+                    msg: "Positionless breakpoint insertions cannot be converted to VCF (no anchor coordinate)"
+                        .to_string(),
+                });
+            }
             NaEdit::Delins { sequence, .. } => {
                 // Deletion-insertion: REF is deleted sequence, ALT is replacement
                 let deleted_seq = self.get_reference_sequence(chrom, start, end)?;

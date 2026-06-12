@@ -1129,7 +1129,10 @@ fn try_parse_genome_ring<'a>(
         if looks_like_accession_start(segment) || segment.contains(':') {
             return None;
         }
-        let (rest, loc_edit) = parse_genome_bracket_member(segment, GenomeKind::Genome).ok()?;
+        // Ring segments are not cis composite members: a positionless `ins`
+        // here has no implied breakpoint, so disallow the conversion. #546.
+        let (rest, loc_edit) =
+            parse_genome_bracket_member(segment, GenomeKind::Genome, false).ok()?;
         // Each segment must be consumed in full; trailing text means the
         // join is malformed.
         if !rest.is_empty() {
@@ -1387,9 +1390,19 @@ impl GenomeKind {
 /// predicted-wrapper form. Mirrors `parse_cds_bracket_member` and
 /// `parse_rna_bracket_member`. #243; whole-entity dispatch added by
 /// #423 (follow-up to #396 item 3).
+///
+/// `allow_breakpoint_insertion` gates the positionless-`ins` →
+/// [`NaEdit::BreakpointInsertion`] conversion (`DNA/complex.md`, e.g. the
+/// `insG` in `[a_bdel;c_dinv;insG]`). It is `true` only for members of a
+/// multi-member **cis** composite allele, where a positionless `ins` sits at
+/// an implied breakpoint between other edits. Every other caller (ring
+/// segments, trans `];[` shorthand, unknown-phase `(;)` shorthand, lone
+/// single-member brackets) passes `false` so a bare positionless `ins` is
+/// rejected as it was before the breakpoint-insertion feature. #546.
 fn parse_genome_bracket_member(
     part: &str,
     kind: GenomeKind,
+    allow_breakpoint_insertion: bool,
 ) -> IResult<&str, LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>> {
     // Whole-entity genome edits have no positional content, so attach
     // a dummy interval at position 1 (mirrors `parse_genome_variant`'s
@@ -1428,6 +1441,30 @@ fn parse_genome_bracket_member(
                 edit: mu_edit,
             },
         ));
+    }
+
+    // A bare `ins<seq>` member that carries no coordinate is a positionless
+    // breakpoint insertion (`DNA/complex.md`, e.g. the `insG` in
+    // `[a_bdel;c_dinv;insG]` — "1 bp insertion at break points"). Recognize it
+    // only when the caller authorises it (a multi-member cis composite allele),
+    // so standalone `g.insG`, a lone `[insG]`, ring segments, trans members and
+    // unknown-phase members — none of which carry an implied junction — stay
+    // rejected. Attach a dummy interval; Display skips the position via
+    // `NaEdit::is_positionless`.
+    if allow_breakpoint_insertion {
+        if let Ok((remaining, crate::hgvs::edit::NaEdit::Insertion { sequence })) =
+            parse_na_edit(part)
+        {
+            if remaining.is_empty() {
+                return Ok((
+                    remaining,
+                    LocEdit::new(
+                        dummy_genome_interval(),
+                        crate::hgvs::edit::NaEdit::BreakpointInsertion { sequence },
+                    ),
+                ));
+            }
+        }
     }
 
     let is_circular = matches!(kind, GenomeKind::Mt | GenomeKind::Circular);
@@ -1908,6 +1945,12 @@ fn parse_genome_kind_compound_allele(
         AllelePhase::Cis
     };
 
+    // A positionless `ins` member (`DNA/complex.md`'s `insG`) is only valid as
+    // an implied breakpoint between other edits in a multi-member cis group
+    // (`[a_bdel;c_dinv;insG]`). Reject it in a lone `[insG]` bracket and in
+    // unknown-phase groups, where there is no such junction. #546.
+    let allow_breakpoint_insertion = matches!(phase, AllelePhase::Cis) && scan.members.len() >= 2;
+
     let mut variants = Vec::with_capacity(4);
 
     for part in scan.members {
@@ -1920,7 +1963,8 @@ fn parse_genome_kind_compound_allele(
                 nom::error::ErrorKind::Verify,
             )));
         }
-        let (final_remaining, loc_edit) = parse_genome_bracket_member(part, kind)?;
+        let (final_remaining, loc_edit) =
+            parse_genome_bracket_member(part, kind, allow_breakpoint_insertion)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
@@ -1977,7 +2021,9 @@ fn parse_genome_position_unknown_phase(
         // `g.X(;)Y` symmetric — Display canonicalises one into the
         // other, so accepting an asymmetric set on the parse side
         // breaks round-trip. #423.
-        let (final_remaining, loc_edit) = parse_genome_bracket_member(part, kind)?;
+        // Unknown-phase (`(;)`) members are not a cis breakpoint context, so a
+        // positionless `ins` is not converted here. #546.
+        let (final_remaining, loc_edit) = parse_genome_bracket_member(part, kind, false)?;
         if !final_remaining.trim().is_empty() {
             return Err(nom::Err::Error(nom::error::Error::new(
                 final_remaining,
@@ -2228,7 +2274,7 @@ fn parse_genome_trans_allele_shorthand(
     gene_symbol: Option<String>,
 ) -> IResult<&str, HgvsVariant> {
     parse_trans_allele_shorthand_generic(input, |content| {
-        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Genome)?;
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Genome, false)?;
         Ok((
             rest,
             HgvsVariant::Genome(GenomeVariant {
@@ -3231,7 +3277,7 @@ fn parse_mt_trans_allele_shorthand(
     parse_trans_allele_shorthand_generic(input, |content| {
         // `GenomeKind::Mt` routes through the circular interval parser +
         // spec-authorised reversed-range validator (#129).
-        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Mt)?;
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Mt, false)?;
         Ok((
             rest,
             HgvsVariant::Mt(MtVariant {
@@ -4658,7 +4704,7 @@ fn parse_circular_trans_allele_shorthand(
     parse_trans_allele_shorthand_generic(input, |content| {
         // `GenomeKind::Circular` routes through the circular interval parser
         // + spec-authorised reversed-range validator (#129).
-        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Circular)?;
+        let (rest, loc_edit) = parse_genome_bracket_member(content, GenomeKind::Circular, false)?;
         Ok((
             rest,
             HgvsVariant::Circular(CircularVariant {

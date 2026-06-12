@@ -85,6 +85,20 @@ class TestEditAccessors:
         v = ferro_hgvs.parse("NC_000001.11:g.12345_12346ins(10_20)")
         assert v.indel_length is None
 
+    def test_indel_length_breakpoint_insertion(self) -> None:
+        # The positionless `insG` inside a composite SV carries a concrete
+        # 1-base sequence; indel_length must return 1, not None.
+        allele = ferro_hgvs.parse(
+            "NC_000002.12:g.[32310435_32310710del;32310711_171827243inv;insG]"
+        )
+        ins_sub = next(
+            (v for v in allele.variants() if v.edit_type == "breakpoint_insertion"),
+            None,
+        )
+        assert ins_sub is not None, "composite allele must contain a breakpoint_insertion member"
+        assert ins_sub.edit_type == "breakpoint_insertion"
+        assert ins_sub.indel_length == 1
+
     def test_is_frameshift_true(self) -> None:
         assert ferro_hgvs.parse("NC_000001.11:g.12345del").is_frameshift()
 

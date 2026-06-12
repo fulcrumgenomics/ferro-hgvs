@@ -66,6 +66,7 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
         NaEdit::Duplication { .. } => "duplication",
         NaEdit::DupIns { .. } => "dupins",
         NaEdit::Insertion { .. } => "insertion",
+        NaEdit::BreakpointInsertion { .. } => "breakpoint_insertion",
         NaEdit::Delins { .. } => "delins",
         NaEdit::Inversion { .. } => "inversion",
         NaEdit::Repeat { .. } => "repeat",
@@ -95,6 +96,8 @@ pub fn edit_type_from_debug<T: std::fmt::Debug>(edit: &T) -> &'static str {
         "dupins"
     } else if debug.contains("Duplication") {
         "duplication"
+    } else if debug.contains("BreakpointInsertion") {
+        "breakpoint_insertion"
     } else if debug.contains("Insertion") {
         "insertion"
     } else if debug.contains("Delins") {
@@ -396,6 +399,7 @@ pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
         NaEdit::Deletion { .. } => Some(-compute_span(variant)?),
         NaEdit::Duplication { .. } => Some(compute_span(variant)?),
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
+        NaEdit::BreakpointInsertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
         }
@@ -447,6 +451,7 @@ pub fn get_indel_length_with_provider<P: ReferenceProvider + ?Sized>(
         NaEdit::Deletion { .. } => Some(-compute_span_with_provider(variant, provider)?),
         NaEdit::Duplication { .. } => Some(compute_span_with_provider(variant, provider)?),
         NaEdit::Insertion { sequence } => inserted_sequence_len(sequence),
+        NaEdit::BreakpointInsertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span_with_provider(variant, provider)?)
         }

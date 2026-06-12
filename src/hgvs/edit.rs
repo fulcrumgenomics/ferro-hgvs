@@ -553,6 +553,13 @@ pub enum NaEdit {
     /// Insertion: addition of bases between two positions (e.g., insATG, ins10, insA[10])
     Insertion { sequence: InsertedSequence },
 
+    /// Positionless insertion at a structural breakpoint (e.g., the `insG`
+    /// member of `g.[a_bdel;c_dinv;insG]`). HGVS `DNA/complex.md` allows an
+    /// insertion to omit its coordinate when it occurs at an implied junction
+    /// inside a composite cis allele ("1 bp insertion at break points"). Like
+    /// the whole-entity edits it carries no position, so Display skips it.
+    BreakpointInsertion { sequence: InsertedSequence },
+
     /// Deletion-insertion: replacement of bases (e.g., delinsATG, delinsA[10],
     /// delATGinsTTCC, del3insTA).
     ///
@@ -721,6 +728,15 @@ impl NaEdit {
             || self.is_no_product()
     }
 
+    /// Check if this edit is positionless — it carries no coordinate of its
+    /// own and Display must skip the location. Currently the structural
+    /// [`NaEdit::BreakpointInsertion`] (`DNA/complex.md`), distinct from a
+    /// whole-entity edit in that it still represents a localized change at an
+    /// implied junction rather than spanning the whole reference.
+    pub fn is_positionless(&self) -> bool {
+        matches!(self, NaEdit::BreakpointInsertion { .. })
+    }
+
     /// Format this edit with lowercase nucleotides (for RNA display).
     pub fn to_rna_string(&self) -> String {
         match self {
@@ -747,6 +763,9 @@ impl NaEdit {
                 s
             }
             NaEdit::Insertion { sequence } => {
+                format!("ins{}", sequence.to_rna_string())
+            }
+            NaEdit::BreakpointInsertion { sequence } => {
                 format!("ins{}", sequence.to_rna_string())
             }
             NaEdit::Delins {
@@ -864,6 +883,9 @@ impl fmt::Display for NaEdit {
                 Ok(())
             }
             NaEdit::Insertion { sequence } => {
+                write!(f, "ins{}", sequence)
+            }
+            NaEdit::BreakpointInsertion { sequence } => {
                 write!(f, "ins{}", sequence)
             }
             NaEdit::Delins {
