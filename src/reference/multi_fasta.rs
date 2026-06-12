@@ -283,6 +283,47 @@ impl MultiFastaProvider {
         })
     }
 
+    /// Load the GRCh37 cdot referenced by `cdot_grch37_json` (if present) as a
+    /// secondary build on `mapper`. Best-effort: a missing key, a missing file,
+    /// or a load error is logged and otherwise ignored, mirroring the
+    /// LRG/supplemental loads. Returns the number of GRCh37 transcripts loaded
+    /// (0 when nothing was loaded) so callers/tests can assert the outcome.
+    ///
+    /// Factored out of [`Self::from_manifest`] so it can be exercised without a
+    /// full hermetic manifest (genome + transcript FASTAs).
+    fn load_grch37_secondary_cdot(
+        mapper: &mut CdotMapper,
+        manifest: &serde_json::Value,
+        resolve_path: &impl Fn(&str) -> PathBuf,
+    ) -> usize {
+        let Some(grch37_path_str) = manifest.get("cdot_grch37_json").and_then(|v| v.as_str())
+        else {
+            return 0;
+        };
+        let grch37_path = resolve_path(grch37_path_str);
+        if !grch37_path.exists() {
+            eprintln!(
+                "Warning: cdot_grch37_json path does not exist: {}",
+                grch37_path.display()
+            );
+            return 0;
+        }
+        eprintln!(
+            "Loading GRCh37 cdot transcript metadata from {}...",
+            grch37_path.display()
+        );
+        match mapper.load_secondary_build(&grch37_path, "GRCh37") {
+            Ok(count) => {
+                eprintln!("Loaded {} GRCh37 transcripts (secondary build)", count);
+                count
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load GRCh37 cdot: {}", e);
+                0
+            }
+        }
+    }
+
     /// Create a provider from a manifest file
     pub fn from_manifest<P: AsRef<Path>>(manifest_path: P) -> Result<Self, FerroError> {
         let manifest_path = manifest_path.as_ref();
@@ -407,6 +448,14 @@ impl MultiFastaProvider {
                                 }
                             }
                         }
+
+                        // Load the GRCh37 cdot as a secondary build if the
+                        // manifest provides one. GRCh37 and GRCh38 contig
+                        // accessions are distinct, so the secondary build's
+                        // transcripts are indexed for overlap discovery without
+                        // disturbing the primary (GRCh38) build. Best-effort:
+                        // warn but do not fail, like the LRG/supplemental loads.
+                        Self::load_grch37_secondary_cdot(&mut mapper, &manifest, &resolve_path);
 
                         provider.cdot_mapper = Some(mapper);
                     }
@@ -3443,5 +3492,105 @@ mod tests {
             .get_transcript("NM_EX.1")
             .unwrap();
         assert_eq!(rec.cds_start, Some(2), "empty exons → cdot untouched");
+    }
+
+    // ----------------------------------------------------------------------
+    // from_manifest: the `cdot_grch37_json` key loads a GRCh37 secondary build.
+    // Exercised via the factored-out `load_grch37_secondary_cdot` helper so the
+    // test needs only a tiny GRCh37 cdot file + an in-memory manifest, not a
+    // full hermetic manifest with genome/transcript FASTAs.
+    // ----------------------------------------------------------------------
+
+    fn grch37_cdot_json() -> &'static str {
+        r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.10",
+                    "strand": "+",
+                    "exons": [[48263025, 48263098, 0, 73, "M73"]],
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#
+    }
+
+    #[test]
+    fn test_load_grch37_secondary_cdot_loads_when_key_present() {
+        let dir = tempdir().unwrap();
+        let grch37_path = dir.path().join("cdot-grch37.json");
+        std::fs::write(&grch37_path, grch37_cdot_json()).unwrap();
+
+        // Primary mapper = GRCh38 (only the .11 contig known initially).
+        let grch38_json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73, "M73"]],
+                    "start_codon": 10,
+                    "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let mut mapper = CdotMapper::from_reader(grch38_json.as_bytes()).unwrap();
+        assert_eq!(
+            mapper.available_builds_for("NM_000088.3"),
+            vec!["GRCh38".to_string()],
+            "only GRCh38 before loading the secondary build"
+        );
+
+        // Manifest references the GRCh37 cdot by absolute path.
+        let manifest = serde_json::json!({
+            "cdot_grch37_json": grch37_path.to_str().unwrap(),
+        });
+        let resolve_path = |p: &str| -> PathBuf { PathBuf::from(p) };
+
+        let loaded =
+            MultiFastaProvider::load_grch37_secondary_cdot(&mut mapper, &manifest, &resolve_path);
+        assert_eq!(loaded, 1, "one GRCh37 transcript loaded from the manifest");
+
+        let mut builds = mapper.available_builds_for("NM_000088.3");
+        builds.sort();
+        assert_eq!(builds, vec!["GRCh37".to_string(), "GRCh38".to_string()]);
+        // Overlap discovery now routes the GRCh37 contig to the loaded build.
+        let hits = mapper.transcripts_at_position("NC_000017.10", 48263050);
+        assert_eq!(
+            hits.iter().map(|(acc, _)| *acc).collect::<Vec<_>>(),
+            vec!["NM_000088.3"]
+        );
+    }
+
+    #[test]
+    fn test_load_grch37_secondary_cdot_noop_when_key_absent() {
+        let grch38_json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73, "M73"]]
+                }
+            }
+        }
+        "#;
+        let mut mapper = CdotMapper::from_reader(grch38_json.as_bytes()).unwrap();
+        // Manifest without the GRCh37 key → helper is a no-op.
+        let manifest = serde_json::json!({ "cdot_json": "ignored.json" });
+        let resolve_path = |p: &str| -> PathBuf { PathBuf::from(p) };
+        let loaded =
+            MultiFastaProvider::load_grch37_secondary_cdot(&mut mapper, &manifest, &resolve_path);
+        assert_eq!(loaded, 0);
+        assert_eq!(
+            mapper.available_builds_for("NM_000088.3"),
+            vec!["GRCh38".to_string()]
+        );
     }
 }
