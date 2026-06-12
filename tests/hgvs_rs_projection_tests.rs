@@ -187,6 +187,13 @@ struct AxisTally {
     improvement: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
+    // Selection coverage (reported metric, not a pass/fail gate): of all
+    // applicable cases, how many had ferro return the expected *base*
+    // transcript accession at all — independent of whether the consequence
+    // matched. Quantifies the different-base ("ferro picked a different
+    // transcript") portion of the divergences as a tracked number.
+    selection_hits: usize,
+    selection_total: usize,
 }
 
 impl AxisTally {
@@ -200,6 +207,8 @@ impl AxisTally {
             improvement: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
+            selection_hits: 0,
+            selection_total: 0,
         }
     }
 
@@ -318,6 +327,10 @@ impl AxisTally {
         let _ = fs::write(&tsv_path, &tsv);
 
         println!("{}", self.summary_line(&report_path));
+        println!(
+            "{}: selection coverage {}/{} (ferro returned the expected base transcript)",
+            self.axis, self.selection_hits, self.selection_total
+        );
 
         for (input, policy) in self.divergence_accepted.iter().take(FAIL_PRINT_LIMIT) {
             eprintln!(
@@ -454,6 +467,20 @@ fn consequence_matches(expected: &str, actual: &str) -> bool {
     }
 }
 
+/// Version-insensitive set membership on base accession: does any rendered
+/// string in `rendered_set` share the same base accession (version digit and
+/// `(GENE)` suffix stripped) as `expected`? Used for the selection-coverage
+/// metric — "did ferro return the expected base transcript at all", regardless
+/// of whether its consequence matched.
+fn set_has_base(rendered_set: &[String], expected: &str) -> bool {
+    let Some(want) = base_accession(expected) else {
+        return false;
+    };
+    rendered_set
+        .iter()
+        .any(|r| base_accession(r).as_deref() == Some(want.as_str()))
+}
+
 fn format_pairs(pairs: &[Vec<String>]) -> String {
     let inner: Vec<String> = pairs
         .iter()
@@ -513,6 +540,9 @@ fn axis_coding_protein_descriptions() {
         };
         let expected_repr = format_pairs(pairs);
 
+        // Capture ferro's returned coding accessions for the selection-coverage
+        // metric — keyed on the coding (c.) transcript, the projection target.
+        let mut returned_coding: Vec<String> = Vec::new();
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
@@ -526,6 +556,7 @@ fn axis_coding_protein_descriptions() {
                     Some((c, p))
                 })
                 .collect();
+            returned_coding = actual_pairs.iter().map(|(c, _)| c.clone()).collect();
 
             for pair in pairs {
                 if pair.len() != 2 {
@@ -545,6 +576,16 @@ fn axis_coding_protein_descriptions() {
             Ok(expected_repr.clone())
         });
 
+        // Selection coverage: ferro returned the expected base coding
+        // transcript for every expected (coding, protein) pair.
+        t.selection_total += 1;
+        if pairs
+            .iter()
+            .filter(|p| p.len() == 2)
+            .all(|p| set_has_base(&returned_coding, &p[0]))
+        {
+            t.selection_hits += 1;
+        }
         t.record(case, &expected_repr, actual);
     }
     t.finish();
@@ -611,6 +652,10 @@ fn axis_coding() {
             continue;
         };
 
+        // Capture ferro's returned coding set so we can tally selection
+        // coverage (did ferro return the expected base transcript at all)
+        // independently of whether the consequence matched.
+        let mut returned: Vec<String> = Vec::new();
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
@@ -620,6 +665,7 @@ fn axis_coding() {
                 .iter()
                 .filter_map(|r| r.coding.as_ref().map(|c| c.to_string()))
                 .collect();
+            returned = coding.clone();
             if coding.iter().any(|c| consequence_matches(expected, c)) {
                 Ok(expected.to_string())
             } else {
@@ -627,6 +673,10 @@ fn axis_coding() {
             }
         });
 
+        t.selection_total += 1;
+        if set_has_base(&returned, expected) {
+            t.selection_hits += 1;
+        }
         t.record(case, expected, actual);
     }
     t.finish();
@@ -654,6 +704,7 @@ fn axis_noncoding() {
         };
         let expected = expected_list.join(" | ");
 
+        let mut returned: Vec<String> = Vec::new();
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
@@ -663,6 +714,7 @@ fn axis_noncoding() {
                 .iter()
                 .filter_map(|r| r.noncoding.as_ref().map(|n| n.to_string()))
                 .collect();
+            returned = noncoding.clone();
             for want in expected_list {
                 if !noncoding.iter().any(|n| consequence_matches(want, n)) {
                     return Err(format!("missing noncoding {want:?}; got {noncoding:?}"));
@@ -671,6 +723,15 @@ fn axis_noncoding() {
             Ok(expected.clone())
         });
 
+        // Selection coverage: ferro returned the expected base transcript for
+        // every expected noncoding entry (mirrors the all-must-match contract).
+        t.selection_total += 1;
+        if expected_list
+            .iter()
+            .all(|want| set_has_base(&returned, want))
+        {
+            t.selection_hits += 1;
+        }
         t.record(case, &expected, actual);
     }
     t.finish();
@@ -1038,6 +1099,23 @@ mod comparator_tests {
             "NM_000001.1:c.5A>T",
             "NM_000002.1:c.5A>T"
         ));
+    }
+
+    // `set_has_base` is version-insensitive set membership on the base
+    // accession: present iff some element shares the expected base accession,
+    // regardless of version, gene suffix, or consequence.
+    #[test]
+    fn set_has_base_is_version_insensitive_membership() {
+        let returned = vec![
+            "NM_000682.7(ADRA2B):c.*1353+1856G>T".to_string(),
+            "NM_000682.6(ADRA2B):c.*1353+1856G>T".to_string(),
+        ];
+        // Same base accession (different version + different consequence) → hit.
+        assert!(set_has_base(&returned, "NM_000682.5:c.*1865G>T"));
+        // Different base accession → miss, even though the set is non-empty.
+        assert!(!set_has_base(&returned, "NR_111984.1:n.44G>A"));
+        // Empty set → miss.
+        assert!(!set_has_base(&[], "NM_000682.5:c.5A>T"));
     }
 
     // The summary line carries the documented stable format including the new
