@@ -407,6 +407,53 @@ fn transcript_of(v: &HgvsVariant) -> Option<String> {
     }
 }
 
+/// Extract the *bare* base accession from a rendered variant string.
+///
+/// Takes the substring before the first `:`, drops a trailing `(...)`
+/// gene-symbol group if present (ferro renders e.g. `NM_000682.7(ADRA2B)`),
+/// then drops the `.N` version suffix. Returns the bare base accession, e.g.
+/// both `NM_000682.7(ADRA2B):c.5A>T` and `NM_000682.5:c.5A>T` map to
+/// `Some("NM_000682")`.
+///
+/// Returns `None` when the input has no `:` (malformed — no accession/
+/// consequence boundary).
+fn base_accession(rendered: &str) -> Option<String> {
+    let (accession, _consequence) = rendered.split_once(':')?;
+    // Drop a trailing `(GENE)` gene-symbol group if present.
+    let accession = match accession.split_once('(') {
+        Some((before_paren, _gene)) => before_paren,
+        None => accession,
+    };
+    // Drop the `.N` version suffix if present.
+    let base = match accession.rsplit_once('.') {
+        Some((base, _version)) => base,
+        None => accession,
+    };
+    Some(base.to_string())
+}
+
+/// Return everything after the first `:` in a rendered variant string — the
+/// `c.`/`n.`/`p.` consequence body. Returns `""` when there is no `:`.
+fn consequence_part(rendered: &str) -> &str {
+    match rendered.split_once(':') {
+        Some((_accession, consequence)) => consequence,
+        None => "",
+    }
+}
+
+/// Version-insensitive consequence comparison: `expected` and `actual` match
+/// iff they share the same base accession (version digit and `(GENE)` suffix
+/// stripped) AND the same consequence body. Only the version digit and gene
+/// symbol are forgiven — any coordinate or edit difference is a mismatch.
+fn consequence_matches(expected: &str, actual: &str) -> bool {
+    match (base_accession(expected), base_accession(actual)) {
+        (Some(expected_base), Some(actual_base)) => {
+            expected_base == actual_base && consequence_part(expected) == consequence_part(actual)
+        }
+        _ => false,
+    }
+}
+
 fn format_pairs(pairs: &[Vec<String>]) -> String {
     let inner: Vec<String> = pairs
         .iter()
@@ -936,6 +983,58 @@ mod comparator_tests {
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.spec_overridden.len(), 1);
         assert!(t.fail.is_empty());
+    }
+
+    // `base_accession` strips both the version suffix and ferro's `(GENE)`
+    // gene-symbol group, returning the bare base accession.
+    #[test]
+    fn base_accession_strips_version_and_gene_suffix() {
+        assert_eq!(
+            base_accession("NM_000682.7(ADRA2B):c.5A>T"),
+            Some("NM_000682".to_string())
+        );
+        assert_eq!(
+            base_accession("NM_000682.5:c.5A>T"),
+            Some("NM_000682".to_string())
+        );
+    }
+
+    // Version-only and gene-symbol-suffix differences are forgiven when the base
+    // accession and consequence are identical.
+    #[test]
+    fn consequence_matches_is_version_insensitive_and_ignores_gene_suffix() {
+        assert!(consequence_matches(
+            "NM_000682.5:c.*1865G>T",
+            "NM_000682.7(ADRA2B):c.*1865G>T"
+        ));
+        assert!(consequence_matches(
+            "NM_000682.5:c.*1865G>T",
+            "NM_000682.5:c.*1865G>T"
+        ));
+    }
+
+    // The matcher must NOT forgive a coordinate/model-skew difference: same base
+    // accession, different consequence coordinate → not a match.
+    #[test]
+    fn consequence_matches_rejects_coordinate_model_skew() {
+        assert!(!consequence_matches(
+            "NM_000682.5:c.*1865G>T",
+            "NM_000682.7(ADRA2B):c.*1353+1856G>T"
+        ));
+    }
+
+    // A different base accession is never a match, even with an identical
+    // consequence.
+    #[test]
+    fn consequence_matches_rejects_different_base_accession() {
+        assert!(!consequence_matches(
+            "NR_111984.1:n.44G>A",
+            "NM_001103170.2(AADACL3):n.51G>A"
+        ));
+        assert!(!consequence_matches(
+            "NM_000001.1:c.5A>T",
+            "NM_000002.1:c.5A>T"
+        ));
     }
 
     // The summary line carries the documented stable format including the new
