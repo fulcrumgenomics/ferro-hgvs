@@ -1112,6 +1112,31 @@ fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
     anchor
 }
 
+/// Write one trans member wrapped in its bracket(s). A cis-group / leaf /
+/// `[0]` / `[?]` member renders as `[<inner>]`. An unknown-phase sub-allele
+/// member (the trans+mosaic mix `[B](;)C`) brackets only its first member and
+/// appends the rest with `(;)` outside the bracket.
+fn write_trans_member_bracketed(f: &mut fmt::Formatter<'_>, member: &HgvsVariant) -> fmt::Result {
+    if let HgvsVariant::Allele(a) = member {
+        if a.phase == AllelePhase::Unknown {
+            for (i, sub) in a.variants.iter().enumerate() {
+                if i == 0 {
+                    write!(f, "[")?;
+                    sub.fmt_loc_edit(f)?;
+                    write!(f, "]")?;
+                } else {
+                    write!(f, "(;)")?;
+                    sub.fmt_loc_edit(f)?;
+                }
+            }
+            return Ok(());
+        }
+    }
+    write!(f, "[")?;
+    write_trans_member(f, member)?;
+    write!(f, "]")
+}
+
 /// Write the bracket-inner content of one `Trans` allele member (without the
 /// surrounding `[` `]`). A nested cis-group member renders its sub-variants'
 /// loc-edits joined by `;`; `[0]`/`[?]` render their marker; a leaf renders
@@ -1427,15 +1452,15 @@ impl fmt::Display for AlleleVariant {
                 if has_nested_group {
                     if let Some(anchor) = trans_compact_anchor(&self.variants) {
                         // Compact: ACC:c.[a;b];[c;d] — prefix once, then each
-                        // member's bracket-inner content.
+                        // member's bracket-inner content. An unknown-phase
+                        // member renders as `[B](;)C` (mosaic tail outside the
+                        // bracket).
                         write_compact_prefix(f, anchor)?;
                         for (i, v) in self.variants.iter().enumerate() {
                             if i > 0 {
                                 write!(f, ";")?;
                             }
-                            write!(f, "[")?;
-                            write_trans_member(f, v)?;
-                            write!(f, "]")?;
+                            write_trans_member_bracketed(f, v)?;
                         }
                         Ok(())
                     } else {
@@ -1445,7 +1470,7 @@ impl fmt::Display for AlleleVariant {
                             if i > 0 {
                                 write!(f, ";")?;
                             }
-                            write!(f, "[{}]", v)?;
+                            write_trans_member_bracketed(f, v)?;
                         }
                         Ok(())
                     }
