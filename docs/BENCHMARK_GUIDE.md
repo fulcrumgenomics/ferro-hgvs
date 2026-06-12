@@ -160,6 +160,8 @@ ferro-benchmark compare results normalize ferro_norm.json mutalyzer_norm.json -o
 > from https://dl.biocommons.org/uta/uta_20210129b.pgd.gz (requires human verification),
 > then see [Prepare biocommons](#step-3-prepare-biocommons).
 
+> **Throughput tip — sort the input.** ferro's normalize cost is dominated by transcript resolution (reading the full transcript sequence from the reference and rebuilding its metadata). Resolved transcripts are memoized, so input **sorted by transcript accession (or by genomic position, which clusters variants onto shared transcripts)** maximizes the cache hit rate and can be an order of magnitude faster on large batches than randomly-ordered input. This matters most when the number of distinct transcripts exceeds the cache capacity; sort large or genome-wide inputs to keep the hot transcript set resident.
+
 ---
 
 ## Prerequisites & Build

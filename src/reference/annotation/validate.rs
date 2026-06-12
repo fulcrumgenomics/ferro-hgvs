@@ -179,7 +179,10 @@ mod tests {
     }
 
     impl ReferenceProvider for StubFasta {
-        fn get_transcript(&self, id: &str) -> Result<Transcript, crate::error::FerroError> {
+        fn get_transcript(
+            &self,
+            id: &str,
+        ) -> Result<std::sync::Arc<Transcript>, crate::error::FerroError> {
             Err(crate::error::FerroError::ReferenceNotFound { id: id.to_string() })
         }
 

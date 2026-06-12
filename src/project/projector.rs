@@ -97,7 +97,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .transcript_cache
             .write()
             .expect("transcript cache poisoned");
-        let entry = guard.entry(key).or_insert_with(|| Arc::new(tx));
+        // `tx` is already an `Arc<Transcript>` from the provider; insert directly.
+        let entry = guard.entry(key).or_insert_with(|| tx);
         Ok(Arc::clone(entry))
     }
 
@@ -375,7 +376,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .transcript_cache
             .write()
             .expect("transcript cache poisoned");
-        let entry = guard.entry(key).or_insert_with(|| Arc::new(tx));
+        // `tx` is already an `Arc<Transcript>` from the provider; insert directly.
+        let entry = guard.entry(key).or_insert_with(|| tx);
         Ok(Arc::clone(entry))
     }
 

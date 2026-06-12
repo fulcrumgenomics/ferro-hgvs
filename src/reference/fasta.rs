@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::error::FerroError;
 use crate::reference::provider::ReferenceProvider;
@@ -39,7 +40,7 @@ pub struct FastaProvider {
     /// Chromosome name aliases (for mapping between different naming conventions)
     aliases: HashMap<String, String>,
     /// Transcript data (if loaded)
-    transcripts: HashMap<String, Transcript>,
+    transcripts: HashMap<String, Arc<Transcript>>,
 }
 
 impl FastaProvider {
@@ -217,7 +218,8 @@ impl FastaProvider {
 
     /// Add a transcript to the provider
     pub fn add_transcript(&mut self, transcript: Transcript) {
-        self.transcripts.insert(transcript.id.clone(), transcript);
+        self.transcripts
+            .insert(transcript.id.clone(), Arc::new(transcript));
     }
 
     /// True when `id` is declared as a chromosome/contig name — either
@@ -238,10 +240,10 @@ impl FastaProvider {
 }
 
 impl ReferenceProvider for FastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.transcripts
             .get(id)
-            .cloned()
+            .map(Arc::clone)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
@@ -597,7 +599,7 @@ impl CachedFastaProvider {
 }
 
 impl ReferenceProvider for CachedFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.inner.get_transcript(id)
     }
 
@@ -668,7 +670,7 @@ pub struct MmapFastaProvider {
     /// Chromosome name aliases
     aliases: HashMap<String, String>,
     /// Transcript data (if loaded)
-    transcripts: HashMap<String, Transcript>,
+    transcripts: HashMap<String, Arc<Transcript>>,
 }
 
 #[cfg(feature = "mmap")]
@@ -893,16 +895,17 @@ impl MmapFastaProvider {
 
     /// Add a transcript to the provider
     pub fn add_transcript(&mut self, transcript: Transcript) {
-        self.transcripts.insert(transcript.id.clone(), transcript);
+        self.transcripts
+            .insert(transcript.id.clone(), Arc::new(transcript));
     }
 }
 
 #[cfg(feature = "mmap")]
 impl ReferenceProvider for MmapFastaProvider {
-    fn get_transcript(&self, id: &str) -> Result<Transcript, FerroError> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {
-            return Ok(tx.clone());
+            return Ok(Arc::clone(tx));
         }
 
         // Try without version: only match a stored key whose base id (the
@@ -913,7 +916,7 @@ impl ReferenceProvider for MmapFastaProvider {
         let base_id = id.split('.').next().unwrap_or(id);
         for (key, tx) in &self.transcripts {
             if key.split('.').next().unwrap_or(key) == base_id {
-                return Ok(tx.clone());
+                return Ok(Arc::clone(tx));
             }
         }
 
