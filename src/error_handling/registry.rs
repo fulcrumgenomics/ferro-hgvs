@@ -341,6 +341,27 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "E3007",
+        CodeInfo {
+            code: "E3007",
+            name: "AlignmentGap",
+            summary:
+                "Variant position falls within a transcript-genome alignment gap (CIGAR indel).",
+            explanation: "The variant position lands strictly inside a cdot transcript-genome \
+                CIGAR indel (an `Insertion` is a transcript base with no genome counterpart; a \
+                `Deletion` is a genome base with no transcript counterpart). The position has no \
+                well-defined counterpart on the other axis, so projecting through it is refused \
+                instead of emitting a silently-wrong coordinate.",
+            category: CodeCategory::Validation,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["E3004", "E5001"],
+        },
+    );
+
     // --- Normalization Errors (E4xxx) ---
 
     map.insert(
