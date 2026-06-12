@@ -533,7 +533,10 @@ fn axis_coding_protein_descriptions() {
                 }
                 let want_c = &pair[0];
                 let want_p = &pair[1];
-                if !actual_pairs.iter().any(|(c, p)| c == want_c && p == want_p) {
+                if !actual_pairs
+                    .iter()
+                    .any(|(c, p)| consequence_matches(want_c, c) && consequence_matches(want_p, p))
+                {
                     return Err(format!(
                         "missing pair ({want_c:?}, {want_p:?}); got {actual_pairs:?}"
                     ));
@@ -617,7 +620,7 @@ fn axis_coding() {
                 .iter()
                 .filter_map(|r| r.coding.as_ref().map(|c| c.to_string()))
                 .collect();
-            if coding.iter().any(|c| c == expected) {
+            if coding.iter().any(|c| consequence_matches(expected, c)) {
                 Ok(expected.to_string())
             } else {
                 Err(format!("missing coding {expected:?}; got {coding:?}"))
@@ -661,7 +664,7 @@ fn axis_noncoding() {
                 .filter_map(|r| r.noncoding.as_ref().map(|n| n.to_string()))
                 .collect();
             for want in expected_list {
-                if !noncoding.iter().any(|n| n == want) {
+                if !noncoding.iter().any(|n| consequence_matches(want, n)) {
                     return Err(format!("missing noncoding {want:?}; got {noncoding:?}"));
                 }
             }
