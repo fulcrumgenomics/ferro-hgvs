@@ -58,6 +58,8 @@ pub enum ErrorCode {
     UtrCdsBoundary = 3005,
     /// Self-cancelling allele (overlapping del+dup that cancel out)
     SelfCancellingAllele = 3006,
+    /// Variant position falls within a transcript-genome alignment gap (CIGAR indel)
+    AlignmentGap = 3007,
 
     // Normalization errors (E4xxx)
     /// Intronic variant (cannot normalize)
@@ -129,6 +131,9 @@ impl ErrorCode {
             ErrorCode::ExonIntronBoundary => "variant crosses exon-intron boundary",
             ErrorCode::UtrCdsBoundary => "variant crosses UTR-CDS boundary",
             ErrorCode::SelfCancellingAllele => "self-cancelling allele (overlapping del+dup)",
+            ErrorCode::AlignmentGap => {
+                "variant position falls within a transcript-genome alignment gap (CIGAR indel)"
+            }
             ErrorCode::IntronicVariant => "intronic variant not supported",
             ErrorCode::UnsupportedVariant => "unsupported variant type",
             ErrorCode::UnsupportedProjection => "unsupported projection between coordinate systems",
@@ -337,6 +342,15 @@ pub enum FerroError {
     #[error("Invalid coordinates: {msg}")]
     InvalidCoordinates { msg: String },
 
+    /// Variant position falls within a transcript-genome alignment gap (a cdot
+    /// CIGAR indel — an `Insertion` is a transcript base with no genome
+    /// counterpart, a `Deletion` is a genome base with no transcript
+    /// counterpart). The position cannot be mapped across the gap to a
+    /// well-defined coordinate, so projecting through it is refused instead of
+    /// emitting a silently-wrong coordinate.
+    #[error("Alignment gap: {msg}")]
+    AlignmentGap { msg: String },
+
     /// Unsupported variant type
     #[error("Unsupported variant type: {variant_type}")]
     UnsupportedVariant { variant_type: String },
@@ -457,6 +471,7 @@ impl FerroError {
             FerroError::ExonIntronBoundary { .. } => Some(ErrorCode::ExonIntronBoundary),
             FerroError::UtrCdsBoundary { .. } => Some(ErrorCode::UtrCdsBoundary),
             FerroError::InvalidCoordinates { .. } => Some(ErrorCode::InvalidRange),
+            FerroError::AlignmentGap { .. } => Some(ErrorCode::AlignmentGap),
             FerroError::UnsupportedVariant { .. } => Some(ErrorCode::UnsupportedVariant),
             FerroError::IntronicVariant { .. } => Some(ErrorCode::IntronicVariant),
             FerroError::ReferenceMismatch { .. } => Some(ErrorCode::ReferenceMismatch),
@@ -588,6 +603,17 @@ mod tests {
             ErrorCode::SelfCancellingAllele.description(),
             "self-cancelling allele (overlapping del+dup)"
         );
+    }
+
+    #[test]
+    fn alignment_gap_has_code_3007_and_description() {
+        assert_eq!(ErrorCode::AlignmentGap as u16, 3007);
+        assert_eq!(ErrorCode::AlignmentGap.as_str(), "E3007");
+        let e = FerroError::AlignmentGap {
+            msg: "x".to_string(),
+        };
+        assert_eq!(e.code(), Some(ErrorCode::AlignmentGap));
+        assert!(!ErrorCode::AlignmentGap.description().is_empty());
     }
 
     #[test]
