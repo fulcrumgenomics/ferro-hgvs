@@ -133,6 +133,14 @@
       "status": "enforced"
     },
     {
+      "code": "E3007",
+      "description": "AlignmentGap — variant position falls strictly inside a transcript-genome CIGAR indel (a gap with no counterpart on the other axis).",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure: a cdot transcript-genome alignment discrepancy (CIGAR indel), not an HGVS spec rule. Projecting through the gap would yield a silently-wrong coordinate, so it is refused."
+    },
+    {
       "code": "E4001",
       "description": "IntronicVariant — intronic variant cannot be normalized without genomic context.",
       "spec_section": "background/numbering.md line 28: 'a coding DNA reference sequence does not contain intron sequences and can therefore not be used as a reference'",

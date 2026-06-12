@@ -362,6 +362,24 @@ impl CoordinateMapper {
         // Non-intronic position
         let tx_pos = cds_to_tx_aware(cds_pos.base)?;
 
+        // Refuse transcript positions that fall strictly inside a
+        // transcript-genome CIGAR insertion gap (a transcript base with no
+        // genome counterpart). `tx_to_genome` derives the genome coordinate via
+        // plain offset arithmetic that ignores the CIGAR, so without this check
+        // such a position would map silently to a wrong genome coordinate.
+        if let Some(exon) = tx.exon_for_tx_pos(tx_pos) {
+            let exon_idx = (exon.number as usize).saturating_sub(1);
+            if let Some(gap) = tx.cigar_insertion_gap_at_tx_pos(exon_idx, tx_pos) {
+                return Err(FerroError::AlignmentGap {
+                    msg: format!(
+                        "transcript position {} falls in a transcript-genome alignment gap \
+                         (CIGAR insertion of {} bp) in exon {}",
+                        tx_pos, gap.length, exon.number
+                    ),
+                });
+            }
+        }
+
         let genome_pos = tx
             .tx_to_genome(tx_pos)
             .ok_or_else(|| FerroError::InvalidCoordinates {
@@ -404,6 +422,24 @@ impl CoordinateMapper {
         // (a second scan) separately.
         if let Some((tx_pos, exon)) = tx.locate_genome_pos(genome_pos.base) {
             info.exon_numbers.push(exon.number);
+
+            // Refuse positions that fall strictly inside a transcript-genome
+            // CIGAR deletion gap (a genome base with no transcript
+            // counterpart). `locate_genome_pos` derives `tx_pos` via plain
+            // offset arithmetic that ignores the CIGAR, so without this check
+            // such a position would map silently to a wrong coordinate. The
+            // exon number is 1-based, so the parallel `exons`/`exon_cigars`
+            // index is `number - 1`.
+            let exon_idx = (exon.number as usize).saturating_sub(1);
+            if let Some(gap) = tx.cigar_deletion_gap_at_genome_pos(exon_idx, genome_pos.base) {
+                return Err(FerroError::AlignmentGap {
+                    msg: format!(
+                        "genomic position {} falls in a transcript-genome alignment gap \
+                         (CIGAR deletion of {} bp) in exon {}",
+                        genome_pos.base, gap.length, exon.number
+                    ),
+                });
+            }
 
             // Convert to CDS position
             let cds_pos = tx
@@ -586,7 +622,7 @@ impl CoordinateMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::cdot::CdotTranscript;
+    use crate::data::cdot::{CdotTranscript, CigarOp};
 
     fn create_test_mapper() -> CoordinateMapper {
         let mut cdot = CdotMapper::new();
@@ -736,6 +772,169 @@ mod tests {
 
         assert!(result.info.in_5utr);
         assert!(result.variant.base < 0);
+    }
+
+    /// Build a mapper with a single-exon transcript carrying a CIGAR
+    /// `Deletion` (genome bases with no transcript counterpart). The exon
+    /// spans genome `[1000, 1010)` (10 genome bases) and tx `[0, 6)` via
+    /// `M3 D4 M3`: genome offsets 0..=2 and 7..=9 are matched, genome offsets
+    /// 3..=6 (genome positions 1003..=1006) fall in the deletion gap.
+    fn create_cigar_deletion_mapper(strand: Strand) -> CoordinateMapper {
+        let mut cdot = CdotMapper::new();
+        let tx = CdotTranscript {
+            gene_name: Some("GAP".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand,
+            exons: vec![[1000, 1010, 0, 6]],
+            cds_start: Some(0),
+            cds_end: Some(6),
+            gene_id: None,
+            protein: None,
+            exon_cigars: vec![Some(vec![
+                CigarOp::Match(3),
+                CigarOp::Deletion(4),
+                CigarOp::Match(3),
+            ])],
+        };
+        cdot.add_transcript("NM_GAP.1".to_string(), tx);
+        CoordinateMapper::new(cdot)
+    }
+
+    #[test]
+    fn genome_to_cds_inside_cigar_deletion_errors_alignment_gap_plus() {
+        let mapper = create_cigar_deletion_mapper(Strand::Plus);
+        // Genome positions 1003..=1006 fall strictly inside the deletion gap.
+        for g in 1003..=1006 {
+            let err = mapper
+                .genome_to_cds("NM_GAP.1", &GenomePos::new(g))
+                .expect_err("expected AlignmentGap for position inside the CIGAR deletion");
+            assert!(
+                matches!(err, FerroError::AlignmentGap { .. }),
+                "genome pos {g}: expected AlignmentGap, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn genome_to_cds_adjacent_to_cigar_deletion_maps_ok_plus() {
+        let mapper = create_cigar_deletion_mapper(Strand::Plus);
+        // Matched genome offsets: 0..=2 (1000..=1002) and 7..=9 (1007..=1009).
+        // These are adjacent to / outside the gap and must map cleanly.
+        for g in [1000, 1001, 1002, 1007, 1008, 1009] {
+            mapper
+                .genome_to_cds("NM_GAP.1", &GenomePos::new(g))
+                .unwrap_or_else(|e| panic!("genome pos {g} should map cleanly, got {e:?}"));
+        }
+    }
+
+    #[test]
+    fn genome_to_cds_inside_cigar_deletion_errors_alignment_gap_minus() {
+        let mapper = create_cigar_deletion_mapper(Strand::Minus);
+        // On minus strand the CIGAR (sorted by tx 5'→3') walks the genome axis
+        // from `genome_end - 1` downwards: genome offset = genome_end - 1 - pos.
+        // The deletion covers genome offsets 3..=6, i.e. genome_end-1-off =
+        // 1009-3=1006 down to 1009-6=1003 → genome positions 1003..=1006.
+        for g in 1003..=1006 {
+            let err = mapper
+                .genome_to_cds("NM_GAP.1", &GenomePos::new(g))
+                .expect_err("expected AlignmentGap for position inside the CIGAR deletion");
+            assert!(
+                matches!(err, FerroError::AlignmentGap { .. }),
+                "minus-strand genome pos {g}: expected AlignmentGap, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn genome_to_cds_adjacent_to_cigar_deletion_maps_ok_minus() {
+        let mapper = create_cigar_deletion_mapper(Strand::Minus);
+        for g in [1000, 1001, 1002, 1007, 1008, 1009] {
+            mapper
+                .genome_to_cds("NM_GAP.1", &GenomePos::new(g))
+                .unwrap_or_else(|e| panic!("minus-strand genome pos {g} should map, got {e:?}"));
+        }
+    }
+
+    /// Build a mapper with a single-exon transcript carrying a CIGAR
+    /// `Insertion` (transcript bases with no genome counterpart). The exon
+    /// spans genome `[1000, 1018)` (18 genome bases) and tx `[0, 20)` via
+    /// `M3 I2 M15`: tx offsets 3..=4 fall in the insertion gap, the rest map.
+    /// `cds_start = 0` so `c.N` maps to tx position `N - 1`.
+    fn create_cigar_insertion_mapper() -> CoordinateMapper {
+        let mut cdot = CdotMapper::new();
+        let tx = CdotTranscript {
+            gene_name: Some("INS".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Plus,
+            exons: vec![[1000, 1018, 0, 20]],
+            cds_start: Some(0),
+            cds_end: Some(20),
+            gene_id: None,
+            protein: None,
+            exon_cigars: vec![Some(vec![
+                CigarOp::Match(3),
+                CigarOp::Insertion(2),
+                CigarOp::Match(15),
+            ])],
+        };
+        cdot.add_transcript("NM_INS.1".to_string(), tx);
+        CoordinateMapper::new(cdot)
+    }
+
+    #[test]
+    fn cds_to_genome_inside_cigar_insertion_errors_alignment_gap() {
+        let mapper = create_cigar_insertion_mapper();
+        // tx offsets 3,4 ↔ c.4, c.5 (cds_start=0 → tx = base - 1).
+        for base in [4, 5] {
+            let err = mapper
+                .cds_to_genome(
+                    "NM_INS.1",
+                    &CdsPos {
+                        base,
+                        offset: None,
+                        utr3: false,
+                        special: None,
+                    },
+                )
+                .expect_err("expected AlignmentGap for c. position inside the CIGAR insertion");
+            assert!(
+                matches!(err, FerroError::AlignmentGap { .. }),
+                "c.{base}: expected AlignmentGap, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cds_to_genome_adjacent_to_cigar_insertion_maps_ok() {
+        let mapper = create_cigar_insertion_mapper();
+        // c.1..c.3 (tx 0..2, matched) and c.6.. (tx 5.., matched) map cleanly.
+        for base in [1, 2, 3, 6, 7, 20] {
+            mapper
+                .cds_to_genome(
+                    "NM_INS.1",
+                    &CdsPos {
+                        base,
+                        offset: None,
+                        utr3: false,
+                        special: None,
+                    },
+                )
+                .unwrap_or_else(|e| panic!("c.{base} should map cleanly, got {e:?}"));
+        }
+    }
+
+    /// A transcript with no CIGAR data (the common case) must never fire
+    /// AlignmentGap — every exonic position maps through as before.
+    #[test]
+    fn genome_to_cds_without_cigar_never_fires_alignment_gap() {
+        let mapper = create_test_mapper();
+        for g in [1000, 1050, 1099, 2000, 2199, 3000, 3149] {
+            let res = mapper.genome_to_cds("NM_TEST.1", &GenomePos::new(g));
+            assert!(
+                !matches!(res, Err(FerroError::AlignmentGap { .. })),
+                "genome pos {g} with no CIGAR must not fire AlignmentGap"
+            );
+        }
     }
 
     #[test]

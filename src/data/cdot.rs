@@ -798,6 +798,140 @@ impl CdotTranscript {
         None
     }
 
+    /// Determine whether `genome_pos` falls strictly inside a transcript-genome
+    /// CIGAR `Deletion` gap (a genome base with no transcript counterpart) for
+    /// the exon at index `exon_idx` in [`Self::exons`] / [`Self::exon_cigars`].
+    ///
+    /// The CIGAR ops describe the alignment within the exon, walked from the
+    /// exon's transcript-5' end. A `Deletion(n)` consumes `n` genome bases and
+    /// `0` transcript bases — so any genome position landing inside the
+    /// deletion's genome span has no well-defined transcript coordinate. Plain
+    /// offset arithmetic (as in [`Self::locate_genome_pos`]) would silently map
+    /// such a position to a wrong coordinate; this lets the mapping site refuse
+    /// it instead.
+    ///
+    /// Returns `Some(CigarGap)` describing the deletion when `genome_pos` is
+    /// strictly inside one, and `None` when the position is matched, when the
+    /// exon has no CIGAR data, or when the position is outside the exon.
+    ///
+    /// `genome_pos` must lie within the exon's genome span; callers pass the
+    /// exon already located by [`Self::locate_genome_pos`].
+    pub(crate) fn cigar_deletion_gap_at_genome_pos(
+        &self,
+        exon_idx: usize,
+        genome_pos: u64,
+    ) -> Option<CigarGap> {
+        let exon = self.exons.get(exon_idx)?;
+        let (genome_start, genome_end) = (exon[0], exon[1]);
+        if genome_pos < genome_start || genome_pos >= genome_end {
+            return None;
+        }
+        let ops = match self.exon_cigars.get(exon_idx) {
+            Some(Some(ops)) if !ops.is_empty() => ops,
+            _ => return None,
+        };
+
+        // Genome offset along the CIGAR, measured from the exon's tx-5' end
+        // (the same orientation the CIGAR is written in). On the plus strand
+        // this counts up from `genome_start`; on the minus strand it counts
+        // down from `genome_end - 1`. This mirrors the offset
+        // `locate_genome_pos` uses to derive the (CIGAR-unaware) tx position.
+        let target_genome_offset = match self.strand {
+            Strand::Plus => genome_pos - genome_start,
+            Strand::Minus => genome_end - 1 - genome_pos,
+            Strand::Unknown => return None,
+        };
+
+        let mut genome_consumed: u64 = 0;
+        for op in ops {
+            match op {
+                CigarOp::Match(len) => {
+                    genome_consumed += len;
+                }
+                CigarOp::Deletion(len) => {
+                    // The deletion covers genome offsets
+                    // [genome_consumed, genome_consumed + len). A position
+                    // landing there is strictly inside the gap.
+                    if target_genome_offset >= genome_consumed
+                        && target_genome_offset < genome_consumed + len
+                    {
+                        return Some(CigarGap {
+                            kind: CigarGapKind::Deletion,
+                            length: *len,
+                            offset_in_gap: target_genome_offset - genome_consumed,
+                        });
+                    }
+                    genome_consumed += len;
+                }
+                CigarOp::Insertion(_) => {
+                    // Insertions consume transcript bases only, not genome.
+                }
+            }
+            if genome_consumed > target_genome_offset {
+                break;
+            }
+        }
+        None
+    }
+
+    /// Determine whether transcript position `tx_pos` falls strictly inside a
+    /// transcript-genome CIGAR `Insertion` gap (a transcript base with no
+    /// genome counterpart) for the exon at index `exon_idx`.
+    ///
+    /// The mirror of [`Self::cigar_deletion_gap_at_genome_pos`] on the
+    /// transcript axis: an `Insertion(n)` consumes `n` transcript bases and `0`
+    /// genome bases, so a transcript position inside the insertion's span has
+    /// no well-defined genome coordinate. Returns `Some(CigarGap)` with
+    /// `kind = Insertion` when `tx_pos` is strictly inside such a gap.
+    ///
+    /// `tx_pos` is the 0-based transcript position; callers pass an exon whose
+    /// `[tx_start, tx_end)` span contains it.
+    pub(crate) fn cigar_insertion_gap_at_tx_pos(
+        &self,
+        exon_idx: usize,
+        tx_pos: u64,
+    ) -> Option<CigarGap> {
+        let exon = self.exons.get(exon_idx)?;
+        let (tx_start, tx_end) = (exon[2], exon[3]);
+        if tx_pos < tx_start || tx_pos >= tx_end {
+            return None;
+        }
+        let ops = match self.exon_cigars.get(exon_idx) {
+            Some(Some(ops)) if !ops.is_empty() => ops,
+            _ => return None,
+        };
+
+        // Transcript offset along the CIGAR, measured from the exon's tx-5'
+        // end (the order the CIGAR is written in, on both strands).
+        let target_tx_offset = tx_pos - tx_start;
+
+        let mut tx_consumed: u64 = 0;
+        for op in ops {
+            match op {
+                CigarOp::Match(len) => {
+                    tx_consumed += len;
+                }
+                CigarOp::Insertion(len) => {
+                    if target_tx_offset >= tx_consumed && target_tx_offset < tx_consumed + len {
+                        return Some(CigarGap {
+                            kind: CigarGapKind::Insertion,
+                            length: *len,
+                            offset_in_gap: target_tx_offset - tx_consumed,
+                        });
+                    }
+                    tx_consumed += len;
+                }
+                CigarOp::Deletion(_) => {
+                    // Deletions consume genome bases only, not transcript.
+                }
+            }
+            if tx_consumed > target_tx_offset {
+                break;
+            }
+        }
+        None
+    }
+
     /// Convert CDS position (1-based) to transcript position (0-based).
     pub fn cds_to_tx(&self, cds_pos: i64) -> Option<u64> {
         let cds_start = self.cds_start?;
@@ -897,6 +1031,28 @@ pub enum CigarOp {
     Insertion(u64),
     /// Deletion of `n` bases from the transcript (present in genome).
     Deletion(u64),
+}
+
+/// Which side of a transcript-genome CIGAR alignment a gap lives on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CigarGapKind {
+    /// A genome base with no transcript counterpart (CIGAR `Deletion`).
+    Deletion,
+    /// A transcript base with no genome counterpart (CIGAR `Insertion`).
+    Insertion,
+}
+
+/// Describes a transcript-genome CIGAR indel gap that a queried position falls
+/// strictly inside. Produced by the gap-detection helpers on
+/// [`CdotTranscript`] so the mapping site can build an informative error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CigarGap {
+    /// Whether the gap is a `Deletion` (genome-only) or `Insertion` (tx-only).
+    pub kind: CigarGapKind,
+    /// Length of the gap op in bases.
+    pub length: u64,
+    /// Offset of the queried position from the start of the gap (0-based).
+    pub offset_in_gap: u64,
 }
 
 /// Parse a GFF3 Gap attribute string into a sequence of CIGAR operations.
@@ -4084,5 +4240,107 @@ mod tests {
             .get_transcript_on_build("LRG_1t1", "GRCh37")
             .expect("LRG → RefSeq must work on alt build too (pre-fix this returned None)");
         assert_eq!(tx37.contig, "NC_000017.10");
+    }
+
+    /// Single-exon transcript with a CIGAR `M3 D4 M3`: exon genome `[1000, 1010)`
+    /// (10 genome bases), tx `[0, 6)` (6 tx bases). Genome offsets 3..=6 are the
+    /// deletion gap; offsets 0..=2 and 7..=9 are matched.
+    fn cigar_deletion_transcript(strand: Strand) -> CdotTranscript {
+        CdotTranscript {
+            gene_name: Some("GAP".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand,
+            exons: vec![[1000, 1010, 0, 6]],
+            cds_start: Some(0),
+            cds_end: Some(6),
+            exon_cigars: vec![Some(vec![
+                CigarOp::Match(3),
+                CigarOp::Deletion(4),
+                CigarOp::Match(3),
+            ])],
+            gene_id: None,
+            protein: None,
+        }
+    }
+
+    #[test]
+    fn cigar_deletion_gap_detects_inside_only_plus() {
+        let tx = cigar_deletion_transcript(Strand::Plus);
+        // Inside the deletion: genome positions 1003..=1006.
+        for g in 1003..=1006 {
+            let gap = tx
+                .cigar_deletion_gap_at_genome_pos(0, g)
+                .unwrap_or_else(|| panic!("genome {g} should be inside the deletion gap"));
+            assert_eq!(gap.kind, CigarGapKind::Deletion);
+            assert_eq!(gap.length, 4);
+        }
+        // Matched (outside the gap): 1000..=1002 and 1007..=1009.
+        for g in [1000, 1001, 1002, 1007, 1008, 1009] {
+            assert!(
+                tx.cigar_deletion_gap_at_genome_pos(0, g).is_none(),
+                "genome {g} is matched and must not report a gap"
+            );
+        }
+    }
+
+    #[test]
+    fn cigar_deletion_gap_detects_inside_only_minus() {
+        let tx = cigar_deletion_transcript(Strand::Minus);
+        // On minus strand the CIGAR walks the genome from genome_end-1 down.
+        // Deletion genome offsets 3..=6 → positions 1009-6..=1009-3 = 1003..=1006.
+        for g in 1003..=1006 {
+            let gap = tx
+                .cigar_deletion_gap_at_genome_pos(0, g)
+                .unwrap_or_else(|| panic!("minus genome {g} should be inside the gap"));
+            assert_eq!(gap.kind, CigarGapKind::Deletion);
+        }
+        for g in [1000, 1001, 1002, 1007, 1008, 1009] {
+            assert!(tx.cigar_deletion_gap_at_genome_pos(0, g).is_none());
+        }
+    }
+
+    #[test]
+    fn cigar_deletion_gap_none_without_cigar() {
+        let tx = sample_transcript(); // no exon_cigars
+        for g in [1000, 1050, 1099] {
+            assert!(tx.cigar_deletion_gap_at_genome_pos(0, g).is_none());
+        }
+    }
+
+    #[test]
+    fn cigar_insertion_gap_detects_inside_only() {
+        // CIGAR `M3 I2 M15`: exon genome `[1000, 1018)` (18 genome bases),
+        // tx `[0, 20)` (20 tx bases). Tx offsets 3..=4 are the insertion gap
+        // (transcript bases with no genome counterpart).
+        let tx = CdotTranscript {
+            gene_name: Some("INS".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Plus,
+            exons: vec![[1000, 1018, 0, 20]],
+            cds_start: Some(0),
+            cds_end: Some(20),
+            exon_cigars: vec![Some(vec![
+                CigarOp::Match(3),
+                CigarOp::Insertion(2),
+                CigarOp::Match(15),
+            ])],
+            gene_id: None,
+            protein: None,
+        };
+        // Inside the insertion: tx positions 3 and 4.
+        for t in [3, 4] {
+            let gap = tx
+                .cigar_insertion_gap_at_tx_pos(0, t)
+                .unwrap_or_else(|| panic!("tx {t} should be inside the insertion gap"));
+            assert_eq!(gap.kind, CigarGapKind::Insertion);
+            assert_eq!(gap.length, 2);
+        }
+        // Matched positions before (0..=2) and after (5..) the insertion.
+        for t in [0, 1, 2, 5, 6, 19] {
+            assert!(
+                tx.cigar_insertion_gap_at_tx_pos(0, t).is_none(),
+                "tx {t} is matched and must not report an insertion gap"
+            );
+        }
     }
 }
