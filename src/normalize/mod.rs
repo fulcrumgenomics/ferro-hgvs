@@ -1209,7 +1209,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // pre-existing singleton alleles must round-trip with the Allele
         // wrapper intact for programmatic callers (Display already renders
         // singletons in bare form regardless).
+        // Never unwrap a predicted/uncertain cis allele (`[(a;b)]`): even if
+        // the members merge down to one, the `uncertain` flag and the `[(...)]`
+        // notation must be preserved.  Dropping the wrapper would silently
+        // change semantics and break round-trip fidelity.
         let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
+            && !allele.uncertain
             && original_len > 1
             && normalized.len() == 1
         {
