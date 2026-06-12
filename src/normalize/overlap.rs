@@ -176,6 +176,9 @@ fn is_overlap_edit(edit: &NaEdit) -> bool {
         | NaEdit::Methylation { .. }
         | NaEdit::CopyNumber { .. }
         | NaEdit::Splice { .. }
+        // N-padded deletions sit over an uncertain `(start_end)` range with no
+        // definite reference span, so they are not overlap edits.
+        | NaEdit::NPaddedDeletion { .. }
         | NaEdit::NoProduct
         | NaEdit::PositionOnly => false,
     }

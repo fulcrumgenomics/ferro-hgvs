@@ -232,6 +232,15 @@ fn parse_deletion(input: &str) -> IResult<&str, NaEdit> {
         ));
     }
 
+    // N-padded deletion: `delN[15]`, `delN[(150_180)]` — the deleted size is
+    // a count of unknown (`N`) bases (unsequenced amplicon size difference).
+    // Trigger only on `N` immediately followed by `[` so a literal `delNNN`
+    // stays an ordinary sequence deletion.
+    if bytes[0] == b'N' && bytes.get(1) == Some(&b'[') {
+        let (remaining, count) = parse_repeat_count(&input[1..])?;
+        return Ok((remaining, NaEdit::NPaddedDeletion { count }));
+    }
+
     match bytes[0] {
         b'0'..=b'9' => {
             // Length: del101

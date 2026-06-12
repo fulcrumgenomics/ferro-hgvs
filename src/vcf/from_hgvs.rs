@@ -466,6 +466,12 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 let ref_base = self.get_reference_base(chrom, start)?;
                 (start, ref_base.to_string(), vec![ref_base.to_string()])
             }
+            NaEdit::NPaddedDeletion { .. } => {
+                return Err(FerroError::ConversionError {
+                    msg: "N-padded deletions over an uncertain range cannot be converted to VCF"
+                        .to_string(),
+                });
+            }
             NaEdit::Conversion { .. } => {
                 return Err(FerroError::ConversionError {
                     msg: "Conversion variants cannot be directly converted to VCF".to_string(),
