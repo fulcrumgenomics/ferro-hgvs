@@ -3976,6 +3976,90 @@ mod tests {
                 s
             );
         }
+
+        /// End-to-end: `project_variant_all` on a GRCh37 genome input must
+        /// DISCOVER the overlapping transcript (no transcript id supplied) and
+        /// project it. This is the corpus's actual path: the input is a bare
+        /// `NC_*.10:g.…` HGVSg string and the projector must route overlap
+        /// discovery to the GRCh37 (secondary) build via the contig, then
+        /// build-route the downstream genome→cds projection to the GRCh37 exon
+        /// table. Pre-fix, overlap discovery only indexed the primary (GRCh38)
+        /// build, so `project_variant_all` returned an empty `Vec` ("got []").
+        #[test]
+        fn project_variant_all_discovers_grch37_transcript_by_overlap() {
+            let vp = make_multi_build_projector("GRCh38");
+            // NC_000001.10 is GRCh37; the transcript id is NOT supplied — it
+            // must be discovered by overlap.
+            let g = GenomeVariant {
+                accession: nc_chr1(10),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(10004)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let projections = vp
+                .project_variant_all(&HgvsVariant::Genome(g))
+                .expect("project_variant_all must succeed for a GRCh37 g. input");
+
+            assert!(
+                !projections.is_empty(),
+                "project_variant_all must discover the overlapping GRCh37 transcript \
+                 (pre-fix this returned [])"
+            );
+            let proj = projections
+                .iter()
+                .find(|p| p.transcript_id == "NM_MB_TEST.1")
+                .expect("NM_MB_TEST.1 must be among the discovered transcripts");
+            let coding = proj
+                .coding
+                .as_ref()
+                .expect("coding (c.) form must be present on the discovered projection");
+            let s = coding.to_string();
+            assert!(
+                s.contains(":c.5A>T"),
+                "expected c.5A>T from the GRCh37-discovered projection, got: {}",
+                s
+            );
+        }
+
+        /// Sibling to the above on the primary (GRCh38) build: overlap
+        /// discovery on NC_000001.11 must keep working through the same path.
+        #[test]
+        fn project_variant_all_discovers_grch38_transcript_by_overlap() {
+            let vp = make_multi_build_projector("GRCh38");
+            let g = GenomeVariant {
+                accession: nc_chr1(11),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(20004)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let projections = vp
+                .project_variant_all(&HgvsVariant::Genome(g))
+                .expect("project_variant_all must succeed for a GRCh38 g. input");
+            let proj = projections
+                .iter()
+                .find(|p| p.transcript_id == "NM_MB_TEST.1")
+                .expect("NM_MB_TEST.1 must be discovered on the primary build too");
+            let s = proj
+                .coding
+                .as_ref()
+                .expect("coding form present")
+                .to_string();
+            assert!(
+                s.contains(":c.5A>T"),
+                "expected c.5A>T from the GRCh38-discovered projection, got: {}",
+                s
+            );
+        }
     }
 
     #[test]
