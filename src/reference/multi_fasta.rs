@@ -69,7 +69,7 @@ fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()
 use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
 use crate::reference::authoritative::CanonicalOverrides;
-use crate::reference::provider::ReferenceProvider;
+use crate::reference::provider::{GenomicPlacement, ReferenceProvider};
 use crate::reference::transcript::Transcript;
 
 /// Index entry for a sequence in a FASTA file
@@ -214,6 +214,17 @@ pub struct MultiFastaProvider {
     /// every call dominated the hot loop (~12% of normalize CPU). The index is
     /// immutable after construction, so the answer is a build-time constant.
     has_genomic_data: bool,
+    /// Directory holding the LRG XML records (`LRG_<n>.xml`), if the manifest
+    /// listed `lrg_xmls`. Used to resolve an LRG parent's chromosomal placement
+    /// on demand for #480 (the XML's `main_assembly` `<mapping>` element gives
+    /// LRG↔NC_ coordinates), so transcript coordinates projected onto an LRG
+    /// parent can be re-expressed in the LRG's own frame.
+    lrg_xml_dir: Option<PathBuf>,
+    /// Memoizes parsed LRG placements (and negative results) keyed by LRG
+    /// accession, so repeated projections against the same LRG parent parse the
+    /// XML once. A stored `None` means "parsed, but no usable single-span
+    /// main-assembly placement".
+    lrg_placement_cache: Mutex<FxHashMap<String, Option<GenomicPlacement>>>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -310,6 +321,8 @@ impl MultiFastaProvider {
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
             open_files: Mutex::new(FxHashMap::default()),
+            lrg_xml_dir: None,
+            lrg_placement_cache: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -344,6 +357,8 @@ impl MultiFastaProvider {
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
             open_files: Mutex::new(FxHashMap::default()),
+            lrg_xml_dir: None,
+            lrg_placement_cache: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -463,6 +478,17 @@ impl MultiFastaProvider {
             }
         }
 
+        // Directory of LRG XML records, used to resolve an LRG parent's
+        // chromosomal placement on demand (#480). Derived from the first
+        // `lrg_xmls` entry's parent directory.
+        let lrg_xml_dir = manifest
+            .get("lrg_xmls")
+            .and_then(|v| v.as_array())
+            .and_then(|xmls| xmls.first())
+            .and_then(|v| v.as_str())
+            .map(resolve_path)
+            .and_then(|p| p.parent().map(Path::to_path_buf));
+
         // Get supplemental directory (missing ClinVar transcripts)
         if let Some(supplemental) = manifest.get("supplemental_fasta").and_then(|v| v.as_str()) {
             let path = resolve_path(supplemental);
@@ -480,6 +506,9 @@ impl MultiFastaProvider {
         }
 
         let mut provider = Self::from_directories(&dirs)?;
+        // Carry the LRG XML directory so LRG parents can be re-anchored on
+        // demand (#480); `from_directories` cannot know about it.
+        provider.lrg_xml_dir = lrg_xml_dir;
 
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
@@ -696,6 +725,8 @@ impl MultiFastaProvider {
             protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
             open_files: Mutex::new(FxHashMap::default()),
+            lrg_xml_dir: None,
+            lrg_placement_cache: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -1613,7 +1644,117 @@ impl MultiFastaProvider {
     }
 }
 
+/// Extract the value of an XML attribute written as `name="value"` from a tag
+/// slice. Sufficient for the flat, machine-generated LRG XML; not a general XML
+/// parser.
+fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Parse an LRG's chromosomal placement from its XML record (#480).
+///
+/// Reads the `<mapping type="main_assembly" …>` element (the current assembly,
+/// e.g. GRCh38) and its single `<mapping_span …>` to build a
+/// [`GenomicPlacement`] mapping LRG coordinates onto the `NC_` chromosome.
+/// Returns `None` when there is no main-assembly mapping, its `other_id` is not
+/// a parseable accession, or it is not a single contiguous span (a single
+/// affine placement cannot represent a gapped mapping — the projector then
+/// keeps the chromosome coordinates rather than mis-anchor).
+fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
+    let mut search = xml;
+    loop {
+        let open_rel = search.find("<mapping ")?;
+        let after_open = &search[open_rel..];
+        let tag_end = after_open.find('>')?;
+        let open_tag = &after_open[..tag_end];
+
+        let body_start = open_rel + tag_end + 1;
+        let close_rel = search[body_start..].find("</mapping>");
+        let body = match close_rel {
+            Some(c) => &search[body_start..body_start + c],
+            None => &search[body_start..],
+        };
+
+        if xml_attr(open_tag, "type") == Some("main_assembly") {
+            let nc_str = xml_attr(open_tag, "other_id")?;
+            let nc = crate::hgvs::parser::accession::parse_accession(nc_str)
+                .map(|(_, a)| a)
+                .ok()?;
+
+            // Require exactly one span: a single affine transform.
+            let spans: Vec<&str> = body
+                .match_indices("<mapping_span ")
+                .map(|(i, _)| {
+                    let s = &body[i..];
+                    let e = s.find('>').unwrap_or(s.len());
+                    &s[..e]
+                })
+                .collect();
+            if spans.len() != 1 {
+                return None;
+            }
+            let span = spans[0];
+            let parent_start: u64 = xml_attr(span, "lrg_start")?.parse().ok()?;
+            let o1: u64 = xml_attr(span, "other_start")?.parse().ok()?;
+            let o2: u64 = xml_attr(span, "other_end")?.parse().ok()?;
+            let strand = match xml_attr(span, "strand") {
+                Some("-1") => crate::reference::transcript::Strand::Minus,
+                _ => crate::reference::transcript::Strand::Plus,
+            };
+            let (nc_start, nc_end) = if o1 <= o2 { (o1, o2) } else { (o2, o1) };
+            return Some(GenomicPlacement {
+                nc,
+                parent_start,
+                nc_start,
+                nc_end,
+                strand,
+            });
+        }
+
+        let advance = body_start + close_rel? + "</mapping>".len();
+        search = &search[advance..];
+    }
+}
+
 impl ReferenceProvider for MultiFastaProvider {
+    fn genomic_placement(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<GenomicPlacement> {
+        // Only LRG placement is wired (from the on-hand LRG XMLs). NG_
+        // RefSeqGene placement needs a RefSeqGene→chromosome alignment source
+        // that ferro does not yet ingest (#480 follow-up); until then NG_
+        // parents keep the prior behavior (chromosome coordinates under the
+        // NG_ accession).
+        if !parent.is_lrg() {
+            return None;
+        }
+        let dir = self.lrg_xml_dir.as_ref()?;
+        let key = parent.full(); // e.g. "LRG_1" (LRG accessions carry no version)
+
+        if let Some(cached) = self
+            .lrg_placement_cache
+            .lock()
+            .expect("lrg placement cache poisoned")
+            .get(&key)
+        {
+            return cached.clone();
+        }
+
+        let placement = std::fs::read_to_string(dir.join(format!("{key}.xml")))
+            .ok()
+            .and_then(|xml| parse_lrg_main_assembly_placement(&xml));
+        self.lrg_placement_cache
+            .lock()
+            .expect("lrg placement cache poisoned")
+            .insert(key, placement.clone());
+        placement
+    }
+
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         self.get_transcript_on_build_cached(id, None)
     }
@@ -1945,6 +2086,92 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::tempdir;
+
+    // ----------------------------------------------------------------------
+    // LRG placement parsing (#480)
+    // ----------------------------------------------------------------------
+
+    /// Minimal LRG XML with both assemblies and a (multi-span) transcript
+    /// mapping, modeled on real records. The parser must pick the single-span
+    /// `main_assembly` (GRCh38) mapping and ignore the others.
+    const LRG_XML_SAMPLE: &str = r#"
+      <mapping coord_system="GRCh37.p13" other_name="17" other_id="NC_000017.10" other_start="48259457" other_end="48284000" type="other_assembly">
+        <mapping_span lrg_start="1" lrg_end="24544" other_start="48259457" other_end="48284000" strand="-1" />
+      </mapping>
+      <mapping coord_system="GRCh38.p13" other_name="17" other_id="NC_000017.11" other_start="50182096" other_end="50206639" type="main_assembly">
+        <mapping_span lrg_start="1" lrg_end="24544" other_start="50182096" other_end="50206639" strand="-1" />
+      </mapping>
+      <mapping coord_system="NM_000088.3" other_name="NM_000088.3" other_id="NM_000088.3" other_start="1" other_end="5927" type="transcript">
+        <mapping_span lrg_start="5001" lrg_end="5229" other_start="1" other_end="229" strand="1" />
+        <mapping_span lrg_start="6693" lrg_end="6887" other_start="230" other_end="424" strand="1" />
+      </mapping>
+    "#;
+
+    #[test]
+    fn parses_main_assembly_placement_from_lrg_xml() {
+        let p = parse_lrg_main_assembly_placement(LRG_XML_SAMPLE)
+            .expect("main_assembly mapping should parse");
+        assert_eq!(p.nc.to_string(), "NC_000017.11");
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 50182096);
+        assert_eq!(p.nc_end, 50206639);
+        assert_eq!(p.strand, crate::reference::transcript::Strand::Minus);
+        // Spot-check the affine: the LRG (minus strand) base 1 sits at the high
+        // chromosome coordinate.
+        assert_eq!(p.nc_to_parent(50206639), Some(1));
+        assert_eq!(p.nc_to_parent(50182096), Some(24544));
+    }
+
+    #[test]
+    fn no_placement_when_main_assembly_mapping_is_absent() {
+        let xml = r#"
+          <mapping other_id="NC_000017.10" type="other_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="1" other_end="10" strand="1" />
+          </mapping>
+        "#;
+        assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    }
+
+    #[test]
+    fn no_placement_when_main_assembly_mapping_is_gapped() {
+        // A multi-span main_assembly mapping cannot be a single affine; decline
+        // rather than mis-anchor.
+        let xml = r#"
+          <mapping other_id="NC_000017.11" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1" />
+            <mapping_span lrg_start="11" lrg_end="20" other_start="200" other_end="209" strand="1" />
+          </mapping>
+        "#;
+        assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    }
+
+    /// End-to-end provider path: `genomic_placement` reads the LRG XML from the
+    /// configured directory and returns its parsed placement (and caches it).
+    #[test]
+    fn provider_resolves_lrg_placement_from_xml_dir() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+
+        // LRG XML directory with one record.
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(xml_dir.join("LRG_999.xml"), LRG_XML_SAMPLE).unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        let lrg = crate::hgvs::variant::Accession::new("LRG", "999", None);
+        let placement = provider
+            .genomic_placement(&lrg)
+            .expect("LRG placement should resolve from the XML directory");
+        assert_eq!(placement.nc.to_string(), "NC_000017.11");
+        assert_eq!(placement.nc_start, 50182096);
+        assert_eq!(
+            placement.strand,
+            crate::reference::transcript::Strand::Minus
+        );
+
+        // A non-LRG parent gets no placement (NG_ source not wired yet).
+        let ng = crate::hgvs::variant::Accession::new("NG", "007485", Some(1));
+        assert!(provider.genomic_placement(&ng).is_none());
+    }
 
     // ----------------------------------------------------------------------
     // infer_build_from_parent unit coverage (closes review gap on #332)
