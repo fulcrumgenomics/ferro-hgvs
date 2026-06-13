@@ -146,6 +146,17 @@ fn build_base_to_versioned(
     map
 }
 
+/// Whether `index` holds any genomic (chromosome) sequence, named either
+/// NCBI RefSeq style (`NC_*`) or UCSC style (`chr*`). Computed once at
+/// construction and cached in [`MultiFastaProvider::has_genomic_data`] — the
+/// index can hold hundreds of thousands of keys and this predicate is hit on
+/// the per-variant normalization path.
+fn index_has_genomic_data(index: &FxHashMap<String, FastaIndexEntry>) -> bool {
+    index
+        .keys()
+        .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
+}
+
 /// Multi-FASTA reference provider
 ///
 /// Provides efficient random access to sequences across multiple FASTA files.
@@ -197,6 +208,12 @@ pub struct MultiFastaProvider {
     /// dominated `get_sequence`/transcript resolution. There are only a handful
     /// of distinct FASTA files (genome, transcripts, LRG), so this is bounded.
     open_files: Mutex<FxHashMap<PathBuf, Arc<File>>>,
+    /// Whether the index contains any genomic (chromosome) sequences, computed
+    /// once at construction. `has_genomic_data` is queried on the per-variant
+    /// normalization path; computing it by scanning all ~270k index keys on
+    /// every call dominated the hot loop (~12% of normalize CPU). The index is
+    /// immutable after construction, so the answer is a build-time constant.
+    has_genomic_data: bool,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -284,6 +301,7 @@ impl MultiFastaProvider {
 
         Ok(Self {
             base_to_versioned: build_base_to_versioned(&index),
+            has_genomic_data: index_has_genomic_data(&index),
             index,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
@@ -317,6 +335,7 @@ impl MultiFastaProvider {
 
         Ok(Self {
             base_to_versioned: build_base_to_versioned(&combined_index),
+            has_genomic_data: index_has_genomic_data(&combined_index),
             index: combined_index,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
@@ -668,6 +687,7 @@ impl MultiFastaProvider {
 
         Ok(Self {
             base_to_versioned: build_base_to_versioned(&index),
+            has_genomic_data: index_has_genomic_data(&index),
             index,
             aliases: build_chromosome_aliases(),
             cdot_mapper: Some(cdot_mapper),
@@ -1734,11 +1754,10 @@ impl ReferenceProvider for MultiFastaProvider {
     }
 
     fn has_genomic_data(&self) -> bool {
-        // Check if we have chromosome/contig sequences in the index
-        // These may be named as NC_* (NCBI RefSeq) or chr* (UCSC style)
-        self.index
-            .keys()
-            .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
+        // Precomputed at construction (the index is immutable afterward); see
+        // `index_has_genomic_data`. Previously this scanned every index key on
+        // each call, which dominated the per-variant normalize hot loop.
+        self.has_genomic_data
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
@@ -2881,6 +2900,33 @@ mod tests {
         assert_eq!(
             map.get("NM_000088").map(String::as_str),
             Some("NM_000088.10")
+        );
+    }
+
+    #[test]
+    fn has_genomic_data_reflects_presence_of_chromosome_sequences() {
+        // A transcript-only index (NM_*) has no genomic (NC_*/chr*) sequences.
+        let (tx_only, _d1) = build_provider_with_transcripts(&[
+            ("NM_000088.3", "ACGTACGT"),
+            ("NR_000001.1", "ACGTACGT"),
+        ]);
+        assert!(
+            !tx_only.has_genomic_data(),
+            "transcript-only provider must report no genomic data"
+        );
+
+        // An NC_ chromosome accession makes genomic data available.
+        let (with_nc, _d2) = build_provider_with_transcripts(&[("NC_000001.11", "ACGTACGTACGT")]);
+        assert!(
+            with_nc.has_genomic_data(),
+            "an NC_ chromosome sequence must report genomic data available"
+        );
+
+        // A UCSC-style chr accession likewise counts as genomic.
+        let (with_chr, _d3) = build_provider_with_transcripts(&[("chr1", "ACGTACGTACGT")]);
+        assert!(
+            with_chr.has_genomic_data(),
+            "a chr* sequence must report genomic data available"
         );
     }
 
