@@ -168,3 +168,81 @@ fn parse_acc(s: &str) -> ferro_hgvs::hgvs::variant::Accession {
         other => panic!("expected genome variant, got {other:?}"),
     }
 }
+
+/// A bare LRG transcript input (`LRG_<n>t<m>:c.…`, no genomic-context
+/// parenthetical — the form the conformance corpus uses) must project to its
+/// genomic LRG (`LRG_<n>`) in the LRG's own frame: the genomic parent is derived
+/// structurally from the transcript accession, cdot resolves the LRG transcript
+/// to its RefSeq NM_ for the chromosome mapping, and the LRG placement
+/// re-anchors the coordinate.
+#[test]
+fn bare_lrg_transcript_input_reanchors_to_lrg_frame() {
+    use std::io::Write;
+
+    let mut cdot = CdotMapper::new();
+    cdot.add_transcript(
+        "NM_TEST.1".to_string(),
+        CdotTranscript {
+            gene_name: Some("TESTGENE".to_string()),
+            contig: "chr1".to_string(),
+            strand: Strand::Plus,
+            exons: vec![[1000, 1009, 0, 9]],
+            cds_start: Some(0),
+            cds_end: Some(9),
+            gene_id: None,
+            protein: Some("NP_TEST.1".to_string()),
+            exon_cigars: Vec::new(),
+        },
+    );
+    // Map LRG_1t1 -> NM_TEST.1 via a temp mapping file (NCBI/LRG column layout:
+    // LRG, HGNC_SYMBOL, REFSEQ_GENOMIC, LRG_TRANSCRIPT, REFSEQ_TRANSCRIPT, ...).
+    let mut mapping = tempfile::NamedTempFile::new().unwrap();
+    writeln!(mapping, "# LRG\tHGNC\tREFSEQ_GENOMIC\tLRG_TX\tREFSEQ_TX").unwrap();
+    writeln!(
+        mapping,
+        "LRG_1\tTESTGENE\tNG_000001.1\tt1\tNM_TEST.1\tENST0\tCCDS0"
+    )
+    .unwrap();
+    cdot.load_lrg_mapping(mapping.path())
+        .expect("load lrg mapping");
+    let projector = Projector::new(cdot);
+
+    let mut provider = MockProvider::new();
+    provider.add_transcript(Transcript::new(
+        "NM_TEST.1".to_string(),
+        Some("TESTGENE".to_string()),
+        TxStrand::Plus,
+        "ATGCGCTAA".to_string(),
+        Some(1),
+        Some(9),
+        vec![Exon::new(1, 1, 9)],
+        Some("chr1".to_string()),
+        Some(1000),
+        Some(1008),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+    let prefix = "N".repeat(1000);
+    let suffix = "N".repeat(100);
+    provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
+    provider.add_genomic_placement(
+        "LRG_1",
+        GenomicPlacement {
+            nc: parse_acc("NC_000001.11"),
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end: 1009,
+            strand: Strand::Plus,
+        },
+    );
+    let vp = VariantProjector::new(projector, provider);
+
+    // Bare LRG transcript input — no genomic-context parenthetical.
+    let variant = parse_hgvs("LRG_1t1:c.4C>A").expect("parse");
+    let g = vp
+        .project_to_genomic(&variant)
+        .expect("bare LRG transcript should project to its genomic LRG");
+    assert_eq!(g.to_string(), "LRG_1:g.4C>A");
+}

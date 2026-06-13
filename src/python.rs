@@ -119,6 +119,19 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.has_transcript_version_exact(id),
         }
     }
+
+    fn genomic_placement(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<crate::reference::GenomicPlacement> {
+        // Forward to the inner provider so NG_/LRG_ parent re-anchoring (#480)
+        // works on the Python path; the trait default `None` would otherwise
+        // silently disable it for Python consumers.
+        match self {
+            PyProvider::Mock(p) => p.genomic_placement(parent),
+            PyProvider::MultiFasta(p) => p.genomic_placement(parent),
+        }
+    }
 }
 
 impl PyProvider {

@@ -8,7 +8,7 @@ use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::{CdsInterval, TxInterval};
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
 use crate::hgvs::variant::{
-    is_frameshift, AlleleVariant, CdsVariant, HgvsVariant, LocEdit, TxVariant,
+    is_frameshift, Accession, AlleleVariant, CdsVariant, HgvsVariant, LocEdit, TxVariant,
 };
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
@@ -490,6 +490,26 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_normalized_all(&normalized)
     }
 
+    /// Derive the genomic LRG parent (`LRG_<n>`) of an LRG transcript or protein
+    /// accession (`LRG_<n>t<m>` / `LRG_<n>p<m>`).
+    ///
+    /// LRG accessions embed the genomic number plus a `t`/`p` suffix, so the
+    /// genomic reference is the leading digits — a structural fact of the
+    /// accession, not a cdot inference. Returns `None` for non-LRG accessions
+    /// and for a bare genomic LRG (all digits, no suffix), which is already its
+    /// own genome reference.
+    fn lrg_genomic_parent(accession: &Accession) -> Option<Accession> {
+        if !accession.is_lrg() {
+            return None;
+        }
+        let number = &*accession.number;
+        let genomic_digits: String = number.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if genomic_digits.is_empty() || genomic_digits.len() == number.len() {
+            return None;
+        }
+        Some(Accession::new("LRG", genomic_digits, None))
+    }
+
     /// Project a transcript-coordinate variant (`c.`/`n.`/`r.`) onto its parent
     /// genomic reference and return an [`HgvsVariant::Genome`].
     ///
@@ -653,19 +673,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             });
         }
 
-        // 3. Require an explicit parent NG/NC accession via `genomic_context`.
-        //    Per design (#327) we do NOT synthesize a parent from cdot.
-        let parent = accession
-            .genomic_context
-            .as_deref()
-            .cloned()
-            .ok_or_else(|| FerroError::UnsupportedProjection {
-                reason: format!(
-                    "input variant has no parent reference (genomic_context) on accession {}; \
-                     project_to_genomic requires an explicit NG/NC parent (see #327)",
-                    accession.full()
-                ),
-            })?;
+        // 3. Resolve the genomic parent reference. Normally this is an explicit
+        //    NG/NC parent on `genomic_context` — per #327 we do NOT synthesize a
+        //    parent from cdot. The one exception is an LRG transcript/protein
+        //    input (`LRG_<n>t<m>` / `LRG_<n>p<m>`): its genomic parent `LRG_<n>`
+        //    is determined *structurally* by the accession itself, not inferred
+        //    from cdot, so we derive it when no explicit parent is given (#480).
+        let parent = match accession.genomic_context.as_deref().cloned() {
+            Some(p) => p,
+            None => Self::lrg_genomic_parent(&accession).ok_or_else(|| {
+                FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "input variant has no parent reference (genomic_context) on accession {}; \
+                         project_to_genomic requires an explicit NG/NC parent (see #327)",
+                        accession.full()
+                    ),
+                }
+            })?,
+        };
 
         // 4. Resolve the transcript via the cdot mapper (the same backing
         //    store used by the g. → c./n. path).  Working directly off cdot

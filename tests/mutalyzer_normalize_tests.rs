@@ -172,6 +172,14 @@ impl ReferenceProvider for ArcProvider {
     fn has_protein_data(&self) -> bool {
         self.0.has_protein_data()
     }
+    fn genomic_placement(
+        &self,
+        parent: &ferro_hgvs::hgvs::variant::Accession,
+    ) -> Option<ferro_hgvs::reference::GenomicPlacement> {
+        // Must delegate, or NG_/LRG_ re-anchoring (#480) silently no-ops behind
+        // the wrapper via the trait's `None` default.
+        self.0.genomic_placement(parent)
+    }
 }
 
 fn normalizer() -> Option<Normalizer<ArcProvider>> {
