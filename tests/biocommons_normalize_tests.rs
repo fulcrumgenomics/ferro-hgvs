@@ -28,6 +28,7 @@
 //! for the disposition of currently-known divergences.
 
 use ferro_hgvs::conformance::biocommons::{Case, Disposition, Fixture};
+use ferro_hgvs::conformance::reference_window::WindowFixture;
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::transcript::Transcript;
@@ -41,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 const FIXTURE_PATH: &str = "tests/fixtures/biocommons-normalize/cases.json";
+const WINDOWS_FIXTURE_PATH: &str = "tests/fixtures/biocommons-normalize/reference-windows.json";
 const MOCK_PIN_PATH: &str = "tests/fixtures/biocommons-normalize/mock-pin/normalized.txt";
 const XFAIL_REPORT_DIR: &str = "/tmp/ferro-xfail";
 const FAIL_PRINT_LIMIT: usize = 10;
@@ -518,28 +520,26 @@ impl AxisTally {
     }
 }
 
-#[test]
-fn axis_normalized() {
-    let Some(provider) = provider() else {
-        eprintln!("axis_normalized: skipping — no manifest");
-        return;
-    };
-
+/// Run the `normalized` axis for every `to_test` case against `provider`,
+/// returning the tally (the caller asserts via [`AxisTally::finish`]). Shared by
+/// the per-PR hermetic gate ([`axis_normalized_hermetic`]) and the manifest
+/// nightly tier ([`axis_normalized`]) so both apply identical config,
+/// expects-error handling, and disposition classification — the only difference
+/// is the reference provider behind them.
+fn run_normalized_axis<P: ReferenceProvider + Clone>(provider: P) -> AxisTally {
     let mut t = AxisTally::new("normalized");
     for case in &fixture().cases {
         if !case.to_test {
             continue;
         }
-        // biocommons expects-error cases: ferro should also error.
-        // Run in strict mode so the W4xxx / W5xxx rejectable diagnostics
-        // (`PositionPastEnd`, `VariantExceedsReference`, etc.) fire as
-        // typed errors rather than lenient-mode warnings. Without this,
-        // every rejectable W-code that ferro currently emits would
-        // round-trip as `Ok(canonicalized_input)` and the row would
-        // fail the harness.
+        // biocommons expects-error cases: ferro should also error. Run in strict
+        // mode so the W4xxx / W5xxx rejectable diagnostics (`PositionPastEnd`,
+        // `VariantExceedsReference`, etc.) fire as typed errors rather than
+        // lenient-mode warnings — otherwise every rejectable W-code ferro emits
+        // would round-trip as `Ok(canonicalized_input)` and fail the harness.
         if case.expects_error {
             let cfg = build_config(case).with_error_mode(ErrorMode::Strict);
-            let normalizer = Normalizer::with_config(ArcProvider(provider.clone()), cfg);
+            let normalizer = Normalizer::with_config(provider.clone(), cfg);
             // Map ferro's outcome onto the `<expects error>` sentinel so
             // `classify_outcome` treats this row uniformly with the value-axis
             // rows. ferro erroring is the match (`Ok("<expects error>")`);
@@ -570,7 +570,7 @@ fn axis_normalized() {
             continue;
         };
 
-        let normalizer = Normalizer::with_config(ArcProvider(provider.clone()), build_config(case));
+        let normalizer = Normalizer::with_config(provider.clone(), build_config(case));
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e}"))?;
             let n = normalizer
@@ -581,7 +581,37 @@ fn axis_normalized() {
 
         t.record(&case.input, expected, actual, case.disposition.as_ref());
     }
-    t.finish();
+    t
+}
+
+/// Per-PR hermetic merge gate (CI-always): runs the `normalized` axis against a
+/// [`WindowProvider`] built from the committed `reference-windows.json` — the
+/// exact reference bases the manifest pass touches (transcripts whole, padded
+/// genomic windows), with zero out-of-band data (#478 pillar 4). This is the
+/// gate that blocks PRs. Regenerate the fixture from the manifest with
+/// `cargo run --features dev --example extract_biocommons_windows` whenever
+/// cases.json or normalize behavior changes the reference access set.
+#[test]
+fn axis_normalized_hermetic() {
+    let window_fixture = WindowFixture::from_json_path(Path::new(WINDOWS_FIXTURE_PATH))
+        .unwrap_or_else(|e| panic!("load {WINDOWS_FIXTURE_PATH}: {e}"));
+    run_normalized_axis(window_fixture.to_provider()).finish();
+}
+
+/// Manifest-mode nightly tier: the same axis against the full
+/// `MultiFastaProvider`. Skips when the manifest is absent (e.g. CI) — the
+/// hermetic gate above is the per-PR merge gate. This tier catches anything the
+/// committed windows miss and is the source the extraction tool regenerates
+/// from; it must agree with the hermetic gate row-for-row.
+#[test]
+fn axis_normalized() {
+    let Some(provider) = provider() else {
+        eprintln!(
+            "axis_normalized: skipping — no manifest (per-PR gate is axis_normalized_hermetic)"
+        );
+        return;
+    };
+    run_normalized_axis(ArcProvider(provider)).finish();
 }
 
 // ----------------------------------------------------------------------------
