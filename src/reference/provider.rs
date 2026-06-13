@@ -252,8 +252,76 @@ pub trait ReferenceProvider {
     }
 }
 
-/// Blanket implementation for boxed trait objects
-impl ReferenceProvider for Box<dyn ReferenceProvider> {
+/// Blanket implementation for `Arc<T>` where `T: ReferenceProvider + ?Sized`.
+///
+/// Allows shared-ownership providers (used by `normalize_ferro_parallel`) to
+/// be used anywhere a `ReferenceProvider` is expected without unwrapping.
+/// This covers both `Arc<ConcreteType>` and `Arc<dyn ReferenceProvider + Send + Sync>`.
+impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
+    fn get_transcript(&self, id: &str) -> Result<std::sync::Arc<Transcript>, FerroError> {
+        (**self).get_transcript(id)
+    }
+
+    fn get_transcript_for_variant(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<std::sync::Arc<Transcript>, FerroError> {
+        (**self).get_transcript_for_variant(variant)
+    }
+
+    fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        (**self).get_sequence(id, start, end)
+    }
+
+    fn has_transcript(&self, id: &str) -> bool {
+        (**self).has_transcript(id)
+    }
+
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        (**self).has_transcript_version_exact(id)
+    }
+
+    fn get_genomic_sequence(
+        &self,
+        contig: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        (**self).get_genomic_sequence(contig, start, end)
+    }
+
+    fn has_genomic_data(&self) -> bool {
+        (**self).has_genomic_data()
+    }
+
+    fn get_protein_sequence(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        (**self).get_protein_sequence(accession, start, end)
+    }
+
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        (**self).get_protein_length(accession)
+    }
+
+    fn has_protein_data(&self) -> bool {
+        (**self).has_protein_data()
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        (**self).get_sequence_length(id)
+    }
+}
+
+/// Blanket implementation for boxed trait objects.
+///
+/// Covers both `Box<dyn ReferenceProvider>` and the wider
+/// `Box<dyn ReferenceProvider + Send + Sync>` returned by
+/// `create_reference_provider`.
+impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         (**self).get_transcript(id)
     }
@@ -317,4 +385,22 @@ impl ReferenceProvider for Box<dyn ReferenceProvider> {
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         (**self).get_sequence_length(id)
     }
+}
+
+/// Static assertions: verify that the concrete providers used in production
+/// are `Send + Sync` so they can be safely wrapped in `Arc` and shared
+/// across threads in `normalize_ferro_parallel`.
+///
+/// This assertion fires at compile time if any provider adds a non-Send or
+/// non-Sync field (e.g. `RefCell`, bare `Rc`, or a raw pointer) in the
+/// future.
+#[allow(dead_code)]
+fn _assert_provider_send_sync() {
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+    // Trait object form — verifies the trait itself is object-safe and
+    // compatible with Send+Sync bounds.
+    assert_send_sync::<dyn ReferenceProvider + Send + Sync>();
+    // Concrete types used by create_reference_provider in benchmark builds.
+    assert_send_sync::<crate::reference::multi_fasta::MultiFastaProvider>();
+    assert_send_sync::<crate::reference::mock::MockProvider>();
 }

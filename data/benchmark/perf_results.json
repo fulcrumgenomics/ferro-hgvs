@@ -1,47 +1,204 @@
 {
   "schema_version": 1,
-  "placeholder": true,
+  "placeholder": false,
   "provenance": {
-    "generated": "2026-06-12T00:00:00Z", "corpus_id": "clinvar_patterns",
-    "corpus_sha": "PLACEHOLDER", "machine": "Apple M2 Max (12 cores)", "os": "darwin-arm64",
-    "tool_versions": {"ferro":"0.6.0","mutalyzer":"3.1.1","biocommons":"fa02ca5","hgvs-rs":"0.20.2"}
+    "generated": "2026-06-13T06:17:50.943027+00:00",
+    "corpus_id": "clinvar_patterns",
+    "corpus_sha": "2382f8f849b749ae",
+    "machine": "Apple M2 Max (12 cores)",
+    "os": "macos-aarch64",
+    "tool_versions": {
+      "biocommons": "fa02ca5 (unpinned)",
+      "ferro": "0.6.0",
+      "hgvs-rs": "0.20.2",
+      "mutalyzer": "3.1.1"
+    },
+    "notes": [
+      "normalize throughput for mutalyzer/biocommons includes Python subprocess startup in the timed region (ferro/hgvs-rs exclude it; <2% at this sample size); parse throughput excludes Python startup (measured by the subprocess's internal timer). See issue tracker."
+    ]
   },
   "operations": {
-    "parse": {
-      "sample_size_slow": 1000, "ferro_full_population_n": 1000000, "ferro_full_population_pps": 4200000.0,
-      "by_workers": {
-        "1": {"tools": {
-          "ferro": {"median_pps": 1200000.0, "min_pps": 1150000.0, "max_pps": 1250000.0, "reps": 10, "success_rate": 1.0},
-          "mutalyzer": {"median_pps": 21.0, "min_pps": 20.0, "max_pps": 22.0, "reps": 5, "success_rate": 0.994},
-          "biocommons": {"median_pps": 20.0, "min_pps": 19.0, "max_pps": 21.0, "reps": 5, "success_rate": 0.994},
-          "hgvs-rs": {"median_pps": 2.0, "min_pps": 1.8, "max_pps": 2.2, "reps": 5, "success_rate": 0.994}
-        }},
-        "8": {"tools": {
-          "ferro": {"median_pps": 8000000.0, "min_pps": 7800000.0, "max_pps": 8200000.0, "reps": 10, "success_rate": 1.0},
-          "mutalyzer": {"median_pps": 150.0, "min_pps": 140.0, "max_pps": 160.0, "reps": 5, "success_rate": 0.994},
-          "biocommons": {"median_pps": 140.0, "min_pps": 130.0, "max_pps": 150.0, "reps": 5, "success_rate": 0.994},
-          "hgvs-rs": {"median_pps": 14.0, "min_pps": 13.0, "max_pps": 15.0, "reps": 5, "success_rate": 0.994}
-        }}
-      },
-      "ferro_scaling": {"1": 1200000.0, "2": 2300000.0, "4": 4400000.0, "8": 8000000.0}
-    },
     "normalize": {
-      "sample_size_slow": 1000, "ferro_full_population_n": 1000000, "ferro_full_population_pps": 900000.0,
+      "sample_size_slow": 50,
+      "ferro_full_population_n": 1000000,
+      "ferro_full_population_pps": 72539.12228707611,
       "by_workers": {
-        "1": {"tools": {
-          "ferro": {"median_pps": 250000.0, "min_pps": 240000.0, "max_pps": 260000.0, "reps": 10, "success_rate": 1.0},
-          "mutalyzer": {"median_pps": 19.0, "min_pps": 18.0, "max_pps": 20.0, "reps": 5, "success_rate": 0.99},
-          "biocommons": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"},
-          "hgvs-rs": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"}
-        }},
-        "8": {"tools": {
-          "ferro": {"median_pps": 1800000.0, "min_pps": 1750000.0, "max_pps": 1850000.0, "reps": 10, "success_rate": 1.0},
-          "mutalyzer": {"median_pps": 140.0, "min_pps": 130.0, "max_pps": 150.0, "reps": 5, "success_rate": 0.99},
-          "biocommons": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"},
-          "hgvs-rs": {"median_pps": 0.0, "min_pps": 0.0, "max_pps": 0.0, "reps": 0, "success_rate": 0.0, "not_run": true, "reason": "UTA unavailable"}
-        }}
+        "1": {
+          "tools": {
+            "biocommons": {
+              "median_pps": 225.6803785454343,
+              "min_pps": 221.30470783283315,
+              "max_pps": 231.44967838988464,
+              "reps": 5,
+              "success_rate": 0.65,
+              "not_run": false
+            },
+            "ferro": {
+              "median_pps": 5387.4181457778695,
+              "min_pps": 5283.0529305022155,
+              "max_pps": 5615.825095221871,
+              "reps": 5,
+              "success_rate": 0.9989089255947871,
+              "not_run": false
+            },
+            "hgvs-rs": {
+              "median_pps": 144.43102388563642,
+              "min_pps": 133.22230913658052,
+              "max_pps": 158.36538620398883,
+              "reps": 5,
+              "success_rate": 0.6596958174904943,
+              "not_run": false
+            },
+            "mutalyzer": {
+              "median_pps": 1.1651671305536855,
+              "min_pps": 0.8702070366994676,
+              "max_pps": 1.4285070896324739,
+              "reps": 5,
+              "success_rate": 0.78,
+              "not_run": false
+            }
+          }
+        },
+        "8": {
+          "tools": {
+            "biocommons": {
+              "median_pps": 205.88388571642858,
+              "min_pps": 196.40325443531455,
+              "max_pps": 223.46030617678812,
+              "reps": 5,
+              "success_rate": 0.6214285714285714,
+              "not_run": false
+            },
+            "ferro": {
+              "median_pps": 38125.40013182295,
+              "min_pps": 37663.74275062132,
+              "max_pps": 39070.214853973484,
+              "reps": 5,
+              "success_rate": 0.9989089255947871,
+              "not_run": false
+            },
+            "hgvs-rs": {
+              "median_pps": 1013.7143740996071,
+              "min_pps": 940.0093250712137,
+              "max_pps": 1024.3639413181625,
+              "reps": 5,
+              "success_rate": 0.6596958174904943,
+              "not_run": false
+            },
+            "mutalyzer": {
+              "median_pps": 2.9159343703053517,
+              "min_pps": 1.673894746444094,
+              "max_pps": 3.6740359766789106,
+              "reps": 5,
+              "success_rate": 0.78,
+              "not_run": false
+            }
+          }
+        }
       },
-      "ferro_scaling": {"1": 250000.0, "2": 480000.0, "4": 920000.0, "8": 1800000.0}
+      "ferro_scaling": {
+        "1": 6018.6702836914155,
+        "2": 13496.678112459193,
+        "4": 33081.52887396095,
+        "8": 56136.60022882874
+      },
+      "sample_sizes": {
+        "biocommons": 280,
+        "ferro": 6599,
+        "hgvs-rs": 526,
+        "mutalyzer": 50
+      }
+    },
+    "parse": {
+      "sample_size_slow": 791,
+      "ferro_full_population_n": 1000000,
+      "ferro_full_population_pps": 11554576.795599721,
+      "by_workers": {
+        "1": {
+          "tools": {
+            "biocommons": {
+              "median_pps": 3767.472280072449,
+              "min_pps": 3572.603918371806,
+              "max_pps": 3796.6520307804526,
+              "reps": 5,
+              "success_rate": 0.9913922737879182,
+              "not_run": false
+            },
+            "ferro": {
+              "median_pps": 3052936.3299215375,
+              "min_pps": 3025615.5162915573,
+              "max_pps": 3081288.925399054,
+              "reps": 5,
+              "success_rate": 0.9999883266495295,
+              "not_run": false
+            },
+            "hgvs-rs": {
+              "median_pps": 3563356.7008815734,
+              "min_pps": 3532722.9151984337,
+              "max_pps": 3586412.6739475843,
+              "reps": 5,
+              "success_rate": 0.9911943352532907,
+              "not_run": false
+            },
+            "mutalyzer": {
+              "median_pps": 337.1276831104815,
+              "min_pps": 327.5870089507934,
+              "max_pps": 340.27847479705434,
+              "reps": 5,
+              "success_rate": 0.9987357774968395,
+              "not_run": false
+            }
+          }
+        },
+        "8": {
+          "tools": {
+            "biocommons": {
+              "median_pps": 3805.9840909064174,
+              "min_pps": 3728.1717007411207,
+              "max_pps": 3841.9332144736118,
+              "reps": 5,
+              "success_rate": 0.9913922737879182,
+              "not_run": false
+            },
+            "ferro": {
+              "median_pps": 9280211.014646983,
+              "min_pps": 7916425.611381981,
+              "max_pps": 9794341.99432776,
+              "reps": 5,
+              "success_rate": 0.9999883266495295,
+              "not_run": false
+            },
+            "hgvs-rs": {
+              "median_pps": 3575212.6139989714,
+              "min_pps": 2926769.0762921283,
+              "max_pps": 3628555.538104296,
+              "reps": 5,
+              "success_rate": 0.9911943352532907,
+              "not_run": false
+            },
+            "mutalyzer": {
+              "median_pps": 336.0508835160341,
+              "min_pps": 240.7632834960466,
+              "max_pps": 339.9351068762025,
+              "reps": 5,
+              "success_rate": 0.9987357774968395,
+              "not_run": false
+            }
+          }
+        }
+      },
+      "ferro_scaling": {
+        "1": 3004761.7003280125,
+        "2": 5077909.134826253,
+        "4": 7333766.874772978,
+        "8": 9049465.3472973
+      },
+      "sample_sizes": {
+        "biocommons": 11571,
+        "ferro": 411193,
+        "hgvs-rs": 1795526,
+        "mutalyzer": 791
+      }
     }
   }
 }
