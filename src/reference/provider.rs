@@ -362,6 +362,10 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).has_genomic_data()
     }
 
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        (**self).genomic_placement(parent)
+    }
+
     fn get_protein_sequence(
         &self,
         accession: &str,
@@ -431,6 +435,10 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
 
     fn has_genomic_data(&self) -> bool {
         (**self).has_genomic_data()
+    }
+
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        (**self).genomic_placement(parent)
     }
 
     fn get_protein_sequence(

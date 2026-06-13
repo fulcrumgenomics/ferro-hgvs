@@ -513,9 +513,41 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Project a transcript-coordinate variant (`c.`/`n.`/`r.`) onto its parent
     /// genomic reference and return an [`HgvsVariant::Genome`].
     ///
-    /// The output uses the parent NG/NC accession stored in the input's
-    /// `Accession.genomic_context`. The function is idempotent on `Genome`
-    /// input (returned unchanged).
+    /// The output uses the parent accession stored in the input's
+    /// `Accession.genomic_context`. When that parent is an `NG_` RefSeqGene or
+    /// `LRG_` whose chromosomal placement is known (see
+    /// [`ReferenceProvider::genomic_placement`]), the coordinates are
+    /// re-anchored into the parent's own frame (#480); otherwise they remain in
+    /// the chromosome (`NC_`) frame. Idempotent on `Genome` input.
+    ///
+    /// This is the genomic-axis *output*. The internal pivot used to derive
+    /// coding/protein keeps the chromosome frame — see
+    /// [`Self::project_to_genomic_nc`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::project_to_genomic_nc`] for the full error contract
+    /// (`UnsupportedProjection` / `InvalidCoordinates` / `ReferenceNotFound`).
+    pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+        match self.project_to_genomic_nc(variant)? {
+            HgvsVariant::Genome(gv) => {
+                let reanchored = match self.provider.genomic_placement(&gv.accession) {
+                    Some(placement) => Self::reanchor_genome_to_parent(gv, &placement),
+                    None => gv,
+                };
+                Ok(HgvsVariant::Genome(reanchored))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// Project a transcript-coordinate variant onto its parent genomic reference
+    /// in the **chromosome (`NC_`) frame** — the pivot for downstream
+    /// genome→CDS/protein derivation, which cdot computes in chromosome
+    /// coordinates. The public [`Self::project_to_genomic`] wraps this and
+    /// re-anchors the *output* into an `NG_`/`LRG_` parent's own frame (#480).
+    ///
+    /// The output stamps the parent accession from `Accession.genomic_context`.
     ///
     /// # Errors
     ///
@@ -523,7 +555,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// - `p.` / `m.` / `o.` / RNA-fusion / `Allele` / `NullAllele` / `UnknownAllele`
     ///   inputs (see #328 for allele support),
     /// - transcript-coordinate inputs whose `Accession.genomic_context` is
-    ///   absent (no parent NG/NC reference),
+    ///   absent (no parent NG/NC reference) — except a bare LRG transcript,
+    ///   whose `LRG_<n>` parent is derived structurally (#480),
     /// - `?` position sentinels in the start or end coordinate.
     ///
     /// Returns [`FerroError::InvalidCoordinates`] when an endpoint is a
@@ -539,7 +572,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `Base::U` are forwarded unchanged into the g. output, producing an
     /// invalid DNA emission. Callers should pre-translate U→T before
     /// constructing the r. variant. Tracked separately.
-    pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+    fn project_to_genomic_nc(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::GenomeInterval;
         use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
@@ -803,49 +836,58 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Preserve the Mu certainty (Certain vs Uncertain).
         let g_edit_mu = edit_mu.map(|_| g_edit_inner);
 
-        // 8. Re-anchor into the parent's own frame when the parent is an
-        //    NG_/LRG_ whose chromosomal placement is known (#480). cdot
-        //    resolved the coordinates on the chromosome (`NC_`), but `parent`
-        //    is an NG_/LRG_ whose own frame differs: apply the affine
-        //    NC→parent transform, and reverse-complement the edit when the
-        //    parent runs antiparallel to the chromosome. Without a placement
-        //    (e.g. an `NC_` parent, or an `NG_` whose placement has not been
-        //    ingested) the chromosome coordinates are kept as-is — the prior
-        //    behavior — rather than failing the projection.
-        let (g_interval, g_edit_mu) = match self.provider.genomic_placement(&parent) {
-            Some(placement) => {
-                // `g_start_pos.base <= g_end_pos.base` by construction above.
-                let nc_lo = g_start_pos.base;
-                let nc_hi = g_end_pos.base;
-                match (placement.nc_to_parent(nc_lo), placement.nc_to_parent(nc_hi)) {
-                    (Some(p_a), Some(p_b)) => {
-                        // A minus-strand placement reverses coordinate order.
-                        let (p_lo, p_hi) = if p_a <= p_b { (p_a, p_b) } else { (p_b, p_a) };
-                        let parent_interval =
-                            GenomeInterval::new(GenomePos::new(p_lo), GenomePos::new(p_hi));
-                        let parent_edit_mu = if placement.strand == RefStrand::Minus {
-                            g_edit_mu
-                                .map(|inner| transform_edit_for_strand(&inner, RefStrand::Minus))
-                        } else {
-                            g_edit_mu
-                        };
-                        (parent_interval, parent_edit_mu)
-                    }
-                    // An endpoint fell outside the placed span — keep the
-                    // chromosome coordinates rather than emit an out-of-frame
-                    // position.
-                    _ => (g_interval, g_edit_mu),
-                }
-            }
-            None => (g_interval, g_edit_mu),
-        };
-
+        // This NC-frame result is the **pivot** used downstream (genome→CDS via
+        // cdot needs chromosome coordinates). The public `project_to_genomic`
+        // re-anchors it into an NG_/LRG_ parent's own frame for the genomic
+        // *output*; the pivot must stay NC (#480).
         let g_variant = GenomeVariant {
             accession: parent,
             gene_symbol,
             loc_edit: LocEdit::with_uncertainty(g_interval, g_edit_mu),
         };
         Ok(HgvsVariant::Genome(g_variant))
+    }
+
+    /// Re-anchor an NC-frame genome variant into a genomic parent's own frame
+    /// using its [`GenomicPlacement`] (#480): apply the affine NC→parent
+    /// transform to the interval, and reverse-complement the edit when the
+    /// parent runs antiparallel to the chromosome. If an endpoint falls outside
+    /// the placed span the variant is returned unchanged (chromosome frame).
+    fn reanchor_genome_to_parent(
+        gv: crate::hgvs::variant::GenomeVariant,
+        placement: &crate::reference::GenomicPlacement,
+    ) -> crate::hgvs::variant::GenomeVariant {
+        use crate::hgvs::interval::GenomeInterval;
+        use crate::hgvs::variant::GenomeVariant;
+        let bounds = match (
+            gv.loc_edit.location.start.inner(),
+            gv.loc_edit.location.end.inner(),
+        ) {
+            (Some(s), Some(e)) => Some((s.base, e.base)),
+            _ => None,
+        };
+        let Some((nc_lo, nc_hi)) = bounds else {
+            return gv;
+        };
+        let (Some(a), Some(b)) = (placement.nc_to_parent(nc_lo), placement.nc_to_parent(nc_hi))
+        else {
+            return gv;
+        };
+        // A minus-strand placement reverses coordinate order.
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let interval = GenomeInterval::new(GenomePos::new(lo), GenomePos::new(hi));
+        let edit = if placement.strand == crate::reference::Strand::Minus {
+            gv.loc_edit
+                .edit
+                .map(|inner| transform_edit_for_strand(&inner, crate::reference::Strand::Minus))
+        } else {
+            gv.loc_edit.edit
+        };
+        GenomeVariant {
+            accession: gv.accession,
+            gene_symbol: gv.gene_symbol,
+            loc_edit: LocEdit::with_uncertainty(interval, edit),
+        }
     }
 
     /// Project an already-normalized g. variant onto ALL overlapping
@@ -1414,7 +1456,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                         });
                     }
                 }
-                let g = self.project_to_genomic(normalized)?;
+                // Pivot in the chromosome (NC_) frame: genome→CDS/protein
+                // derivation below runs through cdot, which is NC-based. The
+                // re-anchored (NG_/LRG_) form is the genomic *output* only and
+                // would mis-map back through cdot (#480).
+                let g = self.project_to_genomic_nc(normalized)?;
                 match &g {
                     HgvsVariant::Genome(_) => g,
                     _ => {

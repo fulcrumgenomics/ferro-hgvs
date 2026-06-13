@@ -497,15 +497,41 @@ impl MultiFastaProvider {
             .and_then(|p| p.parent().map(Path::to_path_buf));
 
         // Parse NG_ RefSeqGene→chromosome placements from the NCBI alignment
-        // GFF3, if the manifest names one (#480). A missing/unreadable file
-        // leaves NG_ re-anchoring inert (NG_ parents keep prior behavior).
-        let refseqgene_placements = manifest
+        // GFF3, if the manifest names one (#480). Read/parse failures are warned
+        // (not silently swallowed): a named-but-unreadable file would otherwise
+        // disable NG_ re-anchoring invisibly. An absent field is fine (NG_
+        // parents keep prior behavior).
+        let refseqgene_placements = match manifest
             .get("refseqgene_alignments")
             .and_then(|v| v.as_str())
-            .map(resolve_path)
-            .and_then(|p| std::fs::read_to_string(&p).ok())
-            .map(|gff3| parse_refseqgene_alignments(&gff3))
-            .unwrap_or_default();
+        {
+            None => FxHashMap::default(),
+            Some(rel) => {
+                let path = resolve_path(rel);
+                match std::fs::read_to_string(&path) {
+                    Ok(gff3) => {
+                        let placements = parse_refseqgene_alignments(&gff3);
+                        if placements.is_empty() {
+                            warn!(
+                                "RefSeqGene alignments {} parsed to 0 placements; \
+                                 NG_ projection disabled",
+                                path.display()
+                            );
+                        }
+                        placements
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to read RefSeqGene alignments {}: {}; \
+                             NG_ projection disabled",
+                            path.display(),
+                            e
+                        );
+                        FxHashMap::default()
+                    }
+                }
+            }
+        };
 
         // Get supplemental directory (missing ClinVar transcripts)
         if let Some(supplemental) = manifest.get("supplemental_fasta").and_then(|v| v.as_str()) {
