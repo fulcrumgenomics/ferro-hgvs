@@ -4,7 +4,20 @@
   "source_commit": "cf0e5a8d1b9a2ae3e883a58826f397aa6cb52e23",
   "license": "Apache-2.0",
   "refreshed_at": "2026-06-11",
-  "clusters": [],
+  "clusters": [
+    {
+      "id": "alignment-source-skew",
+      "title": "ferro RefSeq-GFF alignment vs 2021 UTA splign snapshot",
+      "spec_section": "recommendations/general/refseq.md",
+      "note": "ferro projects on NCBI-canonical RefSeq-GFF alignments (cdot-0.2.32.refseq); the corpus expectations come from the 2021 biocommons UTA snapshot (uta_20210129, splign). Where the two alignments disagree (within-exon D/I gaps or exon-boundary off-by-1) ferro returns the expected base transcript at a different coordinate. Auto-quarantined structurally for the gate-listed transcripts only; see tests/fixtures/hgvs-rs-projection/ALIGNMENT_SOURCE_DIVERGENCE.md."
+    },
+    {
+      "id": "transcript-selection-vs-uta",
+      "title": "expected transcript absent/not-selected in ferro cdot-0.2.32.refseq vs UTA",
+      "spec_section": "recommendations/general/refseq.md",
+      "note": "ferro does not return the expected base transcript at all (selection-coverage miss): the expected accession is absent from, or not prioritized by, ferro cdot-0.2.32.refseq relative to the 2021 UTA snapshot. Auto-quarantined structurally when no returned consequence carries the expected base accession."
+    }
+  ],
   "cases": [
     {
       "keywords": [

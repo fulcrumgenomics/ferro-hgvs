@@ -190,3 +190,12 @@ therefore uses the simpler `<input>\t<ferro_output_or_error>` shape.
 | hgvs-rs-projection | `tests/fixtures/hgvs-rs-projection/` | no (fixed config) | — |
 
 Add a row when importing a new corpus.
+
+The hgvs-rs-projection corpus additionally carries a data-source provenance
+doc, `tests/fixtures/hgvs-rs-projection/ALIGNMENT_SOURCE_DIVERGENCE.md`. It
+backs the two `accepted_divergence` clusters (`alignment-source-skew`,
+`transcript-selection-vs-uta`): ferro projects on NCBI-canonical RefSeq-GFF
+alignments while the corpus expectations come from the 2021 biocommons UTA
+snapshot, and the doc records the per-transcript UTA splign CIGARs and the
+gate (ungapped → 0% divergence, gapped/boundary → 39–100%) that the structural
+quarantine in `tests/hgvs_rs_projection_tests.rs` keys off.
