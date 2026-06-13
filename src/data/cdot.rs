@@ -2462,7 +2462,7 @@ impl CdotMapper {
 
     /// Test probe: has the deferred-load attempt for `build` completed (whether it loaded or failed)?
     #[cfg(test)]
-    fn deferred_alt_loaded(&self, build: &str) -> bool {
+    pub(crate) fn deferred_alt_loaded(&self, build: &str) -> bool {
         self.lazy_alt_mappers
             .get(build)
             .is_some_and(|c| c.get().is_some())
