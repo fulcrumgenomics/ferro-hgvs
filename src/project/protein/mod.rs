@@ -15,6 +15,9 @@ mod indel;
 mod substitution;
 
 // Re-export the public API used by `projector.rs`.
-pub(crate) use helpers::{affects_initiation_codon, build_initiator_unknown, RefProteinBundle};
+pub(crate) use helpers::{
+    affects_initiation_codon, build_initiator_unknown, cds_has_valid_start, read_cds_start_codon,
+    RefProteinBundle,
+};
 pub(crate) use indel::predict_indel_protein;
 pub(crate) use substitution::predict_substitution_protein;

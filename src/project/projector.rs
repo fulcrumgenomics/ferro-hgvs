@@ -14,8 +14,8 @@ use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
-    affects_initiation_codon, build_initiator_unknown, predict_indel_protein,
-    predict_substitution_protein, RefProteinBundle,
+    affects_initiation_codon, build_initiator_unknown, cds_has_valid_start, predict_indel_protein,
+    predict_substitution_protein, read_cds_start_codon, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -1079,6 +1079,45 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if !self.provider.has_transcript_version_exact(transcript_id) {
             return Ok(None);
         }
+        // Issue #625: CDS-start sanity. Every protein prediction below trusts
+        // that `Transcript.cds_start` points at the first base of the
+        // initiation codon and translates the CDS bases directly from there.
+        // When the cdot CDS annotation is inconsistent with the transcript
+        // FASTA — cds_start lands mid-frame, not on an `ATG` (e.g.
+        // NM_000425.3 cds_start→"AGG", NM_152263.2 cds_start→"GAT") — that
+        // assumption is false: translation reads the wrong frame and would
+        // fabricate a garbage consequence (premature internal stop, Xaa,
+        // wrong anchor). Decline to predict rather than emit a bogus protein.
+        //
+        // The discriminator is the START codon only. Selenoproteins (e.g.
+        // SELENON / NM_020451.2) legitimately carry an in-frame internal `TGA`
+        // recoded as selenocysteine yet begin with `ATG`; keying on internal
+        // stops would wrongly decline them, so we never inspect them here.
+        //
+        // This is a deliberate over-approximation: a few RefSeq transcripts use
+        // experimentally-supported non-AUG initiation (CUG/GUG with a
+        // `transl_except`), whose CDS is consistent yet non-`ATG`; we decline
+        // those too rather than risk wrong-frame translation of the common
+        // inconsistent-annotation case.
+        //
+        // A failure to read the CDS (missing sequence, degenerate coords) is
+        // left to the per-edit paths below, which already treat
+        // `ProteinSequenceUnavailable` as a non-fatal "no protein" — so we
+        // only act on a CDS we could read whose start is not `ATG`. Read just
+        // the start codon (not the whole 1–10 kbp CDS) since that is all the
+        // guard inspects.
+        let tx_for_cds_check =
+            self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+        if let Ok(start_codon) = read_cds_start_codon(&tx_for_cds_check) {
+            if !cds_has_valid_start(&start_codon) {
+                log::trace!(
+                    "declining protein prediction for {transcript_id}: reference CDS does \
+                     not begin with an ATG start codon (cds_start is inconsistent with the \
+                     transcript FASTA); first codon = {start_codon:?}",
+                );
+                return Ok(None);
+            }
+        }
         // An initiation-codon-affecting edit short-circuits to `p.(Met1?)`
         // here, before edit-type dispatch, so boundary-spanning edits whose
         // 5' end is in the 5'UTR (which the per-edit paths reject via their
@@ -2097,6 +2136,152 @@ mod tests {
         assert!(!result.is_frameshift);
         assert!(!result.is_intronic);
         assert!(!result.is_utr);
+    }
+
+    // -------------------------------------------------------------------------
+    // CDS-start sanity (issue #625)
+    //
+    // When a transcript's cdot CDS coordinates are inconsistent with its FASTA
+    // (cds_start does not land on an ATG start codon), the reference CDS reads
+    // the wrong frame. ferro must DECLINE protein prediction (Ok(None)) rather
+    // than emit a fabricated consequence translated from the wrong frame.
+    // -------------------------------------------------------------------------
+
+    /// Build a single-transcript projector whose CDS sequence and length are
+    /// chosen by the caller. The whole transcript is one plus-strand exon at
+    /// genome `[1000, 1000+len)`, with `cds_start = 1` and `cds_end = len`
+    /// (1-based, full-length CDS, no UTR). The genomic sequence mirrors the
+    /// transcript so a `g.(1000+k)` SNV maps to `c.(k+1)`.
+    ///
+    /// `seq` is the transcript/CDS sequence; its first codon is what the
+    /// CDS-start sanity guard inspects.
+    #[cfg(test)]
+    fn make_custom_cds_provider_and_projector(seq: &str) -> (Projector, MockProvider) {
+        let len_u = seq.len() as u64;
+        let genome_end_excl_u = 1000_u64 + len_u; // 0-based exclusive
+
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_CUSTOM.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("CUSTOMGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                // [genome_start(0-based), genome_end(0-based excl), tx_start, tx_end]
+                exons: vec![[1000, genome_end_excl_u, 0, len_u]],
+                cds_start: Some(0),   // 0-based: CDS starts at tx_pos 0 (no 5'UTR)
+                cds_end: Some(len_u), // 0-based exclusive
+                gene_id: None,
+                protein: Some("NP_CUSTOM.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_CUSTOM.1".to_string(),
+            gene_symbol: Some("CUSTOMGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some(seq.to_string()),
+            cds_start: Some(1), // 1-based inclusive per Transcript convention
+            cds_end: Some(len_u),
+            exons: vec![Exon::new(1, 1, len_u)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(genome_end_excl_u - 1),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(1000);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{prefix}{seq}{suffix}"));
+        (projector, provider)
+    }
+
+    /// (a) RED-FIRST: a transcript whose `cds_start` lands on a non-ATG codon
+    /// ("AGG", not a start) is FASTA/CDS-inconsistent. A coding SNV must
+    /// DECLINE protein prediction (no fabricated consequence from the wrong
+    /// frame), even though c. and n. axes are still emitted.
+    #[test]
+    fn project_non_atg_start_declines_protein() {
+        // CDS "AGGGGCGCTAA": first codon AGG (Arg) is NOT a start codon.
+        // g.1003 → c.4 (4th base 'G'), a plainly coding position.
+        let (projector, provider) = make_custom_cds_provider_and_projector("AGGGGCGCTAA");
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003G>A", "NM_CUSTOM.1")
+            .expect("projection should still succeed at the c./n. level");
+
+        // c. axis must still be present (the inconsistency is CDS-only).
+        assert!(
+            result.coding.is_some(),
+            "c. axis should still be emitted for a coding SNV"
+        );
+        // Protein must be DECLINED: the CDS does not start with ATG, so any
+        // translation would be from the wrong frame.
+        assert!(
+            result.protein.is_none(),
+            "expected NO protein for a non-ATG-start (inconsistent) CDS, got: {:?}",
+            result.protein
+        );
+    }
+
+    /// (b) CONTROL: a normal ATG-start CDS predicts protein as before. This
+    /// must stay green after the guard is added.
+    #[test]
+    fn project_atg_start_predicts_protein_control() {
+        // CDS "ATGCGCTAA": Met-Arg-Ter, a valid ATG start.
+        let (projector, provider) = make_custom_cds_provider_and_projector("ATGCGCTAA");
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "NM_CUSTOM.1")
+            .expect("projection should succeed");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. should be present for a valid ATG-start CDS")
+            .to_string();
+        assert_eq!(p, "NP_CUSTOM.1:p.(Arg2Ser)");
+    }
+
+    /// (c) SELENOPROTEIN CONTROL: a valid ATG-start CDS that contains an
+    /// in-frame internal TGA (recoded as selenocysteine in real selenoproteins
+    /// such as SELENON / NM_020451.2) before the true stop. The guard MUST key
+    /// on the START codon only — an internal stop is legitimate, so protein
+    /// prediction must still succeed (NOT be declined).
+    #[test]
+    fn project_selenoprotein_internal_tga_predicts_protein() {
+        // CDS "ATGAAATGAAAATAA":
+        //   codon0 ATG (Met, start)  codon1 AAA (Lys)  codon2 TGA (internal,
+        //   Sec in vivo / Ter for the naive translator)  codon3 AAA (Lys)
+        //   codon4 TAA (true Ter).
+        // A naive translator stops at the internal TGA, but the START is a
+        // valid ATG, so the CDS-start guard must NOT decline.
+        let (projector, provider) = make_custom_cds_provider_and_projector("ATGAAATGAAAATAA");
+        let vp = VariantProjector::new(projector, provider);
+        // g.1004 → c.5: 2nd base of codon1 (AAA, Lys) — squarely coding and
+        // upstream of the internal TGA so prediction is well-defined.
+        let result = vp
+            .project("chr1:g.1004A>G", "NM_CUSTOM.1")
+            .expect("projection should succeed");
+        // Assert the concrete consequence, not just presence: codon1 AAA (Lys2)
+        // → AGA (Arg2). A regression that declined selenoproteins — or emitted a
+        // wrong-but-present protein — would slip past a bare is_some() check.
+        let p = result
+            .protein
+            .as_ref()
+            .expect(
+                "selenoprotein-style internal TGA must NOT decline protein \
+                 (guard keys on START codon, not internal stops)",
+            )
+            .to_string();
+        assert_eq!(p, "NP_CUSTOM.1:p.(Lys2Arg)");
     }
 
     #[test]
