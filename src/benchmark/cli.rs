@@ -700,6 +700,9 @@ pub enum SetupCommands {
         uta_dump: Option<PathBuf>,
         #[arg(long, action = ArgAction::SetTrue)]
         force: bool,
+        /// Seconds to wait for the UTA schema to be ready (default 300).
+        #[arg(long, default_value_t = 300)]
+        uta_ready_timeout_secs: u64,
     },
 
     /// Set up local SeqRepo repository

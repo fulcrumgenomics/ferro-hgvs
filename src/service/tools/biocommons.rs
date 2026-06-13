@@ -35,6 +35,7 @@ impl BiocommonsService {
             uta_port: extract_port_from_url(&config.uta_url)?,
             seqrepo_dir: config.seqrepo_path.clone(),
             seqrepo_instance: "2021-01-29".to_string(), // Default instance
+            ..Default::default()
         };
 
         // Validate paths exist

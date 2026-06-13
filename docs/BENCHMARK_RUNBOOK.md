@@ -26,6 +26,7 @@ Run this a few times a year when refreshing the published numbers, or when tooli
 | Requirement | Notes |
 |-------------|-------|
 | Docker | Running daemon required; used for the UTA PostgreSQL container |
+| PostgreSQL client | `psql` + `pg_isready`; `setup uta` probes the UTA database over the published host port. Install e.g. `postgresql-client` (Debian/Ubuntu), `libpq` (Homebrew), or `postgresql` (conda/pixi) |
 | pixi | Manages the Python tool environment (mutalyzer, biocommons/hgvs, hgvs-rs) |
 | Rust toolchain | `cargo build --release` for the ferro-benchmark binary |
 
@@ -96,9 +97,15 @@ pixi run ./target/release/ferro-benchmark setup uta \
   --image-tag uta_20210129b
 ```
 
-This pulls `biocommons/uta:uta_20210129b` if not already present and starts the container.
+This pulls `biocommons/uta:uta_20210129b` if not already present, starts the container, and waits (polling the host port for the `uta_20210129b` schema) until the database is ready.
 
-**Important — readiness timeout:** The setup command's built-in readiness wait sometimes times out ("Timed out waiting for UTA database to be ready") even though the database is healthy and comes up seconds later. If you see this message, do not assume the container is broken — verify independently (see next step).
+**Readiness wait.** The wait is patient and configurable via `--uta-ready-timeout-secs` (default **300**); the biocommons/uta image can take a few minutes to initialize its schema on first start, so a heartbeat reports progress while it waits. If it does time out, the error is state-specific (container exited → check `docker logs`; postgres never came up; or schema never appeared) — re-run `setup uta` (it is **idempotent**) with a larger `--uta-ready-timeout-secs` if the disk is slow.
+
+**Idempotency & re-runs.** Re-running `setup uta` is safe: a ready container is a no-op; a stopped one is started; one still initializing is waited on. If a container of the same name already exists with a **different published port or image** than requested, the command errors rather than silently using the wrong one — re-run with `--force` to recreate, or pass a matching `--uta-port` / `--uta-image-tag`.
+
+**Port collisions.** The default `--uta-port` is 5432, commonly occupied by a local Postgres. If `docker run` reports the port is already allocated, pass `--uta-port <other>`.
+
+**Offline / verification-gated dump.** `setup uta` pulls a Docker image; it never auto-downloads the dump. If the image pull is blocked, supply a local dump with `--uta-dump <path>` (see the recovery appendix). The file must be a real gzip `.pgd.gz` — a saved HTML verification page is rejected with a clear error before any Docker work.
 
 ### Step 4: Discover the UTA host port and verify reachability
 

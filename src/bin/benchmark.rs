@@ -11,7 +11,7 @@
 use clap::Parser;
 use ferro_hgvs::benchmark::{
     biocommons::{
-        check_docker_available, check_seqrepo, check_uta_connection,
+        check_seqrepo, check_uta_connection, docker_is_available,
         fetch_and_load_missing_accessions, has_biocommons_normalizer, load_biocommons_settings,
         load_sequences_to_seqrepo, run_biocommons_normalizer_parallel,
         run_biocommons_normalizer_subprocess, setup_seqrepo, setup_uta, start_uta, stop_uta,
@@ -212,11 +212,13 @@ fn main() {
                 port,
                 uta_dump,
                 force,
+                uta_ready_timeout_secs,
             } => {
                 let config = BiocommonsLocalConfig {
                     uta_container_name: container_name,
                     uta_image_tag: image_tag,
                     uta_port: port,
+                    uta_ready_timeout_secs,
                     ..Default::default()
                 };
                 match setup_uta(&config, force, uta_dump.as_deref()) {
@@ -1934,7 +1936,7 @@ fn run_prepare_tool(
 
         Tool::Biocommons | Tool::HgvsRs => {
             // Prerequisites: Docker must be available
-            if !check_docker_available() {
+            if !docker_is_available() {
                 return Err(ferro_hgvs::FerroError::Io {
                     msg: "Docker is required for biocommons/hgvs-rs setup.\n\n\
                           Install Docker: https://docs.docker.com/get-docker/"
@@ -2022,6 +2024,7 @@ fn run_prepare_tool(
                     uta_port,
                     seqrepo_dir: seqrepo.clone(),
                     seqrepo_instance: "2021-01-29".to_string(),
+                    ..Default::default()
                 };
                 setup_seqrepo(&config, force)?;
             }
@@ -3662,7 +3665,7 @@ fn run_check_tool(
 
             // Check Docker
             print!("Docker: ");
-            if check_docker_available() {
+            if docker_is_available() {
                 println!("✓ available");
             } else {
                 println!("✗ NOT available");
@@ -3842,7 +3845,7 @@ fn run_check_tool(
             println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Checking biocommons...");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            let biocommons_ok = if has_biocommons_normalizer() && check_docker_available() {
+            let biocommons_ok = if has_biocommons_normalizer() && docker_is_available() {
                 let seqrepo_check = seqrepo_path.is_some_and(|p| check_seqrepo(p));
                 let uta_check = check_uta_connection(uta_db_url);
                 seqrepo_check && uta_check
@@ -3856,7 +3859,7 @@ fn run_check_tool(
                 if !has_biocommons_normalizer() {
                     println!("  - Package not available (pip install hgvs)");
                 }
-                if !check_docker_available() {
+                if !docker_is_available() {
                     println!("  - Docker not available");
                 }
                 if seqrepo_path.is_none() {
