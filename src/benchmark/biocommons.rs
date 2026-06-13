@@ -2180,8 +2180,6 @@ pub fn run_biocommons_normalizer_parallel(
         return Ok(());
     }
 
-    let start = std::time::Instant::now();
-
     // Shard patterns across workers
     let chunk_size = patterns.len().div_ceil(num_workers);
     let chunks: Vec<Vec<String>> = patterns.chunks(chunk_size).map(|c| c.to_vec()).collect();
@@ -2192,8 +2190,9 @@ pub fn run_biocommons_normalizer_parallel(
         patterns.len()
     );
 
-    // Run subprocesses in parallel
-    let results: Vec<Result<Vec<ParseResult>, FerroError>> = chunks
+    // Run subprocesses in parallel. Each shard returns its parsed results
+    // plus the subprocess's own internal (startup-excluded) compute time.
+    let results: Vec<Result<(Vec<ParseResult>, f64), FerroError>> = chunks
         .par_iter()
         .map(|chunk| {
             // Create temp files for this shard
@@ -2265,17 +2264,26 @@ pub fn run_biocommons_normalizer_parallel(
                 .collect();
             let parsed_results = parsed_results?;
 
-            Ok(parsed_results)
+            // The Python subprocess records its own startup-excluded timer.
+            let shard_secs = output_data["elapsed_seconds"].as_f64().unwrap_or(0.0);
+
+            Ok((parsed_results, shard_secs))
         })
         .collect();
 
-    let elapsed = start.elapsed();
-
-    // Merge all results
+    // Merge all results and collect each shard's internal compute time.
     let mut all_results: Vec<ParseResult> = Vec::new();
+    let mut shard_secs: Vec<f64> = Vec::new();
     for result in results {
-        all_results.extend(result?);
+        let (parsed_results, secs) = result?;
+        all_results.extend(parsed_results);
+        shard_secs.push(secs);
     }
+
+    // Time the tool by the subprocess's own internal timer (startup-excluded),
+    // using the critical path across concurrent shards rather than Rust wall
+    // time, which would fold in interpreter startup + import (#609).
+    let internal_secs = super::compare::critical_path_secs(&shard_secs);
 
     let successful = all_results.iter().filter(|r| r.success).count();
     let failed = all_results.len() - successful;
@@ -2295,8 +2303,12 @@ pub fn run_biocommons_normalizer_parallel(
         "total_patterns": all_results.len(),
         "successful": successful,
         "failed": failed,
-        "elapsed_seconds": elapsed.as_secs_f64(),
-        "patterns_per_second": all_results.len() as f64 / elapsed.as_secs_f64(),
+        "elapsed_seconds": internal_secs,
+        "patterns_per_second": if internal_secs > 0.0 {
+            all_results.len() as f64 / internal_secs
+        } else {
+            0.0
+        },
         "error_counts": error_counts,
         "results": all_results,
     });

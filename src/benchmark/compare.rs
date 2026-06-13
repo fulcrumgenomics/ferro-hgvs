@@ -1009,12 +1009,13 @@ pub fn compare_normalize<P: AsRef<Path>>(
                     "\n[2/2] Running mutalyzer normalize ({} workers)...",
                     config.workers
                 );
-                let (results, elapsed, error_counts) = run_mutalyzer_normalize_parallel(
-                    &mutalyzer_patterns,
-                    config.workers,
-                    config.mutalyzer_settings.as_deref(),
-                    config.allow_mutalyzer_network,
-                )?;
+                let (results, elapsed, _internal_elapsed, error_counts) =
+                    run_mutalyzer_normalize_parallel(
+                        &mutalyzer_patterns,
+                        config.workers,
+                        config.mutalyzer_settings.as_deref(),
+                        config.allow_mutalyzer_network,
+                    )?;
                 eprintln!(
                     "      {} patterns in {:.2}s ({:.0} p/s)",
                     sampled.len(),
@@ -1588,6 +1589,24 @@ fn run_ferro_parse(
     (results, elapsed)
 }
 
+/// Aggregate per-shard subprocess-internal compute times into a single
+/// startup-excluded wall-time estimate.
+///
+/// Each shard's value is the Python subprocess's own `time.perf_counter()`
+/// timer (the `elapsed_seconds` it writes to its output), so it already
+/// excludes interpreter startup and import. Shards run concurrently — one
+/// subprocess per worker — so the startup-excluded wall time is the slowest
+/// shard (the critical path), never the sum of per-shard compute times. For a
+/// single shard (the cross-tool W=1 perf-matrix point) this is exactly that
+/// shard's internal time, mirroring how the parse path records timing.
+///
+/// Note: under the work-stealing pre-sharded path a worker may process several
+/// shards in sequence, so this is a lower bound on the true per-worker critical
+/// path there; it still removes the dominant per-process startup term.
+pub(crate) fn critical_path_secs(shard_secs: &[f64]) -> f64 {
+    shard_secs.iter().copied().fold(0.0, f64::max)
+}
+
 /// Run mutalyzer normalization in parallel using sharded subprocesses.
 ///
 /// Supports two modes:
@@ -1596,6 +1615,10 @@ fn run_ferro_parse(
 ///    Each worker processes one or more shards sequentially.
 /// 2. Runtime partitioning (fallback): Patterns are distributed round-robin to
 ///    workers, and each worker gets symlinks to only the sequences it needs.
+///
+/// Returns the parsed results, the Rust wall time, the subprocess-internal
+/// critical-path time (startup-excluded; see [`critical_path_secs`]), and the
+/// aggregated error counts.
 #[allow(clippy::type_complexity)]
 pub fn run_mutalyzer_normalize_parallel(
     patterns: &[String],
@@ -1605,6 +1628,7 @@ pub fn run_mutalyzer_normalize_parallel(
 ) -> Result<
     (
         Vec<ParseResult>,
+        std::time::Duration,
         std::time::Duration,
         HashMap<String, usize>,
     ),
@@ -1751,6 +1775,7 @@ pub fn run_mutalyzer_normalize_parallel(
     // Collect results and aggregate error counts
     let mut all_results = Vec::new();
     let mut aggregated_error_counts: HashMap<String, usize> = HashMap::new();
+    let mut shard_secs: Vec<f64> = Vec::new();
     for (_, output_path) in &shard_paths {
         let file = File::open(output_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to open shard output: {}", e),
@@ -1760,6 +1785,7 @@ pub fn run_mutalyzer_normalize_parallel(
             serde_json::from_reader(reader).map_err(|e| FerroError::Json {
                 msg: format!("Failed to parse shard output: {}", e),
             })?;
+        shard_secs.push(output.elapsed_seconds);
         all_results.extend(output.results);
 
         // Aggregate error counts from each shard
@@ -1768,7 +1794,17 @@ pub fn run_mutalyzer_normalize_parallel(
         }
     }
 
-    Ok((all_results, elapsed, aggregated_error_counts))
+    // The Python subprocess records its own startup-excluded compute time per
+    // shard; use the critical path across concurrent shards rather than the
+    // Rust wall time (which folds in interpreter startup + import).
+    let internal_elapsed = std::time::Duration::from_secs_f64(critical_path_secs(&shard_secs));
+
+    Ok((
+        all_results,
+        elapsed,
+        internal_elapsed,
+        aggregated_error_counts,
+    ))
 }
 
 /// Run mutalyzer normalization using pre-sharded cache with work-stealing.
@@ -1789,6 +1825,7 @@ fn run_mutalyzer_normalize_presharded(
 ) -> Result<
     (
         Vec<ParseResult>,
+        std::time::Duration,
         std::time::Duration,
         HashMap<String, usize>,
     ),
@@ -1935,6 +1972,7 @@ fn run_mutalyzer_normalize_presharded(
     // Collect results from all completed shards
     let mut all_results = Vec::new();
     let mut aggregated_error_counts: HashMap<String, usize> = HashMap::new();
+    let mut shard_secs: Vec<f64> = Vec::new();
 
     for output_path in &completed_outputs {
         let file = File::open(output_path).map_err(|e| FerroError::Io {
@@ -1945,6 +1983,7 @@ fn run_mutalyzer_normalize_presharded(
             serde_json::from_reader(reader).map_err(|e| FerroError::Json {
                 msg: format!("Failed to parse output: {}", e),
             })?;
+        shard_secs.push(output.elapsed_seconds);
         all_results.extend(output.results);
 
         for (category, count) in output.error_counts {
@@ -1952,7 +1991,17 @@ fn run_mutalyzer_normalize_presharded(
         }
     }
 
-    Ok((all_results, elapsed, aggregated_error_counts))
+    // The Python subprocess records its own startup-excluded compute time per
+    // shard; use the critical path across concurrent shards rather than the
+    // Rust wall time (which folds in interpreter startup + import).
+    let internal_elapsed = std::time::Duration::from_secs_f64(critical_path_secs(&shard_secs));
+
+    Ok((
+        all_results,
+        elapsed,
+        internal_elapsed,
+        aggregated_error_counts,
+    ))
 }
 
 /// Kill and wait on a single child process, logging any errors.
@@ -4591,6 +4640,33 @@ fn save_detailed_results<P: AsRef<Path>>(
     eprintln!("Detailed results saved to: {}", path.display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod critical_path_tests {
+    use super::*;
+
+    #[test]
+    fn no_shards_is_zero() {
+        // No subprocess ran, so there is no startup-excluded compute time.
+        assert_eq!(critical_path_secs(&[]), 0.0);
+    }
+
+    #[test]
+    fn single_shard_returns_its_own_internal_time() {
+        // The cross-tool W=1 matrix point: one subprocess, so the
+        // startup-excluded time is exactly that shard's internal timer —
+        // mirroring how the parse path reads `elapsed_seconds`.
+        assert_eq!(critical_path_secs(&[1.5]), 1.5);
+    }
+
+    #[test]
+    fn concurrent_shards_take_the_slowest_not_the_sum() {
+        // Shards run concurrently (one subprocess per worker), so the
+        // startup-excluded wall time is the critical path (the slowest shard),
+        // never the sum of per-shard compute times.
+        assert_eq!(critical_path_secs(&[0.4, 1.2, 0.9]), 1.2);
+    }
 }
 
 #[cfg(test)]
