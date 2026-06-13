@@ -574,6 +574,51 @@ fn consequence_matches(expected: &str, actual: &str) -> bool {
     }
 }
 
+/// Structural detector for the **predicted-parenthesization** improvement: is
+/// `actual` exactly `expected` with the `p.`-token wrapped in `(...)`?
+///
+/// Returns `true` iff `expected` and `actual` share the same base accession
+/// (version digit and `(GENE)` suffix forgiven, like [`consequence_matches`])
+/// and `actual`'s consequence is `expected`'s consequence with the body after
+/// the `p.` datum prefix wrapped in parentheses — e.g. `p.Arg268Trp` →
+/// `p.(Arg268Trp)`. The inner token must be byte-identical; a different inner
+/// token (`p.(Arg268Cys)`), an already-wrapped `expected`, or a base-accession
+/// mismatch all return `false`.
+///
+/// This is ferro's spec-correct form: a DNA-predicted protein consequence must
+/// be parenthesized (`docs/recommendations/protein/substitution.md` — predicted
+/// consequences are uncertain and rendered `p.(…)`). hgvs-rs emits the bare
+/// legacy form. The classifier routes these to `improvement` rather than FAIL.
+fn is_predicted_parenthesization(expected: &str, actual: &str) -> bool {
+    let (Some(expected_base), Some(actual_base)) =
+        (base_accession(expected), base_accession(actual))
+    else {
+        return false;
+    };
+    if expected_base != actual_base {
+        return false;
+    }
+    let expected_consequence = consequence_part(expected);
+    let actual_consequence = consequence_part(actual);
+    // Split each consequence into its `p.` datum prefix and the body token.
+    let (Some((expected_datum, expected_body)), Some((actual_datum, actual_body))) = (
+        expected_consequence.split_once('.'),
+        actual_consequence.split_once('.'),
+    ) else {
+        return false;
+    };
+    // The datum type (`p`) must agree; only the body wrapping may differ.
+    if expected_datum != actual_datum {
+        return false;
+    }
+    // The bare body must not already be wrapped (no wrap to add), and the
+    // wrapped body must be exactly the bare body inside one `(...)` group.
+    if expected_body.starts_with('(') {
+        return false;
+    }
+    actual_body == format!("({expected_body})")
+}
+
 /// Why a case diverges from the corpus expectation, used to route structural
 /// data-source skew into `divergence_accepted` while keeping genuine
 /// algorithm/convention deltas as FAILs.
@@ -679,6 +724,39 @@ const CLUSTER_ALIGNMENT_SOURCE_SKEW: &str = "alignment-source-skew";
 /// Cluster id for transcript selection/absence (expected base never returned).
 const CLUSTER_TRANSCRIPT_SELECTION: &str = "transcript-selection-vs-uta";
 
+/// Cluster id for the predicted-parenthesization improvement (ferro emits the
+/// spec-preferred `p.(…)` predicted form; hgvs-rs emits the bare legacy form).
+const CLUSTER_PREDICTED_PARENTHESIZATION: &str = "predicted-parenthesization";
+
+/// Detect the **predicted-parenthesization** improvement on a `(c., p.)`-pair
+/// axis: for every expected `[c, p]` pair, ferro returned a pair whose coding
+/// matches version-insensitively ([`consequence_matches`]) AND whose protein is
+/// exactly the expected protein with the predicted-consequence parentheses
+/// added ([`is_predicted_parenthesization`]).
+///
+/// When this holds, the only divergence is that ferro emits the spec-preferred
+/// parenthesized predicted form while the corpus carries the bare legacy form —
+/// a tracked `improvement`, not a FAIL. Returns `false` if any expected pair is
+/// unmatched on the coding component or differs by anything other than the
+/// protein parenthesization (so genuine coordinate/selection/form deltas still
+/// route through the normal classifier).
+fn is_predicted_parenthesization_pairs(
+    expected_pairs: &[Vec<String>],
+    returned_pairs: &[(String, String)],
+) -> bool {
+    let applicable: Vec<&Vec<String>> = expected_pairs.iter().filter(|p| p.len() == 2).collect();
+    if applicable.is_empty() {
+        return false;
+    }
+    applicable.iter().all(|pair| {
+        let want_c = &pair[0];
+        let want_p = &pair[1];
+        returned_pairs.iter().any(|(c, p)| {
+            consequence_matches(want_c, c) && is_predicted_parenthesization(want_p, p)
+        })
+    })
+}
+
 /// Version-insensitive set membership on base accession: does any rendered
 /// string in `rendered_set` share the same base accession (version digit and
 /// `(GENE)` suffix stripped) as `expected`? Used for the selection-coverage
@@ -754,7 +832,11 @@ fn axis_coding_protein_descriptions() {
 
         // Capture ferro's returned coding accessions for the selection-coverage
         // metric — keyed on the coding (c.) transcript, the projection target.
+        // `returned_pairs` carries the full (coding, protein) set so the
+        // predicted-parenthesization improvement can be detected on the protein
+        // component (which `record_classified` does not inspect).
         let mut returned_coding: Vec<String> = Vec::new();
+        let mut returned_pairs: Vec<(String, String)> = Vec::new();
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
@@ -769,6 +851,7 @@ fn axis_coding_protein_descriptions() {
                 })
                 .collect();
             returned_coding = actual_pairs.iter().map(|(c, _)| c.clone()).collect();
+            returned_pairs = actual_pairs.clone();
 
             for pair in pairs {
                 if pair.len() != 2 {
@@ -798,6 +881,22 @@ fn axis_coding_protein_descriptions() {
         {
             t.selection_hits += 1;
         }
+        // Predicted-parenthesization improvement: when the case diverges only
+        // because ferro emits the spec-preferred parenthesized predicted
+        // protein form (`p.(X)`) over the corpus's bare legacy `p.X` — with the
+        // coding component matching — route to `improvement` (cluster
+        // `predicted-parenthesization`) rather than the data-source classifier.
+        // A clean match (or stale-annotation XPASS) still goes through the
+        // normal path so the XPASS guard fires.
+        let is_match = matches!(&actual, Ok(s) if s == &expected_repr);
+        if !is_match && is_predicted_parenthesization_pairs(pairs, &returned_pairs) {
+            t.improvement.push((
+                case.input.clone(),
+                CLUSTER_PREDICTED_PARENTHESIZATION.to_string(),
+            ));
+            continue;
+        }
+
         // Classify on the coding (c.) component against ferro's returned coding
         // set — transcript selection and alignment-source skew manifest on the
         // coding coordinate; the protein is derived downstream.
@@ -1402,6 +1501,129 @@ mod comparator_tests {
         assert_eq!(position_prefix("n.51G>A"), "51");
         assert_eq!(position_prefix("c.-12del"), "-12");
         assert_eq!(position_prefix("c.5_7dup"), "5_7");
+    }
+
+    // is_predicted_parenthesization: true iff `actual` is `expected` with the
+    // `p.`-token wrapped in `(...)` — same base accession, same inner token.
+    #[test]
+    fn predicted_parenthesization_wraps_bare_protein() {
+        assert!(is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.(Arg268Trp)"
+        ));
+    }
+
+    // Version digit and `(GENE)` suffix differences on the base accession are
+    // forgiven (the corpus is version-insensitive), as long as the inner
+    // protein token is the bare → wrapped pair.
+    #[test]
+    fn predicted_parenthesization_is_version_and_gene_insensitive() {
+        assert!(is_predicted_parenthesization(
+            "NP_000673.2:p.Lys233Ile",
+            "NP_000673.2(ADRA2B):p.(Lys233Ile)"
+        ));
+    }
+
+    // A different inner protein token is NOT a parenthesization-only divergence.
+    #[test]
+    fn predicted_parenthesization_rejects_inner_token_difference() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.(Arg268Cys)"
+        ));
+    }
+
+    // Already-equal (both wrapped) adds no wrap → not a parenthesization
+    // divergence (the harness handles equality as a match/XPASS elsewhere).
+    #[test]
+    fn predicted_parenthesization_rejects_already_equal() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.(Arg268Trp)",
+            "NP_000673.2:p.(Arg268Trp)"
+        ));
+    }
+
+    // A bare→bare pair (no wrap added) is not a parenthesization divergence.
+    #[test]
+    fn predicted_parenthesization_rejects_no_wrap() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.Arg268Trp"
+        ));
+    }
+
+    // A different base accession is never a parenthesization-only divergence,
+    // even if the inner token would wrap.
+    #[test]
+    fn predicted_parenthesization_rejects_different_base() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000042.3:p.(Arg268Trp)"
+        ));
+    }
+
+    // is_predicted_parenthesization_pairs: the pairs-axis wrapper that drives
+    // the `improvement` routing in `axis_coding_protein_descriptions`. It holds
+    // iff every applicable (c., p.) pair has a returned pair whose coding
+    // matches version-insensitively AND whose protein is the bare→wrapped
+    // predicted form. A single clean matching pair → true.
+    #[test]
+    fn predicted_parenthesization_pairs_holds_for_matching_pair() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        // Coding matches version- and gene-insensitively; protein is bare→wrapped.
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        assert!(is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // A coding-component mismatch (coordinate skew on the c. position) is not a
+    // parenthesization-only divergence, even when the protein wraps cleanly.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_coding_mismatch() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_000673.5(GENE):c.999G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        assert!(!is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // An inner protein-token difference (Trp vs Cys) is a genuine delta, not a
+    // parenthesization-only divergence — false even though the coding matches.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_inner_token_difference() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Cys)".to_string(),
+        )];
+        assert!(!is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // No applicable (length-2) expected pair → false: the `applicable.is_empty()`
+    // guard must not route a pair-less or malformed case to `improvement`.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_empty_applicable() {
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        // A malformed singleton (len != 2) leaves `applicable` empty → false.
+        let malformed = vec![vec!["NM_000673.2:c.803G>A".to_string()]];
+        assert!(!is_predicted_parenthesization_pairs(&malformed, &returned));
+        // No expected pairs at all → also false.
+        assert!(!is_predicted_parenthesization_pairs(&[], &returned));
     }
 
     // The summary line carries the documented stable format including the new

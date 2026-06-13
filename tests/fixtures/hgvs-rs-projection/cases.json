@@ -16,6 +16,12 @@
       "title": "expected transcript absent/not-selected in ferro cdot-0.2.32.refseq vs UTA",
       "spec_section": "recommendations/general/refseq.md",
       "note": "ferro does not return the expected base transcript at all (selection-coverage miss): the expected accession is absent from, or not prioritized by, ferro cdot-0.2.32.refseq relative to the 2021 UTA snapshot. Auto-quarantined structurally when no returned consequence carries the expected base accession."
+    },
+    {
+      "id": "predicted-parenthesization",
+      "title": "ferro emits the spec-preferred parenthesized predicted protein form (p.(X)) vs hgvs-rs bare p.X",
+      "spec_section": "recommendations/protein/substitution.md",
+      "note": "On a (c., p.) pair where the coding component matches version-insensitively, ferro renders the DNA-predicted protein consequence parenthesized (p.(Arg268Trp)) per the HGVS predicted-consequence rule (a consequence predicted from a DNA change is uncertain and rendered p.(...); docs/recommendations/protein/substitution.md). hgvs-rs carries the bare legacy form (p.Arg268Trp). ferro is spec-correct, so these are routed structurally to `improvement` in tests/hgvs_rs_projection_tests.rs (is_predicted_parenthesization_pairs) rather than FAIL. #615-adjacent: same predicted-consequence machinery that mis-glyphs the stop-loss extension (#615) correctly parenthesizes here."
     }
   ],
   "cases": [
