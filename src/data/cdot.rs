@@ -2563,21 +2563,39 @@ impl CdotMapper {
         // Non-primary build: GRCh37/GRCh38 contig accessions are distinct, so
         // the contig itself names the owning build. Route the query into that
         // build's `alt_build_transcripts` map.
+        //
+        // The index is built lazily and includes contigs from both eagerly-loaded
+        // secondary builds (`alt_build_transcripts`) and deferred secondary builds
+        // (force-loaded from `lazy_alt_mappers` at index-build time). Transcripts
+        // for a given build may be split across both stores (the primary cdot's
+        // eager alt-build view and the deferred secondary file), so each hit
+        // accession is resolved from both stores before being dropped as missing.
         let alt_by_contig = self
             .alt_build_query_index
             .get_or_init(|| self.build_alt_build_query_index());
         let Some(stab) = alt_by_contig.get(canonical) else {
             return Vec::new();
         };
-        let Some(alt) = self.alt_build_transcripts.get(&stab.build) else {
+        let eager_alt = self.alt_build_transcripts.get(&stab.build);
+        // Resolve the deferred sub-mapper now (force-loading if needed) so we
+        // can check both stores per accession below. If neither store has data
+        // for this build the whole query returns empty.
+        let deferred_alt = self
+            .deferred_alt_mapper(&stab.build)
+            .and_then(|sub| sub.alt_build_transcripts.get(&stab.build));
+        if eager_alt.is_none() && deferred_alt.is_none() {
             return Vec::new();
-        };
+        }
         let mut hits: Vec<u32> = Vec::with_capacity(16);
         stab.index.search_stabbed(p, &mut hits);
         hits.into_iter()
             .filter_map(|idx| {
                 let acc = stab.accessions.get(idx as usize)?;
-                let tx = alt.get(acc)?;
+                // Check the eager store first; fall back to the deferred store.
+                // A transcript can only live in one of the two stores.
+                let tx = eager_alt
+                    .and_then(|m| m.get(acc))
+                    .or_else(|| deferred_alt.and_then(|m| m.get(acc)))?;
                 Some((acc.as_str(), tx))
             })
             .collect()
@@ -2683,62 +2701,124 @@ impl CdotMapper {
     }
 
     /// Construct the per-contig stab-query index for the non-primary builds,
-    /// derived from [`Self::alt_build_transcripts`]. Mirrors
-    /// [`Self::build_query_index`] but groups by `(build, contig)` so a query
-    /// on an alt-build contig can recover both the owning build and the
-    /// accession.
+    /// derived from [`Self::alt_build_transcripts`] and any deferred secondary
+    /// builds registered via [`Self::defer_secondary_build`] (which are
+    /// force-loaded here). Mirrors [`Self::build_query_index`] but groups by
+    /// `(build, contig)` so a query on an alt-build contig can recover both the
+    /// owning build and the accession.
     ///
     /// Because GRCh37 and GRCh38 contig accessions are distinct, no contig is
-    /// claimed by two builds; the per-contig map is therefore unambiguous. If
-    /// a future build did share a contig accession, the last build iterated
-    /// would win for that contig — acceptable until such a build exists.
+    /// claimed by two builds; the per-contig map is therefore unambiguous.
+    ///
+    /// **Merge semantics**: a single build (e.g. "GRCh37") can have transcripts
+    /// in *both* the eager store (`self.alt_build_transcripts`) and in a deferred
+    /// secondary mapper, potentially on the *same* contig.  The old two-pass
+    /// approach (call `index_one_build` once for eager, once for deferred) used
+    /// `HashMap::insert` which silently replaced the eager contig stab with the
+    /// deferred one, discarding all eagerly-indexed accessions.  The fix below
+    /// gathers all `(build, accession)` pairs across **both** stores first, then
+    /// builds exactly one `AltBuildContigStab` per contig from the combined,
+    /// sorted accession list.
     fn build_alt_build_query_index(&self) -> HashMap<String, AltBuildContigStab> {
-        let mut by_contig: HashMap<String, AltBuildContigStab> = HashMap::new();
-        for (build, transcripts) in &self.alt_build_transcripts {
-            // Group this build's transcripts by contig so each contig gets its
-            // own accession list + interval index.
-            let mut accessions_by_contig: HashMap<String, Vec<String>> = HashMap::new();
-            for acc in transcripts.keys() {
-                let Some(tx) = transcripts.get(acc) else {
-                    continue;
-                };
-                accessions_by_contig
-                    .entry(tx.contig.clone())
+        // Step 1 — collect (build, Vec<accession>) per contig from every source.
+        // A contig maps to exactly one build — NC_*.10 = GRCh37, NC_*.11 =
+        // GRCh38 — so first-seen wins; the debug_assert guards the invariant
+        // in test builds.
+        let mut contig_build: HashMap<String, String> = HashMap::new();
+        let mut contig_accs: HashMap<String, Vec<String>> = HashMap::new();
+
+        let mut add_transcripts = |build: &str, txs: &HashMap<String, CdotTranscript>| {
+            for (acc, tx) in txs {
+                let contig = &tx.contig;
+                let existing = contig_build
+                    .entry(contig.clone())
+                    .or_insert_with(|| build.to_string());
+                debug_assert_eq!(
+                    existing.as_str(),
+                    build,
+                    "contig {contig} claimed by two builds"
+                );
+                contig_accs
+                    .entry(contig.clone())
                     .or_default()
                     .push(acc.clone());
             }
-            for (contig, mut accessions) in accessions_by_contig {
-                // Deterministic order so the `u32` payload→accession mapping is
-                // stable across runs (HashMap key iteration is not).
-                accessions.sort();
-                let mut im: IntervalMap<u32> = IntervalMap::new();
-                for (idx, acc) in accessions.iter().enumerate() {
-                    let Some(tx) = transcripts.get(acc) else {
-                        continue;
-                    };
-                    if tx.exons.is_empty() {
-                        continue;
-                    }
-                    let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
-                    let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
-                    if max <= min {
-                        continue;
-                    }
-                    let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
-                        continue;
-                    };
-                    im.add(s, e, idx as u32);
+        };
+
+        // Eager store.
+        for (build, transcripts) in &self.alt_build_transcripts {
+            add_transcripts(build, transcripts);
+        }
+
+        // Deferred secondary builds. Collect the keys first to avoid holding a
+        // borrow on `self.lazy_alt_mappers` while calling `deferred_alt_mapper`
+        // (which also borrows `self`).
+        let deferred: Vec<String> = self.lazy_alt_mappers.keys().cloned().collect();
+        for build in &deferred {
+            if let Some(sub) = self.deferred_alt_mapper(build) {
+                if let Some(transcripts) = sub.alt_build_transcripts.get(build.as_str()) {
+                    add_transcripts(build, transcripts);
                 }
-                im.build();
-                by_contig.insert(
-                    contig,
-                    AltBuildContigStab {
-                        build: build.clone(),
-                        accessions,
-                        index: im,
-                    },
-                );
             }
+        }
+
+        // Step 2 — for every contig, sort the combined accession list and build
+        // one IntervalMap.  To resolve a transcript's exons we need to look the
+        // accession up in a transcript map.  A given accession may live in either
+        // the eager store or the deferred sub-mapper; try both.
+        let mut by_contig: HashMap<String, AltBuildContigStab> =
+            HashMap::with_capacity(contig_accs.len());
+        for (contig, mut accessions) in contig_accs {
+            // Deterministic payload→accession mapping (HashMap iteration order
+            // is random across runs; sort to stabilise the u32 index).
+            accessions.sort();
+            // An accession present in BOTH the eager alt-build view and the deferred sub-mapper
+            // would appear twice in the combined list; dedup keeps the IntervalMap
+            // payload->accession mapping 1:1.
+            accessions.dedup();
+
+            let build = contig_build
+                .get(&contig)
+                .expect("contig_build populated in same loop")
+                .as_str();
+
+            let eager_map = self.alt_build_transcripts.get(build);
+            // Resolve the deferred sub-mapper (force-loading if needed).
+            let deferred_map = self
+                .deferred_alt_mapper(build)
+                .and_then(|sub| sub.alt_build_transcripts.get(build));
+
+            let mut im: IntervalMap<u32> = IntervalMap::new();
+            for (idx, acc) in accessions.iter().enumerate() {
+                // Look up the transcript in the eager store first, then deferred.
+                let tx = eager_map
+                    .and_then(|m| m.get(acc))
+                    .or_else(|| deferred_map.and_then(|m| m.get(acc)));
+                let Some(tx) = tx else {
+                    continue;
+                };
+                if tx.exons.is_empty() {
+                    continue;
+                }
+                let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
+                let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
+                if max <= min {
+                    continue;
+                }
+                let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
+                    continue;
+                };
+                im.add(s, e, idx as u32);
+            }
+            im.build();
+            by_contig.insert(
+                contig,
+                AltBuildContigStab {
+                    build: build.to_string(),
+                    accessions,
+                    index: im,
+                },
+            );
         }
         by_contig
     }
@@ -5151,6 +5231,91 @@ mod tests {
         assert!(
             !lazy2.deferred_alt_loaded("GRCh37"),
             "an eagerly-satisfiable GRCh37 lookup must not load the deferred secondary"
+        );
+    }
+
+    #[test]
+    fn test_overlap_index_includes_deferred_grch37_contigs() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut eager = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        eager.load_secondary_build(&path, "GRCh37").unwrap();
+        let eager_hits = eager.transcripts_at_position("NC_000001.10", 150);
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+        let lazy_hits = lazy.transcripts_at_position("NC_000001.10", 150);
+
+        let mut e: Vec<&str> = eager_hits.iter().map(|(a, _)| *a).collect();
+        let mut l: Vec<&str> = lazy_hits.iter().map(|(a, _)| *a).collect();
+        e.sort();
+        l.sort();
+        assert_eq!(e, l, "deferred overlap must match eager overlap");
+        assert!(
+            lazy.deferred_alt_loaded("GRCh37"),
+            "an overlap query must force-load the deferred secondary"
+        );
+        assert!(
+            l.contains(&"NM_000001.1"),
+            "overlap result must include NM_000001.1 at position 150"
+        );
+    }
+
+    #[test]
+    fn test_overlap_merges_eager_and_deferred_same_contig() {
+        // The primary (multi_build) cdot puts NM_000088.3 on GRCh37 contig
+        // NC_000017.10 (eager alt view). A deferred GRCh37 file adds another
+        // transcript on the SAME contig. Both must appear in an overlap query —
+        // the deferred index must MERGE with, not replace, the eager contig stab.
+        //
+        // Regression: the old `index_one_build`-based approach called
+        // `HashMap::insert` per contig, so the deferred pass silently overwrote
+        // the eager stab for NC_000017.10, discarding NM_000088.3.
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_999999.1": {
+                    "gene_name": "GENE_X",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000017.10", "strand": "+", "exons": [[48263025, 48263098, 1, 0, 73, "M73"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+
+        // A position inside NM_000088.3's GRCh37 exon (NC_000017.10:48263025-48263098).
+        // NM_999999.1 has an identical exon, so both transcripts overlap pos 48263050.
+        let hits = lazy.transcripts_at_position("NC_000017.10", 48263050);
+        let mut accs: Vec<&str> = hits.iter().map(|(a, _)| *a).collect();
+        accs.sort();
+        assert!(
+            accs.contains(&"NM_000088.3"),
+            "eager GRCh37 transcript must not be dropped by the deferred merge; got: {accs:?}"
+        );
+        assert!(
+            accs.contains(&"NM_999999.1"),
+            "deferred GRCh37 transcript must be present; got: {accs:?}"
         );
     }
 }
