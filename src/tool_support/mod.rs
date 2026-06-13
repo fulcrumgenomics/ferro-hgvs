@@ -4,7 +4,7 @@
 //! and renders deterministic projections (markdown tables, website JSON). See
 //! `docs/superpowers/specs/2026-06-09-tool-support-matrix-design.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -230,7 +230,21 @@ impl Matrix {
             .find(|v| v.id == view_id)
             .ok_or_else(|| format!("unknown view {view_id}"))?;
 
-        let mut fa = FootnoteAssigner::new();
+        // Resolve the selected rows up front so footnote markers can be assigned
+        // in a stable canonical order (shared with the website) before rendering.
+        let rows: Vec<(&ViewSelect, &Row)> = view
+            .select
+            .iter()
+            .map(|sel| {
+                self.find_row(&sel.category, &sel.key)
+                    .map(|row| (sel, row))
+                    .ok_or_else(|| {
+                        format!("view {view_id} row {}/{} missing", sel.category, sel.key)
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        let used = used_footnotes(rows.iter().map(|(_, r)| *r), &self.tools);
+        let fa = FootnoteAssigner::new(self.footnotes.keys().cloned(), &used);
         let mut out = String::new();
 
         // Header row.
@@ -252,10 +266,7 @@ impl Matrix {
         out.push('\n');
 
         // Body rows.
-        for sel in &view.select {
-            let row = self.find_row(&sel.category, &sel.key).ok_or_else(|| {
-                format!("view {view_id} row {}/{} missing", sel.category, sel.key)
-            })?;
+        for (sel, row) in &rows {
             out.push_str(&format!("| {} |", sel.label));
             for t in &self.tools {
                 let cell = row.support.get(&t.id).ok_or_else(|| {
@@ -263,7 +274,7 @@ impl Matrix {
                 })?;
                 let mut g = cell.markdown_glyph().to_string();
                 if let Some(f) = &cell.footnote {
-                    g.push_str(&fa.marker(f));
+                    g.push_str(fa.marker(f));
                 }
                 out.push_str(&format!(" {g} |"));
             }
@@ -271,10 +282,10 @@ impl Matrix {
         }
 
         // Footnote legend (escaped `*` so markdown doesn't italicize).
-        let used = fa.used();
-        if !used.is_empty() {
+        let legend = fa.legend();
+        if !legend.is_empty() {
             out.push('\n');
-            for (marker, key) in used {
+            for (marker, key) in legend {
                 let text = self
                     .footnotes
                     .get(key)
@@ -305,7 +316,8 @@ impl Matrix {
             .categories
             .iter()
             .map(|cat| {
-                let mut fa = FootnoteAssigner::new();
+                let used = used_footnotes(cat.rows.iter(), &self.tools);
+                let fa = FootnoteAssigner::new(self.footnotes.keys().cloned(), &used);
                 let rows: Vec<serde_json::Value> = cat
                     .rows
                     .iter()
@@ -320,7 +332,7 @@ impl Matrix {
                                 let marker = cell
                                     .footnote
                                     .as_ref()
-                                    .map(|f| fa.marker(f))
+                                    .map(|f| fa.marker(f).to_string())
                                     .unwrap_or_default();
                                 json!({"glyph": cell.website_glyph(), "footnote": marker})
                             })
@@ -335,7 +347,7 @@ impl Matrix {
                     })
                     .collect();
                 let legend: Vec<serde_json::Value> = fa
-                    .used()
+                    .legend()
                     .into_iter()
                     .map(|(marker, key)| {
                         json!({"marker": marker, "text": self.footnotes.get(key).cloned().expect("cell cites unknown footnote; call Matrix::validate_invariants() before rendering")})
@@ -371,37 +383,60 @@ impl Matrix {
     }
 }
 
-/// Assigns `*`, `**`, `***`, … to footnote keys in first-appearance order
-/// within one rendered table.
+/// Assigns `*`, `**`, `***`, … to footnote keys in a stable **canonical** order
+/// (the matrix's sorted footnote keys) rather than per-table appearance order, so
+/// the same footnote renders with the same marker on every surface (README,
+/// BENCHMARK_GUIDE, and the website). Only keys actually used in a given table
+/// are assigned a marker, compacted in canonical order.
 struct FootnoteAssigner {
-    order: Vec<String>,
+    /// Used key -> marker, e.g. `"net" -> "*"`.
+    markers: BTreeMap<String, String>,
+    /// Used keys in marker order, for the legend.
+    ordered: Vec<String>,
 }
 
 impl FootnoteAssigner {
-    fn new() -> Self {
-        Self { order: Vec::new() }
-    }
-
-    /// Return the marker for a key, registering it on first use.
-    fn marker(&mut self, key: &str) -> String {
-        let idx = match self.order.iter().position(|k| k == key) {
-            Some(i) => i,
-            None => {
-                self.order.push(key.to_string());
-                self.order.len() - 1
+    /// Build from the canonical key order and the set of keys actually used in a
+    /// table. Markers are assigned in canonical order over the used keys.
+    fn new<I: IntoIterator<Item = String>>(canonical: I, used: &BTreeSet<String>) -> Self {
+        let mut markers = BTreeMap::new();
+        let mut ordered = Vec::new();
+        for key in canonical {
+            if used.contains(&key) && !markers.contains_key(&key) {
+                let marker = "*".repeat(ordered.len() + 1);
+                ordered.push(key.clone());
+                markers.insert(key, marker);
             }
-        };
-        "*".repeat(idx + 1)
+        }
+        Self { markers, ordered }
     }
 
-    /// Markers used so far, in assignment order, as (marker, key).
-    fn used(&self) -> Vec<(String, &str)> {
-        self.order
+    /// Marker for a key (empty string if the key isn't used in this table).
+    fn marker(&self, key: &str) -> &str {
+        self.markers.get(key).map(String::as_str).unwrap_or("")
+    }
+
+    /// `(marker, key)` pairs in canonical marker order, for the legend.
+    fn legend(&self) -> Vec<(String, &str)> {
+        self.ordered
             .iter()
-            .enumerate()
-            .map(|(i, k)| ("*".repeat(i + 1), k.as_str()))
+            .map(|k| (self.markers[k].clone(), k.as_str()))
             .collect()
     }
+}
+
+/// Collect the set of footnote keys cited by any cell in `rows` (across all
+/// `tools`). Missing rows/tools are skipped here; the render pass surfaces those.
+fn used_footnotes<'a>(rows: impl Iterator<Item = &'a Row>, tools: &[Tool]) -> BTreeSet<String> {
+    let mut used = BTreeSet::new();
+    for row in rows {
+        for t in tools {
+            if let Some(f) = row.support.get(&t.id).and_then(|c| c.footnote.as_ref()) {
+                used.insert(f.clone());
+            }
+        }
+    }
+    used
 }
 
 /// Subtract `months` from a `YYYY-MM-DD` date lexically (string comparison is
@@ -566,13 +601,14 @@ mod tests {
         // Header + alignment.
         assert!(out.contains("| Pattern Type | ferro | mutalyzer | biocommons | hgvs-rs |"));
         assert!(out.contains("|--------------|:-----:|:---------:|:----------:|:-------:|"));
-        // Intronic row: ferro ✓, mutalyzer ✓ with first footnote (*), biocommons ✗, hgvs-rs ✗.
-        assert!(out.contains("| Coding (c.) intronic | ✓ | ✓* | ✗ | ✗ |"));
-        // Protein row: mutalyzer Net with second footnote (**).
-        assert!(out.contains("| Protein (p.) | ✓ | Net** | ✗ | ✗ |"));
-        // Footnote legend, in assignment order.
-        assert!(out.contains("\\* enabled by default via genomic-context rewriting"));
-        assert!(out.contains("\\*\\* requires network access"));
+        // Markers are canonical (sorted footnote keys: `net` < `rewrite`), so
+        // `net` is always `*` and `rewrite` always `**`, regardless of row order.
+        // Intronic cites `rewrite` -> **, protein cites `net` -> *.
+        assert!(out.contains("| Coding (c.) intronic | ✓ | ✓** | ✗ | ✗ |"));
+        assert!(out.contains("| Protein (p.) | ✓ | Net* | ✗ | ✗ |"));
+        // Legend in canonical marker order: * = net, ** = rewrite.
+        assert!(out.contains("\\* requires network access"));
+        assert!(out.contains("\\*\\* enabled by default via genomic-context rewriting"));
     }
 
     #[test]
@@ -591,6 +627,37 @@ mod tests {
         assert_eq!(rows[0]["cells"][3]["glyph"], "V"); // hgvs-rs (unsupported)
                                                        // Protein: hgvs-rs errors -> V, biocommons unsupported -> V.
         assert_eq!(rows[1]["cells"][3]["glyph"], "V");
+    }
+
+    #[test]
+    fn footnote_markers_consistent_across_surfaces() {
+        // The same footnote must render with the same marker in the markdown view
+        // and the website JSON. Canonical order (`net` < `rewrite`) => net=*, rewrite=**.
+        let m = view_matrix();
+
+        let md = m
+            .render_markdown_view("normalization_capabilities")
+            .unwrap();
+        assert!(md.contains("| Protein (p.) | ✓ | Net* | ✗ | ✗ |")); // net -> *
+        assert!(md.contains("| Coding (c.) intronic | ✓ | ✓** | ✗ | ✗ |")); // rewrite -> **
+
+        let web = m.render_website_json();
+        let coord = &web["categories"][0];
+        let rows = coord["rows"].as_array().unwrap();
+        // row 0 = intronic (mutalyzer cites rewrite), row 1 = protein (mutalyzer cites net).
+        assert_eq!(rows[0]["cells"][1]["footnote"], "**"); // rewrite, same as markdown
+        assert_eq!(rows[1]["cells"][1]["footnote"], "*"); // net, same as markdown
+        let legend = coord["footnotes"].as_array().unwrap();
+        assert_eq!(legend[0]["marker"], "*");
+        assert!(legend[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("network access"));
+        assert_eq!(legend[1]["marker"], "**");
+        assert!(legend[1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("genomic-context rewriting"));
     }
 
     #[test]
