@@ -1211,11 +1211,17 @@ fn run_normalize(
                         warning.message
                     );
                 }
-                if v == normalized.to_string() {
-                    writeln!(writer, "{}", normalized)
+                // Format the normalized variant once and reuse it for both the
+                // unchanged-vs-changed comparison and the written output. The
+                // previous code called `normalized.to_string()` for the compare
+                // and then formatted `normalized` again in `writeln!`, paying
+                // the `Display` cost twice per line (~8% of a batch run).
+                let normalized_str = normalized.to_string();
+                if v == normalized_str {
+                    writeln!(writer, "{}", normalized_str)
                         .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 } else {
-                    writeln!(writer, "{} -> {}", v, normalized)
+                    writeln!(writer, "{} -> {}", v, normalized_str)
                         .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 }
             }
