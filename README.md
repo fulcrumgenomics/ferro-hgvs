@@ -224,42 +224,36 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 
 <!-- DO NOT EDIT — generated from data/benchmark/perf_results.json by `generate_perf_tables`. -->
 
-_Throughput on a stratified ClinVar sample, local/offline, same sample across tools; per-process startup excluded. See `docs/BENCHMARK_GUIDE.md` for methodology._
+_Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools draw from one stratified ClinVar population; per-tool sample sizes are calibrated so each tool is measured over a meaningful interval (fast tools see millions of patterns, slow tools hundreds). ferro/hgvs-rs exclude process startup from the timed region; mutalyzer/biocommons normalize include Python subprocess startup (<2% at this scale, see issue #609). Reference-data load is excluded for all tools. ferro full-population peak: parse 11.5M/s, normalize 72.5k/s. See `docs/BENCHMARK_RUNBOOK.md` for the full method._
 
 **Parse**
 
 <!-- BEGIN perf:parse -->
-> ⚠️ **Placeholder data — not yet measured.** These figures are illustrative pending a real benchmark run; do not cite them.
-
 | Tool | Throughput @ 1 worker | Throughput @ 8 workers | ferro speedup @ 8w |
 |------|----------------------:|-----------------------:|-------------------:|
-| ferro | 1.2M/s | 8.0M/s | — |
-| mutalyzer | 21/s | 150/s | 53,000× |
-| biocommons | 20/s | 140/s | 57,000× |
-| hgvs-rs | 2/s | 14/s | 570,000× |
+| ferro | 3.1M/s | 9.3M/s | — |
+| mutalyzer | 337/s | 336/s | 28,000× |
+| biocommons | 3.8k/s | 3.8k/s | 2,400× |
+| hgvs-rs | 3.6M/s | 3.6M/s | 3× |
 <!-- END perf:parse -->
 
 **Normalize**
 
 <!-- BEGIN perf:normalize -->
-> ⚠️ **Placeholder data — not yet measured.** These figures are illustrative pending a real benchmark run; do not cite them.
-
 | Tool | Throughput @ 1 worker | Throughput @ 8 workers | ferro speedup @ 8w |
 |------|----------------------:|-----------------------:|-------------------:|
-| ferro | 250.0k/s | 1.8M/s | — |
-| mutalyzer | 19/s | 140/s | 13,000× |
-| biocommons | — | — | — |
-| hgvs-rs | — | — | — |
+| ferro | 5.4k/s | 38.1k/s | — |
+| mutalyzer | 1/s | 3/s | 13,000× |
+| biocommons | 226/s | 206/s | 190× |
+| hgvs-rs | 144/s | 1.0k/s | 38× |
 <!-- END perf:normalize -->
 
 **ferro thread scaling**
 
 <!-- BEGIN perf:ferro_scaling -->
-> ⚠️ **Placeholder data — not yet measured.** These figures are illustrative pending a real benchmark run; do not cite them.
-
 | Threads | 1 | 2 | 4 | 8 |
 |---------|--:|--:|--:|--:|
-| ferro parse | 1.2M/s | 2.3M/s | 4.4M/s | 8.0M/s |
+| ferro parse | 3.0M/s | 5.1M/s | 7.3M/s | 9.0M/s |
 <!-- END perf:ferro_scaling -->
 
 **Input ordering matters for batch throughput.** Resolving a transcript (reading its full sequence from the reference and rebuilding its CDS/exon metadata) dominates per-variant cost. ferro memoizes resolved transcripts in a bounded in-memory cache, so repeated lookups of the same transcript are near-free. Providing variants **sorted by transcript accession — or by genomic position, which clusters variants onto the same transcripts** — maximizes the cache hit rate and can speed up large batches by an order of magnitude versus randomly-ordered input. Ordering matters most when the number of distinct transcripts in the run exceeds the cache capacity (very large or genome-wide inputs); below that, the working set stays resident regardless of order.

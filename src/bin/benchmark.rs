@@ -30,7 +30,7 @@ use ferro_hgvs::benchmark::{
     compare::{compare_normalize, compare_parse, run_mutalyzer_normalize_parallel, CompareConfig},
     extract_clinvar, extract_json,
     mutalyzer::{has_mutalyzer_normalizer, has_mutalyzer_parser, run_mutalyzer_parser_subprocess},
-    normalize_ferro, prepare_references,
+    normalize_ferro, normalize_ferro_parallel, perf_matrix, prepare_references,
     report::{generate_readme_tables, generate_report, generate_summary},
     sample::stratified_sample,
     shard::shard_dataset,
@@ -70,6 +70,8 @@ fn main() {
         },
 
         Commands::Benchmark(cmd) => match cmd {
+            BenchmarkCommands::Matrix(args) => perf_matrix::run_matrix(&args),
+
             BenchmarkCommands::Parse {
                 input,
                 output,
@@ -2668,13 +2670,13 @@ fn run_normalize_tool(
                 });
             }
 
-            println!("Normalizing patterns with ferro...");
+            println!("Normalizing patterns with ferro ({} worker(s))...", workers);
             if workers > 1 {
-                println!(
-                    "Note: Parallel ferro normalization not yet implemented, using single worker"
-                );
+                normalize_ferro_parallel(input, output, &timing_path, Some(ref_dir), workers)
+                    .map(|_| ())
+            } else {
+                normalize_ferro(input, output, &timing_path, Some(ref_dir)).map(|_| ())
             }
-            normalize_ferro(input, output, &timing_path, Some(ref_dir)).map(|_| ())
         }
 
         Tool::Mutalyzer => {

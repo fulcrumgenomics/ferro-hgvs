@@ -413,6 +413,100 @@ pub enum CompareCommands {
     },
 }
 
+/// Arguments for the `benchmark matrix` subcommand.
+#[derive(clap::Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct MatrixArgs {
+    /// Population file (one HGVS expression per line, plain text).
+    #[arg(long)]
+    pub population: PathBuf,
+
+    /// Output results JSON file.
+    #[arg(long, default_value = "data/benchmark/perf_results.json")]
+    pub output: PathBuf,
+
+    /// Manual sample size override for all (tool, op) pairs.
+    ///
+    /// When set, calibration is skipped and every tool uses this fixed N.
+    /// Useful for smoke runs. When omitted, N is calibrated per (tool, op)
+    /// using --target-seconds / --min-sample / --max-sample.
+    #[arg(long)]
+    pub sample_size: Option<usize>,
+
+    /// Target wall-time per measurement used to calibrate per-(tool,op) N.
+    ///
+    /// Ignored when --sample-size is set.
+    #[arg(long, default_value_t = 3.0)]
+    pub target_seconds: f64,
+
+    /// Minimum sample size (floor) for calibrated N.
+    ///
+    /// Ensures statistically meaningful samples even for very slow tools.
+    /// Ignored when --sample-size is set.
+    #[arg(long, default_value_t = 50)]
+    pub min_sample: usize,
+
+    /// Maximum sample size (ceiling) for calibrated N.
+    ///
+    /// Bounds memory use for very fast tools.
+    /// Ignored when --sample-size is set.
+    #[arg(long, default_value_t = 2_000_000)]
+    pub max_sample: usize,
+
+    /// Cap on the ferro full-population pass (0 = whole population).
+    #[arg(long, default_value_t = 0)]
+    pub ferro_full_n: usize,
+
+    /// Repetitions per (tool, worker-count) cell.
+    #[arg(long, default_value_t = 5)]
+    pub reps: u32,
+
+    /// Base random seed; rep r uses seed + r.
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Worker counts for the cross-tool comparison tables (comma-separated).
+    #[arg(long, value_delimiter = ',', default_value = "1,8")]
+    pub workers: Vec<usize>,
+
+    /// ferro thread-scaling counts (comma-separated).
+    #[arg(long, value_delimiter = ',', default_value = "1,2,4,8")]
+    pub ferro_threads: Vec<usize>,
+
+    /// Operations to run (comma-separated: parse, normalize).
+    #[arg(long, value_delimiter = ',', default_value = "parse,normalize")]
+    pub operations: Vec<String>,
+
+    /// ferro reference data directory (required for normalization).
+    #[arg(long)]
+    pub reference: Option<PathBuf>,
+
+    /// mutalyzer settings file (mutalyzer_settings.conf).
+    #[arg(long)]
+    pub mutalyzer_settings: Option<PathBuf>,
+
+    /// biocommons settings file (biocommons_settings.conf).
+    #[arg(long)]
+    pub biocommons_settings: Option<PathBuf>,
+
+    /// SeqRepo data directory path (biocommons / hgvs-rs).
+    #[arg(long)]
+    pub seqrepo_path: Option<PathBuf>,
+
+    /// UTA database URL including schema suffix
+    /// (e.g. postgresql://anonymous:anonymous@localhost:5432/uta/uta_20210129b).
+    #[arg(long)]
+    pub uta_db_url: Option<String>,
+
+    /// Exclude protein variants (NP_*, :p.) from samples — recommended for normalize.
+    #[arg(long, default_value_t = true)]
+    pub exclude_protein: bool,
+
+    /// Human-readable machine label recorded in provenance (e.g. "Apple M2 Max").
+    #[arg(long, default_value = "unknown")]
+    pub machine: String,
+}
+
 /// Benchmark subcommands (live sampling and comparison)
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
@@ -443,6 +537,10 @@ pub enum BenchmarkCommands {
         #[arg(long, default_value = "strict", value_parser = ["strict", "lenient", "silent"])]
         error_mode: String,
     },
+
+    /// Run the full performance matrix (tools × operations × worker counts × reps)
+    /// over a shared seeded stratified sample and write perf_results.json.
+    Matrix(MatrixArgs),
 
     /// Benchmark normalization between ferro-hgvs and an external validator
     Normalize {

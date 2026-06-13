@@ -254,6 +254,38 @@ pub fn parse_ferro_parallel<P: AsRef<Path>>(
     Ok(shard_results)
 }
 
+/// Parse a slice of HGVS patterns in parallel across `workers` threads using a
+/// dedicated Rayon thread pool, returning `(successful, failed, elapsed)`.
+///
+/// ferro parse is pure (`parse_hgvs` holds no provider state), so rayon works
+/// without any `Send`/`Sync` complexity. A sized pool is constructed on each
+/// call so that the caller controls the degree of parallelism independently of
+/// the global pool.
+pub fn parse_ferro_count_parallel(
+    patterns: &[String],
+    workers: usize,
+) -> (usize, usize, std::time::Duration) {
+    use rayon::prelude::*;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers.max(1))
+        .build()
+        .expect("rayon pool");
+    let start = std::time::Instant::now();
+    let (ok, err): (usize, usize) = pool.install(|| {
+        patterns
+            .par_iter()
+            .map(|p| {
+                if parse_hgvs(p).is_ok() {
+                    (1usize, 0usize)
+                } else {
+                    (0usize, 1usize)
+                }
+            })
+            .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
+    });
+    (ok, err, start.elapsed())
+}
+
 /// Categorize an error for analysis.
 fn categorize_error(error: &FerroError) -> String {
     match error {
@@ -340,6 +372,41 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    /// parse_ferro_count_parallel at W=1 and W=4 must produce the same
+    /// (ok, err) counts as iterating with parse_hgvs directly, regardless
+    /// of timing. Uses patterns that require no reference data (parse is pure).
+    #[test]
+    fn parse_parallel_matches_serial_counts() {
+        let patterns: Vec<String> = vec![
+            "NM_000088.3:c.589G>T".to_string(),
+            "NC_000001.11:g.12345A>G".to_string(),
+            "NM_000088.3:c.1del".to_string(),
+            "NP_000079.2:p.Gly197Arg".to_string(), // protein — valid parse
+            "not_a_valid_hgvs".to_string(),        // invalid
+            "NM_000088.3:c.badposition".to_string(), // invalid
+        ];
+
+        // Compute the ground-truth serial counts.
+        let serial_ok: usize = patterns.iter().filter(|p| parse_hgvs(p).is_ok()).count();
+        let serial_err: usize = patterns.len() - serial_ok;
+
+        for workers in [1, 4] {
+            let (ok, err, elapsed) = parse_ferro_count_parallel(&patterns, workers);
+            assert_eq!(
+                ok, serial_ok,
+                "workers={workers}: ok mismatch (got {ok}, expected {serial_ok})"
+            );
+            assert_eq!(
+                err, serial_err,
+                "workers={workers}: err mismatch (got {err}, expected {serial_err})"
+            );
+            assert!(
+                elapsed.as_nanos() > 0,
+                "workers={workers}: elapsed should be positive"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_ferro() {

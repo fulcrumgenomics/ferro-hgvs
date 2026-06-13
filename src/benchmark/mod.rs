@@ -53,6 +53,7 @@ pub mod inmemory_provider;
 pub mod mutalyzer;
 pub mod normalize;
 pub mod parse;
+pub mod perf_matrix;
 pub mod report;
 pub mod runner;
 pub mod sample;
@@ -90,7 +91,7 @@ pub use compare::{
 };
 pub use extract::{extract_clinvar, extract_json};
 pub use mutalyzer::MutalyzerClient;
-pub use normalize::{normalize_ferro, normalize_mutalyzer};
+pub use normalize::{normalize_ferro, normalize_ferro_parallel, normalize_mutalyzer};
 pub use parse::{parse_ferro, parse_ferro_unified};
 pub use runner::{load_existing_results, run_benchmark};
 // Re-export from the main prepare module (avoiding code duplication)

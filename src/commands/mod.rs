@@ -110,7 +110,7 @@ impl Default for NormalizeConfig {
 /// - Falls back to MockProvider with test data
 pub fn create_reference_provider(
     reference_dir: Option<&Path>,
-) -> Result<Box<dyn ReferenceProvider>, FerroError> {
+) -> Result<Box<dyn ReferenceProvider + Send + Sync>, FerroError> {
     match reference_dir {
         Some(ref_path) => {
             let manifest_path = ref_path.join("manifest.json");
