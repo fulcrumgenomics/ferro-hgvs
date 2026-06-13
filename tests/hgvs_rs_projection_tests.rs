@@ -296,6 +296,113 @@ impl AxisTally {
         self.fail.push((case.input.clone(), diag));
     }
 
+    /// Record a discovery-axis case with structural data-source quarantine.
+    ///
+    /// `expected_repr`/`actual` are the same display/disposition pair the
+    /// [`AxisTally::record`] path uses (for PASS/XPASS and per-case annotation
+    /// routing). `expected_entries` are the individual expected rendered
+    /// strings (one for single-value axes, several for the pair/list axes) and
+    /// `returned` is the full set of rendered strings ferro produced for this
+    /// case.
+    ///
+    /// When the case is a genuine divergence (`actual` is `Ok` but did not
+    /// match, or `Err`), every *diverging* expected entry is classified via
+    /// [`classify_divergence`] and the case is routed **structurally** — never
+    /// by a per-case annotation:
+    ///
+    /// - All diverging entries are [`Divergence::SelectionMiss`] →
+    ///   `divergence_accepted` (cluster `transcript-selection-vs-uta`).
+    /// - All diverging entries are quarantinable and at least one is a
+    ///   [`Divergence::CoordinateSkew`] on a [`SOURCE_SKEW_TRANSCRIPTS`]
+    ///   transcript → `divergence_accepted` (cluster `alignment-source-skew`).
+    /// - Otherwise (a [`Divergence::FormOnly`], or a `CoordinateSkew` on a
+    ///   transcript NOT on the gate list, or an `Err` projection failure) →
+    ///   FAIL, so genuine convention/algorithm signal and gate-list gaps are
+    ///   surfaced rather than silently accepted.
+    ///
+    /// A clean match (or a stale per-case annotation XPASS) delegates to
+    /// [`AxisTally::record`] unchanged.
+    fn record_classified(
+        &mut self,
+        case: &Case,
+        expected_repr: &str,
+        actual: Result<String, String>,
+        expected_entries: &[String],
+        returned: &[String],
+    ) {
+        // The discovery-axis closures signal a clean match by returning
+        // `Ok(expected_repr)` and a divergence by returning `Err(...)` (a
+        // missing-entry diagnostic). A clean match (or a stale-annotation
+        // XPASS) is handled by the existing buckets; anything else is a
+        // candidate for structural quarantine.
+        let is_match = matches!(&actual, Ok(s) if s == expected_repr);
+        if is_match {
+            self.record(case, expected_repr, actual);
+            return;
+        }
+
+        // A hard projection failure (parse / project / panic) is always a real
+        // FAIL — it is not a data-source divergence. The discovery-axis closures
+        // signal a value divergence with a `missing …` diagnostic; any other
+        // `Err` is a hard failure that must surface via the normal path.
+        if let Err(e) = &actual {
+            if !e.starts_with("missing ") {
+                self.record(case, expected_repr, actual);
+                return;
+            }
+        }
+
+        // Classify each expected entry that did not match against ferro's set.
+        let diverging: Vec<Divergence> = expected_entries
+            .iter()
+            .map(|e| classify_divergence(e, returned))
+            .filter(|d| *d != Divergence::Match)
+            .collect();
+
+        // Defensive: if nothing classified as diverging (shouldn't happen given
+        // `is_divergence`), fall back to the standard path.
+        if diverging.is_empty() {
+            self.record(case, expected_repr, actual);
+            return;
+        }
+
+        let all_selection_miss = diverging.iter().all(|d| *d == Divergence::SelectionMiss);
+        // A coordinate skew is quarantinable only on a gate-listed transcript.
+        let listed_coordinate_skew = |entry: &str| -> bool {
+            base_accession(entry).is_some_and(|b| SOURCE_SKEW_TRANSCRIPTS.contains(&b.as_str()))
+        };
+        let all_quarantinable = expected_entries
+            .iter()
+            .map(|e| (e, classify_divergence(e, returned)))
+            .all(|(e, d)| match d {
+                Divergence::Match | Divergence::SelectionMiss => true,
+                Divergence::CoordinateSkew => listed_coordinate_skew(e),
+                Divergence::FormOnly => false,
+            });
+        let has_listed_skew = expected_entries.iter().any(|e| {
+            classify_divergence(e, returned) == Divergence::CoordinateSkew
+                && listed_coordinate_skew(e)
+        });
+
+        if all_selection_miss {
+            self.divergence_accepted
+                .push((case.input.clone(), CLUSTER_TRANSCRIPT_SELECTION.to_string()));
+        } else if all_quarantinable && has_listed_skew {
+            self.divergence_accepted.push((
+                case.input.clone(),
+                CLUSTER_ALIGNMENT_SOURCE_SKEW.to_string(),
+            ));
+        } else {
+            // FormOnly, or CoordinateSkew on a non-listed transcript (gate gap),
+            // or a mix that isn't cleanly one source-skew category: surface it.
+            let diag = match actual {
+                Ok(got) => format!("expected={expected_repr:?} got={got:?}"),
+                Err(e) => format!("expected={expected_repr:?} err={e}"),
+            };
+            self.fail.push((case.input.clone(), diag));
+        }
+    }
+
     /// Single-line, grep-friendly summary of the tally state.
     fn summary_line(&self, report_path: &Path) -> String {
         format!(
@@ -691,7 +798,21 @@ fn axis_coding_protein_descriptions() {
         {
             t.selection_hits += 1;
         }
-        t.record(case, &expected_repr, actual);
+        // Classify on the coding (c.) component against ferro's returned coding
+        // set — transcript selection and alignment-source skew manifest on the
+        // coding coordinate; the protein is derived downstream.
+        let expected_coding: Vec<String> = pairs
+            .iter()
+            .filter(|p| p.len() == 2)
+            .map(|p| p[0].clone())
+            .collect();
+        t.record_classified(
+            case,
+            &expected_repr,
+            actual,
+            &expected_coding,
+            &returned_coding,
+        );
     }
     t.finish();
 }
@@ -782,7 +903,7 @@ fn axis_coding() {
         if set_has_base(&returned, expected) {
             t.selection_hits += 1;
         }
-        t.record(case, expected, actual);
+        t.record_classified(case, expected, actual, &[expected.to_string()], &returned);
     }
     t.finish();
 }
@@ -837,7 +958,7 @@ fn axis_noncoding() {
         {
             t.selection_hits += 1;
         }
-        t.record(case, &expected, actual);
+        t.record_classified(case, &expected, actual, expected_list, &returned);
     }
     t.finish();
 }
