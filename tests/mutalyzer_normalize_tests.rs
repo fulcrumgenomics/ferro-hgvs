@@ -106,14 +106,9 @@ fn manifest_path() -> Option<PathBuf> {
         let p = PathBuf::from(path);
         return if p.exists() { Some(p) } else { None };
     }
-    for candidate in [
-        "/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data/ferro/manifest.json",
-        "benchmark-output/manifest.json",
-    ] {
-        let p = Path::new(candidate);
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
+    let p = Path::new("benchmark-output/manifest.json");
+    if p.exists() {
+        return Some(p.to_path_buf());
     }
     None
 }
@@ -520,8 +515,8 @@ fn manifest_or_skip() {
     match manifest_path() {
         Some(p) => println!("mutalyzer-normalize: using manifest {}", p.display()),
         None => println!(
-            "mutalyzer-normalize: skipping — no manifest at FERRO_MANIFEST, \
-             /Volumes/scratch-00001/.../manifest.json, or benchmark-output/manifest.json"
+            "mutalyzer-normalize: skipping — no manifest at FERRO_MANIFEST \
+             or benchmark-output/manifest.json"
         ),
     }
 }
