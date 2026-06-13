@@ -766,7 +766,11 @@ fn axis_errors() {
     // the other axes can never reproduce mutalyzer's ESEQUENCEMISMATCH /
     // EREPEATMISMATCH rejections. Strict mode does. See #486 and the design doc.
     let cfg = NormalizeConfig::new()
-        .with_error_override(ErrorType::RefSeqMismatch, ErrorOverride::Reject);
+        .with_error_override(ErrorType::RefSeqMismatch, ErrorOverride::Reject)
+        // Position-past-end (#486 EOUTOFBOUNDARY) — same strict-mode-on-the-
+        // errors-axis rationale as RefSeqMismatch above; ferro's default is
+        // lenient warn-only. The bounds check itself is pre-existing.
+        .with_error_override(ErrorType::PositionPastEnd, ErrorOverride::Reject);
     let normalizer = Normalizer::with_config(ArcProvider(p), cfg);
 
     let mut t = AxisTally::new(Axis::Errors);
