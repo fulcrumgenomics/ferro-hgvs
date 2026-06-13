@@ -973,6 +973,7 @@ class ErrorType(IntEnum):
     DupExplicitSeq = 38
     DelExplicitSeq = 39
     NonConformantBracketCardinality = 40
+    IntronicOnBareTranscript = 43
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

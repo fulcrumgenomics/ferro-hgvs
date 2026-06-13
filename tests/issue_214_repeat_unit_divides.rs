@@ -90,6 +90,10 @@ fn is_ref_mismatch(err: &FerroError) -> bool {
     matches!(err, FerroError::ReferenceMismatch { .. })
 }
 
+fn is_eintronic(err: &FerroError) -> bool {
+    matches!(err, FerroError::IntronicVariant { .. })
+}
+
 // =============================================================================
 // SECTION 1 — g. unit_len does not divide span
 // =============================================================================
@@ -536,22 +540,35 @@ mod c_intronic_plus_strand {
         p
     }
 
-    /// Consistent intronic `AT[4]` over `c.30+1_30+8`: strict mode must
-    /// accept (no `ReferenceMismatch` rejection). The specific output
-    /// shape is determined by `normalize_repeat` and is out of scope.
+    /// Consistent intronic `AT[4]` on the spec-valid genomic-context form:
+    /// strict mode must accept (no rejection). Output shape is out of scope.
     #[test]
     fn consistent_intronic_at4_strict_accepted() {
         let provider = provider_with_intronic_at4();
-        normalize_strict(provider, "NM_INTRON.1:c.30+1_30+8AT[4]")
-            .expect("strict mode must accept consistent intronic AT[4]");
+        normalize_strict(provider, "NG_012337.1(NM_INTRON.1):c.30+1_30+8AT[4]")
+            .expect("strict mode must accept consistent intronic AT[4] on NG_(NM_)");
     }
 
-    /// `c.30+1_30+9AT[4]` — span 9 bases, unit_len 2: doesn't divide.
-    /// Must reject in strict mode.
+    /// Bare-transcript form of the same input is spec-invalid: strict mode
+    /// rejects it as EINTRONIC (#486) before any repeat validation runs.
+    #[test]
+    fn consistent_intronic_at4_bare_rejects_eintronic_strict() {
+        let provider = provider_with_intronic_at4();
+        let err = normalize_strict(provider, "NM_INTRON.1:c.30+1_30+8AT[4]")
+            .expect_err("bare-NM intronic must reject as EINTRONIC in strict mode");
+        assert!(
+            is_eintronic(&err),
+            "expected IntronicVariant, got {:?}",
+            err
+        );
+    }
+
+    /// `c.30+1_30+9AT[4]` — span 9, unit_len 2: doesn't divide. On the
+    /// genomic-context form, strict mode rejects with ReferenceMismatch.
     #[test]
     fn intronic_span_indivisible_rejected_strict() {
         let provider = provider_with_intronic_at4();
-        let err = normalize_strict(provider, "NM_INTRON.1:c.30+1_30+9AT[4]")
+        let err = normalize_strict(provider, "NG_012337.1(NM_INTRON.1):c.30+1_30+9AT[4]")
             .expect_err("intronic span-not-divisible-by-unit_len must be rejected");
         assert!(
             is_ref_mismatch(&err),
@@ -560,12 +577,12 @@ mod c_intronic_plus_strand {
         );
     }
 
-    /// `c.30+3_30+10AT[4]` — span 8 ✓ but reference at that range is
-    /// `ATATATGG`, not `ATATATAT`. Content mismatch.
+    /// `c.30+3_30+10AT[4]` — span 8 ✓ but reference is `ATATATGG`, not
+    /// `ATATATAT`. Content mismatch on the genomic-context form.
     #[test]
     fn intronic_content_mismatch_rejected_strict() {
         let provider = provider_with_intronic_at4();
-        let err = normalize_strict(provider, "NM_INTRON.1:c.30+3_30+10AT[4]")
+        let err = normalize_strict(provider, "NG_012337.1(NM_INTRON.1):c.30+3_30+10AT[4]")
             .expect_err("intronic content mismatch must be rejected");
         assert!(
             is_ref_mismatch(&err),
@@ -632,16 +649,30 @@ mod c_intronic_minus_strand {
         p
     }
 
-    /// `c.30+1_30+9AT[4]` — span 9 ≠ 4×2. Inconsistent regardless of
-    /// strand orientation. Must be rejected.
+    /// `c.30+1_30+9AT[4]` — span 9 ≠ 4×2, inconsistent regardless of strand.
+    /// On the genomic-context form, strict mode rejects with ReferenceMismatch.
     #[test]
     fn minus_strand_intronic_span_indivisible_rejected_strict() {
         let provider = provider_with_minus_intronic_at3();
-        let err = normalize_strict(provider, "NM_MINTRON.1:c.30+1_30+9AT[4]")
+        let err = normalize_strict(provider, "NG_012337.1(NM_MINTRON.1):c.30+1_30+9AT[4]")
             .expect_err("minus-strand intronic span-indivisible must be rejected");
         assert!(
             is_ref_mismatch(&err),
             "expected ReferenceMismatch, got {:?}",
+            err
+        );
+    }
+
+    /// Bare-transcript form rejects as EINTRONIC (#486) before strand-aware
+    /// repeat validation runs.
+    #[test]
+    fn minus_strand_intronic_bare_rejects_eintronic_strict() {
+        let provider = provider_with_minus_intronic_at3();
+        let err = normalize_strict(provider, "NM_MINTRON.1:c.30+1_30+9AT[4]")
+            .expect_err("bare-NM minus-strand intronic must reject as EINTRONIC");
+        assert!(
+            is_eintronic(&err),
+            "expected IntronicVariant, got {:?}",
             err
         );
     }

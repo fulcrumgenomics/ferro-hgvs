@@ -2307,6 +2307,10 @@ pub enum PyErrorType {
     // 42 is W4006 TranscriptFlankNotDescribable — pter/qter on a genomic-reference
     // c. denotes a 5'/3' transcript-flank position, not c.-numberable (#488).
     TranscriptFlankNotDescribable = 42,
+    // 43 is W4007 IntronicOnBareTranscript — an intronic offset on a bare
+    // transcript reference (NM_ c. / NR_ n., no NG_(…)/NC_(…) context); strict
+    // mode rejects, lenient warns (#486).
+    IntronicOnBareTranscript = 43,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2356,6 +2360,7 @@ impl From<ErrorType> for PyErrorType {
             }
             ErrorType::UnresolvableCentromere => PyErrorType::UnresolvableCentromere,
             ErrorType::TranscriptFlankNotDescribable => PyErrorType::TranscriptFlankNotDescribable,
+            ErrorType::IntronicOnBareTranscript => PyErrorType::IntronicOnBareTranscript,
         }
     }
 }
@@ -2407,6 +2412,7 @@ impl From<PyErrorType> for ErrorType {
             }
             PyErrorType::UnresolvableCentromere => ErrorType::UnresolvableCentromere,
             PyErrorType::TranscriptFlankNotDescribable => ErrorType::TranscriptFlankNotDescribable,
+            PyErrorType::IntronicOnBareTranscript => ErrorType::IntronicOnBareTranscript,
         }
     }
 }

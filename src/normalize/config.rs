@@ -217,6 +217,26 @@ impl NormalizeConfig {
         self.position_past_end_action().should_warn()
     }
 
+    /// Get the resolved action for `IntronicOnBareTranscript` (W4007) —
+    /// fires when an intronic offset appears on a bare transcript reference
+    /// (`NM_` c. / `NR_` n. with `genomic_context: None`). See #486 EINTRONIC.
+    pub fn intronic_bare_transcript_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::IntronicOnBareTranscript)
+    }
+
+    /// Returns true if an intronic offset on a bare transcript should be
+    /// rejected (strict mode default / errors-axis override).
+    pub fn should_reject_intronic_bare_transcript(&self) -> bool {
+        self.intronic_bare_transcript_action().should_reject()
+    }
+
+    /// Returns true if an intronic offset on a bare transcript should emit a
+    /// warning (lenient mode default; silent suppresses).
+    pub fn should_warn_intronic_bare_transcript(&self) -> bool {
+        self.intronic_bare_transcript_action().should_warn()
+    }
+
     /// Get the resolved action for `OverlapConflictingEdits` (W5002).
     pub fn overlap_conflict_action(&self) -> ResolvedAction {
         self.error_config

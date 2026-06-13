@@ -565,6 +565,80 @@ pub enum NormalizationWarning {
         /// The numeric bound (e.g. 945 if the CDS is 945 bases long).
         bound_value: u64,
     },
+
+    /// An intronic offset (`c.<N>±<M>` / `n.<N>±<M>`) appears on a bare
+    /// transcript reference (`NM_` c. / `NR_`/`XR_` n. with
+    /// `genomic_context: None`) — a spec-invalid description form. Code:
+    /// `INTRONIC_ON_BARE_TRANSCRIPT` (W4007). Strict mode (or the errors-axis
+    /// override) escalates this to `FerroError::IntronicVariant`; lenient
+    /// surfaces it and returns the existing value unchanged. See #486.
+    IntronicOnBareTranscript {
+        /// Full variant Display, e.g. `"NM_003002.2:c.274+20C>T"`.
+        variant: String,
+        /// Coordinate system: `"c"` (NM_ coding) or `"n"` (NR_/XR_ non-coding).
+        coordinate_system: String,
+    },
+}
+
+/// True iff any concrete position reachable from `boundary` is intronic —
+/// covering both a `Single` position and either endpoint of a `Range`
+/// boundary (uncertain breakpoints like `c.(100+1_101-1)_(200+1_201-1)del`).
+/// `Unknown` (`?`) and otherwise-absent inner positions contribute `false`.
+fn boundary_has_intronic<T>(
+    boundary: &crate::hgvs::interval::UncertainBoundary<T>,
+    is_intronic: impl Fn(&T) -> bool,
+) -> bool {
+    use crate::hgvs::interval::UncertainBoundary;
+    let mu_intronic = |mu: &crate::hgvs::uncertainty::Mu<T>| mu.inner().is_some_and(&is_intronic);
+    match boundary {
+        UncertainBoundary::Single(mu) => mu_intronic(mu),
+        UncertainBoundary::Range { start, end } => mu_intronic(start) || mu_intronic(end),
+    }
+}
+
+/// EINTRONIC (#486): detect an intronic offset on a **bare transcript
+/// reference** (no `NG_(…)`/`NC_(…)` genomic context). Returns the warning
+/// to emit, or `None`.
+///
+/// In scope: a bare coding transcript (`NM_`/`XM_`) used with `c.` and a bare
+/// non-coding transcript (`NR_`/`XR_`, via `is_noncoding_rna()`) used with
+/// `n.`, with `Accession.genomic_context == None`. The spec's "a (non-)coding
+/// DNA reference sequence does not contain introns" rule applies equally to
+/// curated (`NM_`/`NR_`) and predicted (`XM_`/`XR_`) transcripts, so both are
+/// covered on each axis. Out of scope: genomic-context forms
+/// (`genomic_context: Some`), `NG_`/`NC_` references (which never reach the
+/// c./n. transcript path), LRG, Ensembl `ENST`, and the r. axis. Both `Single`
+/// and `Range` (uncertain-breakpoint) position boundaries are inspected; an
+/// unknown (`?`) offset still counts as intronic (`CdsPos::is_intronic` treats
+/// the unknown-offset sentinel as intronic), which is correct — it is an
+/// intronic position whose exact offset is unspecified.
+fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<NormalizationWarning> {
+    match variant {
+        HV::Cds(v) => {
+            if !matches!(&*v.accession.prefix, "NM" | "XM") || v.accession.genomic_context.is_some()
+            {
+                return None;
+            }
+            let intronic = boundary_has_intronic(&v.loc_edit.location.start, CdsPos::is_intronic)
+                || boundary_has_intronic(&v.loc_edit.location.end, CdsPos::is_intronic);
+            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
+                variant: format!("{variant}"),
+                coordinate_system: "c".to_string(),
+            })
+        }
+        HV::Tx(v) => {
+            if !v.accession.is_noncoding_rna() || v.accession.genomic_context.is_some() {
+                return None;
+            }
+            let intronic = boundary_has_intronic(&v.loc_edit.location.start, TxPos::is_intronic)
+                || boundary_has_intronic(&v.loc_edit.location.end, TxPos::is_intronic);
+            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
+                variant: format!("{variant}"),
+                coordinate_system: "n".to_string(),
+            })
+        }
+        _ => None,
+    }
 }
 
 impl NormalizationWarning {
@@ -581,6 +655,7 @@ impl NormalizationWarning {
             Self::InitiatorMetCanonicalization { .. } => "INITIATOR_MET_CANONICALIZATION",
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
+            Self::IntronicOnBareTranscript { .. } => "INTRONIC_ON_BARE_TRANSCRIPT",
         }
     }
 
@@ -689,6 +764,24 @@ impl std::fmt::Display for NormalizationWarning {
                 f,
                 "{accession}:{coordinate_system}.{position} lies past the {bound_kind} (bound {bound_value})",
             ),
+            Self::IntronicOnBareTranscript {
+                variant,
+                coordinate_system,
+            } => {
+                // Show a parent-reference example matching the input axis: a
+                // coding `NM_` parent for c., a non-coding `NR_` parent for n.
+                let parent_example = if coordinate_system == "n" {
+                    "NG_(NR_)/NC_(NR_)"
+                } else {
+                    "NG_(NM_)/NC_(NM_)"
+                };
+                write!(
+                    f,
+                    "{variant}: intronic offset on a bare {coordinate_system}. transcript \
+                     reference; a genomic reference sequence is required (e.g. {parent_example}) \
+                     (IntronicOnBareTranscript / W4007 / EINTRONIC)",
+                )
+            }
         }
     }
 }
@@ -913,6 +1006,49 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (normalized, warnings) = self.normalize_core(variant)?;
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
+        // EINTRONIC (#486): reject an intronic offset on a bare transcript
+        // reference. The reference *form* being invalid (the spec marks
+        // `NM_:c.357+1` "not correct") is more fundamental than any
+        // offset-magnitude error, so this is checked BEFORE PositionPastEnd —
+        // a bare intronic-and-past-intron-end input rejects as EINTRONIC, not
+        // W4004. Reuses `FerroError::IntronicVariant` because only that variant
+        // carries the EINTRONIC tag in mutalyzer_map.rs (the runner
+        // substring-matches the `IntronicVariant` variant name); the
+        // capability-failure guard in normalize_intronic_cds (no genomic data)
+        // uses the same variant but is reached on a different path.
+        if self.config.should_reject_intronic_bare_transcript() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::IntronicOnBareTranscript {
+                    variant,
+                    coordinate_system,
+                } => Some(FerroError::IntronicVariant {
+                    // Embed a distinguishing clarifier in the `variant` field so
+                    // this spec-form rejection is not confused (in logs) with the
+                    // capability-failure `IntronicVariant` from
+                    // `normalize_intronic_cds` ("no genomic data"). The EINTRONIC
+                    // tag in mutalyzer_map.rs keys off the variant *name*, not this
+                    // string, so the clarifier does not affect conformance mapping.
+                    variant: {
+                        // Parent-reference example matching the input axis: a
+                        // coding `NM_` parent for c., a non-coding `NR_` for n.
+                        let parent_example = if coordinate_system == "n" {
+                            "NG_(NR_)/NC_(NR_)"
+                        } else {
+                            "NG_(NM_)/NC_(NM_)"
+                        };
+                        format!(
+                            "{variant} (intronic offset on a bare {coordinate_system}. transcript \
+                             reference; a genomic reference is required, e.g. {parent_example} — \
+                             IntronicOnBareTranscript / W4007 / EINTRONIC)"
+                        )
+                    },
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         // In strict mode, reject if there were reference mismatches.
         if self.config.should_reject_ref_mismatch() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
@@ -1091,7 +1227,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        let result = match variant {
+        // EINTRONIC (#486): an intronic offset on a bare transcript reference
+        // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
+        // description form. Detect it up front — before any per-axis
+        // short-circuit, so substitutions are covered, and once per allele
+        // member (normalize_allele recurses through normalize_core).
+        let eintronic_warning = if self.config.should_reject_intronic_bare_transcript()
+            || self.config.should_warn_intronic_bare_transcript()
+        {
+            intronic_on_bare_transcript_warning(variant)
+        } else {
+            None
+        };
+        // In reject mode, short-circuit BEFORE normalization: the form is
+        // invalid regardless of whether the intronic position would resolve,
+        // and running normalize_cds/normalize_tx first can surface an
+        // incidental ConversionError (or capability-failure IntronicVariant)
+        // instead of the EINTRONIC form error. The echoed result is discarded
+        // when `normalize()` escalates the warning to FerroError::IntronicVariant.
+        if self.config.should_reject_intronic_bare_transcript() {
+            if let Some(w) = &eintronic_warning {
+                return Ok((variant.clone(), vec![w.clone()]));
+            }
+        }
+
+        let (result, mut warnings) = match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
             // must be described with `m.` (#487). Coerce it to an `MtVariant`
             // — same accession/location/edit, only the coordinate system label
@@ -1131,7 +1291,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::NullAllele => (HV::NullAllele, vec![]),
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
         };
-        Ok(result)
+
+        // Lenient (warn-only): attach the EINTRONIC warning to the resolved
+        // output. (Reject mode already short-circuited above; if normalization
+        // errored, lenient surfaces that error as before.)
+        if let Some(w) = eintronic_warning {
+            warnings.push(w);
+        }
+
+        Ok((result, warnings))
     }
 
     /// Normalize an allele (compound) variant
@@ -9103,5 +9271,70 @@ mod tests {
             out, "NM_003002.2:c.-61del",
             "bare NM_ pter still resolves to the transcript boundary"
         );
+    }
+}
+
+#[cfg(test)]
+mod eintronic_helper_tests {
+    use super::*;
+    use crate::parse_hgvs;
+
+    #[test]
+    fn bare_nm_intronic_sub_yields_warning() {
+        let v = parse_hgvs("NM_004006.2:c.357+1G>A").unwrap();
+        let w = intronic_on_bare_transcript_warning(&v).expect("bare NM intronic must warn");
+        assert_eq!(w.code(), "INTRONIC_ON_BARE_TRANSCRIPT");
+    }
+
+    #[test]
+    fn bare_nr_intronic_del_yields_warning() {
+        let v = parse_hgvs("NR_038420.1:n.100+10del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn ng_nm_intronic_sub_no_warning() {
+        let v = parse_hgvs("NG_012337.1(NM_004006.2):c.357+1G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
+    }
+
+    #[test]
+    fn bare_nm_exonic_no_warning() {
+        let v = parse_hgvs("NM_004006.2:c.357G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
+    }
+
+    #[test]
+    fn bare_nm_minus_offset_intronic_yields_warning() {
+        // The check is offset-sign-agnostic: a `-` (3'-of-intron) offset on a
+        // bare transcript is just as spec-invalid as a `+` offset.
+        let v = parse_hgvs("NM_004006.2:c.357-1G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn bare_xm_intronic_yields_warning() {
+        // Predicted coding mRNA (XM_) has the same "no introns on a coding
+        // reference" property as NM_; the bare intronic form is spec-invalid.
+        let v = parse_hgvs("XM_011535484.2:c.357+1G>A").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn bare_nm_uncertain_breakpoint_range_yields_warning() {
+        // Uncertain-breakpoint exon deletion: both endpoints are `Range`
+        // boundaries whose inner positions are intronic. `.inner()` skips
+        // `Range`, so the boundary-aware check must inspect the endpoints.
+        let v = parse_hgvs("NM_004006.2:c.(4185+1_4186-1)_(4357+1_4358-1)del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn ng_nm_uncertain_breakpoint_range_no_warning() {
+        // Same uncertain-breakpoint form on the genomic-context reference is
+        // the spec-valid description — no warning.
+        let v =
+            parse_hgvs("NG_012337.1(NM_004006.2):c.(4185+1_4186-1)_(4357+1_4358-1)del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
     }
 }

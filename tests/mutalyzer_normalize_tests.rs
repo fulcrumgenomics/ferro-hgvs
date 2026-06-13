@@ -770,7 +770,11 @@ fn axis_errors() {
         // Position-past-end (#486 EOUTOFBOUNDARY) — same strict-mode-on-the-
         // errors-axis rationale as RefSeqMismatch above; ferro's default is
         // lenient warn-only. The bounds check itself is pre-existing.
-        .with_error_override(ErrorType::PositionPastEnd, ErrorOverride::Reject);
+        .with_error_override(ErrorType::PositionPastEnd, ErrorOverride::Reject)
+        // Intronic-on-bare-transcript (#486 EINTRONIC) — same strict-mode-on-
+        // the-errors-axis rationale: ferro's default is a lenient warn; the
+        // spec-compliant reject is asserted here. See the #486 design doc.
+        .with_error_override(ErrorType::IntronicOnBareTranscript, ErrorOverride::Reject);
     let normalizer = Normalizer::with_config(ArcProvider(p), cfg);
 
     let mut t = AxisTally::new(Axis::Errors);

@@ -360,11 +360,13 @@ fn intronic_offset_check_skips_when_genomic_coords_missing() {
 
 #[test]
 fn strict_mode_promotes_intronic_past_end_to_error() {
-    // Strict mode calls `normalize` (not `normalize_with_diagnostics`), which
-    // promotes a `PositionPastEnd` warning to `FerroError::InvalidCoordinates`.
+    // On the spec-valid genomic-context form, a past-intron-end intronic
+    // offset still promotes the W4004 PositionPastEnd warning to
+    // FerroError::InvalidCoordinates in strict mode. (The bare form now
+    // rejects earlier as EINTRONIC — see the companion test below.)
     let provider = provider_with_intronic_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
-    let variant = parse_hgvs("NM_INT.1:c.10+21del").expect("parse");
+    let variant = parse_hgvs("NG_012337.1(NM_INT.1):c.10+21del").expect("parse");
     let err = normalizer
         .normalize(&variant)
         .expect_err("strict mode must reject c.10+21del as past-intron-end");
@@ -377,6 +379,22 @@ fn strict_mode_promotes_intronic_past_end_to_error() {
         }
         other => panic!("unexpected error variant: {other:?}"),
     }
+}
+
+#[test]
+fn strict_mode_rejects_bare_intronic_as_eintronic() {
+    // The bare-transcript form is spec-invalid (#486 EINTRONIC) and rejects
+    // before the past-intron-end check runs.
+    let provider = provider_with_intronic_transcript();
+    let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
+    let variant = parse_hgvs("NM_INT.1:c.10+21del").expect("parse");
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("strict mode must reject bare-NM intronic as EINTRONIC");
+    assert!(
+        matches!(err, FerroError::IntronicVariant { .. }),
+        "expected IntronicVariant (EINTRONIC), got {err:?}",
+    );
 }
 
 // --- No-intron edge case: offset off the last exon -------------------------

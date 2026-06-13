@@ -377,7 +377,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             good_examples: &["NC_000017.11:g.12345del"],
             mode_behavior: None,
             hgvs_spec_url: None,
-            related_codes: &["E3004"],
+            related_codes: &["E3004", "W4007"],
         },
     );
 
@@ -1324,9 +1324,10 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 rejects past-end inputs; lenient mode emits W4004 and short-circuits \
                 normalize() to the canonical variant (no further shifting). Has no safe \
                 auto-correction — the user could have meant a different position or a \
-                different reference. Intronic offsets remain out of scope (their bounds \
-                depend on intron size, which requires alignment data this helper does not \
-                consult).",
+                different reference. Intronic-offset magnitude checks remain out of scope \
+                (their bounds depend on intron size, which requires alignment data this \
+                helper does not consult); bare-transcript intronic positions (where the \
+                reference form itself is invalid) are rejected by W4007 (#486).",
             category: CodeCategory::Position,
             bad_examples: &[
                 "NM_001001656.1:c.946G>C (CDS-end = 945)",
@@ -1336,7 +1337,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             good_examples: &["NM_001001656.1:c.945G>C", "NM_001001656.1:c.*1G>C"],
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
-            related_codes: &["E3001", "W3016"],
+            related_codes: &["E3001", "W3016", "W4007"],
         },
     );
 
@@ -1381,6 +1382,33 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
             related_codes: &["W4005"],
+        },
+    );
+
+    map.insert(
+        "W4007",
+        CodeInfo {
+            code: "W4007",
+            name: "IntronicOnBareTranscript",
+            summary: "Intronic offset on a bare transcript reference (no genomic context).",
+            explanation: "A coding (c.) or non-coding (n.) DNA reference sequence does not \
+                contain introns, so it cannot describe an intronic position (an offset `+M`/`-M` \
+                from a splice site). The bare forms `NM_004006.2:c.357+1G>A` and \
+                `NR_038420.1:n.100+10del` are spec-invalid (background/refseq.md): an intronic \
+                description must supply a genomic reference, e.g. `NG_012337.1(NM_004006.2):c.357+1G>A`, \
+                `NC_…(NM_…):c.357+1`, or `LRG_199t1:c.357+1`. Strict mode rejects (mapped to \
+                EINTRONIC); lenient mode emits W4007 and returns the existing value unchanged; \
+                silent accepts. Has no safe auto-correction — ferro cannot synthesize the \
+                genomic reference.",
+            category: CodeCategory::Position,
+            bad_examples: &["NM_004006.2:c.357+1G>A", "NR_038420.1:n.100+10del"],
+            good_examples: &[
+                "NG_012337.1(NM_004006.2):c.357+1G>A",
+                "LRG_199t1:c.357+1G>A",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/refseq/"),
+            related_codes: &["W4004", "E4001"],
         },
     );
 
