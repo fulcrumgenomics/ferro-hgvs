@@ -95,6 +95,19 @@ ferro's terminal #121 policy preserves the NM_(GENE) gene-symbol selector; both 
 |---|---|---|---|---|
 | `NG_012337.3(NM_003002.4):p.(Asp92Tyr)` | normalized | accepted_divergence | — | — |
 
+### Compound-allele SHUFFLE_APPLIED (#499)
+
+Spec: `recommendations/DNA (3' shifting); mutalyzer info model`
+
+ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound allele; mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Accepted divergence per #499 (precedent #481).
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | infos | accepted_divergence | — | — |
+| `NG_012337.1:g.[104_105insA;105_106insC;105del]` | infos | accepted_divergence | — | — |
+| `NG_012337.1:g.[105_106insC;105del;104_105insA]` | infos | accepted_divergence | — | — |
+| `NG_012337.1:g.[105del;104_105insA;105_106insC]` | infos | accepted_divergence | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -106,5 +119,6 @@ ferro's terminal #121 policy preserves the NM_(GENE) gene-symbol selector; both 
 
 | axis | accepted_divergence | known_bug | improvement | spec_citation |
 |---|---:|---:|---:|---:|
+| infos | 4 | 0 | 0 | 0 |
 | normalized | 1 | 0 | 24 | 2 |
 | protein_description | 0 | 0 | 0 | 19 |

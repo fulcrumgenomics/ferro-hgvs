@@ -238,6 +238,12 @@ pub enum Policy {
     /// arbitration). See PR #146 for the spec arbitration trail.
     #[serde(rename = "ferro-policy-121-gene-symbol-selector")]
     GeneSymbolSelector121,
+    /// ferro emits a per-member SHUFFLE_APPLIED for a genuine 3'-shift in a
+    /// compound allele; mutalyzer reports only the allele-level
+    /// ISORTEDVARIANTS (it sorts/collapses members; ferro preserves order).
+    /// Both are spec-defensible. Accepted divergence per #499 (precedent #481).
+    #[serde(rename = "ferro-policy-499-shuffle-applied-compound-allele")]
+    ShuffleAppliedCompoundAllele499,
 }
 
 impl Policy {
@@ -246,6 +252,9 @@ impl Policy {
     pub fn as_str(self) -> &'static str {
         match self {
             Policy::GeneSymbolSelector121 => "ferro-policy-121-gene-symbol-selector",
+            Policy::ShuffleAppliedCompoundAllele499 => {
+                "ferro-policy-499-shuffle-applied-compound-allele"
+            }
         }
     }
 }
