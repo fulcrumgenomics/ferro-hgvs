@@ -467,6 +467,111 @@ fn consequence_matches(expected: &str, actual: &str) -> bool {
     }
 }
 
+/// Why a case diverges from the corpus expectation, used to route structural
+/// data-source skew into `divergence_accepted` while keeping genuine
+/// algorithm/convention deltas as FAILs.
+///
+/// - [`Divergence::SelectionMiss`] — ferro never returned the expected base
+///   transcript accession (transcript selection/absence: ferro's cdot set vs
+///   the 2021 UTA snapshot).
+/// - [`Divergence::CoordinateSkew`] — ferro returned the expected base
+///   transcript but at a *different coordinate* (the `c.`/`n.` position prefix
+///   differs). This is the alignment-source skew (RefSeq-GFF vs UTA splign).
+/// - [`Divergence::FormOnly`] — ferro returned the expected base AND the same
+///   coordinate position, but a different *edit form* (e.g. `dup` vs `ins`).
+///   This is NOT data-source — it is a genuine convention/algorithm delta and
+///   stays a FAIL.
+/// - [`Divergence::Match`] — some actual consequence matched the expectation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Divergence {
+    SelectionMiss,
+    CoordinateSkew,
+    FormOnly,
+    Match,
+}
+
+/// Extract the *position prefix* of a `c.`/`n.` (or `p.`) consequence body: the
+/// leading coordinate token(s) before the edit operation. For a consequence
+/// body like `c.*1865G>T` this returns `*1865`; for `c.*1353+1856G>T` it
+/// returns `*1353+1856`; for an `c.10+830_10+831insG` range it returns
+/// `10+830_10+831`.
+///
+/// The position prefix is the maximal leading run of *coordinate* characters:
+/// digits, the UTR/offset sign markers `*`/`-`/`+`, and the range separator
+/// `_`. The first character that is none of those (an edit letter `A`–`Z`, a
+/// `>` substitution arrow, or an operation keyword like `del`/`ins`/`dup`)
+/// terminates the prefix. The leading datum-type letter and `.` (the `c.`/`n.`
+/// in `c.*1865`) are skipped first.
+fn position_prefix(consequence: &str) -> &str {
+    // Drop the `c.`/`n.`/`p.`/`r.`/`m.`/`g.` datum-type prefix (`<letter>.`).
+    let body = match consequence.split_once('.') {
+        Some((_datum, rest)) => rest,
+        None => consequence,
+    };
+    let end = body
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_digit() || matches!(c, '*' | '-' | '+' | '_')))
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    &body[..end]
+}
+
+/// Classify why `expected` diverges from `actual_set` (the rendered strings
+/// ferro returned for this case), for structural quarantine routing.
+///
+/// See [`Divergence`] for the meaning of each variant. The ordering is
+/// significant: `Match` short-circuits; then a missing base accession is a
+/// `SelectionMiss`; then a position-prefix difference is `CoordinateSkew`;
+/// otherwise the base + position matched and only the edit form differs, which
+/// is `FormOnly`.
+fn classify_divergence(expected: &str, actual_set: &[String]) -> Divergence {
+    if actual_set.iter().any(|a| consequence_matches(expected, a)) {
+        return Divergence::Match;
+    }
+    if !set_has_base(actual_set, expected) {
+        return Divergence::SelectionMiss;
+    }
+    // Base accession is present. Compare the position prefix of the expected
+    // consequence against every actual that shares the expected base accession.
+    let Some(want_base) = base_accession(expected) else {
+        return Divergence::SelectionMiss;
+    };
+    let want_prefix = position_prefix(consequence_part(expected));
+    let same_position = actual_set.iter().any(|a| {
+        base_accession(a).as_deref() == Some(want_base.as_str())
+            && position_prefix(consequence_part(a)) == want_prefix
+    });
+    if same_position {
+        Divergence::FormOnly
+    } else {
+        Divergence::CoordinateSkew
+    }
+}
+
+/// Base accessions where ferro's RefSeq-GFF alignment is known (per the gate;
+/// see `tests/fixtures/hgvs-rs-projection/ALIGNMENT_SOURCE_DIVERGENCE.md`) to
+/// disagree with the 2021 UTA splign snapshot the corpus expectations come
+/// from. A [`Divergence::CoordinateSkew`] on one of these is structural
+/// data-source skew and is auto-quarantined as `divergence_accepted`; a
+/// coordinate skew on any *other* transcript stays a FAIL (the gate list is
+/// incomplete — surface it, don't silently accept).
+const SOURCE_SKEW_TRANSCRIPTS: &[&str] = &[
+    "NM_001080519",
+    "NM_001077527",
+    "NM_000804",
+    "NM_000682",
+    "NM_003777",
+    "NM_006158",
+    "NM_001277115",
+];
+
+/// Cluster id for the alignment-source skew (coordinate differs, base matches,
+/// transcript is on the gate list).
+const CLUSTER_ALIGNMENT_SOURCE_SKEW: &str = "alignment-source-skew";
+
+/// Cluster id for transcript selection/absence (expected base never returned).
+const CLUSTER_TRANSCRIPT_SELECTION: &str = "transcript-selection-vs-uta";
+
 /// Version-insensitive set membership on base accession: does any rendered
 /// string in `rendered_set` share the same base accession (version digit and
 /// `(GENE)` suffix stripped) as `expected`? Used for the selection-coverage
@@ -1116,6 +1221,66 @@ mod comparator_tests {
         assert!(!set_has_base(&returned, "NR_111984.1:n.44G>A"));
         // Empty set → miss.
         assert!(!set_has_base(&[], "NM_000682.5:c.5A>T"));
+    }
+
+    // classify_divergence: a selection miss — the expected NR_ base accession
+    // is absent from ferro's set (ferro returned a different transcript).
+    #[test]
+    fn classify_selection_miss() {
+        assert!(matches!(
+            classify_divergence(
+                "NR_111984.1:n.44G>A",
+                &["NM_001103170.2(AADACL3):n.51G>A".into()]
+            ),
+            Divergence::SelectionMiss
+        ));
+    }
+
+    // classify_divergence: coordinate skew — same base accession, different
+    // position prefix (`*1865` vs `*1353+1856`).
+    #[test]
+    fn classify_coordinate_skew() {
+        assert!(matches!(
+            classify_divergence(
+                "NM_000682.5:c.*1865G>T",
+                &["NM_000682.7(ADRA2B):c.*1353+1856G>T".into()]
+            ),
+            Divergence::CoordinateSkew
+        ));
+    }
+
+    // classify_divergence: form-only — same base, same position prefix, the
+    // edit form differs (`insG` over a range vs `dup`). NOT data-source.
+    #[test]
+    fn classify_form_only() {
+        assert!(matches!(
+            classify_divergence(
+                "NM_X.1:c.10+830_10+831insG",
+                &["NM_X.2(G):c.10+830_10+831dup".into()]
+            ),
+            Divergence::FormOnly
+        ));
+    }
+
+    // classify_divergence: a match short-circuits to `Match`.
+    #[test]
+    fn classify_match() {
+        assert!(matches!(
+            classify_divergence("NM_X.1:c.5A>T", &["NM_X.2(G):c.5A>T".into()]),
+            Divergence::Match
+        ));
+    }
+
+    // position_prefix extracts the leading coordinate token before the edit,
+    // handling `*` UTR, `+`/`-` intronic offsets, and `_` ranges.
+    #[test]
+    fn position_prefix_handles_utr_offset_and_range() {
+        assert_eq!(position_prefix("c.*1865G>T"), "*1865");
+        assert_eq!(position_prefix("c.*1353+1856G>T"), "*1353+1856");
+        assert_eq!(position_prefix("c.10+830_10+831insG"), "10+830_10+831");
+        assert_eq!(position_prefix("n.51G>A"), "51");
+        assert_eq!(position_prefix("c.-12del"), "-12");
+        assert_eq!(position_prefix("c.5_7dup"), "5_7");
     }
 
     // The summary line carries the documented stable format including the new
