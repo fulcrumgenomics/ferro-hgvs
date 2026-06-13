@@ -1658,16 +1658,18 @@ mod comparator_tests {
 }
 
 // ----------------------------------------------------------------------------
-// Hermetic #615 stop-loss reproducer (characterization — no manifest, no corpus)
+// Hermetic #615 stop-loss extension regression guards (no manifest, no corpus)
 // ----------------------------------------------------------------------------
 //
-// The 4 `stoploss-xaa` rows in cases.json are dispositioned as known_bug #615
-// against the corpus manifest. This module pins the *same symptom* hermetically:
-// a hand-built `MockProvider` transcript (CDS ending in a stop codon + a 3'UTR)
-// plus a single-base deletion that disrupts the terminator codon, projected
-// through the real `VariantProjector`. It asserts ferro CURRENTLY emits a
-// `p.(Xaa…)` placeholder consequence — the #615 bug — independent of the
-// manifest, so the fix has a clear target and this test flips when it lands.
+// The 4 ex-`stoploss-xaa` rows in cases.json (now folded into the
+// `extter-vs-legacy-glyph` improvement cluster) exercise the same stop-loss path
+// against the corpus manifest. This module pins the behavior hermetically: a
+// hand-built `MockProvider` transcript (CDS ending in a stop codon + a 3'UTR)
+// plus a single-base indel that disrupts the terminator codon, projected through
+// the real `VariantProjector`. #615 is fixed (PR #621 routes stop-disrupting
+// indels to a C-terminal extension), so these assert ferro now emits the spec
+// `p.(Ter…ext…)` extension — not the old `p.(Xaa…)` placeholder — independent of
+// the manifest.
 #[cfg(test)]
 mod stoploss_615_reproducer {
     use super::*;
@@ -1726,38 +1728,38 @@ mod stoploss_615_reproducer {
             .unwrap_or_else(|| panic!("no protein predicted for `{input}`"))
     }
 
-    // KNOWN BUG #615: a deletion that disrupts the terminator codon should be a
-    // C-terminal stop-loss extension (`p.Ter…<aa>ext*…`), but ferro currently
-    // emits a `p.(Xaa…)` placeholder (unknown amino acid). Remove/flip this
-    // assertion when #615 is fixed — at that point the corpus known_bug #615
-    // rows will also XPASS and demand removal.
+    // #615 FIXED (PR #621): a deletion that disrupts the terminator codon is now
+    // rendered as a C-terminal stop-loss extension (`p.(Ter…ext…)`), not the old
+    // `p.(Xaa…)` placeholder. Regression guard for the fix.
     #[test]
-    fn stoploss_deletion_in_terminator_emits_xaa_placeholder() {
+    fn stoploss_deletion_in_terminator_emits_extension() {
         // c.11delA deletes the middle base of the `TAA` terminator (c.10..12),
-        // a stop-loss. Spec-correct would be a `p.Ter4…ext*…` extension.
+        // a stop-loss → spec C-terminal extension.
         let got = project_protein("NM_700000.1:c.11delA");
         assert_eq!(
-            got, "NP_700000.1:p.(Xaa4Ter)",
-            "KNOWN BUG #615: stop-loss deletion should yield a Ter…ext* extension, \
-             not an Xaa placeholder; got {got}"
+            got, "NP_700000.1:p.(Ter4extTer0)",
+            "#615 fixed: stop-loss deletion should yield a Ter…ext extension; got {got}"
         );
         assert!(
-            got.contains("Xaa"),
-            "KNOWN BUG #615 characterization expects an Xaa placeholder; got {got}"
+            got.contains("ext") && !got.contains("Xaa"),
+            "#615 fixed: expected a spec extension, not an Xaa placeholder; got {got}"
         );
     }
 
-    // KNOWN BUG #615 (duplication variant): a single-base duplication that
-    // frameshifts through the terminator likewise yields an `Xaa` placeholder
-    // rather than the spec stop-loss extension. Mirrors the corpus `dup` rows
-    // (e.g. NM_000425.3:c.3772dupT). Remove/flip when #615 is fixed.
+    // #615 FIXED (PR #621, duplication variant): a single-base duplication that
+    // frameshifts through the terminator is now rendered as the spec C-terminal
+    // extension, not an `Xaa` placeholder. Mirrors the corpus `dup` rows (e.g.
+    // NM_000425.3:c.3772dupT, now an extter-vs-legacy-glyph improvement).
     #[test]
-    fn stoploss_duplication_through_terminator_emits_xaa_placeholder() {
+    fn stoploss_duplication_through_terminator_emits_extension() {
         let got = project_protein("NM_700000.1:c.9dupA");
+        assert_eq!(
+            got, "NP_700000.1:p.(Ter4IleextTer?)",
+            "#615 fixed: stop-disrupting dup should yield a Ter…ext extension; got {got}"
+        );
         assert!(
-            got.contains("Xaa"),
-            "KNOWN BUG #615: stop-disrupting dup should yield a Ter…ext* extension, \
-             not an Xaa placeholder; got {got}"
+            got.contains("ext") && !got.contains("Xaa"),
+            "#615 fixed: expected a spec extension, not an Xaa placeholder; got {got}"
         );
     }
 

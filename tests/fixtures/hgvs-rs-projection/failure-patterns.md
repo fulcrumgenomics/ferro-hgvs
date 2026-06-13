@@ -22,7 +22,41 @@ ferro does not return the expected base transcript at all (selection-coverage mi
 
 _No seeded member rows yet (manifest-gated seeding, #325)._
 
+### ferro emits the spec-preferred parenthesized predicted protein form (p.(X)) vs hgvs-rs bare p.X
+
+Spec: `recommendations/protein/substitution.md`
+
+On a (c., p.) pair where the coding component matches version-insensitively, ferro renders the DNA-predicted protein consequence parenthesized (p.(Arg268Trp)) per the HGVS predicted-consequence rule (a consequence predicted from a DNA change is uncertain and rendered p.(...); docs/recommendations/protein/substitution.md). hgvs-rs carries the bare legacy form (p.Arg268Trp). ferro is spec-correct, so these are routed structurally to `improvement` in tests/hgvs_rs_projection_tests.rs (is_predicted_parenthesization_pairs) rather than FAIL. #615-related: the same predicted-consequence machinery now renders the C-terminal stop-loss extension correctly after the #615 fix (PR #621).
+
+_No seeded member rows yet (manifest-gated seeding, #325)._
+
+### ferro emits the spec-preferred three-letter extension glyph (extTer) vs hgvs-rs legacy ext*
+
+Spec: `background/standards.md`
+
+For a C-terminal stop-loss extension, ferro canonicalizes to the three-letter form p.(...extTer<n>) (#224); the corpus carries the legacy single-character p.(...ext*<n>). Three-letter codes (including Ter) are the preferred canonical form, with `*` an accepted alternative (background/standards.md). Both are valid HGVS, so these rows are dispositioned per-case as `improvement` (#224), XPASS-guarded.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NM_000051.3:c.9170_9171delGA` | protein_description | improvement | — | #224 |
+| `NM_000249.3:c.2266_2269dupTGTT` | protein_description | improvement | — | #224 |
+| `NM_000249.3:c.2269dupT` | protein_description | improvement | — | #224 |
+| `NM_000425.3:c.3772dupT` | protein_description | improvement | — | #224 |
+| `NM_000488.3:c.1391dupA` | protein_description | improvement | — | #224 |
+| `NM_152263.2:c.855delA` | protein_description | improvement | — | #224 |
+
+### whole-CDS-deletion protein form: corpus p.0? vs ferro p.(Met1?)
+
+Spec: `recommendations/protein/deletion.md`
+
+For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced) while ferro emits p.(Met1?) (uncertain start-loss). Both are spec-allowed predicted forms for a variant removing the start codon; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1), not a bug; p.0? is arguably preferable as a future refinement.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NM_000249.3:c.-7_*46del` | protein_description | accepted_divergence | — | — |
+
 ## Disposition tallies
 
 | axis | accepted_divergence | known_bug | improvement | spec_citation |
 |---|---:|---:|---:|---:|
+| protein_description | 1 | 0 | 6 | 0 |

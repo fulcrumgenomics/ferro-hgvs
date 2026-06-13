@@ -21,19 +21,13 @@
       "id": "predicted-parenthesization",
       "title": "ferro emits the spec-preferred parenthesized predicted protein form (p.(X)) vs hgvs-rs bare p.X",
       "spec_section": "recommendations/protein/substitution.md",
-      "note": "On a (c., p.) pair where the coding component matches version-insensitively, ferro renders the DNA-predicted protein consequence parenthesized (p.(Arg268Trp)) per the HGVS predicted-consequence rule (a consequence predicted from a DNA change is uncertain and rendered p.(...); docs/recommendations/protein/substitution.md). hgvs-rs carries the bare legacy form (p.Arg268Trp). ferro is spec-correct, so these are routed structurally to `improvement` in tests/hgvs_rs_projection_tests.rs (is_predicted_parenthesization_pairs) rather than FAIL. #615-adjacent: same predicted-consequence machinery that mis-glyphs the stop-loss extension (#615) correctly parenthesizes here."
+      "note": "On a (c., p.) pair where the coding component matches version-insensitively, ferro renders the DNA-predicted protein consequence parenthesized (p.(Arg268Trp)) per the HGVS predicted-consequence rule (a consequence predicted from a DNA change is uncertain and rendered p.(...); docs/recommendations/protein/substitution.md). hgvs-rs carries the bare legacy form (p.Arg268Trp). ferro is spec-correct, so these are routed structurally to `improvement` in tests/hgvs_rs_projection_tests.rs (is_predicted_parenthesization_pairs) rather than FAIL. #615-related: the same predicted-consequence machinery now renders the C-terminal stop-loss extension correctly after the #615 fix (PR #621)."
     },
     {
       "id": "extter-vs-legacy-glyph",
       "title": "ferro emits the spec-preferred three-letter extension glyph (extTer) vs hgvs-rs legacy ext*",
       "spec_section": "background/standards.md",
       "note": "For a C-terminal stop-loss extension, ferro canonicalizes to the three-letter form p.(...extTer<n>) (#224); the corpus carries the legacy single-character p.(...ext*<n>). Three-letter codes (including Ter) are the preferred canonical form, with `*` an accepted alternative (background/standards.md). Both are valid HGVS, so these rows are dispositioned per-case as `improvement` (#224), XPASS-guarded."
-    },
-    {
-      "id": "stoploss-xaa",
-      "title": "ferro stop-loss bug: emits p.(Xaa...) placeholder instead of the spec ext extension",
-      "spec_section": "recommendations/protein/extension.md",
-      "note": "For a variant that disrupts the terminator codon (a stop-loss), ferro currently emits a p.(Xaa...) consequence — an `Xaa` (unknown amino acid) placeholder, sometimes with a spurious frameshift — instead of the spec C-terminal extension p.Ter<n><aa>ext*<m>. This is a genuine ferro bug tracked by #615 (see the hermetic reproducer stoploss_xaa_known_bug_615 in tests/hgvs_rs_projection_tests.rs). Dispositioned per-case as `known_bug` #615, XPASS-guarded: these rows fail loudly when #615 is fixed, prompting their removal."
     },
     {
       "id": "wholeCDSdel-form",
@@ -9869,11 +9863,12 @@
       "to_test": true,
       "input": "NM_000051.3:c.9170_9171delGA",
       "protein_description": "NP_000042.3:p.Ter3057Pheext*4",
-      "known_bug": {
+      "improvement": {
         "axis": "protein_description",
-        "tracking_issue": 615,
-        "cluster": "stoploss-xaa",
-        "note": "stop-loss bug: ferro emits NP_000042.3:p.(Xaa3057fsTer5) — an `Xaa` (unknown amino acid) placeholder with a spurious frameshift — instead of the spec stop-loss extension NP_000042.3:p.Ter3057Pheext*4. Tracked by #615; XPASS-guarded (this row flips when #615 lands)."
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000042.3:p.Ter3057Pheext*4. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
       }
     },
     {
@@ -9931,11 +9926,12 @@
       "to_test": true,
       "input": "NM_000425.3:c.3772dupT",
       "protein_description": "NP_000416.1:p.Ter1258Leuext*96",
-      "known_bug": {
+      "improvement": {
         "axis": "protein_description",
-        "tracking_issue": 615,
-        "cluster": "stoploss-xaa",
-        "note": "stop-loss bug: ferro emits NP_000416.1:p.(Xaa8Ter) — an `Xaa` (unknown amino acid) placeholder — instead of the spec stop-loss extension NP_000416.1:p.Ter1258Leuext*96. Tracked by #615; XPASS-guarded (this row flips when #615 lands)."
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000416.1:p.Ter1258Leuext*96. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
       }
     },
     {
@@ -9946,11 +9942,12 @@
       "to_test": true,
       "input": "NM_000488.3:c.1391dupA",
       "protein_description": "NP_000479.1:p.Ter465Valext*18",
-      "known_bug": {
+      "improvement": {
         "axis": "protein_description",
-        "tracking_issue": 615,
-        "cluster": "stoploss-xaa",
-        "note": "stop-loss bug: ferro emits NP_000479.1:p.(Xaa465ValfsTer19) — an `Xaa` (unknown amino acid) placeholder with a spurious frameshift — instead of the spec stop-loss extension NP_000479.1:p.Ter465Valext*18. Tracked by #615; XPASS-guarded (this row flips when #615 lands)."
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000479.1:p.Ter465Valext*18. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
       }
     },
     {
@@ -9961,11 +9958,12 @@
       "to_test": true,
       "input": "NM_152263.2:c.855delA",
       "protein_description": "NP_689476.2:p.Ter286Asnext*73",
-      "known_bug": {
+      "improvement": {
         "axis": "protein_description",
-        "tracking_issue": 615,
-        "cluster": "stoploss-xaa",
-        "note": "stop-loss bug: ferro emits NP_689476.2:p.(Xaa26Ter) — an `Xaa` (unknown amino acid) placeholder — instead of the spec stop-loss extension NP_689476.2:p.Ter286Asnext*73. Tracked by #615; XPASS-guarded (this row flips when #615 lands)."
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_689476.2:p.Ter286Asnext*73. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
       }
     }
   ]
