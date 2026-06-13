@@ -103,9 +103,20 @@ pub mod urls {
     pub const REFSEQGENE_COUNT: usize = 9;
 
     /// RefSeqGene→genome alignment GFF3 (NG_ chromosomal placements, #480).
-    /// Lives in [`REFSEQGENE_BASE`]; the `GCF_000001405.40` patch matches
-    /// [`GRCH38_GENOME`] above (update both together on a new GRCh38 patch).
-    pub const REFSEQGENE_ALIGNMENTS_FILE: &str = "GCF_000001405.40_refseqgene_alignments.gff3";
+    ///
+    /// NCBI stopped *updating* the RefSeqGene→genome alignments in 2024 (the
+    /// live `H_sapiens/alignments` dir now carries only known/model RefSeq
+    /// transcript alignments, and the `RefSeqGene/` dir's GFF3 symlinks are
+    /// dangling). The latest **GRCh38** RefSeqGene alignment is the archived
+    /// RefSeq-release-109 (GRCh38.p13) snapshot under `alignments/ARCHIVE/all/`.
+    /// Primary-chromosome `NC_` accessions are unchanged across GRCh38 patches,
+    /// so it remains valid against the `.40` (p14) genome/cdot; `NG_` records
+    /// curated after 2021 are simply absent (they decline — never a wrong
+    /// coordinate). Revisit if NCBI republishes a maintained feed.
+    pub const REFSEQGENE_ALIGNMENTS_FILE: &str =
+        "GCF_000001405.39_109.20211119_refseqgene_alignments.gff3";
+    pub const REFSEQGENE_ALIGNMENTS_URL: &str =
+        "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/alignments/ARCHIVE/all/GCF_000001405.39_109.20211119_refseqgene_alignments.gff3";
 
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
@@ -405,9 +416,8 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             eprintln!("  Skipping {} (exists)", aln_name);
             manifest.refseqgene_alignments = Some(aln_path);
         } else {
-            let aln_url = format!("{}{}", urls::REFSEQGENE_BASE, aln_name);
             eprintln!("  Downloading {}...", aln_name);
-            match download_file(&aln_url, &aln_path) {
+            match download_file(urls::REFSEQGENE_ALIGNMENTS_URL, &aln_path) {
                 Ok(_) => manifest.refseqgene_alignments = Some(aln_path),
                 Err(e) => eprintln!("  Warning: Failed to download {}: {}", aln_name, e),
             }
