@@ -707,7 +707,17 @@ fn classify_divergence(expected: &str, actual_set: &[String]) -> Divergence {
 /// data-source skew and is auto-quarantined as `divergence_accepted`; a
 /// coordinate skew on any *other* transcript stays a FAIL (the gate list is
 /// incomplete — surface it, don't silently accept).
+///
+/// Two sub-kinds, both alignment-source skew (see the provenance doc):
+/// - **gapped-CIGAR skew**: the UTA splign CIGAR carries a within-exon `D`/`I`
+///   gap or an exon-boundary off-by-one, so the `c.`/`n.` coordinate shifts
+///   downstream of the gap.
+/// - **genomic-anchor skew**: the per-exon CIGARs are ungapped *and* ferro's
+///   CDS start agrees with UTA's `cds_start_i`, yet a uniform `+2` `c.`-offset
+///   remains — a 2 bp difference in where the two sources anchor the transcript
+///   on the genome. Confirmed for the last three entries below.
 const SOURCE_SKEW_TRANSCRIPTS: &[&str] = &[
+    // Gapped-CIGAR skew (within-exon indel or boundary off-by-one).
     "NM_001080519",
     "NM_001077527",
     "NM_000804",
@@ -715,6 +725,11 @@ const SOURCE_SKEW_TRANSCRIPTS: &[&str] = &[
     "NM_003777",
     "NM_006158",
     "NM_001277115",
+    // Genomic-anchor skew (ungapped CIGAR, CDS start agrees with UTA, uniform
+    // +2 c.-offset from a 2 bp genomic alignment-anchor difference).
+    "NM_020451",
+    "NM_007199",
+    "NM_002386",
 ];
 
 /// Cluster id for the alignment-source skew (coordinate differs, base matches,
