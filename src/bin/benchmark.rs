@@ -841,16 +841,12 @@ fn run_normalize_biocommons(
     lrg_mapping_file: Option<&str>,
     workers: usize,
 ) -> Result<(), ferro_hgvs::FerroError> {
-    use std::time::Instant;
-
     // Check if biocommons is available
     if !has_biocommons_normalizer() {
         eprintln!("biocommons/hgvs is NOT available");
         eprintln!("Install with: pip install hgvs");
         std::process::exit(1);
     }
-
-    let start = Instant::now();
 
     // Run normalization (parallel or sequential based on workers)
     if workers > 1 {
@@ -872,8 +868,6 @@ fn run_normalize_biocommons(
         )?;
     }
 
-    let elapsed = start.elapsed();
-
     // Read results to get counts
     let results_content =
         std::fs::read_to_string(results_path).map_err(|e| ferro_hgvs::FerroError::Io {
@@ -887,6 +881,13 @@ fn run_normalize_biocommons(
     let total = results_data["total_patterns"].as_u64().unwrap_or(0) as usize;
     let successful = results_data["successful"].as_u64().unwrap_or(0) as usize;
 
+    // Time the tool by the subprocess's own internal timer (startup-excluded),
+    // which both the single-process and parallel paths record in the results
+    // JSON — not Rust wall time, which folds in interpreter startup + import
+    // (#609, matching the parse path and the other tools).
+    let elapsed =
+        std::time::Duration::from_secs_f64(results_data["elapsed_seconds"].as_f64().unwrap_or(0.0));
+
     // Write timing info
     let timing_info = TimingInfo::new("biocommons-hgvs", total, successful, elapsed);
     let timing_json =
@@ -897,11 +898,11 @@ fn run_normalize_biocommons(
         msg: format!("Failed to write timing file: {}", e),
     })?;
 
+    let secs = elapsed.as_secs_f64();
+    let throughput = if secs > 0.0 { total as f64 / secs } else { 0.0 };
     println!(
         "Normalized {} patterns in {:.2}s ({:.0} patterns/s)",
-        total,
-        elapsed.as_secs_f64(),
-        total as f64 / elapsed.as_secs_f64()
+        total, secs, throughput
     );
     println!(
         "Successful: {} ({:.1}%)",
@@ -2766,13 +2767,17 @@ fn run_normalize_tool(
                 effective_workers
             );
 
-            // Use parallel normalization
-            let (results, elapsed, _error_counts) = run_mutalyzer_normalize_parallel(
-                &patterns_to_normalize,
-                effective_workers,
-                Some(settings.to_str().unwrap()),
-                allow_network,
-            )?;
+            // Use parallel normalization. Time the tool by the Python
+            // subprocess's own internal timer (startup-excluded), matching the
+            // parse path and the other tools — not the Rust wall time, which
+            // would fold in interpreter startup + import (#609).
+            let (results, _wall_elapsed, elapsed, _error_counts) =
+                run_mutalyzer_normalize_parallel(
+                    &patterns_to_normalize,
+                    effective_workers,
+                    Some(settings.to_str().unwrap()),
+                    allow_network,
+                )?;
 
             let total = patterns.len();
             let successful = results.iter().filter(|r| r.success).count();

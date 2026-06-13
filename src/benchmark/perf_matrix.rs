@@ -257,10 +257,12 @@ pub fn run_operation(
 /// so Python startup is NOT included in parse throughput numbers. ferro and
 /// hgvs-rs parse throughput is also measured after any one-time setup.
 pub const TIMED_REGION_NOTE: &str =
-    "normalize throughput for mutalyzer/biocommons includes Python subprocess \
-     startup in the timed region (ferro/hgvs-rs exclude it; <2% at this sample \
-     size); parse throughput excludes Python startup (measured by the \
-     subprocess's internal timer). See issue tracker.";
+    "All tools exclude process/interpreter startup from the timed region: the \
+     mutalyzer/biocommons subprocesses are timed by their own internal \
+     (startup-excluded) timer for both parse and normalize, matching ferro/hgvs-rs \
+     (#609). For mutalyzer normalize at >1 worker under the pre-sharded cache, the \
+     internal time is the slowest shard's critical path — a lower bound that still \
+     excludes the dominant per-process startup term.";
 
 // ---------------------------------------------------------------------------
 // Real HarnessMeasure implementation
@@ -414,7 +416,10 @@ impl HarnessMeasure {
             .as_ref()
             .and_then(|p| p.to_str().map(str::to_owned));
 
-        let (results, elapsed, _errs) = run_mutalyzer_normalize_parallel(
+        // Time mutalyzer by its Python subprocess's own internal timer
+        // (startup-excluded, position 3), matching the parse path and the other
+        // tools — not the Rust wall time, which folds in interpreter startup (#609).
+        let (results, _wall, elapsed, _errs) = run_mutalyzer_normalize_parallel(
             sample,
             workers,
             settings.as_deref(),
@@ -511,7 +516,6 @@ with open(sys.argv[2],'w') as f:
             has_biocommons_normalizer, run_biocommons_normalizer_parallel,
             run_biocommons_normalizer_subprocess,
         };
-        use std::time::Instant;
 
         if !has_biocommons_normalizer() {
             return None;
@@ -520,7 +524,6 @@ with open(sys.argv[2],'w') as f:
         let tmp = Self::write_sample_to_tempfile(sample).ok()?;
         let results_tmp = tempfile::NamedTempFile::new().ok()?;
 
-        let start = Instant::now();
         if workers > 1 {
             run_biocommons_normalizer_parallel(
                 tmp.path().to_str()?,
@@ -541,17 +544,20 @@ with open(sys.argv[2],'w') as f:
             )
             .ok()?;
         }
-        let elapsed = start.elapsed();
 
+        // Time biocommons by the startup-excluded `elapsed_seconds` the Python
+        // subprocess records in its results JSON (the internal critical-path
+        // time), not the Rust wall time — matching the parse path and #609.
         let content = std::fs::read_to_string(results_tmp.path()).ok()?;
         let v: serde_json::Value = serde_json::from_str(&content).ok()?;
         let total = v["total_patterns"].as_u64().unwrap_or(0) as usize;
         let successful = v["successful"].as_u64().unwrap_or(0) as usize;
-        if total == 0 || successful == 0 || elapsed.as_secs_f64() <= 0.0 {
+        let elapsed = v["elapsed_seconds"].as_f64().unwrap_or(0.0);
+        if total == 0 || successful == 0 || elapsed <= 0.0 {
             return None;
         }
         Some(RepRate {
-            pps: total as f64 / elapsed.as_secs_f64(),
+            pps: total as f64 / elapsed,
             success_rate: successful as f64 / total as f64,
         })
     }
