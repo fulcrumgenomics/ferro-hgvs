@@ -1,7 +1,8 @@
 //! Mock reference provider for testing
 
 use crate::error::FerroError;
-use crate::reference::provider::ReferenceProvider;
+use crate::hgvs::variant::Accession;
+use crate::reference::provider::{GenomicPlacement, ReferenceProvider};
 use crate::reference::transcript::Transcript;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -20,6 +21,11 @@ pub struct MockProvider {
     /// manifest. Empty by default, so an unconfigured mock reports every
     /// transcript as version-exact (matching the trait default).
     non_version_exact: HashSet<String>,
+    /// Chromosomal placements of genomic parent references (`NG_`/`LRG_`),
+    /// keyed by the parent's full versioned accession (e.g. `"NG_007485.1"`).
+    /// Lets tests exercise the #480 NC→parent-frame re-anchoring without a real
+    /// RefSeqGene/LRG placement source.
+    genomic_placements: HashMap<String, GenomicPlacement>,
 }
 
 impl MockProvider {
@@ -30,7 +36,19 @@ impl MockProvider {
             proteins: HashMap::new(),
             genomic_sequences: HashMap::new(),
             non_version_exact: HashSet::new(),
+            genomic_placements: HashMap::new(),
         }
+    }
+
+    /// Register the chromosomal placement of a genomic parent reference
+    /// (`NG_`/`LRG_`), keyed by its full versioned accession (#480).
+    pub fn add_genomic_placement(
+        &mut self,
+        parent_accession: impl Into<String>,
+        placement: GenomicPlacement,
+    ) {
+        self.genomic_placements
+            .insert(parent_accession.into(), placement);
     }
 
     /// Mark `id` as not available at its exact requested version, so
@@ -94,6 +112,7 @@ impl MockProvider {
             proteins,
             genomic_sequences,
             non_version_exact: HashSet::new(),
+            genomic_placements: HashMap::new(),
         })
     }
 
@@ -299,6 +318,10 @@ impl Default for MockProvider {
 }
 
 impl ReferenceProvider for MockProvider {
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        self.genomic_placements.get(&parent.full()).cloned()
+    }
+
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {

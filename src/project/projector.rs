@@ -778,6 +778,43 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Preserve the Mu certainty (Certain vs Uncertain).
         let g_edit_mu = edit_mu.map(|_| g_edit_inner);
 
+        // 8. Re-anchor into the parent's own frame when the parent is an
+        //    NG_/LRG_ whose chromosomal placement is known (#480). cdot
+        //    resolved the coordinates on the chromosome (`NC_`), but `parent`
+        //    is an NG_/LRG_ whose own frame differs: apply the affine
+        //    NC→parent transform, and reverse-complement the edit when the
+        //    parent runs antiparallel to the chromosome. Without a placement
+        //    (e.g. an `NC_` parent, or an `NG_` whose placement has not been
+        //    ingested) the chromosome coordinates are kept as-is — the prior
+        //    behavior — rather than failing the projection.
+        let (g_interval, g_edit_mu) = match self.provider.genomic_placement(&parent) {
+            Some(placement) => {
+                // `g_start_pos.base <= g_end_pos.base` by construction above.
+                let nc_lo = g_start_pos.base;
+                let nc_hi = g_end_pos.base;
+                match (placement.nc_to_parent(nc_lo), placement.nc_to_parent(nc_hi)) {
+                    (Some(p_a), Some(p_b)) => {
+                        // A minus-strand placement reverses coordinate order.
+                        let (p_lo, p_hi) = if p_a <= p_b { (p_a, p_b) } else { (p_b, p_a) };
+                        let parent_interval =
+                            GenomeInterval::new(GenomePos::new(p_lo), GenomePos::new(p_hi));
+                        let parent_edit_mu = if placement.strand == RefStrand::Minus {
+                            g_edit_mu
+                                .map(|inner| transform_edit_for_strand(&inner, RefStrand::Minus))
+                        } else {
+                            g_edit_mu
+                        };
+                        (parent_interval, parent_edit_mu)
+                    }
+                    // An endpoint fell outside the placed span — keep the
+                    // chromosome coordinates rather than emit an out-of-frame
+                    // position.
+                    _ => (g_interval, g_edit_mu),
+                }
+            }
+            None => (g_interval, g_edit_mu),
+        };
+
         let g_variant = GenomeVariant {
             accession: parent,
             gene_symbol,
