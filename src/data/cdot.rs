@@ -1963,6 +1963,13 @@ impl CdotMapper {
     /// in (so a multi-build secondary file still contributes its nested views).
     /// Clears the lazy overlap indexes so they rebuild with the new contigs.
     fn absorb_secondary_build(&mut self, other: Self, build_name: &str) -> usize {
+        // Snapshot the build's transcript count so we can report how many this
+        // secondary file *newly* contributes (the primary cdot may already have
+        // populated some `build_name` views from its own `genome_builds`).
+        let before = self
+            .alt_build_transcripts
+            .get(build_name)
+            .map_or(0, |m| m.len());
         let CdotMapper {
             transcripts: other_transcripts,
             alt_build_transcripts: other_alt,
@@ -1971,14 +1978,20 @@ impl CdotMapper {
             ..
         } = other;
 
-        let target = self
-            .alt_build_transcripts
-            .entry(build_name.to_string())
-            .or_default();
-        let mut loaded = 0usize;
-        for (acc, tx) in other_transcripts {
-            target.insert(acc, tx);
-            loaded += 1;
+        // The requested build's transcripts can arrive two ways: as `other`'s
+        // primary view (when the secondary file's primary build *is*
+        // `build_name`), or nested under `other.alt_build_transcripts[build_name]`
+        // (when the file nests its data under `genome_builds`, which the real
+        // RefSeq cdot files do — there the primary view selected by the default
+        // load build is empty). Absorb both into our `build_name` slot.
+        {
+            let target = self
+                .alt_build_transcripts
+                .entry(build_name.to_string())
+                .or_default();
+            for (acc, tx) in other_transcripts {
+                target.insert(acc, tx);
+            }
         }
         // Fold in any builds the secondary file nested under `genome_builds`,
         // EXCEPT the primary build of this mapper (that data is authoritative
@@ -2008,7 +2021,15 @@ impl CdotMapper {
 
         // The new alt-build contigs invalidate the lazy overlap indexes.
         self.alt_build_query_index = OnceCell::new();
-        loaded
+        // Report how many transcripts this secondary file newly contributed to
+        // `build_name` (the net new entries). For real (`genome_builds`-nested)
+        // cdot files the default-build primary view is empty, so the old count —
+        // which only tallied `other.transcripts` — logged a misleading "0" even
+        // though the build's transcripts were absorbed via the fold above.
+        self.alt_build_transcripts
+            .get(build_name)
+            .map_or(0, |m| m.len())
+            .saturating_sub(before)
     }
 
     /// Create from a raw CdotFile, converting to internal format.
@@ -4314,6 +4335,63 @@ mod tests {
             .get_transcript_on_build("NM_000088.3", "GRCh37")
             .expect("GRCh37 view must be retained even when GRCh38 is primary");
         assert_eq!(tx37.contig, "NC_000017.10");
+    }
+
+    #[test]
+    fn load_secondary_build_counts_genome_builds_nested_transcripts() {
+        // Regression for the misleading "Loaded 0 GRCh37 transcripts" log. Real
+        // cdot files nest their alignments under `genome_builds`, and the
+        // path-based `load_secondary_build` loads via `load()` using the default
+        // build — so a GRCh37-nested file's *primary* (default-build) view is
+        // empty and the transcripts arrive through the alt-build fold. The
+        // reported count must reflect what is actually queryable for the build,
+        // not the empty primary view (which previously logged "0").
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000001.10",
+                            "strand": "+",
+                            "exons": [[100, 200, 1, 0, 100, "M100"]]
+                        }
+                    }
+                },
+                "NM_000002.1": {
+                    "gene_name": "GENE_B",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000001.10",
+                            "strand": "+",
+                            "exons": [[300, 400, 1, 0, 100, "M100"]]
+                        }
+                    }
+                }
+            }
+        }
+        "#;
+        // Primary mapper on GRCh38; write the GRCh37 secondary to a temp file
+        // (no sibling cache) so `load_secondary_build` parses the JSON via the
+        // default-build `load()` path that exhibited the miscount.
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let count = mapper.load_secondary_build(&path, "GRCh37").unwrap();
+        assert_eq!(
+            count, 2,
+            "secondary load must count the GRCh37-nested transcripts, not the empty primary view"
+        );
+        // And the data is genuinely queryable on GRCh37 (not just counted).
+        assert!(
+            mapper
+                .get_transcript_on_build("NM_000002.1", "GRCh37")
+                .is_some(),
+            "GRCh37-nested transcript must be resolvable after secondary load"
+        );
     }
 
     #[test]
