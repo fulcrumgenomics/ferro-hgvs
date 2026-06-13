@@ -1641,3 +1641,122 @@ mod comparator_tests {
         );
     }
 }
+
+// ----------------------------------------------------------------------------
+// Hermetic #615 stop-loss reproducer (characterization — no manifest, no corpus)
+// ----------------------------------------------------------------------------
+//
+// The 4 `stoploss-xaa` rows in cases.json are dispositioned as known_bug #615
+// against the corpus manifest. This module pins the *same symptom* hermetically:
+// a hand-built `MockProvider` transcript (CDS ending in a stop codon + a 3'UTR)
+// plus a single-base deletion that disrupts the terminator codon, projected
+// through the real `VariantProjector`. It asserts ferro CURRENTLY emits a
+// `p.(Xaa…)` placeholder consequence — the #615 bug — independent of the
+// manifest, so the fix has a clear target and this test flips when it lands.
+#[cfg(test)]
+mod stoploss_615_reproducer {
+    use super::*;
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand};
+
+    /// Build a single-exon plus-strand coding transcript from a literal mRNA
+    /// sequence, CDS bounds (1-based, inclusive), and an explicit protein
+    /// accession so the direct `c.→p.` path can name the predicted consequence.
+    fn stoploss_transcript() -> Transcript {
+        // mRNA:  ATG CGC AAA TAA  GCATAAGGGCCC
+        //        Met Arg Lys Ter  └─── 3'UTR ───┘
+        // CDS = c.1..12 (ATGCGCAAATAA → Met-Arg-Lys-Ter). The terminator codon
+        // `TAA` sits at c.10..12; a deletion inside it is a stop-loss.
+        let seq = "ATGCGCAAATAAGCATAAGGGCCC";
+        let len = seq.len() as u64;
+        Transcript::new(
+            "NM_700000.1".to_string(),
+            Some("STOPLOSS".to_string()),
+            Strand::Plus,
+            seq.to_string(),
+            Some(1),
+            Some(12),
+            vec![Exon::new(1, 1, len)],
+            None,
+            None,
+            None,
+            Default::default(),
+            ManeStatus::Select,
+            None,
+            None,
+        )
+        .with_protein_id("NP_700000.1".to_string())
+    }
+
+    /// A Mock-backed projector seeded with the stop-loss transcript. The cdot
+    /// mapper is empty; the direct bare-`NM_` `c.→p.` path reads the CDS and
+    /// protein straight from the transcript record, so no genome alignment is
+    /// needed.
+    fn stoploss_projector() -> VariantProjector<MockProvider> {
+        let mut provider = MockProvider::new();
+        provider.add_transcript(stoploss_transcript());
+        let projector = Projector::new(CdotMapper::new());
+        VariantProjector::new(projector, provider)
+    }
+
+    fn project_protein(input: &str) -> String {
+        let vp = stoploss_projector();
+        let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse `{input}`: {e}"));
+        let result = vp
+            .project_variant(&v, "NM_700000.1")
+            .unwrap_or_else(|e| panic!("project `{input}`: {e}"));
+        result
+            .protein
+            .as_ref()
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| panic!("no protein predicted for `{input}`"))
+    }
+
+    // KNOWN BUG #615: a deletion that disrupts the terminator codon should be a
+    // C-terminal stop-loss extension (`p.Ter…<aa>ext*…`), but ferro currently
+    // emits a `p.(Xaa…)` placeholder (unknown amino acid). Remove/flip this
+    // assertion when #615 is fixed — at that point the corpus known_bug #615
+    // rows will also XPASS and demand removal.
+    #[test]
+    fn stoploss_deletion_in_terminator_emits_xaa_placeholder() {
+        // c.11delA deletes the middle base of the `TAA` terminator (c.10..12),
+        // a stop-loss. Spec-correct would be a `p.Ter4…ext*…` extension.
+        let got = project_protein("NM_700000.1:c.11delA");
+        assert_eq!(
+            got, "NP_700000.1:p.(Xaa4Ter)",
+            "KNOWN BUG #615: stop-loss deletion should yield a Ter…ext* extension, \
+             not an Xaa placeholder; got {got}"
+        );
+        assert!(
+            got.contains("Xaa"),
+            "KNOWN BUG #615 characterization expects an Xaa placeholder; got {got}"
+        );
+    }
+
+    // KNOWN BUG #615 (duplication variant): a single-base duplication that
+    // frameshifts through the terminator likewise yields an `Xaa` placeholder
+    // rather than the spec stop-loss extension. Mirrors the corpus `dup` rows
+    // (e.g. NM_000425.3:c.3772dupT). Remove/flip when #615 is fixed.
+    #[test]
+    fn stoploss_duplication_through_terminator_emits_xaa_placeholder() {
+        let got = project_protein("NM_700000.1:c.9dupA");
+        assert!(
+            got.contains("Xaa"),
+            "KNOWN BUG #615: stop-disrupting dup should yield a Ter…ext* extension, \
+             not an Xaa placeholder; got {got}"
+        );
+    }
+
+    // Control: a duplication that cleanly converts the terminator to a sense
+    // codon DOES produce the spec extension form (`extTer…`), proving the
+    // predictor is capable of the correct output and #615 is a specific
+    // disruption-path bug, not a wholesale failure. This must stay GREEN both
+    // before and after the #615 fix.
+    #[test]
+    fn stoploss_clean_readthrough_emits_extension_not_xaa() {
+        let got = project_protein("NM_700000.1:c.10dupT");
+        assert!(
+            got.contains("ext") && !got.contains("Xaa"),
+            "a clean stop-loss readthrough should yield an extension, not Xaa; got {got}"
+        );
+    }
+}
