@@ -2426,9 +2426,7 @@ impl CdotMapper {
     /// is returned on all subsequent calls.
     pub fn defer_secondary_build(&mut self, build: &str, path: PathBuf) {
         self.deferred_alt_sources.insert(build.to_string(), path);
-        self.lazy_alt_mappers
-            .entry(build.to_string())
-            .or_insert_with(OnceCell::new);
+        self.lazy_alt_mappers.entry(build.to_string()).or_default();
         // A newly-deferred build adds alt-build contigs; invalidate the lazy
         // overlap index so a previously force-built index doesn't omit them
         // (mirrors the eager `load_secondary_build` reset).
