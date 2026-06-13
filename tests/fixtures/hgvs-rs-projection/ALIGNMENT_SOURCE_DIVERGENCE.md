@@ -75,6 +75,24 @@ auto-quarantined as `divergence_accepted` (cluster `alignment-source-skew`). A
 so an incomplete gate list surfaces for review instead of being silently
 accepted.
 
+### Surfaced for review (not yet on the list)
+
+A manifest run surfaces a small number of low-count `CoordinateSkew` FAILs on
+transcripts **not** in the list above — each a ~2 bp shift consistent with an
+alignment indel, but not yet confirmed against a UTA CIGAR:
+
+| transcript | expected → ferro | shift |
+|---|---|---|
+| `NM_020451` (SELENON) | `c.943` → `c.945` | +2 |
+| `NM_007199` (IRAK3) | `c.1` → `c.3` | +2 |
+| `NM_002386` (MC1R) | `c.-11_19del` → `c.-9_21del` | +2 |
+
+These are **intentionally left red** — they are added to the list only after
+confirming the UTA `uta_20210129` splign CIGAR shows the corresponding indel
+(a follow-up; the gate list was seeded from the high-divergence transcripts and
+these low-count ones were below that threshold). If a confirmed CIGAR shows no
+indel, the case is instead a genuine ferro coordinate delta, not source skew.
+
 ## Category B — transcript selection/absence (cluster `transcript-selection-vs-uta`)
 
 ferro does **not** return the expected base transcript at all (a
