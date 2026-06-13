@@ -10,13 +10,13 @@
       "id": "boundary-spanning-del-accepted",
       "title": "Boundary-spanning del/delins accepted (5'UTR/CDS, CDS/3'UTR)",
       "spec_section": "recommendations/general.md, DNA/deletion.md",
-      "note": "Per the #253 audit, HGVS v21 does not forbid a boundary-spanning del with cross_boundaries=false; ferro accepts and is spec-compatible (e.g. NM_001166478.1:c.59_61del). A terminal accepted divergence from biocommons. Member rows are pending manifest-backed seeding (#325)."
+      "note": "Per the #253 audit, HGVS v21 does not forbid a boundary-spanning del with cross_boundaries=false; ferro accepts and is spec-compatible (e.g. NM_001166478.1:c.59_61del). A terminal accepted divergence from biocommons, seeded from a manifest-backed run (#325)."
     },
     {
       "id": "spanning-dup-canonicalization",
       "title": "Spanning-dup canonicalization across the c.-1/c.1 boundary",
       "spec_section": "recommendations/DNA/duplication.md (edit-type priority)",
-      "note": "Per #404, an insertion spanning the CDS-start boundary canonicalizes to a spanning dup by edit-type priority (e.g. NM_000051.3:c.-2_-1insCA). An accepted divergence; member rows are pending manifest-backed seeding (#325)."
+      "note": "Per #404, an insertion spanning the CDS-start boundary canonicalizes to a spanning dup by edit-type priority (e.g. NM_000051.3:c.-2_-1insCA). A terminal accepted divergence, seeded from a manifest-backed run (#325)."
     }
   ],
   "cases": [
@@ -244,7 +244,14 @@
       "shuffle_direction": "3prime",
       "cross_boundaries": false,
       "source_function": "normalize_cds_around_exon_intron_boundary",
-      "to_test": true
+      "to_test": true,
+      "disposition": {
+        "kind": "accepted_divergence",
+        "reason": "biocommons raises on this boundary-spanning del; HGVS v21 does not forbid a del spanning the CDS/3'UTR boundary with cross_boundaries=false, so ferro spec-correctly accepts and leaves it unshifted. Terminal divergence (closed decision #253, closes #81 J1).",
+        "spec_citation": "recommendations/general.md, DNA/deletion.md",
+        "ferro_output": "NM_001166478.1:c.59_61del",
+        "cluster": "boundary-spanning-del-accepted"
+      }
     },
     {
       "input": "NM_001166478.1:c.59delG",
@@ -284,7 +291,14 @@
       "shuffle_direction": "3prime",
       "cross_boundaries": false,
       "source_function": "normalize_cds_utr_variant",
-      "to_test": true
+      "to_test": true,
+      "disposition": {
+        "kind": "accepted_divergence",
+        "reason": "ferro applies edit-type priority (dup > ins) when an insertion of the immediately-preceding base(s) spans the c.-1/c.1 boundary, yielding the spanning dup c.-1_1dup; biocommons suppresses the canon path under cross_boundaries=false and emits c.-1_1insAC. ferro's spanning-dup form is HGVS-canonical (biocommons itself emits it under cross_boundaries=true). Terminal divergence (closed decision #404).",
+        "spec_citation": "recommendations/DNA/duplication.md (edit-type priority)",
+        "ferro_output": "NM_000051.3:c.-1_1dup",
+        "cluster": "spanning-dup-canonicalization"
+      }
     },
     {
       "input": "NM_000051.3:c.-2_-1insCA",

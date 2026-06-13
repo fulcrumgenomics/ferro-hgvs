@@ -540,11 +540,21 @@ fn axis_normalized() {
         if case.expects_error {
             let cfg = build_config(case).with_error_mode(ErrorMode::Strict);
             let normalizer = Normalizer::with_config(ArcProvider(provider.clone()), cfg);
+            // Map ferro's outcome onto the `<expects error>` sentinel so
+            // `classify_outcome` treats this row uniformly with the value-axis
+            // rows. ferro erroring is the match (`Ok("<expects error>")`);
+            // ferro *accepting* is the divergence, and we surface the accepted
+            // HGVS string as the `Ok` value so an `accepted_divergence`
+            // annotation can pin it (e.g. #253: biocommons raises, ferro
+            // spec-correctly accepts `NM_001166478.1:c.59_61del`). Returning the
+            // accepted form as `Ok` — not `Err` — is what lets the disposition's
+            // `ferro_output` compare equal; an unannotated accept still fails as
+            // `Unannotated` (it can never equal the `<expects error>` sentinel).
             let actual = catch_panics(|| -> Result<String, String> {
                 let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e}"))?;
                 match normalizer.normalize(&v) {
                     Err(_) => Ok("<expects error>".to_string()),
-                    Ok(n) => Err(format!("accepted: {n}")),
+                    Ok(n) => Ok(n.to_string()),
                 }
             });
             t.record(
@@ -741,6 +751,37 @@ mod classify_outcome_tests {
                 Some(&accepted("c.-1_1dup"))
             ),
             RecordOutcome::Fail(FailKind::AnnotationDrift)
+        );
+    }
+
+    #[test]
+    fn expects_error_accept_with_accepted_divergence_is_accepted() {
+        // The expects-error axis encodes "ferro errored" as the `<expects error>`
+        // sentinel and "ferro accepted" as the accepted HGVS string (see the
+        // expects_error branch of `axis_normalized`). An `accepted_divergence`
+        // pinning that accepted form must classify as AcceptedDivergence — this
+        // is #253 (biocommons raises, ferro spec-correctly accepts).
+        assert_eq!(
+            classify_outcome(
+                "<expects error>",
+                &ok("NM_001166478.1:c.59_61del"),
+                Some(&accepted("NM_001166478.1:c.59_61del"))
+            ),
+            RecordOutcome::AcceptedDivergence
+        );
+    }
+
+    #[test]
+    fn expects_error_when_ferro_errors_with_accepted_divergence_is_xpass() {
+        // If an accepted_divergence expects ferro to accept but ferro now errors,
+        // the recorded divergence is gone — XPASS, so the annotation gets removed.
+        assert_eq!(
+            classify_outcome(
+                "<expects error>",
+                &ok("<expects error>"),
+                Some(&accepted("NM_001166478.1:c.59_61del"))
+            ),
+            RecordOutcome::Fail(FailKind::AcceptedDivergenceGone)
         );
     }
 
