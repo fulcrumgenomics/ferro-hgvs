@@ -5318,4 +5318,69 @@ mod tests {
             "deferred GRCh37 transcript must be present; got: {accs:?}"
         );
     }
+
+    #[test]
+    fn deferred_grch37_not_loaded_for_grch38_only_sequence() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        // A sequence of GRCh38 / primary-build-only lookups must NOT load the deferred GRCh37 mapper.
+        let mut m = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        m.defer_secondary_build("GRCh37", path);
+        let _ = m.get_transcript("NM_000088.3");
+        let _ = m.get_transcript_on_build("NM_000088.3", "GRCh38");
+        assert!(
+            !m.deferred_alt_loaded("GRCh37"),
+            "GRCh38/primary lookups must not load the GRCh37 secondary"
+        );
+    }
+
+    #[test]
+    fn deferred_grch37_loads_once_under_concurrency() {
+        use std::sync::Arc;
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        mapper.defer_secondary_build("GRCh37", path);
+        let shared = Arc::new(mapper);
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let m = Arc::clone(&shared);
+            handles.push(std::thread::spawn(move || {
+                m.get_transcript_on_build("NM_000001.1", "GRCh37")
+                    .map(|t| t.contig.clone())
+            }));
+        }
+        for h in handles {
+            assert_eq!(h.join().unwrap().as_deref(), Some("NC_000001.10"));
+        }
+        assert!(shared.deferred_alt_loaded("GRCh37"));
+    }
 }
