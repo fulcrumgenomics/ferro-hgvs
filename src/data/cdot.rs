@@ -2340,9 +2340,12 @@ impl CdotMapper {
     /// When `build` matches the mapper's primary load build, delegates to
     /// [`get_transcript`](Self::get_transcript). Otherwise consults the
     /// alt-build cache (populated from the source cdot JSON's `genome_builds`
-    /// section). Returns `None` if the transcript is absent from the requested
-    /// build (or if the alt-build cache is empty, e.g. for bincode-loaded
-    /// mappers or `from_transcripts`-built mappers).
+    /// section). If the transcript is not found in the eagerly-captured alt
+    /// views, falls back to a lazily-loaded deferred secondary build registered
+    /// via [`defer_secondary_build`](Self::defer_secondary_build), if any.
+    /// Returns `None` if the transcript is absent from the requested build (or
+    /// if neither the alt-build cache nor any deferred secondary covers it,
+    /// e.g. for bincode-loaded mappers or `from_transcripts`-built mappers).
     ///
     /// This is the lookup used by NG/NC-parent-aware transcript resolution
     /// (issue #332): when the input is `NG_*(NM_*):c.…` or
@@ -2374,36 +2377,42 @@ impl CdotMapper {
         } else {
             accession
         };
-        let alt = self.alt_build_transcripts.get(build)?;
-        if let Some(tx) = alt.get(resolved) {
-            return Some(tx);
-        }
-        // Version fallback within the alt-build map. Deterministically pick
-        // the highest numeric version among siblings sharing the base, rather
-        // than the first HashMap iteration hit — alt-build maps occasionally
-        // hold more than one version of the same base accession, and
-        // returning whichever the hasher landed on first was nondeterministic
-        // across runs (#389 follow-up).
-        if let Some(base) = resolved.split('.').next() {
-            let mut best: Option<(u32, &CdotTranscript)> = None;
-            for (k, v) in alt {
-                if !(k.starts_with(base) && k[base.len()..].starts_with('.')) {
-                    continue;
-                }
-                let ver = k[base.len() + 1..]
-                    .split('.')
-                    .next()
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .unwrap_or(0);
-                if best.is_none_or(|(cur, _)| ver > cur) {
-                    best = Some((ver, v));
-                }
-            }
-            if let Some((_, tx)) = best {
+        // Eagerly-captured alt views for this build, if any. Absent when the
+        // build is deferred (consulted below).
+        if let Some(alt) = self.alt_build_transcripts.get(build) {
+            if let Some(tx) = alt.get(resolved) {
                 return Some(tx);
             }
+            // Version fallback within the alt-build map. Deterministically pick
+            // the highest numeric version among siblings sharing the base, rather
+            // than the first HashMap iteration hit — alt-build maps occasionally
+            // hold more than one version of the same base accession, and
+            // returning whichever the hasher landed on first was nondeterministic
+            // across runs (#389 follow-up).
+            if let Some(base) = resolved.split('.').next() {
+                let mut best: Option<(u32, &CdotTranscript)> = None;
+                for (k, v) in alt {
+                    if !(k.starts_with(base) && k[base.len()..].starts_with('.')) {
+                        continue;
+                    }
+                    let ver = k[base.len() + 1..]
+                        .split('.')
+                        .next()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    if best.is_none_or(|(cur, _)| ver > cur) {
+                        best = Some((ver, v));
+                    }
+                }
+                if let Some((_, tx)) = best {
+                    return Some(tx);
+                }
+            }
         }
-        None
+        // Not in the eagerly-captured alt views — consult a deferred secondary
+        // build (e.g. a manifest's GRCh37 cdot) loaded lazily on first use.
+        self.deferred_alt_mapper(build)?
+            .get_transcript_on_build(accession, build)
     }
 
     /// Record a secondary build to load lazily on first use, instead of folding
@@ -5044,5 +5053,53 @@ mod tests {
         );
         assert!(mapper.deferred_alt_loaded("GRCh37"));
         assert!(mapper.deferred_alt_mapper("GRCh99").is_none());
+    }
+
+    #[test]
+    fn get_transcript_on_build_deferred_matches_eager() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut eager = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        eager.load_secondary_build(&path, "GRCh37").unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path.clone());
+
+        let e = eager
+            .get_transcript_on_build("NM_000001.1", "GRCh37")
+            .unwrap();
+        let l = lazy
+            .get_transcript_on_build("NM_000001.1", "GRCh37")
+            .unwrap();
+        assert_eq!(e.contig, l.contig);
+        assert_eq!(e.contig, "NC_000001.10");
+        assert_eq!(e.strand, l.strand);
+        assert_eq!(e.exons, l.exons);
+
+        let mut lazy2 = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy2.defer_secondary_build("GRCh37", path);
+        // A GRCh37 lookup satisfied by the PRIMARY cdot's own eager GRCh37 alt view
+        // must NOT spill into (load) the deferred secondary.
+        let _ = lazy2
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .unwrap();
+        assert!(
+            !lazy2.deferred_alt_loaded("GRCh37"),
+            "an eagerly-satisfiable GRCh37 lookup must not load the deferred secondary"
+        );
     }
 }
