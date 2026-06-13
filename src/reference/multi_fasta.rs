@@ -225,6 +225,11 @@ pub struct MultiFastaProvider {
     /// XML once. A stored `None` means "parsed, but no usable single-span
     /// main-assembly placement".
     lrg_placement_cache: Mutex<FxHashMap<String, Option<GenomicPlacement>>>,
+    /// NG_ RefSeqGene → chromosome placements, parsed once from the NCBI
+    /// `GCF_*_refseqgene_alignments.gff3` named by the manifest's
+    /// `refseqgene_alignments`, keyed by NG accession.version (#480). Empty when
+    /// the manifest carries no alignments file.
+    refseqgene_placements: FxHashMap<String, GenomicPlacement>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -323,6 +328,7 @@ impl MultiFastaProvider {
             open_files: Mutex::new(FxHashMap::default()),
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
+            refseqgene_placements: FxHashMap::default(),
         })
     }
 
@@ -359,6 +365,7 @@ impl MultiFastaProvider {
             open_files: Mutex::new(FxHashMap::default()),
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
+            refseqgene_placements: FxHashMap::default(),
         })
     }
 
@@ -489,6 +496,17 @@ impl MultiFastaProvider {
             .map(resolve_path)
             .and_then(|p| p.parent().map(Path::to_path_buf));
 
+        // Parse NG_ RefSeqGene→chromosome placements from the NCBI alignment
+        // GFF3, if the manifest names one (#480). A missing/unreadable file
+        // leaves NG_ re-anchoring inert (NG_ parents keep prior behavior).
+        let refseqgene_placements = manifest
+            .get("refseqgene_alignments")
+            .and_then(|v| v.as_str())
+            .map(resolve_path)
+            .and_then(|p| std::fs::read_to_string(&p).ok())
+            .map(|gff3| parse_refseqgene_alignments(&gff3))
+            .unwrap_or_default();
+
         // Get supplemental directory (missing ClinVar transcripts)
         if let Some(supplemental) = manifest.get("supplemental_fasta").and_then(|v| v.as_str()) {
             let path = resolve_path(supplemental);
@@ -506,9 +524,10 @@ impl MultiFastaProvider {
         }
 
         let mut provider = Self::from_directories(&dirs)?;
-        // Carry the LRG XML directory so LRG parents can be re-anchored on
-        // demand (#480); `from_directories` cannot know about it.
+        // Carry the LRG XML directory + NG_ placements so NG_/LRG_ parents can
+        // be re-anchored (#480); `from_directories` cannot know about them.
         provider.lrg_xml_dir = lrg_xml_dir;
+        provider.refseqgene_placements = refseqgene_placements;
 
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
@@ -727,6 +746,7 @@ impl MultiFastaProvider {
             open_files: Mutex::new(FxHashMap::default()),
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
+            refseqgene_placements: FxHashMap::default(),
         })
     }
 
@@ -1720,16 +1740,116 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
     }
 }
 
+/// Extract a GFF3 attribute value (`key=value`, `;`-separated). The value may
+/// contain spaces (e.g. `Target=NG_011717.1 1 55255 -`).
+fn gff_attr<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
+    attrs.split(';').find_map(|field| {
+        // Match the attribute name exactly: split on the first `=` and compare
+        // the whole key, so e.g. `Target=` is not matched by a `key` of `Targe`
+        // nor a sibling like `Target_note=`.
+        let (name, value) = field.trim().split_once('=')?;
+        (name == key).then_some(value)
+    })
+}
+
+/// Parse NCBI RefSeqGene→genome alignments (`GCF_*_refseqgene_alignments.gff3`)
+/// into `NG_ accession.version` → [`GenomicPlacement`] (#480).
+///
+/// Each `match` line places an `NG_` RefSeqGene on a chromosome, e.g.
+/// ```text
+/// NC_000020.11  RefSeq  match  63404189  63477640  .  +  .  ID=aln;Target=NG_009004.1 1 73452 -;gap_count=0;…
+/// ```
+/// col 1 is the chromosome (`NC_`), cols 4/5 the chromosome span, and the
+/// **`Target`** attribute carries the NG accession, its own coordinate range,
+/// and — in its 4th field — the NG's orientation relative to the chromosome.
+/// (The GFF `match` strand in col 7 is always `+`; the real orientation is the
+/// Target strand.)
+///
+/// Only **ungapped** (`gap_count=0`) alignments to a **GRCh38 primary
+/// chromosome** are kept — matching cdot's primary build, against which the
+/// `NM_`→`NC_` step is computed. GRCh37 placements, alt-loci/patches, and gapped
+/// alignments (which a single affine span cannot represent) are skipped, so the
+/// projector keeps prior behavior rather than emit a wrong `NG_` coordinate.
+fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, GenomicPlacement> {
+    let mut out = FxHashMap::default();
+    for line in gff3.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 9 {
+            continue;
+        }
+        // Only `match` rows place an NG_ parent on a chromosome (col 3 is the
+        // GFF3 feature/record type). Skip any other record so a stray row that
+        // happens to carry `Target=NG_*` cannot overwrite a real placement.
+        if cols[2] != "match" {
+            continue;
+        }
+        let (Ok(a), Ok(b)) = (cols[3].parse::<u64>(), cols[4].parse::<u64>()) else {
+            continue;
+        };
+        let attrs = cols[8];
+        // A single affine placement requires an ungapped alignment.
+        if gff_attr(attrs, "gap_count") != Some("0") {
+            continue;
+        }
+        let Some(target) = gff_attr(attrs, "Target") else {
+            continue;
+        };
+        let mut tf = target.split_whitespace();
+        let (Some(ng), Some(tstart), Some(_tend), Some(tstrand)) =
+            (tf.next(), tf.next(), tf.next(), tf.next())
+        else {
+            continue;
+        };
+        if !ng.starts_with("NG_") {
+            continue;
+        }
+        let Ok(parent_start) = tstart.parse::<u64>() else {
+            continue;
+        };
+        let strand = if tstrand == "-" {
+            crate::reference::transcript::Strand::Minus
+        } else {
+            crate::reference::transcript::Strand::Plus
+        };
+        // Keep only GRCh38 primary-chromosome placements (cdot's build).
+        let Ok((_, nc)) = crate::hgvs::parser::accession::parse_accession(cols[0]) else {
+            continue;
+        };
+        if crate::liftover::aliases::infer_genome_build_from_accession(&nc) != Some("GRCh38") {
+            continue;
+        }
+        let (nc_start, nc_end) = if a <= b { (a, b) } else { (b, a) };
+        out.insert(
+            ng.to_string(),
+            GenomicPlacement {
+                nc,
+                parent_start,
+                nc_start,
+                nc_end,
+                strand,
+            },
+        );
+    }
+    out
+}
+
 impl ReferenceProvider for MultiFastaProvider {
     fn genomic_placement(
         &self,
         parent: &crate::hgvs::variant::Accession,
     ) -> Option<GenomicPlacement> {
-        // Only LRG placement is wired (from the on-hand LRG XMLs). NG_
-        // RefSeqGene placement needs a RefSeqGene→chromosome alignment source
-        // that ferro does not yet ingest (#480 follow-up); until then NG_
-        // parents keep the prior behavior (chromosome coordinates under the
-        // NG_ accession).
+        // NG_ RefSeqGene placement comes from the NCBI RefSeqGene→genome
+        // alignments (`GCF_*_refseqgene_alignments.gff3`), parsed once at load
+        // and keyed by NG accession.version. Absent (no alignments file, or no
+        // GRCh38 primary placement) → None, and the projector keeps prior
+        // behavior rather than emit a wrong NG_ coordinate.
+        if parent.prefix.as_ref() == "NG" {
+            return self.refseqgene_placements.get(&parent.full()).cloned();
+        }
+        // LRG placement comes from the on-hand LRG XMLs (parsed on demand).
         if !parent.is_lrg() {
             return None;
         }
@@ -2168,9 +2288,99 @@ mod tests {
             crate::reference::transcript::Strand::Minus
         );
 
-        // A non-LRG parent gets no placement (NG_ source not wired yet).
+        // An NG_ parent with no loaded RefSeqGene alignments gets no placement.
         let ng = crate::hgvs::variant::Accession::new("NG", "007485", Some(1));
         assert!(provider.genomic_placement(&ng).is_none());
+    }
+
+    // ----------------------------------------------------------------------
+    // RefSeqGene→genome alignment parsing (#480)
+    // ----------------------------------------------------------------------
+
+    /// Realistic `GCF_*_refseqgene_alignments.gff3` rows: plus- and minus-strand
+    /// NG_ on a GRCh38 primary chromosome, a GRCh37 placement, and a gapped one.
+    /// (Tabs are significant.)
+    const RSG_GFF3_SAMPLE: &str = "\
+##gff-version 3
+NC_000001.11\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=aln0;Target=NG_001000.1 1 100 +;gap_count=0\n\
+NC_000001.11\tRefSeq\tmatch\t2000\t2099\t100\t+\t.\tID=aln1;Target=NG_002000.1 1 100 -;gap_count=0\n\
+NC_000001.10\tRefSeq\tmatch\t500\t599\t100\t+\t.\tID=aln2;Target=NG_003000.1 1 100 -;gap_count=0\n\
+NC_000001.11\tRefSeq\tmatch\t3000\t3120\t100\t+\t.\tID=aln3;Target=NG_004000.1 1 100 +;gap_count=2\n\
+NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_005000.1 1 100 +;gap_count=0\n";
+
+    #[test]
+    fn parses_refseqgene_alignments_plus_and_minus() {
+        let m = parse_refseqgene_alignments(RSG_GFF3_SAMPLE);
+
+        // GRCh37 placement and gapped alignment are excluded.
+        assert_eq!(m.len(), 2, "only GRCh38 ungapped placements kept: {m:?}");
+        assert!(
+            !m.contains_key("NG_003000.1"),
+            "GRCh37 placement must be dropped"
+        );
+        assert!(
+            !m.contains_key("NG_004000.1"),
+            "gapped placement must be dropped"
+        );
+        assert!(
+            !m.contains_key("NG_005000.1"),
+            "non-`match` record (cDNA_match) must be dropped even when it carries Target=NG_*"
+        );
+
+        let plus = &m["NG_001000.1"];
+        assert_eq!(plus.nc.to_string(), "NC_000001.11");
+        assert_eq!(plus.parent_start, 1);
+        assert_eq!(plus.nc_start, 1000);
+        assert_eq!(plus.nc_end, 1099);
+        assert_eq!(plus.strand, crate::reference::transcript::Strand::Plus);
+        assert_eq!(plus.nc_to_parent(1000), Some(1));
+        assert_eq!(plus.nc_to_parent(1099), Some(100));
+
+        let minus = &m["NG_002000.1"];
+        assert_eq!(minus.strand, crate::reference::transcript::Strand::Minus);
+        // Minus: NG base 1 sits at the high chromosome coordinate.
+        assert_eq!(minus.nc_to_parent(2099), Some(1));
+        assert_eq!(minus.nc_to_parent(2000), Some(100));
+    }
+
+    /// An unknown-orientation placement has no defined parent frame, so
+    /// `nc_to_parent` declines (`None`) even for an in-span coordinate, rather
+    /// than silently treating it as the plus strand.
+    #[test]
+    fn nc_to_parent_declines_for_unknown_strand() {
+        let nc = crate::hgvs::parser::accession::parse_accession("NC_000001.11")
+            .expect("valid accession")
+            .1;
+        let placement = GenomicPlacement {
+            nc,
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end: 1099,
+            strand: crate::reference::transcript::Strand::Unknown,
+        };
+        // In-span coordinate, but unknown strand → decline.
+        assert_eq!(placement.nc_to_parent(1000), None);
+        assert_eq!(placement.nc_to_parent(1050), None);
+        // Out-of-span is still None, as before.
+        assert_eq!(placement.nc_to_parent(2000), None);
+    }
+
+    /// End-to-end provider path: `genomic_placement` returns the parsed NG_
+    /// placement for an NG_ parent, and `None` for one with no alignment.
+    #[test]
+    fn provider_resolves_ng_placement_from_alignments() {
+        let (mut provider, _dir) = build_provider_with_test_genome();
+        provider.refseqgene_placements = parse_refseqgene_alignments(RSG_GFF3_SAMPLE);
+
+        let ng = crate::hgvs::variant::Accession::new("NG", "001000", Some(1));
+        let p = provider
+            .genomic_placement(&ng)
+            .expect("NG_ placement should resolve from the parsed alignments");
+        assert_eq!(p.nc.to_string(), "NC_000001.11");
+        assert_eq!(p.nc_start, 1000);
+
+        let missing = crate::hgvs::variant::Accession::new("NG", "999999", Some(1));
+        assert!(provider.genomic_placement(&missing).is_none());
     }
 
     // ----------------------------------------------------------------------

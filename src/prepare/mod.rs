@@ -102,6 +102,11 @@ pub mod urls {
     pub const REFSEQGENE_BASE: &str = "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/RefSeqGene/";
     pub const REFSEQGENE_COUNT: usize = 9;
 
+    /// RefSeqGene→genome alignment GFF3 (NG_ chromosomal placements, #480).
+    /// Lives in [`REFSEQGENE_BASE`]; the `GCF_000001405.40` patch matches
+    /// [`GRCH38_GENOME`] above (update both together on a new GRCh38 patch).
+    pub const REFSEQGENE_ALIGNMENTS_FILE: &str = "GCF_000001405.40_refseqgene_alignments.gff3";
+
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
@@ -390,6 +395,23 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             "  Downloaded {} RefSeqGene files",
             manifest.refseqgene_fastas.len()
         );
+
+        // RefSeqGene→genome alignment GFF3 — each NG_ record's chromosomal
+        // placement, used to project transcript coordinates into an NG_ parent's
+        // own frame (#480). Plain (un-gzipped) GFF3.
+        let aln_name = urls::REFSEQGENE_ALIGNMENTS_FILE;
+        let aln_path = refseqgene_dir.join(aln_name);
+        if config.skip_existing && aln_path.exists() {
+            eprintln!("  Skipping {} (exists)", aln_name);
+            manifest.refseqgene_alignments = Some(aln_path);
+        } else {
+            let aln_url = format!("{}{}", urls::REFSEQGENE_BASE, aln_name);
+            eprintln!("  Downloading {}...", aln_name);
+            match download_file(&aln_url, &aln_path) {
+                Ok(_) => manifest.refseqgene_alignments = Some(aln_path),
+                Err(e) => eprintln!("  Warning: Failed to download {}: {}", aln_name, e),
+            }
+        }
     }
 
     // Download LRG sequences and XML annotations from EBI

@@ -235,6 +235,7 @@ mod tests {
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
