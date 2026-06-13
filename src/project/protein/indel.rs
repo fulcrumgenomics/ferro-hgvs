@@ -92,26 +92,38 @@ pub(crate) fn predict_indel_protein(
         translate_mutated_cds_inframe(ref_protein, &mut_cds, cds_pos_start, cds_pos_end, net)
     };
 
-    // 3. Check for stop-codon readthrough: the ref had a stop that is now an AA.
-    //    Detected when the mutated protein is longer than the ref protein and
-    //    alt_protein[ref_protein.len()] is not Ter.
-    if alt_protein.len() > ref_protein.len()
-        && ref_protein_with_stop.last() == Some(&AminoAcid::Ter)
+    // 3. Check for stop-codon readthrough (stop-loss extension). The reference
+    //    ends in a terminator and the edit disrupts that terminator codon while
+    //    leaving every sense residue intact, so the former stop now codes an
+    //    amino acid and translation reads through the 3'UTR to the next stop:
+    //    `p.(Ter<pos><aa>extTer<k>)` (extension.md:30; #498, #615).
+    //
+    //    Detection must read the mutated CDS *through the 3'UTR*: a small del
+    //    that disrupts the stop shortens the CDS-only `alt_protein` so that
+    //    `alt_protein.len()` is NOT longer than `ref_protein.len()` — the old
+    //    length-based check missed it and the variant fell through to the
+    //    frameshift path, which then read the (nonexistent) reference residue
+    //    at the stop slot and emitted the invalid `Xaa` token (#615). Instead
+    //    we translate the full read-through sequence once and route to the
+    //    extension builder iff the protein is unchanged up to and including the
+    //    last sense residue and the former stop now codes a non-stop AA. A
+    //    frameshift *before* the stop diverges earlier and is excluded.
+    if ref_protein_with_stop.last() == Some(&AminoAcid::Ter)
+        && is_stop_loss_readthrough(
+            ref_protein,
+            &mut_cds,
+            transcript,
+            cds_pos_end,
+            is_frameshift,
+        )?
     {
-        // Possibly readthrough if the MUTATION affected the stop codon.
-        // The affected CDS region includes the stop codon area.
-        let stop_cds_start = (ref_protein.len() * 3 + 1) as i64; // 1-based CDS pos of stop codon
-        if cds_pos_start >= stop_cds_start
-            || (cds_pos_end >= stop_cds_start && cds_pos_start <= stop_cds_start + 2)
-        {
-            return build_extension_variant(
-                ref_protein,
-                &alt_protein,
-                &mut_cds,
-                protein_accession,
-                transcript,
-            );
-        }
+        return build_extension_variant(
+            ref_protein,
+            &alt_protein,
+            &mut_cds,
+            protein_accession,
+            transcript,
+        );
     }
 
     // 4. Build the protein variant (net + is_frameshift were computed above).
@@ -580,6 +592,26 @@ fn build_frameshift_variant(
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
     let first_diff = first_diff_position(ref_protein, alt_protein);
+
+    // Defense-in-depth (#615): a frameshift whose first changed residue is at
+    // or beyond the reference protein's end has no indexable reference residue,
+    // so the legacy `ref_protein.get(first_diff).unwrap_or(Xaa)` below would
+    // emit the invalid `Xaa` token. That situation is a stop-region
+    // readthrough: the divergence is the former terminator (or past it),
+    // which is a C-terminal extension, not a frameshift. Route it to the
+    // extension builder, which anchors at the stop position and reads the new
+    // residue from the mutated sequence — never `Xaa`. (Normal frameshifts
+    // diverge mid-protein with `first_diff < ref_protein.len()` and skip this.)
+    if first_diff >= ref_protein.len() {
+        return build_extension_variant(
+            ref_protein,
+            alt_protein,
+            mut_cds,
+            protein_accession,
+            transcript,
+        );
+    }
+
     let aa_pos = (first_diff + 1) as u64; // 1-based
     let ref_aa = ref_protein
         .get(first_diff)
@@ -644,6 +676,60 @@ fn build_frameshift_variant(
 }
 
 // ── Extension (stop-codon readthrough) prediction ─────────────────────────────
+
+/// Does the edit produce a stop-codon readthrough (stop-loss extension)?
+///
+/// A stop-loss extension occurs when the edit disrupts the terminator codon
+/// while leaving every sense residue intact, so the former stop now codes an
+/// amino acid and translation continues into the 3'UTR. We detect it by
+/// translating the *full* mutated read-through sequence (CDS + 3'UTR) and
+/// requiring all of:
+///
+/// 1. the terminator is genuinely destroyed — either the edit is a frameshift
+///    (`net % 3 != 0`, which scrambles the reading frame through the stop) or
+///    its affected CDS span overlaps the terminator codon
+///    (`cds_pos_end >= stop_cds_start`). Without this, an in-frame duplication
+///    of a sense codon *before* the stop (e.g. `c.4_6dup` on Met-Arg-Ter) also
+///    leaves the sense residues intact and pushes a residue into the
+///    former-stop slot, yet the terminator is untouched (just relocated by one
+///    codon) — that is a plain `dup`, not a stop-loss.
+/// 2. the first `ref_protein.len()` translated residues are byte-identical to
+///    `ref_protein` (no sense residue changed — a frameshift that begins
+///    *before* the last sense codon diverges earlier and is excluded), and
+/// 3. there is a residue at the former-stop slot (index `ref_protein.len()`)
+///    that is not a terminator (the stop was genuinely read through).
+///
+/// Reading through the 3'UTR is essential: a small deletion/duplication that
+/// disrupts the stop shortens (or doesn't lengthen) the CDS-only translation,
+/// so a length-based check would miss the readthrough and misroute to the
+/// frameshift path — which then reads the (nonexistent) reference residue at
+/// the empty stop slot and emits the invalid `Xaa` token (#615).
+fn is_stop_loss_readthrough(
+    ref_protein: &[AminoAcid],
+    mut_cds: &str,
+    transcript: &Transcript,
+    cds_pos_end: i64,
+    is_frameshift: bool,
+) -> Result<bool, FerroError> {
+    // 1-based CDS position of the (reference) terminator codon.
+    let stop_cds_start = (ref_protein.len() * 3 + 1) as i64;
+    // A frameshift scrambles the frame through the stop even when its anchor
+    // lies a base or two upstream of the terminator codon; an in-frame edit
+    // only disrupts the stop if its span actually overlaps it.
+    if !is_frameshift && cds_pos_end < stop_cds_start {
+        return Ok(false);
+    }
+
+    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
+    let readthrough = translate_full_cds_with_stop(&scan_seq);
+    let stop_idx = ref_protein.len();
+    // The former-stop slot must hold a non-terminator residue (the stop was
+    // read through) and every sense residue before it must be unchanged.
+    match readthrough.get(stop_idx) {
+        Some(&aa) if aa != AminoAcid::Ter => Ok(readthrough[..stop_idx] == *ref_protein),
+        _ => Ok(false),
+    }
+}
 
 /// Build a `p.(Ter{N}{Yyy}ext*{K})` extension variant for stop-codon readthrough.
 fn build_extension_variant(
@@ -1294,5 +1380,78 @@ mod tests {
         };
         let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
+    }
+
+    // ─── Stop-loss indel extension tests (#615) ──────────────────────────────
+    //
+    // A small del/dup that disrupts the terminator codon is a stop-loss: the
+    // protein is intact up to the last sense residue and the former stop now
+    // codes an amino acid, so translation reads through the 3'UTR to the next
+    // stop, yielding `p.(Ter<pos><aa>extTer<k>)` (or `extTer?` with no
+    // downstream stop). Such a variant must NEVER emit the `Xaa` undetermined
+    // residue nor be misrouted to the frameshift/delins path (#615).
+
+    /// (a) Single-base deletion *inside* the terminator codon with a new
+    /// in-frame stop in the 3'UTR.
+    ///
+    /// Transcript "ATGAAATAATTAAGGG": CDS c.1_9 = "ATGAAATAA" (Met-Lys-Ter,
+    /// stop TAA at c.7_9); 3'UTR = "TTAAGGG". Delete c.7 (the first T of the
+    /// stop). The CDS becomes "ATGAAAAA"; reading through the 3'UTR gives
+    /// "ATGAAAAATTAAGGG" → Met-Lys-Asn-Ter, so the former stop (Ter3) now
+    /// codes Asn and the very next codon is the new stop ⇒ extTer1. Crucially:
+    /// no `Xaa`, and anchored at Ter3 (not the frameshift form).
+    #[test]
+    fn del_in_stop_codon_is_extension_with_downstream_stop() {
+        let t = tx("ATGAAATAATTAAGGG", 1, 9);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 7, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Ter3AsnextTer1)");
+        assert!(!s.contains("Xaa"), "stop-loss must not emit Xaa: '{}'", s);
+    }
+
+    /// (b) Single-base duplication that disrupts the terminator codon with a
+    /// new in-frame stop in the 3'UTR.
+    ///
+    /// Transcript "ATGAAATAATTTAAGGG": CDS c.1_9 = "ATGAAATAA" (Met-Lys-Ter);
+    /// 3'UTR = "TTTAAGGG". Duplicate c.7 (the first T of the stop). The CDS
+    /// becomes "ATGAAATTAA"; reading through gives "ATGAAATTAATTTAAGGG" →
+    /// Met-Lys-Leu-Ile-Ter. The former stop (Ter3) now codes Leu; the new stop
+    /// is the 2nd added residue ⇒ extTer2. No `Xaa`.
+    #[test]
+    fn dup_disrupting_stop_codon_is_extension_with_downstream_stop() {
+        let t = tx("ATGAAATAATTTAAGGG", 1, 9);
+        let edit = NaEdit::Duplication {
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        };
+        let result = predict_indel(&t, 7, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Ter3LeuextTer2)");
+        assert!(!s.contains("Xaa"), "stop-loss must not emit Xaa: '{}'", s);
+    }
+
+    /// (c) Stop-disrupting deletion with NO in-frame stop in the available
+    /// downstream sequence → the extension length is unknown, reported as
+    /// `extTer?` (extension.md:33,50). Never `Xaa`.
+    ///
+    /// Transcript "ATGAAATAATTTGGG": CDS c.1_9 = "ATGAAATAA"; 3'UTR = "TTTGGG"
+    /// (no in-frame stop). Delete c.7 → CDS "ATGAAAAA"; read-through
+    /// "ATGAAAAATTTGGG" → Met-Lys-Asn-Leu with no further stop ⇒ extTer?.
+    #[test]
+    fn del_in_stop_codon_without_downstream_stop_is_ext_ter_unknown() {
+        let t = tx("ATGAAATAATTTGGG", 1, 9);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 7, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Ter3AsnextTer?)");
+        assert!(!s.contains("Xaa"), "stop-loss must not emit Xaa: '{}'", s);
     }
 }
