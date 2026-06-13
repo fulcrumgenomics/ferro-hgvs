@@ -2473,6 +2473,11 @@ impl CdotMapper {
     /// Includes the primary build if the transcript is present there. The
     /// returned list is unordered; callers that want a deterministic probe
     /// order (e.g. GRCh38-then-GRCh37) should sort externally.
+    ///
+    /// Side effect: this can force-load a deferred secondary build on first
+    /// use (via `deferred_alt_mapper`), which may read a large cdot source
+    /// (~198k transcripts) from disk. Callers on a hot path should be aware
+    /// this is not a cheap metadata-only query.
     pub fn available_builds_for(&self, accession: &str) -> Vec<String> {
         let mut builds = Vec::new();
         // Only claim the primary build when we actually know what it is —
@@ -2493,6 +2498,22 @@ impl CdotMapper {
                 });
             if hit {
                 builds.push(build.clone());
+            }
+        }
+        // Also consider deferred secondary builds (loaded on demand). Only report
+        // a deferred build when it actually has the transcript, mirroring the
+        // eager check above.
+        let deferred: Vec<String> = self.lazy_alt_mappers.keys().cloned().collect();
+        for build in deferred {
+            if builds.iter().any(|b| b == &build) {
+                continue;
+            }
+            // `get_transcript_on_build` applies its own version-fallback, so we
+            // don't repeat the eager loop's inline fallback here.
+            if let Some(sub) = self.deferred_alt_mapper(&build) {
+                if sub.get_transcript_on_build(accession, &build).is_some() {
+                    builds.push(build);
+                }
             }
         }
         builds
@@ -4502,6 +4523,36 @@ mod tests {
         let json = multi_build_cdot_json();
         let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
         assert!(mapper.available_builds_for("NM_999999.1").is_empty());
+    }
+
+    #[test]
+    fn test_available_builds_for_includes_deferred_build() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+
+        let mut builds = lazy.available_builds_for("NM_000001.1");
+        builds.sort();
+        assert_eq!(
+            builds,
+            vec!["GRCh37".to_string()],
+            "deferred GRCh37 must be the sole available build"
+        );
     }
 
     #[test]
