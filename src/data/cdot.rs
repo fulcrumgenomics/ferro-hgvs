@@ -5383,4 +5383,30 @@ mod tests {
         }
         assert!(shared.deferred_alt_loaded("GRCh37"));
     }
+
+    #[test]
+    fn deferred_state_is_not_serialized() {
+        // The deferred source is runtime-only: serializing and reloading drops it
+        // (from_manifest re-establishes it). Round-trip must not panic and must yield
+        // a mapper with no deferred state, while primary data survives.
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        mapper.defer_secondary_build("GRCh37", PathBuf::from("/tmp/whatever.json"));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let rkyv_path = dir.path().join("m.rkyv");
+        mapper.to_rkyv_file(&rkyv_path).unwrap();
+        let reloaded = CdotMapper::from_rkyv_file(&rkyv_path).unwrap();
+
+        // Deferred state did not survive serialization.
+        assert!(
+            !reloaded.deferred_alt_loaded("GRCh37"),
+            "deferred state must not survive serialization"
+        );
+        assert!(
+            reloaded.deferred_alt_mapper("GRCh37").is_none(),
+            "no deferred source should be reconstructed from a snapshot"
+        );
+        // Primary data survives normally.
+        assert!(reloaded.get_transcript("NM_000088.3").is_some());
+    }
 }
