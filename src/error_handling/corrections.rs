@@ -7,6 +7,7 @@ use super::types::{ErrorType, ResolvedAction};
 use crate::convert::mapper::CoordinateMapper;
 use crate::hgvs::location::CdsPos;
 use crate::reference::provider::ReferenceProvider;
+use std::borrow::Cow;
 use std::cmp::min;
 
 /// A detected correction with its details.
@@ -54,7 +55,15 @@ impl DetectedCorrection {
 /// Normalize wrong dash characters (en-dash, em-dash) to hyphen.
 ///
 /// Returns the corrected string and a list of corrections made.
-pub fn correct_dash_characters(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_dash_characters(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: this function only rewrites U+2013/U+2014/U+2212,
+    // all of which are multi-byte UTF-8 (every byte >= 0x80). A pure-ASCII
+    // input therefore cannot contain any of them, so no correction is
+    // possible — skip without walking or allocating.
+    if input.is_ascii() {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut result = String::with_capacity(input.len());
     let mut corrections = Vec::new();
 
@@ -97,13 +106,25 @@ pub fn correct_dash_characters(input: &str) -> (String, Vec<DetectedCorrection>)
         }
     }
 
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 /// Normalize wrong quote characters (smart quotes) to regular quotes.
 ///
 /// Returns the corrected string and a list of corrections made.
-pub fn correct_quote_characters(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_quote_characters(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: this function only rewrites the smart quotes
+    // U+2018/U+2019/U+201C/U+201D, all of which are multi-byte UTF-8 (every
+    // byte >= 0x80). A pure-ASCII input cannot contain any of them, so no
+    // correction is possible — skip without walking or allocating.
+    if input.is_ascii() {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut result = String::with_capacity(input.len());
     let mut corrections = Vec::new();
 
@@ -135,7 +156,11 @@ pub fn correct_quote_characters(input: &str) -> (String, Vec<DetectedCorrection>
         }
     }
 
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 /// Return true if the character is whitespace per Rust's `char::is_whitespace`,
@@ -169,7 +194,17 @@ fn is_invisible_whitespace(c: char) -> bool {
 /// silently). The function is idempotent on its own output. See issue #128.
 ///
 /// Returns the corrected string and a list of corrections made.
-pub fn correct_whitespace(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_whitespace(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction requires at least one
+    // `is_invisible_whitespace` char. Every such char is either ASCII
+    // whitespace, or a non-ASCII char (the Unicode-whitespace set and the
+    // zero-width additions U+200B/U+200C/U+200D/U+FEFF are all >= 0x80). So if
+    // the input has no ASCII-whitespace byte AND is pure ASCII, no stripped
+    // char can be present — skip without walking or allocating.
+    if input.is_ascii() && !input.bytes().any(|b| b.is_ascii_whitespace()) {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut corrections = Vec::new();
     let mut result = String::with_capacity(input.len());
     let mut run_start: Option<usize> = None;
@@ -204,7 +239,11 @@ pub fn correct_whitespace(input: &str) -> (String, Vec<DetectedCorrection>) {
         ));
     }
 
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 /// Check if the input contains position zero on a numeric axis.
@@ -273,7 +312,7 @@ pub fn detect_position_zero(input: &str) -> Option<usize> {
 /// Correct protein substitution arrow syntax.
 ///
 /// Converts `p.Val600>Glu` to `p.Val600Glu`.
-pub fn correct_protein_arrow(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_protein_arrow(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Simple pattern: look for ">Xxx" where Xxx is an amino acid
@@ -294,13 +333,13 @@ pub fn correct_protein_arrow(input: &str) -> (String, Vec<DetectedCorrection>) {
                         arrow_pos,
                         arrow_pos + 1,
                     ));
-                    return (corrected, corrections);
+                    return (Cow::Owned(corrected), corrections);
                 }
             }
         }
     }
 
-    (input.to_string(), corrections)
+    (Cow::Borrowed(input), corrections)
 }
 
 /// Correct deprecated stop-codon and frameshift forms in protein descriptions.
@@ -322,12 +361,12 @@ pub fn correct_protein_arrow(input: &str) -> (String, Vec<DetectedCorrection>) {
 /// the input cursor, even when replacements change the output length. Only operates
 /// when `p.` appears in the input. Idempotent: a second pass over canonical input
 /// yields no corrections.
-pub fn correct_deprecated_protein_forms(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_deprecated_protein_forms(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Gate: only operate on inputs that contain a protein variant.
     if !input.starts_with("p.") && !input.contains(":p.") && !input.contains("[p.") {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     let bytes = input.as_bytes();
@@ -438,7 +477,11 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (String, Vec<DetectedCor
         }
     }
 
-    (out, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(out), corrections)
+    }
 }
 
 /// Returns true if byte index `pos` in `input` is inside a `p.` (protein) segment.
@@ -536,10 +579,10 @@ pub fn correct_amino_acid_case(token: &str) -> Option<(String, ErrorType)> {
 /// `:p.` (or leading `p.`) variant-type marker are returned unchanged. This
 /// scoping prevents false matches against accession bodies, gene-symbol
 /// selectors, or coding-variant nucleotide tokens.
-pub fn correct_amino_acid_case_in_protein(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_amino_acid_case_in_protein(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
     let Some(start) = find_protein_segment_start(input) else {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     };
     let prefix = &input[..start];
     let body = &input[start..];
@@ -599,7 +642,11 @@ pub fn correct_amino_acid_case_in_protein(input: &str) -> (String, Vec<DetectedC
         }
     }
 
-    (out, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(out), corrections)
+    }
 }
 
 /// UTF-8 leading-byte → byte count.
@@ -631,10 +678,10 @@ fn utf8_char_len(b: u8) -> usize {
 /// three-letter run already has canonical capitalisation.
 ///
 /// One `DetectedCorrection` is emitted per replaced one-letter code.
-pub fn correct_single_letter_aa_in_protein(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_single_letter_aa_in_protein(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
     let Some(start) = find_protein_segment_start(input) else {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     };
     let prefix = &input[..start];
     let body = &input[start..];
@@ -685,7 +732,11 @@ pub fn correct_single_letter_aa_in_protein(input: &str) -> (String, Vec<Detected
         }
     }
 
-    (out, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(out), corrections)
+    }
 }
 
 /// Find the byte offset *within `input`* at which the protein description
@@ -766,7 +817,7 @@ pub fn single_to_three_letter_aa(single: char) -> Option<&'static str> {
 /// Correct lowercase accession prefix.
 ///
 /// Converts `nm_000088.3` to `NM_000088.3`.
-pub fn correct_accession_prefix_case(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_accession_prefix_case(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Known prefixes that should be uppercase
@@ -794,11 +845,11 @@ pub fn correct_accession_prefix_case(input: &str) -> (String, Vec<DetectedCorrec
                 0,
                 lower.len(),
             ));
-            return (corrected, corrections);
+            return (Cow::Owned(corrected), corrections);
         }
     }
 
-    (input.to_string(), corrections)
+    (Cow::Borrowed(input), corrections)
 }
 
 /// Correct mixed case edit types.
@@ -816,7 +867,16 @@ pub fn correct_accession_prefix_case(input: &str) -> (String, Vec<DetectedCorrec
 /// requires at least one uppercase letter in the token to fire.
 /// Already-lowercase tokens are passed through. `delins` is checked
 /// before `del` (longer prefix).
-pub fn correct_edit_type_case_full(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_edit_type_case_full(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires when a matched edit-type
+    // token differs from its canonical lowercase form (`raw != canonical`),
+    // i.e. the token contains at least one uppercase ASCII letter. If the
+    // input has no uppercase ASCII letter at all, every candidate token is
+    // already lowercase and no correction is possible — skip the walk.
+    if !input.bytes().any(|b| b.is_ascii_uppercase()) {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let bytes = input.as_bytes();
     let mut corrections = Vec::new();
     let mut result = String::with_capacity(input.len());
@@ -869,7 +929,11 @@ pub fn correct_edit_type_case_full(input: &str) -> (String, Vec<DetectedCorrecti
         result.push_str(&input[i..ch_end]);
         i = ch_end;
     }
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 #[inline]
@@ -1237,7 +1301,7 @@ pub fn detect_swapped_positions(input: &str) -> Option<DetectedCorrection> {
 /// This function strips the trailing annotation.
 ///
 /// Returns the stripped string and a list of corrections made.
-pub fn strip_trailing_annotation(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn strip_trailing_annotation(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Look for patterns like " (p.XXX)" or "(p.XXX)" at the end
@@ -1269,12 +1333,12 @@ pub fn strip_trailing_annotation(input: &str) -> (String, Vec<DetectedCorrection
                     input.len(),
                 ));
 
-                return (stripped.to_string(), corrections);
+                return (Cow::Owned(stripped.to_string()), corrections);
             }
         }
     }
 
-    (input.to_string(), corrections)
+    (Cow::Borrowed(input), corrections)
 }
 
 /// Infer and add missing coordinate type prefix for genomic accessions.
@@ -1283,13 +1347,13 @@ pub fn strip_trailing_annotation(input: &str) -> (String, Vec<DetectedCorrection
 /// Also handles uncertain boundaries like `NC_000001.11:(?_pos)_(pos_?)del`.
 ///
 /// Returns the corrected string and a list of corrections made.
-pub fn correct_missing_coordinate_prefix(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_missing_coordinate_prefix(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Find the colon that separates accession from variant
     let colon_pos = match input.find(':') {
         Some(pos) => pos,
-        None => return (input.to_string(), corrections),
+        None => return (Cow::Borrowed(input), corrections),
     };
 
     let accession = &input[..colon_pos];
@@ -1303,7 +1367,7 @@ pub fn correct_missing_coordinate_prefix(input: &str) -> (String, Vec<DetectedCo
         || (accession.starts_with("LRG_") && !accession.contains('t'));
 
     if !is_genomic_accession {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     // Check if already has a coordinate prefix (g., c., p., n., r., m.)
@@ -1315,13 +1379,13 @@ pub fn correct_missing_coordinate_prefix(input: &str) -> (String, Vec<DetectedCo
         || after_colon.starts_with("m.");
 
     if has_prefix {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     // Check if this looks like a variant (starts with digit, paren, or ?)
     let first_char = after_colon.chars().next().unwrap_or(' ');
     if !first_char.is_ascii_digit() && first_char != '(' && first_char != '?' && first_char != '[' {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     // Add g. prefix
@@ -1334,13 +1398,13 @@ pub fn correct_missing_coordinate_prefix(input: &str) -> (String, Vec<DetectedCo
         colon_pos + 1,
     ));
 
-    (corrected, corrections)
+    (Cow::Owned(corrected), corrections)
 }
 
 /// Correct swapped interval positions.
 ///
 /// Swaps `c.200_100del` to `c.100_200del`.
-pub fn correct_swapped_positions(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_swapped_positions(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     if let Some(correction) = detect_swapped_positions(input) {
         let corrected = format!(
             "{}{}{}",
@@ -1348,9 +1412,9 @@ pub fn correct_swapped_positions(input: &str) -> (String, Vec<DetectedCorrection
             correction.corrected,
             &input[correction.end..]
         );
-        (corrected, vec![correction])
+        (Cow::Owned(corrected), vec![correction])
     } else {
-        (input.to_string(), vec![])
+        (Cow::Borrowed(input), vec![])
     }
 }
 
@@ -1360,7 +1424,7 @@ pub fn correct_swapped_positions(input: &str) -> (String, Vec<DetectedCorrection
 /// to `NM_000088.3:c.[100A>G;200C>T]` (coordinate type before brackets).
 ///
 /// Returns the corrected string and a list of corrections made.
-pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_old_allele_format(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut corrections = Vec::new();
 
     // Pattern to detect: ref:[x.edit1;x.edit2;...] where x is the coordinate type
@@ -1369,7 +1433,7 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
     // Find the colon followed by opening bracket
     let colon_bracket = match input.find(":[") {
         Some(pos) => pos,
-        None => return (input.to_string(), corrections),
+        None => return (Cow::Borrowed(input), corrections),
     };
 
     // Check what's after the bracket
@@ -1390,13 +1454,13 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
         "p."
     } else {
         // Not an old allele format we can correct
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     };
 
     // Find the closing bracket
     let close_bracket = match input[colon_bracket..].find(']') {
         Some(pos) => colon_bracket + pos,
-        None => return (input.to_string(), corrections),
+        None => return (Cow::Borrowed(input), corrections),
     };
 
     // Extract the content between brackets
@@ -1405,13 +1469,13 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
     // Check if all variants have the same coordinate prefix
     let parts: Vec<&str> = content.split(';').collect();
     if parts.is_empty() {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     // Verify all parts start with the same coordinate type
     let all_same_prefix = parts.iter().all(|p| p.trim().starts_with(coord_type));
     if !all_same_prefix {
-        return (input.to_string(), corrections);
+        return (Cow::Borrowed(input), corrections);
     }
 
     // Strip the coordinate prefix from each part
@@ -1444,7 +1508,7 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
         close_bracket + 1,
     ));
 
-    (corrected, corrections)
+    (Cow::Owned(corrected), corrections)
 }
 
 /// Detect and correct the deprecated multi-base substitution syntax
@@ -1467,7 +1531,14 @@ pub fn correct_old_allele_format(input: &str) -> (String, Vec<DetectedCorrection
 /// original input rather than any normalised buffer.
 ///
 /// Returns the (possibly rewritten) string and the list of corrections.
-pub fn correct_old_substitution_syntax(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_old_substitution_syntax(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: every correction path requires an `>` arrow byte
+    // (the rewrite is anchored at `bytes[k] == b'>'`). With no `>` in the
+    // input there is no substitution form to rewrite — skip the walk.
+    if !input.contains('>') {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let bytes = input.as_bytes();
     let mut result = String::with_capacity(input.len());
     let mut corrections = Vec::new();
@@ -1594,7 +1665,11 @@ pub fn correct_old_substitution_syntax(input: &str) -> (String, Vec<DetectedCorr
         i = m;
     }
 
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 /// IUPAC nucleotide base (incl. ambiguity codes used in HGVS).
@@ -1832,7 +1907,14 @@ fn canonicalize_protein_bracketed_aa_list(inner: &str) -> Option<String> {
 /// (digits, optional leading `-` or `*`, optional `+`/`-` offset). The
 /// `<source>` portion runs to end of input or whitespace; the rewrite is
 /// `<pos>_<pos>delins<source>`.
-pub fn correct_deprecated_con(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_deprecated_con(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires on a `con` token
+    // (the inner test is `&bytes[i..i + 3] == b"con"`). Without the substring
+    // `con` anywhere in the input there is nothing to rewrite — skip the walk.
+    if !input.contains("con") {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let bytes = input.as_bytes();
     let mut result = String::with_capacity(input.len() + 4);
     let mut corrections = Vec::new();
@@ -1881,7 +1963,11 @@ pub fn correct_deprecated_con(input: &str) -> (String, Vec<DetectedCorrection>) 
         i += 1;
     }
 
-    (result, corrections)
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        (Cow::Owned(result), corrections)
+    }
 }
 
 /// True if the bytes preceding `end` end in an HGVS-position range of the
@@ -3076,11 +3162,18 @@ pub fn detect_dup_size_suffix(input: &str) -> Vec<DetectedCorrection> {
 /// Per HGVS spec (`recommendations/DNA/duplication.md:35-36`): the seq is
 /// redundant given the position range, and including it increases the
 /// chance of a typing error (`dupG` vs `dupT`). Safe to drop.
-pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_dup_explicit_seq(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires on a `dup` token
+    // (the inner test is `&bytes[i..i + 3] != b"dup"`). Without the substring
+    // `dup` anywhere in the input there is nothing to rewrite — skip the walk.
+    if !input.contains("dup") {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
     if !has_non_protein_description(bytes) {
-        return (input.to_string(), hits);
+        return (Cow::Borrowed(input), hits);
     }
 
     let mut out = String::with_capacity(input.len());
@@ -3132,7 +3225,11 @@ pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>
     if i < bytes.len() {
         out.push_str(&input[i..]);
     }
-    (out, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(out), hits)
+    }
 }
 
 /// Detect and correct deletions with an explicit deleted sequence (W3025).
@@ -3145,11 +3242,18 @@ pub fn correct_dup_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>
 /// Per HGVS spec (`recommendations/DNA/deletion.md:30-31`): the seq is
 /// redundant; including it increases the chance of a typing error
 /// (`delG` vs `delA`). Safe to drop.
-pub fn correct_del_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_del_explicit_seq(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires on a `del` token
+    // (the inner test is `&bytes[i..i + 3] != b"del"`). Without the substring
+    // `del` anywhere in the input there is nothing to rewrite — skip the walk.
+    if !input.contains("del") {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
     if !has_non_protein_description(bytes) {
-        return (input.to_string(), hits);
+        return (Cow::Borrowed(input), hits);
     }
 
     let mut out = String::with_capacity(input.len());
@@ -3207,7 +3311,11 @@ pub fn correct_del_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>
     if i < bytes.len() {
         out.push_str(&input[i..]);
     }
-    (out, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(out), hits)
+    }
 }
 
 /// Detect and correct deletion-insertions whose inserted sequence is empty
@@ -3217,11 +3325,19 @@ pub fn correct_del_explicit_seq(input: &str) -> (String, Vec<DetectedCorrection>
 /// or whitespace). Rewrites to `del` and emits one `DetectedCorrection`
 /// per occurrence. Pre-existing `delinsATG` / `delins[…]` / `delinsN[12]` /
 /// `delins(10_20)` / `delins10` forms are left untouched.
-pub fn correct_empty_delins(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_empty_delins(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires on a `delins` token
+    // (the inner test is `&bytes[i..i + 6] == b"delins"`). Without the
+    // substring `delins` anywhere in the input there is nothing to rewrite —
+    // skip the walk.
+    if !input.contains("delins") {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
     if !has_non_protein_description(bytes) {
-        return (input.to_string(), hits);
+        return (Cow::Borrowed(input), hits);
     }
 
     let mut result = String::with_capacity(input.len());
@@ -3250,7 +3366,11 @@ pub fn correct_empty_delins(input: &str) -> (String, Vec<DetectedCorrection>) {
         result.push_str(&input[i..ch_end]);
         i = ch_end;
     }
-    (result, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(result), hits)
+    }
 }
 
 /// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>` and
@@ -3317,11 +3437,19 @@ fn matches_single_pos_keyword(bytes: &[u8], i: usize) -> bool {
 /// the single-position form and emits one `DetectedCorrection` per
 /// occurrence. The check is scoped to non-protein descriptions; protein has
 /// its own L2 issue track.
-pub fn correct_single_position_range(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_single_position_range(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a correction only fires when an equal position pair
+    // is immediately followed by a `del`/`dup`/`inv` keyword (see
+    // `matches_single_pos_keyword`). Without any of those substrings present
+    // there is no keyword to anchor on — skip the walk.
+    if !(input.contains("del") || input.contains("dup") || input.contains("inv")) {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
     if !has_non_protein_description(bytes) {
-        return (input.to_string(), hits);
+        return (Cow::Borrowed(input), hits);
     }
 
     let mut result = String::with_capacity(input.len());
@@ -3345,7 +3473,11 @@ pub fn correct_single_position_range(input: &str) -> (String, Vec<DetectedCorrec
         result.push_str(&input[p..ch_end]);
         p = ch_end;
     }
-    (result, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(result), hits)
+    }
 }
 
 /// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>`,
@@ -3391,7 +3523,7 @@ fn match_position_pair(bytes: &[u8], i: usize) -> Option<usize> {
 /// Scoped to `r.` (RNA) descriptions: the HGVS
 /// `recommendations/RNA/repeated.md` page is the only one that calls this
 /// form non-canonical; DNA repeats keep the base label by convention.
-pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_redundant_repeat_label(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
 
@@ -3409,7 +3541,7 @@ pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorre
         i += 1;
     }
     let Some(start) = desc_start else {
-        return (input.to_string(), hits);
+        return (Cow::Borrowed(input), hits);
     };
 
     let mut result = String::with_capacity(input.len());
@@ -3454,7 +3586,11 @@ pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorre
         p = ch_end;
     }
     result.push_str(&input[p..]);
-    (result, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(result), hits)
+    }
 }
 
 /// Canonicalize thymine (`t`/`T`) to `u` inside `r.` (RNA) descriptions
@@ -3483,7 +3619,15 @@ pub fn correct_redundant_repeat_label(input: &str) -> (String, Vec<DetectedCorre
 ///   `t`/`T` byte inside an `r.` description span is unambiguously a base.
 /// - Each `t`/`T` byte produces one `DetectedCorrection` and is rewritten
 ///   to lowercase `u` (the canonical RNA letter casing).
-pub fn correct_rna_thymine(input: &str) -> (String, Vec<DetectedCorrection>) {
+pub fn correct_rna_thymine(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    // Necessary condition: a `t`/`T` byte is only rewritten while `in_rna` is
+    // true, and `in_rna` is only ever set on observing an `r.` coordinate
+    // prefix. Without the substring `r.` anywhere in the input the RNA context
+    // is never entered and no correction is possible — skip the walk.
+    if !input.contains("r.") {
+        return (Cow::Borrowed(input), Vec::new());
+    }
+
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
 
@@ -3535,7 +3679,11 @@ pub fn correct_rna_thymine(input: &str) -> (String, Vec<DetectedCorrection>) {
         result.push_str(&input[i..ch_end]);
         i = ch_end;
     }
-    (result, hits)
+    if hits.is_empty() {
+        (Cow::Borrowed(input), hits)
+    } else {
+        (Cow::Owned(result), hits)
+    }
 }
 
 #[cfg(test)]
