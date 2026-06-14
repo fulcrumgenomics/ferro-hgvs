@@ -100,6 +100,23 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NC_000001.11:g.12345delA",  // trailing reference sequence
     "NC_000001.11:g.12345del3",  // trailing explicit length
     "NM_000088.3:c.459_460dupAC", // trailing sequence on a dup
+    // --- protein missense (now fast-pathed; must agree) ---
+    "NP_000079.2:p.Val600Glu",
+    "NP_000079.2:p.(Val600Glu)",
+    "NP_000079.2:p.Gly12Cys",
+    "NP_000079.2:p.Arg100Ter",
+    "NP_000079.2:p.Met1Val",
+    "ENSP00000369497.3:p.Asp427Tyr",
+    "NP_000079.2:p.V600E", // 1-letter codes
+    // --- protein non-missense / edges that must defer to (and agree with) generic ---
+    "NP_000079.2:p.Arg100GlyfsTer5", // frameshift
+    "NP_000079.2:p.Asp427=",         // synonymous / identity
+    "NP_000079.2:p.Lys23del",        // protein deletion
+    "NP_000079.2:p.(Gly56Ala^Ser)",  // residue alternatives
+    "NP_000079.2:p.Arg725Trp5",      // trailing annotation digit (generic ignores it)
+    "NP_000079.2:p.Met1?",           // unknown
+    "NP_000079.2:p.=",               // whole-protein identity
+    "NP_000079.2:p.0",               // no protein
     // --- other non-substitution edits (fall back) ---
     "NM_000088.3:c.459_460insACGT",
     "NM_000088.3:c.459_460delinsAC",
@@ -123,7 +140,14 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NM_000088.3:c.A>G",
     "NC_000001.11:g.12345A>",
     "NM_000088.3:c.459X>G",
+    // --- protein coordinate on a nucleotide-flavored accession: the generic
+    // parser *accepts* these (it does not enforce a reference-type ↔ coordinate-
+    // system match for `p.`, unlike the `NR_` + `g.`/`c.` mismatch it does
+    // reject), so the protein fast-path dispatch must accept-and-agree, not
+    // defer. Pins the parity the unguarded `b'p'` dispatch relies on. ---
     "NM_000088.3:p.Arg100Gly",
+    "ENST00000357033.8:p.Arg100Gly",
+    "LRG_1:p.Arg100Gly",
 ];
 
 #[test]
@@ -218,6 +242,53 @@ prop_compose! {
     }
 }
 
+/// A protein accession flavor (RefSeq / Ensembl protein).
+fn protein_accession() -> impl Strategy<Value = &'static str> {
+    prop_oneof![Just("NP_000079.2"), Just("ENSP00000369497.3")]
+}
+
+/// An amino-acid token: 3-letter codes (incl. `Ter`/`Sec`), one 1-letter code,
+/// and an invalid token — to exercise both the fast path's missense `Success`
+/// branch and its deferral on forms it should not claim.
+fn amino_acid() -> impl Strategy<Value = &'static str> {
+    prop_oneof![
+        Just("Ala"),
+        Just("Arg"),
+        Just("Gly"),
+        Just("Val"),
+        Just("Glu"),
+        Just("Ter"),
+        Just("Sec"),
+        Just("V"),
+        Just("Zzz"),
+    ]
+}
+
+prop_compose! {
+    /// A protein edit string: missense (`p.Arg100Gly`), its predicted-parens
+    /// form, and non-missense forms (`fs`/`=`/`del`/`^`-alternatives/trailing
+    /// annotation digit) the fast path must defer on. Both parsers must agree.
+    fn protein_edit()(
+        acc in protein_accession(),
+        from in amino_acid(),
+        pos in prop_oneof![Just(1u64), Just(100), Just(600), Just(0)],
+        to in amino_acid(),
+        tail in prop_oneof![
+            Just(""), Just(""), Just(""),       // bare missense (weighted)
+            Just("fsTer5"), Just("="), Just("del"),
+            Just("^Ser"), Just("5"),            // ^-alternatives, trailing digit
+        ],
+        parens in prop::bool::ANY,
+    ) -> String {
+        let body = format!("{from}{pos}{to}{tail}");
+        if parens {
+            format!("{acc}:p.({body})")
+        } else {
+            format!("{acc}:p.{body}")
+        }
+    }
+}
+
 /// A base spanning canonical (`ACGT`), IUPAC-ambiguity (`RYN`), the RNA base
 /// `U`, and lowercase — to exercise base-validity parity.
 fn edge_base() -> impl Strategy<Value = &'static str> {
@@ -306,6 +377,11 @@ proptest! {
 
     #[test]
     fn fast_path_matches_standard_edge(input in edge_substitution()) {
+        prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
+    }
+
+    #[test]
+    fn fast_path_matches_standard_protein(input in protein_edit()) {
         prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
     }
 }

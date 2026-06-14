@@ -28,6 +28,7 @@
 //! - RNA variants: `r.100a>g`
 //! - Non-coding RNA accessions: NR_/XR_ (any coordinate system)
 //! - Insertions / delins / inversions / repeats
+//! - Non-missense protein edits (frameshift, identity, extension, indel)
 //!
 //! This overhead comes from the quick-rejection checks needed to identify
 //! fast-path candidates. For workloads dominated by substitutions, the net
@@ -35,20 +36,24 @@
 //!
 //! # Supported Fast-Paths
 //!
-//! Substitutions (position + single base change), including intronic
-//! (`c.100+5A>G`) and UTR (`c.*100A>G`, `c.-50A>G`) coding positions, and plain
+//! Nucleotide substitutions (position + single base change), including intronic
+//! (`c.100+5A>G`) and UTR (`c.*100A>G`, `c.-50A>G`) coding positions; plain
 //! deletions / duplications (a single position or `a_b` range followed by a bare
-//! `del` / `dup`, with no trailing sequence or length) for:
-//! - **RefSeq**: NC_, NM_, NG_, XM_ accessions with `g.` or `c.` variants
+//! `del` / `dup`, with no trailing sequence or length); and protein missense
+//! substitutions (`p.Arg100Gly`, `p.(Arg100Gly)`), for:
+//! - **RefSeq**: NC_, NM_, NG_, XM_ accessions with `g.` or `c.` variants, and
+//!   NP_/XP_ with `p.` missense
 //!   (`NR_`/`XR_` non-coding RNA transcripts are deferred to the generic
 //!   parser — their only valid coordinate systems are `n.`/`r.`)
-//! - **Ensembl**: ENST, ENSG accessions with `g.` or `c.` variants
-//! - **LRG**: LRG_ accessions with `g.` or `c.` variants
+//! - **Ensembl**: ENST, ENSG accessions with `g.` or `c.` variants, ENSP with `p.`
+//! - **LRG**: LRG_ accessions with `g.`, `c.`, or `p.` (missense) variants
 //! - **Assembly**: GRCh37/38, hg19/38 notation with `g.` variants
 //!
 //! Deletion/duplication forms that carry a deleted sequence or explicit length
-//! (`delA`, `del3`, `dupAG`), insertions, delins, inversions, and repeats are
-//! left to the generic parser, which owns their canonicalization.
+//! (`delA`, `del3`, `dupAG`), insertions, delins, inversions, repeats, and
+//! non-missense protein edits (frameshift, identity `=`, `del`/`dup`/`ins`,
+//! extension, `^`-alternatives) are left to the generic parser, which owns their
+//! canonicalization.
 //!
 //! # When to Use
 //!
@@ -60,10 +65,13 @@
 //! delegates unconditionally to [`super::parse_hgvs`] and offers no additional
 //! performance over calling [`super::parse_hgvs`] directly.
 
-use crate::hgvs::edit::{Base, NaEdit};
-use crate::hgvs::interval::{CdsInterval, GenomeInterval};
-use crate::hgvs::location::{CdsPos, GenomePos};
-use crate::hgvs::variant::{Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit};
+use crate::hgvs::edit::{Base, NaEdit, ProteinEdit};
+use crate::hgvs::interval::{CdsInterval, GenomeInterval, ProtInterval};
+use crate::hgvs::location::{AminoAcid, CdsPos, GenomePos};
+use crate::hgvs::parser::position::{parse_amino_acid, parse_prot_pos};
+use crate::hgvs::variant::{
+    Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, ProteinVariant,
+};
 
 /// Lookup table for valid IUPAC base characters
 /// Supports A, C, G, T, U, R, Y, S, W, K, M, B, D, H, V, N
@@ -152,6 +160,11 @@ enum FastEdit {
     Substitution,
     Deletion,
     Duplication,
+    /// A protein missense substitution (`p.Arg100Gly`). Unlike the nucleotide
+    /// edits this is not recognized by [`classify_fast_edit`] (its tail is an
+    /// amino-acid code, not `X>Y`/`del`/`dup`); it is selected by coordinate
+    /// type (`:p.`) in [`try_fast_path`] instead.
+    ProteinSubstitution,
 }
 
 /// Classify the trailing edit of a fast-path candidate, or `None` to defer.
@@ -196,56 +209,57 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
         return FastPathResult::Fallback;
     }
 
-    // Classify the trailing edit up front. This is the quick-rejection gate:
-    // anything that is not a recognized substitution / plain del / plain dup
-    // tail defers immediately, avoiding parse work for the patterns the fast
-    // path does not handle.
-    let edit_kind = match classify_fast_edit(bytes, len) {
-        Some(k) => k,
+    // Locate the coordinate type (`:<x>.`). It selects the edit family: `p.`
+    // routes to the protein missense path; `n.`/`r.` are unsupported; `g.`/`c.`
+    // use the trailing-edit classifier.
+    let colon_pos = match memchr::memchr(b':', bytes) {
+        Some(c) => c,
         None => return FastPathResult::Fallback,
     };
+    let typed = colon_pos + 2 < len && bytes[colon_pos + 2] == b'.';
+    let type_char = if typed { bytes[colon_pos + 1] } else { 0 };
 
-    // Quick exclusion: find colon and check variant type + complex patterns
-    // Combined check to minimize overhead
-    if let Some(colon_pos) = memchr::memchr(b':', bytes) {
-        if colon_pos + 2 < len {
-            let type_char = bytes[colon_pos + 1];
-            let dot_char = bytes[colon_pos + 2];
+    // Exclude :n. (non-coding RNA) and :r. (RNA) - not supported.
+    if type_char == b'n' || type_char == b'r' {
+        return FastPathResult::Fallback;
+    }
 
-            // Exclude :n. (non-coding RNA) and :r. (RNA) - not supported
-            if (type_char == b'n' || type_char == b'r') && dot_char == b'.' {
+    let edit_kind = if type_char == b'p' {
+        // Protein missense is selected by type, not by a trailing-edit tail.
+        FastEdit::ProteinSubstitution
+    } else {
+        // The trailing-edit classifier is the quick-rejection gate for the
+        // nucleotide families: anything not a recognized substitution / plain
+        // del / plain dup tail defers immediately.
+        match classify_fast_edit(bytes, len) {
+            Some(k) => k,
+            None => return FastPathResult::Fallback,
+        }
+    };
+
+    // For :c. del/dup, exclude UTR (`*`/`-`) and intronic (`+`/`-`) coordinates:
+    // the del/dup builders parse only plain in-CDS positions. Substitutions
+    // handle UTR/intronic positions themselves (see `scan_cds_sub_position`), so
+    // they are not excluded here.
+    if type_char == b'c' && colon_pos + 3 < len && !matches!(edit_kind, FastEdit::Substitution) {
+        let pos_start = bytes[colon_pos + 3];
+        // c.*100 (UTR3) or c.-50 (UTR5/negative position)
+        if pos_start == b'*' || pos_start == b'-' {
+            return FastPathResult::Fallback;
+        }
+
+        // Check for intronic offset using memchr (faster than loop). Look for
+        // + or - in the region between the position start and the trailing
+        // keyword. Guard the bounds: for a very short `c.` body `colon_pos + 4`
+        // can exceed `len - 3`, and an unchecked slice would panic instead of
+        // falling back. When the region is empty there is no room for an
+        // intronic offset anyway, so skip.
+        let region_start = colon_pos + 4;
+        let region_end = len - 3;
+        if region_start < region_end {
+            let search_region = &bytes[region_start..region_end];
+            if memchr::memchr2(b'+', b'-', search_region).is_some() {
                 return FastPathResult::Fallback;
-            }
-
-            // For :c. del/dup, exclude UTR (`*`/`-`) and intronic (`+`/`-`)
-            // coordinates: the del/dup builders parse only plain in-CDS
-            // positions. Substitutions handle UTR/intronic positions themselves
-            // (see `scan_cds_sub_position`), so they are not excluded here.
-            if type_char == b'c'
-                && dot_char == b'.'
-                && colon_pos + 3 < len
-                && !matches!(edit_kind, FastEdit::Substitution)
-            {
-                let pos_start = bytes[colon_pos + 3];
-                // c.*100 (UTR3) or c.-50 (UTR5/negative position)
-                if pos_start == b'*' || pos_start == b'-' {
-                    return FastPathResult::Fallback;
-                }
-
-                // Check for intronic offset using memchr (faster than loop).
-                // Look for + or - in the region between the position start and
-                // the trailing keyword. Guard the bounds: for a very short `c.`
-                // body `colon_pos + 4` can exceed `len - 3`, and an unchecked
-                // slice would panic instead of falling back. When the region is
-                // empty there is no room for an intronic offset anyway, so skip.
-                let region_start = colon_pos + 4;
-                let region_end = len - 3;
-                if region_start < region_end {
-                    let search_region = &bytes[region_start..region_end];
-                    if memchr::memchr2(b'+', b'-', search_region).is_some() {
-                        return FastPathResult::Fallback;
-                    }
-                }
             }
         }
     }
@@ -363,7 +377,7 @@ fn try_refseq_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastP
     match type_char {
         b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
         b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
-        b'p' => FastPathResult::Fallback, // Protein is more complex
+        b'p' => try_parse_protein_substitution(input, edit_start, accession),
         _ => FastPathResult::Fallback,
     }
 }
@@ -425,7 +439,7 @@ fn try_ensembl_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> Fast
     match var_type_char {
         b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
         b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
-        b'p' => FastPathResult::Fallback,
+        b'p' => try_parse_protein_substitution(input, edit_start, accession),
         _ => FastPathResult::Fallback,
     }
 }
@@ -489,7 +503,7 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPath
     match type_char {
         b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
         b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
-        b'p' => FastPathResult::Fallback,
+        b'p' => try_parse_protein_substitution(input, edit_start, accession),
         _ => FastPathResult::Fallback,
     }
 }
@@ -561,6 +575,8 @@ fn dispatch_genome(
         }
         FastEdit::Deletion => try_parse_genome_del_dup(bytes, edit_start, accession, false),
         FastEdit::Duplication => try_parse_genome_del_dup(bytes, edit_start, accession, true),
+        // Protein edits never reach a genomic dispatch (selected only for `:p.`).
+        FastEdit::ProteinSubstitution => FastPathResult::Fallback,
     }
 }
 
@@ -577,6 +593,8 @@ fn dispatch_cds(
         FastEdit::Substitution => try_parse_cds_substitution(input, bytes, edit_start, accession),
         FastEdit::Deletion => try_parse_cds_del_dup(bytes, edit_start, accession, false),
         FastEdit::Duplication => try_parse_cds_del_dup(bytes, edit_start, accession, true),
+        // Protein edits never reach a coding dispatch (selected only for `:p.`).
+        FastEdit::ProteinSubstitution => FastPathResult::Fallback,
     }
 }
 
@@ -760,6 +778,80 @@ fn try_parse_cds_del_dup(
         accession,
         gene_symbol: None,
         loc_edit: LocEdit::new(interval, edit),
+    }))
+}
+
+/// Try to parse a protein missense substitution: `p.Arg100Gly` and its
+/// predicted-parens form `p.(Arg100Gly)`.
+///
+/// The reference residue and position are parsed by the generic [`parse_prot_pos`]
+/// and the alternative residue by the generic [`parse_amino_acid`], so amino-acid
+/// codes (1- and 3-letter) are handled identically to the generic parser. This
+/// builder only skips the generic parser's protein-edit `alt()` dispatch; it
+/// defers (returns `Fallback`) on anything that is not exactly a missense
+/// substitution filling the whole edit body — `^`-alternatives, a trailing
+/// annotation digit (`p.Arg725Trp5`), identity (`=`), `fs`/`ext`/`del`/`dup`/`ins`,
+/// `?`, `p.0`, etc. — leaving those to the generic parser.
+///
+/// Matches the generic output exactly: the residue lives in `ProtPos.aa` while
+/// the edit's `reference` is the `Xaa` sentinel; the parens form wraps the edit
+/// in `Mu::Uncertain` via [`LocEdit::new_predicted`].
+#[inline]
+fn try_parse_protein_substitution(
+    input: &str,
+    edit_start: usize,
+    accession: Accession,
+) -> FastPathResult {
+    if edit_start > input.len() {
+        return FastPathResult::Fallback;
+    }
+    let body = &input[edit_start..];
+    // Predicted change: `p.(...)`.
+    let (body, predicted) = match body.strip_prefix('(') {
+        Some(inner) => (inner, true),
+        None => (body, false),
+    };
+
+    // Reference residue + position (e.g. `Val600`) — reuse the generic parser.
+    let (rest, pos) = match parse_prot_pos(body) {
+        Ok(x) => x,
+        Err(_) => return FastPathResult::Fallback,
+    };
+    // Alternative residue (e.g. `Glu`) — reuse the generic parser.
+    let (rest, alternative) = match parse_amino_acid(rest) {
+        Ok(x) => x,
+        Err(_) => return FastPathResult::Fallback,
+    };
+
+    // The edit body must end exactly here (a closing paren first, when
+    // predicted). Anything trailing (`^Ser`, an annotation digit, `fs`, …)
+    // defers to the generic parser.
+    let rest = if predicted {
+        match rest.strip_prefix(')') {
+            Some(r) => r,
+            None => return FastPathResult::Fallback,
+        }
+    } else {
+        rest
+    };
+    if !rest.is_empty() {
+        return FastPathResult::Fallback;
+    }
+
+    let interval = ProtInterval::point(pos);
+    let edit = ProteinEdit::Substitution {
+        reference: AminoAcid::Xaa,
+        alternative,
+    };
+    let loc_edit = if predicted {
+        LocEdit::new_predicted(interval, edit)
+    } else {
+        LocEdit::new(interval, edit)
+    };
+    FastPathResult::Success(HgvsVariant::Protein(ProteinVariant {
+        accession,
+        gene_symbol: None,
+        loc_edit,
     }))
 }
 
@@ -978,11 +1070,44 @@ mod tests {
             FastPathResult::Fallback
         ));
 
-        // Protein
+        // Protein missense is now fast-pathed, but non-substitution protein
+        // edits (frameshift, identity, deletion) still defer to the generic
+        // parser, which owns their structure.
         assert!(matches!(
-            try_fast_path("NP_000079.2:p.Arg100Gly"),
+            try_fast_path("NP_000079.2:p.Arg100GlyfsTer5"),
             FastPathResult::Fallback
         ));
+        assert!(matches!(
+            try_fast_path("NP_000079.2:p.Asp427="),
+            FastPathResult::Fallback
+        ));
+        assert!(matches!(
+            try_fast_path("NP_000079.2:p.Lys23del"),
+            FastPathResult::Fallback
+        ));
+    }
+
+    #[test]
+    fn test_fast_path_protein_substitution() {
+        use crate::hgvs::parser::variant::parse_variant;
+        // Protein missense substitutions (and their predicted-parens form) are
+        // fast-pathed; each must equal the generic parser's output exactly.
+        let cases = [
+            "NP_000079.2:p.Val600Glu",
+            "NP_000079.2:p.(Val600Glu)",
+            "NP_000079.2:p.Gly12Cys",
+            "NP_000079.2:p.Arg100Ter", // substitution to stop
+            "NP_000079.2:p.Met1Val",
+            "ENSP00000369497.3:p.Asp427Tyr",
+        ];
+        for input in cases {
+            let fast = match try_fast_path(input) {
+                FastPathResult::Success(v) => v,
+                FastPathResult::Fallback => panic!("expected fast-path Success for {input:?}"),
+            };
+            let generic = parse_variant(input).expect("generic should parse");
+            assert_eq!(fast, generic, "fast-path/generic mismatch for {input:?}");
+        }
     }
 
     #[test]
