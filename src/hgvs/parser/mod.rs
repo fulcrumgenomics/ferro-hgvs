@@ -32,8 +32,9 @@ use crate::hgvs::HgvsVariant;
 ///
 /// # Performance
 ///
-/// Common substitution patterns (RefSeq / Ensembl / LRG / Assembly `g.`/`c.`
-/// SNVs — ~72% of real ClinVar) take a specialized fast path that is ~1.7x
+/// Common substitutions and plain deletions/duplications (RefSeq / Ensembl /
+/// LRG / Assembly `g.`/`c.` — ~72% of real ClinVar) take a specialized fast
+/// path that is ~1.7x
 /// faster end-to-end over the full ClinVar corpus; everything else falls back
 /// to the full [`variant::parse_variant`] parser. The fast path is
 /// observationally identical to the generic parser — both accept the same

@@ -7,7 +7,8 @@
 //!
 //! The fast-path parser provides a **~1.7x end-to-end speedup** on the full ClinVar
 //! corpus. It handles ~72% of real ClinVar variants (RefSeq / Ensembl / LRG /
-//! Assembly `g.`/`c.` SNVs); everything else falls back to the generic parser.
+//! Assembly `g.`/`c.` substitutions and plain deletions/duplications);
+//! everything else falls back to the generic parser.
 //! The per-pattern micro-benchmark speedup (fast path alone vs. generic parser) is
 //! higher — roughly 45-58% faster for the patterns listed below — but the corpus-level
 //! figure accounts for the fallback fraction and the fast-path overhead on
@@ -35,13 +36,19 @@
 //!
 //! # Supported Fast-Paths
 //!
-//! Simple substitutions (position + single base change) for:
+//! Simple substitutions (position + single base change) and plain deletions /
+//! duplications (a single position or `a_b` range followed by a bare `del` /
+//! `dup`, with no trailing sequence or length) for:
 //! - **RefSeq**: NC_, NM_, NG_, XM_ accessions with `g.` or `c.` variants
 //!   (`NR_`/`XR_` non-coding RNA transcripts are deferred to the generic
 //!   parser — their only valid coordinate systems are `n.`/`r.`)
 //! - **Ensembl**: ENST, ENSG accessions with `g.` or `c.` variants
 //! - **LRG**: LRG_ accessions with `g.` or `c.` variants
 //! - **Assembly**: GRCh37/38, hg19/38 notation with `g.` variants
+//!
+//! Deletion/duplication forms that carry a deleted sequence or explicit length
+//! (`delA`, `del3`, `dupAG`), insertions, delins, inversions, and repeats are
+//! left to the generic parser, which owns their canonicalization.
 //!
 //! # When to Use
 //!
@@ -134,6 +141,47 @@ pub enum FastPathResult {
     Fallback,
 }
 
+/// The trailing edit kind a fast-path candidate carries.
+///
+/// Only the simplest, unambiguous forms are recognized; everything else defers
+/// to the generic parser. All three recognized tails are exactly three bytes
+/// (`X>Y`, `del`, `dup`), so the downstream intronic/UTR exclusion checks that
+/// key off `len - 3` apply uniformly.
+#[derive(Clone, Copy)]
+enum FastEdit {
+    Substitution,
+    Deletion,
+    Duplication,
+}
+
+/// Classify the trailing edit of a fast-path candidate, or `None` to defer.
+///
+/// - Substitution: `…<base>><base>`.
+/// - Plain deletion / duplication: `…<digit>del` / `…<digit>dup`. The required
+///   preceding digit means a position immediately precedes the keyword, so only
+///   the bare forms (`100del`, `100_200dup`) match. Forms that carry a trailing
+///   sequence or length (`delA`, `del3`, `dupAG`) end in a base or digit — not
+///   `l`/`p` — and `delins`/`dupins` end in a base, so all of them fall through
+///   to the generic parser, which owns their canonicalization.
+#[inline]
+fn classify_fast_edit(bytes: &[u8], len: usize) -> Option<FastEdit> {
+    if len >= 3
+        && bytes[len - 2] == b'>'
+        && is_fast_dna_base(bytes[len - 1])
+        && is_fast_dna_base(bytes[len - 3])
+    {
+        return Some(FastEdit::Substitution);
+    }
+    if len >= 4 && bytes[len - 4].is_ascii_digit() {
+        match &bytes[len - 3..] {
+            b"del" => return Some(FastEdit::Deletion),
+            b"dup" => return Some(FastEdit::Duplication),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Attempt to parse using fast-path for known patterns
 ///
 /// Returns `FastPathResult::Success` if the pattern was recognized and parsed,
@@ -148,17 +196,14 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
         return FastPathResult::Fallback;
     }
 
-    // Quick check: does it end with a substitution pattern (X>Y)?
-    // This avoids expensive parsing for deletions, insertions, etc.
-    // `is_fast_dna_base` (not `is_iupac_base`) so a `U` base — invalid in a DNA
-    // description — falls back to the generic parser rather than being parsed.
-    if len < 3
-        || bytes[len - 2] != b'>'
-        || !is_fast_dna_base(bytes[len - 1])
-        || !is_fast_dna_base(bytes[len - 3])
-    {
-        return FastPathResult::Fallback;
-    }
+    // Classify the trailing edit up front. This is the quick-rejection gate:
+    // anything that is not a recognized substitution / plain del / plain dup
+    // tail defers immediately, avoiding parse work for the patterns the fast
+    // path does not handle.
+    let edit_kind = match classify_fast_edit(bytes, len) {
+        Some(k) => k,
+        None => return FastPathResult::Fallback,
+    };
 
     // Quick exclusion: find colon and check variant type + complex patterns
     // Combined check to minimize overhead
@@ -224,35 +269,35 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
                 if bytes[1] == b'R' {
                     return FastPathResult::Fallback;
                 }
-                return try_refseq_fast_path(input, bytes);
+                return try_refseq_fast_path(input, bytes, edit_kind);
             }
             FastPathResult::Fallback
         }
         // Ensembl accessions: ENST, ENSG, ENSP
         b'E' => {
             if bytes.len() >= 4 && bytes[1] == b'N' && bytes[2] == b'S' {
-                return try_ensembl_fast_path(input, bytes);
+                return try_ensembl_fast_path(input, bytes, edit_kind);
             }
             FastPathResult::Fallback
         }
         // LRG accessions
         b'L' => {
             if bytes.len() >= 4 && bytes[1] == b'R' && bytes[2] == b'G' && bytes[3] == b'_' {
-                return try_lrg_fast_path(input, bytes);
+                return try_lrg_fast_path(input, bytes, edit_kind);
             }
             FastPathResult::Fallback
         }
         // Assembly notation: GRCh37, GRCh38
         b'G' => {
             if bytes.len() >= 6 && bytes[1] == b'R' && bytes[2] == b'C' && bytes[3] == b'h' {
-                return try_assembly_fast_path(input, bytes);
+                return try_assembly_fast_path(input, bytes, edit_kind);
             }
             FastPathResult::Fallback
         }
         // Assembly notation: hg18, hg19, hg38
         b'h' => {
             if bytes.len() >= 4 && bytes[1] == b'g' {
-                return try_assembly_fast_path(input, bytes);
+                return try_assembly_fast_path(input, bytes, edit_kind);
             }
             FastPathResult::Fallback
         }
@@ -264,7 +309,7 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
 ///
 /// Pattern: `[NX][A-Z]_DIGITS.VERSION:TYPE.POSITION[EDIT]`
 #[inline]
-fn try_refseq_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
+fn try_refseq_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPathResult {
     // Parse prefix: two letters
     let prefix_end = 2;
     if !bytes[0].is_ascii_uppercase() || !bytes[1].is_ascii_uppercase() {
@@ -315,8 +360,8 @@ fn try_refseq_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
     let edit_start = type_start + 2;
 
     match type_char {
-        b'g' => try_parse_genome_substitution(input, bytes, edit_start, accession),
-        b'c' => try_parse_cds_substitution(input, bytes, edit_start, accession),
+        b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
+        b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
         b'p' => FastPathResult::Fallback, // Protein is more complex
         _ => FastPathResult::Fallback,
     }
@@ -326,7 +371,7 @@ fn try_refseq_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
 ///
 /// Pattern: `ENS[TGPSR]DIGITS.VERSION:TYPE.POSITION[EDIT]`
 #[inline]
-fn try_ensembl_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
+fn try_ensembl_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPathResult {
     // Check ENS prefix
     if bytes.len() < 15 || bytes[0] != b'E' || bytes[1] != b'N' || bytes[2] != b'S' {
         return FastPathResult::Fallback;
@@ -377,8 +422,8 @@ fn try_ensembl_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
     let edit_start = var_type_start + 2;
 
     match var_type_char {
-        b'g' => try_parse_genome_substitution(input, bytes, edit_start, accession),
-        b'c' => try_parse_cds_substitution(input, bytes, edit_start, accession),
+        b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
+        b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
         b'p' => FastPathResult::Fallback,
         _ => FastPathResult::Fallback,
     }
@@ -388,7 +433,7 @@ fn try_ensembl_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
 ///
 /// Pattern: `LRG_DIGITS:TYPE.POSITION[EDIT]`
 #[inline]
-fn try_lrg_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
+fn try_lrg_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPathResult {
     // Check LRG_ prefix
     if bytes.len() < 8
         || bytes[0] != b'L'
@@ -441,8 +486,8 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
     let edit_start = type_start + 2;
 
     match type_char {
-        b'g' => try_parse_genome_substitution(input, bytes, edit_start, accession),
-        b'c' => try_parse_cds_substitution(input, bytes, edit_start, accession),
+        b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
+        b'c' => dispatch_cds(input, bytes, edit_start, accession, edit_kind),
         b'p' => FastPathResult::Fallback,
         _ => FastPathResult::Fallback,
     }
@@ -452,7 +497,7 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
 ///
 /// Pattern: `ASSEMBLY(CHROM):TYPE.POSITION[EDIT]`
 #[inline]
-fn try_assembly_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
+fn try_assembly_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPathResult {
     // Find opening paren
     let paren_pos = bytes.iter().position(|&b| b == b'(');
     if paren_pos.is_none() {
@@ -495,9 +540,165 @@ fn try_assembly_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
     let edit_start = type_start + 2;
 
     match type_char {
-        b'g' => try_parse_genome_substitution(input, bytes, edit_start, accession),
+        b'g' => dispatch_genome(input, bytes, edit_start, accession, edit_kind),
         _ => FastPathResult::Fallback, // Assembly is typically genomic only
     }
+}
+
+/// Dispatch a genomic (`g.`) edit to the matching fast-path builder.
+#[inline]
+fn dispatch_genome(
+    input: &str,
+    bytes: &[u8],
+    edit_start: usize,
+    accession: Accession,
+    edit_kind: FastEdit,
+) -> FastPathResult {
+    match edit_kind {
+        FastEdit::Substitution => {
+            try_parse_genome_substitution(input, bytes, edit_start, accession)
+        }
+        FastEdit::Deletion => try_parse_genome_del_dup(bytes, edit_start, accession, false),
+        FastEdit::Duplication => try_parse_genome_del_dup(bytes, edit_start, accession, true),
+    }
+}
+
+/// Dispatch a coding (`c.`) edit to the matching fast-path builder.
+#[inline]
+fn dispatch_cds(
+    input: &str,
+    bytes: &[u8],
+    edit_start: usize,
+    accession: Accession,
+    edit_kind: FastEdit,
+) -> FastPathResult {
+    match edit_kind {
+        FastEdit::Substitution => try_parse_cds_substitution(input, bytes, edit_start, accession),
+        FastEdit::Deletion => try_parse_cds_del_dup(bytes, edit_start, accession, false),
+        FastEdit::Duplication => try_parse_cds_del_dup(bytes, edit_start, accession, true),
+    }
+}
+
+/// Scan a fast-path genomic interval at `start`: either a single canonical
+/// position or a `a_b` range. Returns the interval and the index just past the
+/// position text, or `None` to defer. Defers on a non-canonical/overflowing
+/// position and on an inverted range (`a > b`): the generic parser rejects an
+/// inverted *deletion* and accepts an inverted *duplication*, so rather than
+/// replicate that split we cede both inverted cases to it (they are rare and
+/// `Fallback` stays observationally identical either way).
+#[inline]
+fn scan_genome_interval(bytes: &[u8], start: usize) -> Option<(GenomeInterval, usize)> {
+    let (p1, e1) = scan_position(bytes, start)?;
+    if e1 < bytes.len() && bytes[e1] == b'_' {
+        let (p2, e2) = scan_position(bytes, e1 + 1)?;
+        if p1 > p2 {
+            return None;
+        }
+        Some((
+            GenomeInterval::new(GenomePos::new(p1), GenomePos::new(p2)),
+            e2,
+        ))
+    } else {
+        Some((GenomeInterval::point(GenomePos::new(p1)), e1))
+    }
+}
+
+/// Scan a fast-path coding interval at `start`. Like [`scan_genome_interval`]
+/// but builds `CdsPos` and defers any position beyond `i64::MAX` (which would
+/// wrap). UTR (`*`/`-`) and intronic (`+`/`-`) coordinates are already excluded
+/// by the dispatcher's caller, so only plain in-CDS positions reach here.
+#[inline]
+fn scan_cds_interval(bytes: &[u8], start: usize) -> Option<(CdsInterval, usize)> {
+    let (p1, e1) = scan_position(bytes, start)?;
+    if p1 > i64::MAX as u64 {
+        return None;
+    }
+    if e1 < bytes.len() && bytes[e1] == b'_' {
+        let (p2, e2) = scan_position(bytes, e1 + 1)?;
+        if p2 > i64::MAX as u64 || p1 > p2 {
+            return None;
+        }
+        Some((
+            CdsInterval::new(CdsPos::new(p1 as i64), CdsPos::new(p2 as i64)),
+            e2,
+        ))
+    } else {
+        Some((CdsInterval::point(CdsPos::new(p1 as i64)), e1))
+    }
+}
+
+/// Build a plain genomic deletion or duplication (`g.NNNdel`, `g.A_Bdup`).
+///
+/// Only the bare forms (no trailing sequence or length) reach here — the edit
+/// keyword must immediately end the string. `sequence`/`length`/`uncertain_extent`
+/// are `None`, matching the generic parser's output for these inputs.
+#[inline]
+fn try_parse_genome_del_dup(
+    bytes: &[u8],
+    edit_start: usize,
+    accession: Accession,
+    is_dup: bool,
+) -> FastPathResult {
+    let (interval, after) = match scan_genome_interval(bytes, edit_start) {
+        Some(x) => x,
+        None => return FastPathResult::Fallback,
+    };
+    // The classified 3-char `del`/`dup` keyword must immediately end the string;
+    // anything between the position and it (e.g. an extra coordinate) defers.
+    if after + 3 != bytes.len() {
+        return FastPathResult::Fallback;
+    }
+    let edit = if is_dup {
+        NaEdit::Duplication {
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        }
+    } else {
+        NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        }
+    };
+    FastPathResult::Success(HgvsVariant::Genome(GenomeVariant {
+        accession,
+        gene_symbol: None,
+        loc_edit: LocEdit::new(interval, edit),
+    }))
+}
+
+/// Build a plain coding deletion or duplication (`c.NNNdel`, `c.A_Bdup`).
+#[inline]
+fn try_parse_cds_del_dup(
+    bytes: &[u8],
+    edit_start: usize,
+    accession: Accession,
+    is_dup: bool,
+) -> FastPathResult {
+    let (interval, after) = match scan_cds_interval(bytes, edit_start) {
+        Some(x) => x,
+        None => return FastPathResult::Fallback,
+    };
+    if after + 3 != bytes.len() {
+        return FastPathResult::Fallback;
+    }
+    let edit = if is_dup {
+        NaEdit::Duplication {
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        }
+    } else {
+        NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        }
+    };
+    FastPathResult::Success(HgvsVariant::Cds(CdsVariant {
+        accession,
+        gene_symbol: None,
+        loc_edit: LocEdit::new(interval, edit),
+    }))
 }
 
 /// Try to parse a simple genomic substitution (g.NNNA>G)
@@ -710,21 +911,22 @@ mod tests {
             FastPathResult::Fallback
         ));
 
-        // Deletion
-        assert!(matches!(
-            try_fast_path("NC_000001.11:g.12345del"),
-            FastPathResult::Fallback
-        ));
-
-        // Insertion
+        // Insertion (plain del/dup are now fast-pathed, but ins still defers —
+        // its inserted sequence is parsed by the generic parser)
         assert!(matches!(
             try_fast_path("NC_000001.11:g.12345_12346insA"),
             FastPathResult::Fallback
         ));
 
-        // Range
+        // Deletion-insertion (delins) still defers
         assert!(matches!(
-            try_fast_path("NC_000001.11:g.12345_12346del"),
+            try_fast_path("NC_000001.11:g.12345_12346delinsAC"),
+            FastPathResult::Fallback
+        ));
+
+        // Deletion with an explicit trailing sequence/length still defers
+        assert!(matches!(
+            try_fast_path("NC_000001.11:g.12345delA"),
             FastPathResult::Fallback
         ));
 
@@ -733,6 +935,34 @@ mod tests {
             try_fast_path("NP_000079.2:p.Arg100Gly"),
             FastPathResult::Fallback
         ));
+    }
+
+    #[test]
+    fn test_fast_path_plain_deletion_and_duplication() {
+        use crate::hgvs::parser::variant::parse_variant;
+        // Plain deletions/duplications (no trailing sequence or length) are
+        // fast-pathed; each must equal the generic parser's output exactly.
+        let cases = [
+            "NC_000001.11:g.12345del",
+            "NC_000001.11:g.12345_12346del",
+            "NC_000001.11:g.12345dup",
+            "NC_000001.11:g.12345_12346dup",
+            "NM_000088.3:c.459del",
+            "NM_000088.3:c.459_460del",
+            "NM_000088.3:c.459dup",
+            "NM_000088.3:c.459_460dup",
+            "ENST00000357033.8:c.100del",
+            "LRG_1:g.5000del",
+            "GRCh38(chr1):g.12345del",
+        ];
+        for input in cases {
+            let fast = match try_fast_path(input) {
+                FastPathResult::Success(v) => v,
+                FastPathResult::Fallback => panic!("expected fast-path Success for {input:?}"),
+            };
+            let generic = parse_variant(input).expect("generic should parse");
+            assert_eq!(fast, generic, "fast-path/generic mismatch for {input:?}");
+        }
     }
 
     #[test]
