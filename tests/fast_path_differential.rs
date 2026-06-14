@@ -132,9 +132,11 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NM_000088.3:c.459_460insACGT",
     "NM_000088.3:c.459_460delinsAC",
     "NM_000088.3:c.459_460inv",
-    // --- whitespace / trimming edges ---
+    // --- whitespace / trimming edges (ASCII and Unicode) ---
     "  NC_000001.11:g.12345A>G  ",
     "\tNM_000088.3:c.459A>G\n",
+    "\u{00A0}NM_000088.3:c.459A>G\u{3000}", // non-breaking + ideographic space
+    "\u{2028}NC_000001.11:g.12345del\u{2029}",
     // --- invalid base `U` in DNA / non-canonical positions: fast must defer ---
     "NC_000001.11:g.100A>U",
     "NC_000001.11:g.100U>A",
