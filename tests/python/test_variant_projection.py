@@ -116,14 +116,25 @@ class TestProjectToGenomic:
     """
 
     def test_plus_strand_c_to_g_substitution(self, projector: ferro_hgvs.VariantProjector) -> None:
-        # NG_TEST.1(NM_TEST.1):c.4C>A — NG_TEST.1 is the parent NG accession
-        # carried in the input's genomic_context. NM_TEST.1's c.4 maps to
-        # genome 1003 on the plus strand.
-        v = ferro_hgvs.parse("NG_TEST.1(NM_TEST.1):c.4C>A")
+        # NC_000001.11(NM_TEST.1):c.4C>A — NC_ chromosome parent carried in the
+        # input's genomic_context. NM_TEST.1's c.4 maps to genome 1003 on the
+        # plus strand. Only an NC_ chromosome parent shares cdot's coordinate
+        # frame; NG_/LRG_ parents are declined (see test below, #480/#655).
+        v = ferro_hgvs.parse("NC_000001.11(NM_TEST.1):c.4C>A")
         g = projector.project_to_genomic(v)
         s = str(g)
-        assert s.startswith("NG_TEST.1")
+        assert s.startswith("NC_000001.11")
         assert ":g.1003C>A" in s
+
+    def test_ng_parent_raises(self, projector: ferro_hgvs.VariantProjector) -> None:
+        # NG_TEST.1(NM_TEST.1):c.4C>A — cdot only carries the transcript's
+        # chromosome (NC_) alignment, so projecting onto the NG_ parent would
+        # stamp a chromosome coordinate under the NG_ accession (invalid HGVS).
+        # The projector must decline rather than emit silently-wrong HGVS
+        # (#480/#655).
+        v = ferro_hgvs.parse("NG_TEST.1(NM_TEST.1):c.4C>A")
+        with pytest.raises(RuntimeError, match="cannot project to the NG_TEST.1 parent frame"):
+            projector.project_to_genomic(v)
 
     def test_idempotent_on_genome_input(self, projector: ferro_hgvs.VariantProjector) -> None:
         # Genome input must pass through unchanged.

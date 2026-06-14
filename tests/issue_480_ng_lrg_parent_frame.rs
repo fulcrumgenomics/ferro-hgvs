@@ -10,8 +10,10 @@
 //! `NG_`/`LRG_` one — the two frames disagree. Given the parent's chromosomal
 //! placement (`GenomicPlacement`), ferro composes NM→NC (cdot) with the affine
 //! NC→parent transform and emits the coordinate in the parent's own frame.
-//! Without a placement it keeps the chromosome coordinate (prior behavior),
-//! never failing the projection.
+//! Without a placement the chromosome coordinate cannot be re-anchored into the
+//! parent frame, so `project_to_genomic` declines (`UnsupportedProjection`)
+//! rather than stamp a chromosome coordinate under the parent accession, which
+//! would be invalid HGVS (#655).
 //!
 //! Fixture: NM_TEST.1 on chr1 plus strand, "ATGCGCTAA" at genomic [1000, 1009);
 //! `c.4C>A` resolves to chromosome position 1003.
@@ -31,7 +33,7 @@ use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::provider::GenomicPlacement;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
 use ferro_hgvs::reference::Strand;
-use ferro_hgvs::{parse_hgvs, VariantProjector};
+use ferro_hgvs::{parse_hgvs, FerroError, VariantProjector};
 
 fn base_fixture() -> (Projector, MockProvider) {
     let mut cdot = CdotMapper::new();
@@ -164,16 +166,28 @@ fn ng_parent_emits_parent_frame_coords_minus_strand() {
 }
 
 #[test]
-fn ng_parent_without_placement_keeps_prior_behavior() {
-    // No placement registered: the projection keeps the chromosome coordinate
-    // under the parent accession (the pre-#480 behavior). This is the
-    // no-regression fallback for NG_ records whose placement is not ingested.
+fn ng_parent_without_placement_declines() {
+    // No placement registered: cdot carries only the transcript's chromosome
+    // (NC_) alignment, so the chromosome coordinate cannot be re-anchored into
+    // the NG_ parent's own frame. Emitting the chromosome coordinate under the
+    // NG_ accession (e.g. `NG_NOPLACE.1:g.1003C>A`) would be invalid HGVS — the
+    // coordinate is a chromosome position, not a position in the NG_ frame — so
+    // `project_to_genomic` declines with `UnsupportedProjection` (#655). This
+    // mirrors the unit test `project_to_genomic_ng_parent_without_placement_declines`.
     let (projector, provider) = base_fixture();
     let vp = VariantProjector::new(projector, provider);
     let variant = parse_hgvs("NG_NOPLACE.1(NM_TEST.1):c.4C>A").expect("parse");
 
-    let g = vp.project_to_genomic(&variant).expect("should project");
-    assert_eq!(g.to_string(), "NG_NOPLACE.1:g.1003C>A");
+    let err = vp
+        .project_to_genomic(&variant)
+        .expect_err("NG_ parent without a placement must decline, not emit invalid HGVS");
+    match err {
+        FerroError::UnsupportedProjection { reason } => assert!(
+            reason.contains("NG_NOPLACE.1") && reason.contains("no chromosomal placement"),
+            "expected a no-placement decline naming NG_NOPLACE.1, got: {reason}"
+        ),
+        other => panic!("expected UnsupportedProjection, got: {other:?}"),
+    }
 }
 
 fn parse_acc(s: &str) -> ferro_hgvs::hgvs::variant::Accession {

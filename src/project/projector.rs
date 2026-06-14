@@ -560,10 +560,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if let (Some(HgvsVariant::Genome(gv)), Some(placement)) =
             (result.genomic.as_ref(), placement)
         {
-            let mut reanchored = Self::reanchor_genome_to_parent(gv.clone(), placement);
-            reanchored.accession = parent.clone();
-            reanchored.gene_symbol = None;
-            result.genomic = Some(HgvsVariant::Genome(reanchored));
+            match Self::reanchor_genome_to_parent(gv.clone(), placement) {
+                Ok(mut reanchored) => {
+                    reanchored.accession = parent.clone();
+                    reanchored.gene_symbol = None;
+                    result.genomic = Some(HgvsVariant::Genome(reanchored));
+                }
+                Err(e) => {
+                    // The genomic axis cannot be re-anchored into the parent
+                    // frame (endpoint outside the placed span or an uncertain
+                    // position). Drop the unframable genomic axis rather than
+                    // stamp the parent accession on a chromosome coordinate,
+                    // which would be invalid HGVS (#655). The transcript-relative
+                    // coding/noncoding/protein forms re-labeled above remain
+                    // valid and are preferable to dropping the whole projection
+                    // (mirrors the tolerate-and-log fallback in
+                    // `project_variant_all`).
+                    log::trace!(
+                        "frame_projection_owned: cannot re-anchor the genomic axis into the {} \
+                         parent frame: {}; reporting genomic = None",
+                        parent,
+                        e
+                    );
+                    result.genomic = None;
+                }
+            }
         }
         result
     }
@@ -620,11 +641,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// genomic reference and return an [`HgvsVariant::Genome`].
     ///
     /// The output uses the parent accession stored in the input's
-    /// `Accession.genomic_context`. When that parent is an `NG_` RefSeqGene or
-    /// `LRG_` whose chromosomal placement is known (see
-    /// [`ReferenceProvider::genomic_placement`]), the coordinates are
-    /// re-anchored into the parent's own frame (#480); otherwise they remain in
-    /// the chromosome (`NC_`) frame. Idempotent on `Genome` input.
+    /// `Accession.genomic_context`:
+    /// - an `NC_` chromosome parent is already in the genome frame and passes
+    ///   through unchanged;
+    /// - an `NG_` RefSeqGene or `LRG_` parent whose chromosomal placement is
+    ///   known (see [`ReferenceProvider::genomic_placement`]) is re-anchored
+    ///   into the parent's own frame (#480);
+    /// - an `NG_`/`LRG_` parent with **no** known placement, or whose endpoint
+    ///   cannot be re-anchored, is declined (see `# Errors`) rather than
+    ///   emitting chromosome (`NC_`) coordinates under the parent accession,
+    ///   which would be invalid HGVS (#655).
+    ///
+    /// Idempotent on `Genome` input.
     ///
     /// This is the genomic-axis *output*. The internal pivot used to derive
     /// coding/protein keeps the chromosome frame — see
@@ -632,13 +660,34 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///
     /// # Errors
     ///
-    /// See [`Self::project_to_genomic_nc`] for the full error contract
+    /// Returns [`FerroError::UnsupportedProjection`] when an `NG_`/`LRG_` parent
+    /// has no known chromosomal placement or an endpoint falls outside the placed
+    /// span, and [`FerroError::InvalidCoordinates`] when an endpoint has no single
+    /// resolved position (uncertain/compound boundary) (#655). See
+    /// [`Self::project_to_genomic_nc`] for the rest of the error contract
     /// (`UnsupportedProjection` / `InvalidCoordinates` / `ReferenceNotFound`).
     pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         match self.project_to_genomic_nc(variant)? {
             HgvsVariant::Genome(gv) => {
                 let reanchored = match self.provider.genomic_placement(&gv.accession) {
-                    Some(placement) => Self::reanchor_genome_to_parent(gv, &placement),
+                    Some(placement) => Self::reanchor_genome_to_parent(gv, &placement)?,
+                    // No placement: an `NC_` chromosome parent is already in the
+                    // genome frame and passes through unchanged, but an `NG_`/`LRG_`
+                    // parent cannot be re-anchored (cdot carries only the
+                    // transcript's `NC_` alignment). Emitting the `NC_` coordinate
+                    // under the `NG_`/`LRG_` accession would be invalid HGVS, so
+                    // decline instead (#480/#655).
+                    None if &*gv.accession.prefix == "NG" || gv.accession.is_lrg() => {
+                        return Err(FerroError::UnsupportedProjection {
+                            reason: format!(
+                                "cannot project to the {} parent frame: no chromosomal \
+                                 placement is known for this NG_/LRG_ reference, so cdot's \
+                                 chromosome (NC_) coordinates cannot be re-anchored into the \
+                                 parent's own frame (#480/#655)",
+                                gv.accession.transcript_accession(),
+                            ),
+                        });
+                    }
                     None => gv,
                 };
                 Ok(HgvsVariant::Genome(reanchored))
@@ -994,7 +1043,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     fn reanchor_genome_to_parent(
         gv: crate::hgvs::variant::GenomeVariant,
         placement: &crate::reference::GenomicPlacement,
-    ) -> crate::hgvs::variant::GenomeVariant {
+    ) -> Result<crate::hgvs::variant::GenomeVariant, FerroError> {
         use crate::hgvs::interval::GenomeInterval;
         use crate::hgvs::variant::GenomeVariant;
         let bounds = match (
@@ -1005,11 +1054,29 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             _ => None,
         };
         let Some((nc_lo, nc_hi)) = bounds else {
-            return gv;
+            // Uncertain/compound endpoint: no single position to re-anchor.
+            // Decline rather than stamp the parent accession on an unresolved
+            // chromosome coordinate, which would be invalid HGVS (#655).
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "cannot re-anchor {} into its NG_/LRG_ parent frame: an endpoint has no \
+                     single resolved position (uncertain or compound boundary) (#480/#655)",
+                    gv.accession.transcript_accession(),
+                ),
+            });
         };
         let (Some(a), Some(b)) = (placement.nc_to_parent(nc_lo), placement.nc_to_parent(nc_hi))
         else {
-            return gv;
+            // Endpoint falls outside the placed genomic span: the parent frame
+            // cannot express this coordinate. Decline rather than emit a
+            // chromosome coordinate under the parent accession (#655).
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "cannot re-anchor {} into its NG_/LRG_ parent frame: an endpoint falls \
+                     outside the placed genomic span (#480/#655)",
+                    gv.accession.transcript_accession(),
+                ),
+            });
         };
         // A minus-strand placement reverses coordinate order.
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -1021,11 +1088,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         } else {
             gv.loc_edit.edit
         };
-        GenomeVariant {
+        Ok(GenomeVariant {
             accession: gv.accession,
             gene_symbol: gv.gene_symbol,
             loc_edit: LocEdit::with_uncertainty(interval, edit),
-        }
+        })
     }
 
     /// If `variant` is a genome variant on an `NG_`/`LRG_` parent whose
@@ -2892,6 +2959,85 @@ mod tests {
         }
     }
 
+    /// Coexistence of the #646 cross-isoform enumeration with the #655 graceful
+    /// decline. A `c.` input carrying an `NG_` `genomic_context` is de-anchored
+    /// into the chromosome frame and enumerated against the overlapping
+    /// transcripts, each re-framed under the parent (#646). Here the registered
+    /// placement spans a region disjoint from where the transcripts actually map
+    /// (chr 1003), so the genomic axis cannot be re-anchored into the parent
+    /// frame. Rather than failing the whole projection (the #646 enumerate path)
+    /// or stamping the parent accession on an out-of-frame chromosome coordinate
+    /// (invalid HGVS, #655), `project_variant_all` returns the transcript-relative
+    /// coding/protein forms framed under the parent and drops only the genomic
+    /// axis (`None`). This locks in that #646 (enumerate) and #655 (graceful
+    /// decline) coexist: `frame_projection_owned` degrades the unframable axis
+    /// via `reanchor_genome_to_parent` instead of hard-erroring.
+    #[test]
+    fn project_variant_all_drops_genomic_axis_but_still_enumerates_under_ng_parent() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        // Placement exists (so de-anchor enumerates) but its span [2000, 2010]
+        // is disjoint from chr 1003 where the transcripts map, so the genomic
+        // re-anchor `nc_to_parent(1003)` declines and the axis is dropped.
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 2000,
+                nc_end: 2010,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        let vp = VariantProjector::new(projector, provider);
+
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::CdsVariant;
+        let cds = CdsVariant {
+            accession: parse_accession("NM_TX1.1").with_genomic_context(Accession::new(
+                "NG",
+                "900",
+                Some(1),
+            )),
+            gene_symbol: Some("GENE1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        };
+        let v = HgvsVariant::Cds(cds);
+        let results = vp
+            .project_variant_all(&v)
+            .expect("enumerate path must degrade the unframable genomic axis, not hard-error");
+
+        // Enumeration still finds the overlapping transcripts (#646 path alive).
+        let txs: Vec<&str> = results.iter().map(|r| r.transcript_id.as_str()).collect();
+        assert!(
+            txs.contains(&"NM_TX1.1") && txs.contains(&"NM_TX2.1"),
+            "expected both transcripts enumerated, got {txs:?}"
+        );
+        for r in &results {
+            // The genomic axis is dropped — it cannot be expressed in the parent
+            // frame — rather than emitting a chromosome coordinate under NG_900.1.
+            assert!(
+                r.genomic.is_none(),
+                "genomic axis should be dropped when it cannot be re-anchored, got: {:?}",
+                r.genomic
+            );
+            // The coding axis survives, re-framed under the NG_ parent.
+            if let Some(c) = r.coding.as_ref().map(|c| c.to_string()) {
+                assert!(
+                    c.starts_with("NG_900.1("),
+                    "coding should be framed under the NG_ parent, got {c:?}"
+                );
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Cache identity tests
     // -------------------------------------------------------------------------
@@ -4362,6 +4508,15 @@ mod tests {
             Accession::new("NG", num, Some(version))
         }
 
+        /// An `NC_` chromosome parent. Unlike an `NG_`/`LRG_` parent it shares
+        /// cdot's coordinate frame, so `project_to_genomic` emits it unchanged
+        /// (no re-anchoring, no decline) — the right vehicle for exercising the
+        /// c./n./r. → g. coordinate math without tripping the NG_/LRG_ decline
+        /// (#655). GRCh38 primary (`.11`) to match the test cdot fixture.
+        fn nc_parent() -> Accession {
+            Accession::new("NC", "000001", Some(11))
+        }
+
         /// Attach a genomic_context to an existing `CdsVariant`.
         fn attach_genomic_context_cds(mut v: CdsVariant, ctx: Accession) -> CdsVariant {
             v.accession = v.accession.with_genomic_context(ctx);
@@ -4452,7 +4607,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("TEST", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
             let out = vp
                 .project_to_genomic(&input)
@@ -4461,12 +4616,12 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant, got: {}", out),
             };
-            // Parent NG_TEST.1, plus-strand → g.1003C>A.
-            assert_eq!(g.accession.to_string(), "NG_TEST.1");
+            // Parent NC_000001.11, plus-strand → g.1003C>A.
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let s = g.to_string();
             assert!(
-                s.starts_with("NG_TEST.1") && s.contains(":g.1003C>A"),
-                "expected NG_TEST.1...:g.1003C>A, got: {}",
+                s.starts_with("NC_000001.11") && s.contains(":g.1003C>A"),
+                "expected NC_000001.11...:g.1003C>A, got: {}",
                 s
             );
         }
@@ -4493,7 +4648,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("TESTMINUS", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
             let out = vp
                 .project_to_genomic(&input)
@@ -4502,11 +4657,11 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant"),
             };
-            assert_eq!(g.accession.to_string(), "NG_TESTMINUS.1");
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let s = g.to_string();
             assert!(
-                s.starts_with("NG_TESTMINUS.1") && s.contains(":g.1005G>A"),
-                "minus-strand c.4C>T should revcomp to NG_TESTMINUS.1...:g.1005G>A, got: {}",
+                s.starts_with("NC_000001.11") && s.contains(":g.1005G>A"),
+                "minus-strand c.4C>T should revcomp to NC_000001.11...:g.1005G>A, got: {}",
                 s
             );
         }
@@ -4531,7 +4686,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("TESTMINUS", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
             let out = vp
                 .project_to_genomic(&input)
@@ -4580,7 +4735,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("INTR", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
             let out = vp
                 .project_to_genomic(&input)
@@ -4589,8 +4744,8 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant"),
             };
-            // Expect a deletion at g.1014 on NG_INTR.1.
-            assert_eq!(g.accession.to_string(), "NG_INTR.1");
+            // Expect a deletion at g.1014 on NC_000001.11.
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let start = g
                 .loc_edit
                 .location
@@ -4688,7 +4843,7 @@ mod tests {
                     },
                 ),
             };
-            let tx = attach_genomic_context_tx(tx, ng_parent("NRTEST", 1));
+            let tx = attach_genomic_context_tx(tx, nc_parent());
             let input = HgvsVariant::Tx(tx);
             let out = vp
                 .project_to_genomic(&input)
@@ -4697,11 +4852,11 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant"),
             };
-            assert_eq!(g.accession.to_string(), "NG_NRTEST.1");
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let s = g.to_string();
             assert!(
-                s.starts_with("NG_NRTEST.1") && s.contains(":g.1004A>G"),
-                "expected NG_NRTEST.1...:g.1004A>G, got: {}",
+                s.starts_with("NC_000001.11") && s.contains(":g.1004A>G"),
+                "expected NC_000001.11...:g.1004A>G, got: {}",
                 s
             );
         }
@@ -4727,7 +4882,7 @@ mod tests {
             let (projector, provider) = make_test_provider_and_projector();
             let vp = VariantProjector::new(projector, provider);
 
-            // r.4 on NM_TEST.1 (plus strand) → g.1003 on NG_TEST.1.
+            // r.4 on NM_TEST.1 (plus strand) → g.1003 on NC_000001.11.
             let rna = RnaVariant {
                 accession: parse_accession("NM_TEST.1"),
                 gene_symbol: Some("TESTGENE".to_string()),
@@ -4740,7 +4895,7 @@ mod tests {
                 ),
             };
             let mut rna = rna;
-            rna.accession = rna.accession.with_genomic_context(ng_parent("TEST", 1));
+            rna.accession = rna.accession.with_genomic_context(nc_parent());
             let input = HgvsVariant::Rna(rna);
             let out = vp
                 .project_to_genomic(&input)
@@ -4754,10 +4909,207 @@ mod tests {
             let s = g.to_string();
             assert!(
                 s.contains(":g.1003C>A"),
-                "expected NG_TEST.1...:g.1003C>A, got: {}",
+                "expected NC_000001.11...:g.1003C>A, got: {}",
                 s
             );
-            assert_eq!(g.accession.to_string(), "NG_TEST.1");
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
+        }
+
+        // -- 8b: NG_/LRG_ re-anchor decline → error, not invalid HGVS (#655) ---
+
+        /// An `NG_` parent with no registered placement cannot be re-anchored:
+        /// cdot carries only the transcript's chromosome (`NC_`) alignment.
+        /// `project_to_genomic` must decline rather than stamp the chromosome
+        /// coordinate under the `NG_` accession (invalid HGVS) (#655).
+        #[test]
+        fn project_to_genomic_ng_parent_without_placement_declines() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("TEST", 1));
+            let err = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect_err("NG_ parent without a placement must decline, not emit invalid HGVS");
+            match err {
+                FerroError::UnsupportedProjection { reason } => assert!(
+                    reason.contains("NG_TEST.1") && reason.contains("no chromosomal placement"),
+                    "expected a no-placement decline naming NG_TEST.1, got: {reason}"
+                ),
+                other => panic!("expected UnsupportedProjection, got: {other:?}"),
+            }
+        }
+
+        /// A placement exists for the `NG_` parent, but the variant's chromosome
+        /// coordinate falls outside the placed span, so it cannot be re-anchored
+        /// into the parent frame. Decline rather than emit a chromosome
+        /// coordinate under the `NG_` accession (#655).
+        #[test]
+        fn project_to_genomic_ng_parent_endpoint_outside_placement_declines() {
+            let (projector, mut provider) = make_test_provider_and_projector();
+            // NM_TEST.1 c.4 maps to chromosome 1003; place NG_TEST.1 on a
+            // disjoint span [2000, 2010] so nc_to_parent(1003) declines.
+            provider.add_genomic_placement(
+                "NG_TEST.1",
+                crate::reference::GenomicPlacement {
+                    nc: Accession::new("NC", "000001", Some(11)),
+                    parent_start: 1,
+                    nc_start: 2000,
+                    nc_end: 2010,
+                    strand: crate::reference::Strand::Plus,
+                },
+            );
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("TEST", 1));
+            let err = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect_err("an endpoint outside the placed span must decline");
+            match err {
+                FerroError::UnsupportedProjection { reason } => assert!(
+                    reason.contains("outside the placed genomic span"),
+                    "expected an out-of-span decline, got: {reason}"
+                ),
+                other => panic!("expected UnsupportedProjection, got: {other:?}"),
+            }
+        }
+
+        /// De-anchor path: when the genomic axis cannot be re-anchored into the
+        /// `NG_` parent frame (here the endpoint is outside the placement span),
+        /// `frame_projection_owned` drops the genomic axis (reports `None`)
+        /// rather than stamping the parent accession on an out-of-frame
+        /// chromosome coordinate (#655). The transcript-relative coding form is
+        /// still re-framed under the parent — degrading the unframable axis is
+        /// preferable to dropping the whole projection.
+        #[test]
+        fn frame_projection_owned_drops_genomic_when_reanchor_declines() {
+            let parent = ng_parent("900", 1);
+            let placement = crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1010,
+                strand: crate::reference::Strand::Plus,
+            };
+            // Genomic axis at chromosome 5000 — well outside the placed span.
+            let genomic = HgvsVariant::Genome(GenomeVariant {
+                accession: Accession::new("NC", "000001", Some(11)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(5000)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            });
+            let coding = HgvsVariant::Cds(CdsVariant {
+                accession: parse_accession("NM_900.1"),
+                gene_symbol: Some("GENE900".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            });
+            let proj = VariantProjection {
+                genomic: Some(genomic),
+                coding: Some(coding),
+                noncoding: None,
+                protein: None,
+                transcript_id: "NM_900.1".to_string(),
+                gene_symbol: Some("GENE900".to_string()),
+                is_frameshift: false,
+                is_intronic: false,
+                is_utr: false,
+            };
+            let framed = VariantProjector::<MockProvider>::frame_projection_owned(
+                proj,
+                &parent,
+                Some(&placement),
+            );
+            assert!(
+                framed.genomic.is_none(),
+                "genomic axis should be dropped when it cannot be re-anchored, got: {:?}",
+                framed.genomic
+            );
+            // The coding axis is still re-framed under the NG_ parent.
+            let coding_str = framed
+                .coding
+                .as_ref()
+                .expect("coding axis retained")
+                .to_string();
+            assert!(
+                coding_str.starts_with("NG_900.1("),
+                "coding should be framed under the NG_ parent, got: {coding_str}"
+            );
+        }
+
+        /// `reanchor_genome_to_parent` declines an endpoint with no single
+        /// resolved position (a compound `(a_b)` `UncertainBoundary::Range`)
+        /// with `InvalidCoordinates` rather than stamping the parent accession
+        /// on an unresolved coordinate (#655). This decline is defensive — the
+        /// public `project_to_genomic` pivot rejects uncertain endpoints
+        /// earlier — so it is exercised here directly.
+        #[test]
+        fn reanchor_genome_to_parent_declines_uncertain_endpoint() {
+            use crate::hgvs::interval::UncertainBoundary;
+            use crate::hgvs::Mu;
+            let placement = crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1010,
+                strand: crate::reference::Strand::Plus,
+            };
+            // The end boundary is a compound range, so `.inner()` is `None`:
+            // there is no single position to re-anchor.
+            let mut interval = GenomeInterval::new(GenomePos::new(1003), GenomePos::new(1006));
+            interval.end = UncertainBoundary::range(
+                Mu::Certain(GenomePos::new(1004)),
+                Mu::Certain(GenomePos::new(1006)),
+            );
+            let gv = GenomeVariant {
+                accession: ng_parent("900", 1),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    interval,
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let err = VariantProjector::<MockProvider>::reanchor_genome_to_parent(gv, &placement)
+                .expect_err("an uncertain endpoint must decline");
+            match err {
+                FerroError::InvalidCoordinates { msg } => assert!(
+                    msg.contains("single resolved position"),
+                    "expected an uncertain-position decline, got: {msg}"
+                ),
+                other => panic!("expected InvalidCoordinates, got: {other:?}"),
+            }
         }
 
         // -- 9: protein input → unsupported ------------------------------------
@@ -4961,7 +5313,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("UTR", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
 
             let out = vp
@@ -4971,11 +5323,11 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant"),
             };
-            assert_eq!(g.accession.to_string(), "NG_UTR.1");
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let s = g.to_string();
             assert!(
                 s.contains(":g.1012A>G"),
-                "expected NG_UTR.1...:g.1012A>G for c.*1A>G, got: {}",
+                "expected NC_000001.11...:g.1012A>G for c.*1A>G, got: {}",
                 s
             );
         }
@@ -4998,7 +5350,7 @@ mod tests {
                     },
                 ),
             };
-            let cds = attach_genomic_context_cds(cds, ng_parent("UTR", 1));
+            let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
 
             let out = vp
@@ -5008,11 +5360,11 @@ mod tests {
                 HgvsVariant::Genome(ref g) => g,
                 _ => panic!("expected Genome variant"),
             };
-            assert_eq!(g.accession.to_string(), "NG_UTR.1");
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
             let s = g.to_string();
             assert!(
                 s.contains(":g.1002T>G"),
-                "expected NG_UTR.1...:g.1002T>G for c.-1T>G, got: {}",
+                "expected NC_000001.11...:g.1002T>G for c.-1T>G, got: {}",
                 s
             );
         }
@@ -5351,11 +5703,17 @@ mod tests {
             );
         }
 
-        /// NG_* parents are build-agnostic per the HGVS spec — the
-        /// projector falls back to the primary cdot view rather than
-        /// forcing an alt-build lookup. With primary=GRCh38 the c.5
-        /// position must therefore come back at the GRCh38 exon's
-        /// position (g.20004) regardless of any GRCh37 alt-build data.
+        /// NG_* parents are build-agnostic per the HGVS spec — the chromosome
+        /// (`NC_`) pivot falls back to the primary cdot view rather than forcing
+        /// an alt-build lookup. With primary=GRCh38 the c.5 position must come
+        /// back at the GRCh38 exon's position (g.20004) regardless of any GRCh37
+        /// alt-build data.
+        ///
+        /// This is asserted on the `project_to_genomic_nc` pivot, which is where
+        /// the build fallback lives. The public `project_to_genomic` re-anchors
+        /// its output and now *declines* an NG_/LRG_ parent with no known
+        /// placement rather than stamping a chromosome coordinate under the NG_
+        /// accession (#655 — see `project_to_genomic_ng_parent_without_placement_declines`).
         #[test]
         fn project_to_genomic_with_ng_parent_uses_primary_build() {
             let vp = make_multi_build_projector("GRCh38");
@@ -5372,14 +5730,14 @@ mod tests {
                 ),
             };
             let out = vp
-                .project_to_genomic(&HgvsVariant::Cds(cds))
-                .expect("NG-parented variant should project via the primary cdot view");
+                .project_to_genomic_nc(&HgvsVariant::Cds(cds))
+                .expect("NG-parented variant should pivot via the primary cdot view");
             match out {
                 HgvsVariant::Genome(g) => {
                     let s = g.to_string();
                     assert!(
                         s.starts_with("NG_MBTEST.1"),
-                        "expected output to inherit NG_ parent accession, got: {}",
+                        "expected pivot to inherit NG_ parent accession, got: {}",
                         s
                     );
                     assert!(
