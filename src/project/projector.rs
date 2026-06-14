@@ -485,9 +485,86 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<Vec<VariantProjection>, FerroError> {
+        // 0. An NG_/LRG_ genomic *input* carries parent-relative coordinates that
+        //    cdot cannot map; rewrite it into the chromosome (NC_) frame so the
+        //    fan-out below can enumerate and project onto the overlapping
+        //    transcripts (#480 inverse).
+        let (variant, parent) = self.deanchor_genomic_parent_input(variant);
         // 1. Normalize once via the cached normalizer (built at construction time).
-        let normalized = self.normalizer.normalize(variant)?;
-        self.project_normalized_all(&normalized)
+        let normalized = self.normalizer.normalize(&variant)?;
+        let mut results = self.project_normalized_all(&normalized)?;
+        // 2. When the input was an NG_/LRG_ parent, re-frame each per-transcript
+        //    description back under that parent so the output matches the input's
+        //    reference frame (NG_(NM_):c., NG_(NP_):p., NG_:g.) rather than the
+        //    NC_ accession used internally for projection (#480).
+        if let Some(parent) = parent {
+            let placement = self.provider.genomic_placement(&parent);
+            for r in &mut results {
+                Self::frame_projection_under_parent(r, &parent, placement.as_ref());
+            }
+        }
+        Ok(results)
+    }
+
+    /// Re-frame a [`VariantProjection`] produced from a de-anchored `NC_` variant
+    /// back under the original `NG_`/`LRG_` parent (#480): the transcript-relative
+    /// descriptions (`coding`/`noncoding`/`protein`) gain the parent as their
+    /// `genomic_context` (rendering `NG_(NM_)` / `NG_(NP_)`), and the genomic
+    /// description is re-anchored into the parent's own coordinate frame.
+    ///
+    /// The synthesized gene-symbol selector is dropped: per #121 ferro does not
+    /// emit a selector that was not in the input, and the mutalyzer `NG_(NM_)`
+    /// form carries none.
+    fn frame_projection_under_parent(
+        result: &mut VariantProjection,
+        parent: &Accession,
+        placement: Option<&crate::reference::GenomicPlacement>,
+    ) {
+        for field in [
+            &mut result.coding,
+            &mut result.noncoding,
+            &mut result.protein,
+        ] {
+            if let Some(v) = field.as_ref() {
+                *field = Some(Self::relabel_under_parent(v, parent));
+            }
+        }
+        if let (Some(HgvsVariant::Genome(gv)), Some(placement)) =
+            (result.genomic.as_ref(), placement)
+        {
+            let mut reanchored = Self::reanchor_genome_to_parent(gv.clone(), placement);
+            reanchored.accession = parent.clone();
+            reanchored.gene_symbol = None;
+            result.genomic = Some(HgvsVariant::Genome(reanchored));
+        }
+    }
+
+    /// Return a clone of `variant` whose top-level accession carries `parent` as
+    /// its `genomic_context` and whose synthesized gene-symbol selector is
+    /// cleared. Used to frame a transcript-relative description under its
+    /// `NG_`/`LRG_` parent (#480).
+    fn relabel_under_parent(variant: &HgvsVariant, parent: &Accession) -> HgvsVariant {
+        let mut v = variant.clone();
+        match &mut v {
+            HgvsVariant::Cds(c) => {
+                c.accession = c.accession.clone().with_genomic_context(parent.clone());
+                c.gene_symbol = None;
+            }
+            HgvsVariant::Tx(t) => {
+                t.accession = t.accession.clone().with_genomic_context(parent.clone());
+                t.gene_symbol = None;
+            }
+            HgvsVariant::Rna(r) => {
+                r.accession = r.accession.clone().with_genomic_context(parent.clone());
+                r.gene_symbol = None;
+            }
+            HgvsVariant::Protein(p) => {
+                p.accession = p.accession.clone().with_genomic_context(parent.clone());
+                p.gene_symbol = None;
+            }
+            _ => {}
+        }
+        v
     }
 
     /// Derive the genomic LRG parent (`LRG_<n>`) of an LRG transcript or protein
@@ -888,6 +965,65 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             gene_symbol: gv.gene_symbol,
             loc_edit: LocEdit::with_uncertainty(interval, edit),
         }
+    }
+
+    /// If `variant` is a genome variant on an `NG_`/`LRG_` parent whose
+    /// chromosomal [`GenomicPlacement`] is known, rewrite it into the chromosome
+    /// (`NC_`) frame — the inverse of [`Self::reanchor_genome_to_parent`] (#480).
+    ///
+    /// cdot indexes and aligns transcripts on `NC_` contigs, so an `NG_`/`LRG_`
+    /// genomic *input* (e.g. `NG_012337.1:g.4812_4813insTAC`) cannot be
+    /// enumerated or projected in its own frame. Translating it into the `NC_`
+    /// frame lets the normal fan-out path find and project onto the overlapping
+    /// transcripts.
+    ///
+    /// Returns the rewritten variant and the original parent accession when a
+    /// rewrite happened (so the per-transcript output can be re-framed under the
+    /// parent); otherwise returns the input unchanged with `None`.
+    fn deanchor_genomic_parent_input(
+        &self,
+        variant: &HgvsVariant,
+    ) -> (HgvsVariant, Option<Accession>) {
+        use crate::hgvs::interval::GenomeInterval;
+        use crate::hgvs::variant::GenomeVariant;
+        let HgvsVariant::Genome(gv) = variant else {
+            return (variant.clone(), None);
+        };
+        let Some(placement) = self.provider.genomic_placement(&gv.accession) else {
+            return (variant.clone(), None);
+        };
+        let bounds = match (
+            gv.loc_edit.location.start.inner(),
+            gv.loc_edit.location.end.inner(),
+        ) {
+            (Some(s), Some(e)) => Some((s.base, e.base)),
+            _ => None,
+        };
+        let Some((p_lo, p_hi)) = bounds else {
+            return (variant.clone(), None);
+        };
+        let (Some(a), Some(b)) = (placement.parent_to_nc(p_lo), placement.parent_to_nc(p_hi))
+        else {
+            return (variant.clone(), None);
+        };
+        // A minus-strand placement reverses coordinate order.
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let interval = GenomeInterval::new(GenomePos::new(lo), GenomePos::new(hi));
+        let edit = if placement.strand == crate::reference::Strand::Minus {
+            gv.loc_edit
+                .edit
+                .clone()
+                .map(|inner| transform_edit_for_strand(&inner, crate::reference::Strand::Minus))
+        } else {
+            gv.loc_edit.edit.clone()
+        };
+        let parent = gv.accession.clone();
+        let nc_variant = HgvsVariant::Genome(GenomeVariant {
+            accession: placement.nc.clone(),
+            gene_symbol: gv.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(interval, edit),
+        });
+        (nc_variant, Some(parent))
     }
 
     /// Project an already-normalized g. variant onto ALL overlapping
@@ -1984,6 +2120,157 @@ mod tests {
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
         (projector, provider)
+    }
+
+    /// Like [`make_two_transcript_setup`] but with the transcripts placed on an
+    /// `NC_` accession contig (`NC_000001.11`) rather than the `chr1` alias, so
+    /// an `NG_` `GenomicPlacement` (whose `nc` field is an `NC_` accession) maps
+    /// onto the same contig the projector indexes. Used to exercise the
+    /// NG_-genomic-input fan-out path (#480 inverse).
+    #[cfg(test)]
+    fn make_nc_two_transcript_setup() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        for (id, np) in [("NM_TX1.1", "NP_TX1.1"), ("NM_TX2.1", "NP_TX2.1")] {
+            cdot.add_transcript(
+                id.to_string(),
+                CdotTranscript {
+                    gene_name: Some("GENE1".to_string()),
+                    contig: "NC_000001.11".to_string(),
+                    strand: ProvStrand::Plus,
+                    exons: vec![[1000, 1009, 0, 9]],
+                    cds_start: Some(0),
+                    cds_end: Some(9),
+                    gene_id: None,
+                    protein: Some(np.to_string()),
+                    exon_cigars: Vec::new(),
+                },
+            );
+        }
+        let projector = Projector::new(cdot).with_mane(vec!["NM_TX2.1".to_string()], vec![]);
+
+        let mut provider = MockProvider::new();
+        for id in ["NM_TX1.1", "NM_TX2.1"] {
+            provider.add_transcript(Transcript {
+                id: id.to_string(),
+                gene_symbol: Some("GENE1".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAA".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exons: vec![Exon::new(1, 1, 9)],
+                chromosome: Some("NC_000001.11".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1008),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+        }
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence(
+            "NC_000001.11",
+            format!("{}{}{}", prefix, "ATGCGCTAA", suffix),
+        );
+        // The NG_ parent's own sequence (NG_900.1 base 1..9 == NC 1000..1008),
+        // so normalization of an NG_-relative input resolves its reference.
+        provider.add_genomic_sequence("NG_900.1", "ATGCGCTAA".to_string());
+        (projector, provider)
+    }
+
+    /// A bare `NG_<n>:g.` input must enumerate the transcripts overlapping that
+    /// NG_ position by translating the NG_-relative coordinate into the
+    /// chromosome frame via the parent's [`GenomicPlacement`] (#480 inverse),
+    /// then projecting onto each overlapping transcript. Pre-fix
+    /// `extract_contig_and_pos` used the bare NG_ accession as the contig, which
+    /// the projector cannot map, so `project_variant_all` returned `[]`.
+    #[test]
+    fn project_variant_all_enumerates_transcripts_for_ng_genomic_input() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        // NG_900.1 placed on NC_000001.11, plus strand, NG_ base 1 == nc 1000.
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        let vp = VariantProjector::new(projector, provider);
+
+        // NG_900.1:g.4C>A — NG_ base 4 == nc 1003 == c.4 of the CDS.
+        let results = vp
+            .project_all("NG_900.1:g.4C>A")
+            .expect("project_all should enumerate transcripts for an NG_ genomic input");
+
+        assert_eq!(
+            results.len(),
+            2,
+            "expected both transcripts overlapping the NG_ position, got {:?}",
+            results.iter().map(|p| &p.transcript_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// For an `NG_`-genomic input, each per-transcript coding and protein
+    /// description must be framed under the original `NG_` parent
+    /// (`NG_900.1(NM_TX1.1):c.…` / `NG_900.1(NP_TX1.1):p.…`), matching the
+    /// mutalyzer corpus, rather than the bare transcript or the de-anchored
+    /// `NC_` accession used internally for projection.
+    #[test]
+    fn project_variant_all_frames_coding_protein_under_ng_parent() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        let vp = VariantProjector::new(projector, provider);
+
+        let results = vp
+            .project_all("NG_900.1:g.4C>A")
+            .expect("project_all should succeed for an NG_ genomic input");
+
+        let coding_strings: Vec<String> = results
+            .iter()
+            .filter_map(|r| r.coding.as_ref().map(|c| c.to_string()))
+            .collect();
+        assert!(
+            !coding_strings.is_empty(),
+            "expected at least one coding description"
+        );
+        for c in &coding_strings {
+            assert!(
+                c.starts_with("NG_900.1("),
+                "coding description should be framed under the NG_ parent, got {c:?}"
+            );
+        }
+        for r in &results {
+            if let Some(p) = r.protein.as_ref().map(|p| p.to_string()) {
+                assert!(
+                    p.starts_with("NG_900.1("),
+                    "protein description should be framed under the NG_ parent, got {p:?}"
+                );
+            }
+            // The genomic description is re-anchored back into the NG_ frame
+            // (NG_ base 4 == nc 1003), so it reads `NG_900.1:g.4…`.
+            if let Some(g) = r.genomic.as_ref().map(|g| g.to_string()) {
+                assert!(
+                    g.starts_with("NG_900.1:g.4"),
+                    "genomic description should be in the NG_ frame, got {g:?}"
+                );
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
