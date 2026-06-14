@@ -1275,6 +1275,224 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         })
     }
 
+    /// Direct n./r.→CDS→p. projection for a bare transcript non-coding (`n.`)
+    /// or RNA (`r.`) input (no `genomic_context` parent). The c.→g.→CDS
+    /// roundtrip cannot run without a genome alignment, but an `n.` base is a
+    /// 1-based transcript position: convert it to a CDS position via the
+    /// transcript's `cds_start` (the exon/CIGAR-aware
+    /// [`CoordinateMapper::tx_to_cds`]), then run the same protein-consequence
+    /// prediction the coding path uses. The resulting projection has
+    /// `genomic = None` (no genomic representation is available for a bare-NM_
+    /// input) (#506).
+    ///
+    /// `normalized` must be an [`HgvsVariant::Tx`] or [`HgvsVariant::Rna`].
+    fn project_noncoding_direct(
+        &self,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        use crate::reference::Strand as RefStrand;
+
+        // Pull the common pieces (accession, gene_symbol, edit, raw start/end
+        // as a transcript TxPos) out of the n. / r. input. RNA positions share
+        // the same `base`/`offset`/`utr3` shape as transcript positions, so we
+        // normalize both to `TxPos`. RNA edits carry `Base::U`; the protein
+        // machinery reads the transcript's DNA CDS, so we translate U→T below.
+        let (accession, gene_symbol, edit_mu, axis_label, start_tx, end_tx) = match normalized {
+            HgvsVariant::Tx(v) => {
+                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
+                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    "n.",
+                    s,
+                    e,
+                )
+            }
+            HgvsVariant::Rna(v) => {
+                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
+                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
+                // RnaPos shape mirrors TxPos: base / offset / utr3↔downstream.
+                let to_tx = |p: crate::hgvs::location::RnaPos| TxPos {
+                    base: p.base,
+                    offset: p.offset,
+                    downstream: p.utr3,
+                };
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    "r.",
+                    to_tx(s),
+                    to_tx(e),
+                )
+            }
+            _ => {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "project_noncoding_direct only accepts n./r. inputs, got {}",
+                        normalized.variant_type()
+                    ),
+                })
+            }
+        };
+
+        // Mirror the genome path's transcript_id-mismatch guard: an n./r. input
+        // must be projected against its own transcript.
+        let input_tx = accession.transcript_accession();
+        if input_tx != transcript_id {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "transcript_id mismatch: input is on {} but projection requested \
+                     against {}; transcript-coordinate inputs must be projected against \
+                     their own transcript",
+                    input_tx, transcript_id,
+                ),
+            });
+        }
+
+        // `?` sentinel (base == 0) has no concrete transcript position; reject
+        // it up front to match the coding-path contract. (Transcript positions
+        // cannot carry chromosome-arm markers — only `CdsPos` has a `special`
+        // field — so there is no pter/qter/cen case to handle here.)
+        if start_tx.base == 0 || end_tx.base == 0 {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "cannot resolve `?` position sentinel on direct {axis_label}→p. projection"
+                ),
+            });
+        }
+
+        // 3'-downstream (`*N`) positions carry the `*N` *relative* 3'UTR offset
+        // in `base` with `downstream = true`. `CoordinateMapper::tx_to_cds`
+        // (used below) classifies purely by comparing `base` against the CDS
+        // bounds and never reads this flag, so it would misread `n.*5` / `r.*5`
+        // as in-transcript position 5 — yielding a bogus `c.` form and a
+        // spurious protein prediction. The genome-pivot path reshapes
+        // `downstream` into `CdsPos.utr3` (which `cds_to_genome` honors), but the
+        // direct path has no exon-aware 3'UTR translation, so reject these up
+        // front rather than mis-project them.
+        if start_tx.downstream || end_tx.downstream {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "cannot project 3'-downstream (`*N`) positions on direct {axis_label}→p. \
+                     projection without a genome alignment"
+                ),
+            });
+        }
+
+        // The transcript record is needed both for its CDS structure (to
+        // convert tx→CDS) and for protein metadata. Prefer the cdot view for
+        // gene/protein metadata, but the full `Transcript` is what carries the
+        // exon table and `cds_start`/`cds_end` used by `tx_to_cds`.
+        let tx = self.cached_get_transcript_for_variant(normalized, transcript_id)?;
+        // Coding/protein/gene metadata: prefer cdot, fall back to the sequence
+        // provider's transcript record. Mirror the coding-path sibling
+        // (`project_coding_direct`) by resolving `is_coding` cdot-first too — the
+        // two transcript stores can disagree (cdot lists a CDS, the provider
+        // record doesn't), and reading `is_coding` from a different source than
+        // the sibling would silently drop protein where the sibling predicts it.
+        let (is_coding, cdot_protein, gene_symbol_meta) =
+            match self.projector.mapper().cdot().get_transcript(transcript_id) {
+                Some(t) => (
+                    t.cds_start.is_some(),
+                    t.protein.clone(),
+                    t.gene_name.clone(),
+                ),
+                None => (
+                    tx.cds_start.is_some() && tx.cds_end.is_some(),
+                    tx.protein_id.clone(),
+                    tx.gene_symbol.clone(),
+                ),
+            };
+        // Carry the input's gene symbol through to the derived axes when it has
+        // one, else the metadata gene symbol; mirrors the coding path.
+        let gene_symbol = gene_symbol.or(gene_symbol_meta);
+
+        let edit = edit_mu
+            .inner()
+            .cloned()
+            .ok_or_else(|| FerroError::UnsupportedProjection {
+                reason: format!("{axis_label} variant has no concrete edit"),
+            })?;
+        // Translate any RNA `U` bases to DNA `T` so the edit reads against the
+        // transcript's DNA CDS. On the transcript sense strand no reverse-
+        // complement is needed (the c./n. form already reads in transcript
+        // orientation), so we pass `Strand::Plus`, whose only effect is the
+        // U→T mapping. This is a no-op for n. (DNA) inputs.
+        let c_edit = transform_edit_for_strand(&edit, RefStrand::Plus);
+
+        // Non-coding transcript: there is no CDS to convert into, so there is
+        // no protein consequence and no c. form. The n. form is the input
+        // itself; report it on the non-coding axis and stop.
+        if !is_coding {
+            return Ok(VariantProjection {
+                genomic: None,
+                coding: None,
+                noncoding: Some(normalized.clone()),
+                protein: None,
+                transcript_id: transcript_id.to_string(),
+                gene_symbol,
+                is_frameshift: false,
+                is_intronic: start_tx.offset.is_some() || end_tx.offset.is_some(),
+                is_utr: false,
+            });
+        }
+
+        // Convert the 1-based transcript positions to CDS positions via the
+        // exon/CIGAR-aware mapper (the inverse of `noncoding_from_coding`'s
+        // `cds_to_tx`). The intronic offset is carried through.
+        let mapper = crate::convert::mapper::CoordinateMapper::new(&tx);
+        let cds_start = mapper.tx_to_cds(&start_tx)?;
+        let cds_end = mapper.tx_to_cds(&end_tx)?;
+
+        // Flags derived from the resolved CDS positions (no genome): intronic =
+        // any offset; UTR = 5'UTR (base ≤ 0) or 3'UTR (`*`). Mirrors the coding
+        // path so the protein gate behaves identically.
+        let is_intronic = cds_start.offset.is_some() || cds_end.offset.is_some();
+        let is_utr = !is_intronic
+            && (cds_start.base <= 0 || cds_end.base <= 0 || cds_start.utr3 || cds_end.utr3);
+
+        let protein = self.predict_protein_consequence(
+            transcript_id,
+            cdot_protein,
+            is_coding,
+            is_intronic,
+            is_utr,
+            &c_edit,
+            &cds_start,
+            &cds_end,
+            normalized,
+        )?;
+
+        // Build the c. (coding) form from the resolved CDS positions and the
+        // (U→T-translated) edit. Best-effort: keep the bare transcript
+        // accession so it renders without an NC_* wrapper, matching the
+        // genome-pivot `coding` field.
+        let coding = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession(transcript_id),
+            gene_symbol: gene_symbol.clone(),
+            loc_edit: LocEdit::new(CdsInterval::new(cds_start, cds_end), c_edit.clone()),
+        });
+
+        let frameshift = is_frameshift(normalized);
+
+        Ok(VariantProjection {
+            genomic: None,
+            coding: Some(coding),
+            // The non-coding axis is the input itself.
+            noncoding: Some(normalized.clone()),
+            protein,
+            transcript_id: transcript_id.to_string(),
+            gene_symbol,
+            is_frameshift: frameshift,
+            is_intronic,
+            is_utr,
+        })
+    }
+
     fn project_single_inner(
         &self,
         normalized: &HgvsVariant,
@@ -1287,6 +1505,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             if c.accession.genomic_context.is_none() {
                 return self.project_coding_direct(c, normalized, transcript_id);
             }
+        }
+        // Direct n./r.→CDS→p. path: a bare non-coding (`n.`) or RNA (`r.`)
+        // input likewise has no genome alignment. An `n.` base is a 1-based
+        // transcript position; convert it to a CDS position via the
+        // transcript's `cds_start` and run the same protein prediction the
+        // coding path uses (#506).
+        match normalized {
+            HgvsVariant::Tx(t) if t.accession.genomic_context.is_none() => {
+                return self.project_noncoding_direct(normalized, transcript_id);
+            }
+            HgvsVariant::Rna(r) if r.accession.genomic_context.is_none() => {
+                return self.project_noncoding_direct(normalized, transcript_id);
+            }
+            _ => {}
         }
         // Track which g. variant feeds the downstream pipeline AND will
         // be reported in `VariantProjection.genomic`. For g. input the
@@ -4557,6 +4789,334 @@ mod tests {
         assert!(
             matches!(err, FerroError::UnsupportedProjection { .. }),
             "qter sentinel should be UnsupportedProjection, got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Direct n./r.→CDS→p. path for bare transcript inputs (#506)
+    //
+    // A bare non-coding (`n.`) or RNA (`r.`) input on a coding transcript
+    // (no `genomic_context` parent) carries no genome alignment, so the
+    // c.→g.→CDS roundtrip cannot run. But an `n.` base is a 1-based
+    // transcript position: convert it to a CDS position via the
+    // transcript's `cds_start` (exon/CIGAR-aware `tx_to_cds`), then run the
+    // same protein-consequence prediction the coding path uses. The
+    // resulting projection has `genomic = None`.
+    // ------------------------------------------------------------------
+
+    /// A non-coding transcript (no CDS) for the "no protein on n. input"
+    /// guard. Sequence "ACGTACGTAC" (10 nt), exon tx 1..10, plus strand, no
+    /// `cds_start`/`cds_end`.
+    fn make_noncoding_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NR_TEST.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("NCGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1010, 0, 10]],
+                cds_start: None,
+                cds_end: None,
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NR_TEST.1".to_string(),
+            gene_symbol: Some("NCGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ACGTACGTAC".to_string()),
+            cds_start: None,
+            cds_end: None,
+            exons: vec![Exon::new(1, 1, 10)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1009),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ACGTACGTAC", suffix));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_bare_n_substitution_predicts_protein_without_genome() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_TEST.1's CDS begins at transcript position 1 (sequence ATGCGCTAA,
+        // no 5'UTR), so n.4 == c.4. n.4C>A: codon 2 CGC(Arg) → AGC(Ser).
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare n. input should project via the direct n.→CDS→p. path");
+        assert!(
+            proj.genomic.is_none(),
+            "bare n. input should report genomic = None, got {:?}",
+            proj.genomic
+        );
+        // The non-coding axis is the input itself; the coding axis is derived.
+        assert!(
+            proj.noncoding.is_some(),
+            "noncoding (n.) form should be present"
+        );
+        let protein = proj.protein.expect("protein should be predicted");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_bare_n_populates_coding_axis() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // n.4C>A → c.4C>A (cds_start at tx pos 1). The coding form reframes the
+        // transcript-relative position to CDS-relative; the edit is unchanged.
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare n. input should project");
+        let coding = proj
+            .coding
+            .as_ref()
+            .expect("coding (c.) axis should be derived for a coding transcript");
+        assert!(
+            matches!(coding, HgvsVariant::Cds(_)),
+            "coding form should be a c. (Cds) variant, got {coding:?}"
+        );
+        assert!(
+            coding.to_string().contains(":c.4C>A"),
+            "n.4C>A should reframe to c.4C>A, got {coding}"
+        );
+    }
+
+    #[test]
+    fn project_bare_r_substitution_predicts_protein_without_genome() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::RnaInterval;
+        use crate::hgvs::location::RnaPos;
+        use crate::hgvs::variant::{LocEdit, RnaVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // r.4c>a mirrors n.4C>A on the sense strand. The RNA edit carries
+        // `Base::U`-style RNA bases (here `c`/`a`, which are DNA-compatible);
+        // the direct path translates U→T before reading the DNA CDS, so the
+        // protein consequence matches the coding path: p.(Arg2Ser).
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare r. input should project via the direct r.→CDS→p. path");
+        assert!(
+            proj.genomic.is_none(),
+            "bare r. input should report genomic = None, got {:?}",
+            proj.genomic
+        );
+        let protein = proj.protein.expect("protein should be predicted");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_bare_r_with_u_base_predicts_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::RnaInterval;
+        use crate::hgvs::location::RnaPos;
+        use crate::hgvs::variant::{LocEdit, RnaVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // r.2u>a: tx pos 2 is the `T` of ATG (RNA reads `u`). The U→T
+        // translation must run so the ref base matches the DNA CDS. c.2T>A
+        // changes the initiation codon ATG→AAG ⇒ p.(Met1?).
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(2)),
+                NaEdit::Substitution {
+                    reference: Base::U,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare r. input with a U base should project");
+        let protein = proj
+            .protein
+            .expect("a start-codon r. substitution should predict a protein");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Met1?)");
+    }
+
+    #[test]
+    fn project_bare_n_intronic_has_no_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // n.4+5A>G — intronic offset on a bare NM_. Without a genome alignment
+        // the intronic position cannot be placed, so protein prediction is not
+        // attempted: protein = None, no panic.
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::with_offset(4, 5)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("bare n. intronic projection should succeed (no protein)");
+        assert!(proj.genomic.is_none());
+        assert!(
+            proj.protein.is_none(),
+            "intronic n. variant should not predict a protein consequence"
+        );
+        assert!(proj.is_intronic, "is_intronic flag should be set");
+    }
+
+    #[test]
+    fn project_bare_n_on_noncoding_transcript_has_no_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        let (projector, provider) = make_noncoding_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NR_TEST.1 has no CDS, so an n. variant on it has no protein
+        // consequence — the projection succeeds with protein = None.
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NR_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::T,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NR_TEST.1")
+            .expect("bare n. on a non-coding transcript should project (no protein)");
+        assert!(proj.genomic.is_none());
+        assert!(
+            proj.protein.is_none(),
+            "n. on a non-coding transcript must not predict a protein, got {:?}",
+            proj.protein
+        );
+        // The non-coding axis still carries the input n. form.
+        assert!(proj.noncoding.is_some(), "noncoding form should be present");
+    }
+
+    #[test]
+    fn project_bare_n_utr_has_no_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        // NM_UTR5.1: 5 nt 5'UTR then CDS at tx pos 6. n.3 lies in the 5'UTR
+        // (c.-3) and does not reach the initiation codon, so no protein.
+        let (projector, provider) = make_utr5_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NM_UTR5.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(3)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_UTR5.1")
+            .expect("bare n. 5'UTR projection should succeed (no protein)");
+        assert!(proj.genomic.is_none());
+        assert!(
+            proj.is_utr,
+            "is_utr flag should be set for a 5'UTR n. position"
+        );
+        assert!(
+            proj.protein.is_none(),
+            "pure-5'UTR n. position must not predict a protein, got {:?}",
+            proj.protein
+        );
+    }
+
+    #[test]
+    fn project_bare_n_transcript_id_mismatch_is_rejected() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{LocEdit, TxVariant};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // An n. input on NM_TEST.1 projected against a different transcript
+        // must be rejected, mirroring the coding path's guard.
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let err = vp
+            .project_normalized(&variant, "NM_OTHER.1")
+            .expect_err("transcript_id mismatch must be rejected");
+        assert!(
+            matches!(err, FerroError::UnsupportedProjection { .. }),
+            "transcript_id mismatch should be UnsupportedProjection, got {err:?}"
         );
     }
 }
