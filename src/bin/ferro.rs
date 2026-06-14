@@ -1270,6 +1270,16 @@ fn run_normalize(
         }
     }
 
+    // The reference provider (cdot maps + FASTA index, ~1.4 GB) is owned by
+    // `normalizer`. Running its destructor here only frees memory the OS
+    // reclaims at process exit anyway — on a batch run ~10% of wall time is
+    // spent walking the millions of map entries to drop them. `process`
+    // borrowed `normalizer`, but its last use is above, so that borrow has
+    // already ended; leak `normalizer` so the process can exit without the
+    // teardown. `writer` is independent (output is passed in, not captured)
+    // and still flushes on its own drop, so this does not affect output.
+    std::mem::forget(normalizer);
+
     let elapsed = start.elapsed();
 
     // Write timing info if requested
