@@ -222,9 +222,11 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 
 ### Performance Comparison
 
+**All tools are benchmarked in ferro's offline configuration — best case for every tool.** Reference data is preloaded locally (a local UTA database and SeqRepo) and the network is disabled, so the figures below measure parse/normalize compute, not I/O. Out of the box, hgvs-rs, biocommons/hgvs, and mutalyzer resolve each variant against a remote UTA/SeqRepo or the Mutalyzer web API — a network round-trip per variant (~100–1000 ms), i.e. roughly **1–10 variants/sec, hundreds to thousands of times slower than shown here** (an order-of-magnitude estimate from per-call network latency, not separately benchmarked). That local, offline setup is exactly what ferro's `prepare` command builds; ferro needs no external service.
+
 <!-- DO NOT EDIT — generated from data/benchmark/perf_results.json by `generate_perf_tables`. -->
 
-_Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools draw from one stratified ClinVar population; per-tool sample sizes are calibrated so each tool is measured over a meaningful interval — fast cells (e.g. ferro/hgvs-rs parse) draw from millions of patterns, while slower cells (e.g. the per-tool normalize columns) draw from as few as tens to thousands. All tools exclude process/interpreter startup from the timed region — the mutalyzer/biocommons Python subprocesses are timed by their own internal startup-excluded timer, matching ferro/hgvs-rs. Only ferro parallelizes natively (rayon); the other tools are single-threaded libraries, so their normalize *@8 workers* figures come from the benchmark harness running 8 independent instances in parallel, and parsing is not sharded for them (their @1- and @8-worker parse columns are the same single-threaded measurement). Every tool runs fully offline against local reference data — a local UTA database and SeqRepo, with mutalyzer's network lookups disabled — the configuration ferro's `prepare` command enables; the figures therefore reflect compute throughput, not per-variant network latency. Reference-data load is excluded for all tools. ferro full-population peak: parse 11.2M/s, normalize 74.5k/s. See `docs/BENCHMARK_RUNBOOK.md` for the full method._
+_Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools draw from one stratified ClinVar population; per-tool sample sizes are calibrated so each tool is measured over a meaningful interval — fast cells (e.g. ferro/hgvs-rs parse) draw from millions of patterns, while slower cells (e.g. the per-tool normalize columns) draw from as few as tens to thousands. All tools exclude process/interpreter startup from the timed region — the mutalyzer/biocommons Python subprocesses are timed by their own internal startup-excluded timer, matching ferro/hgvs-rs. Only ferro parallelizes natively (rayon); the other tools are single-threaded libraries, so their normalize *@8 workers* figures come from the benchmark harness running 8 independent instances in parallel, while parsing is not sharded for them — hence the `single-threaded` label in their parse *@8 workers* column (mutalyzer normalize likewise shows no gain at 8 workers: per-call cache and IPC overhead dominate, so sharding does not help). Every tool runs fully offline against local reference data — a local UTA database and SeqRepo, with mutalyzer's network lookups disabled — the configuration ferro's `prepare` command enables; the figures therefore reflect compute throughput, not per-variant network latency. Reference-data load is excluded for all tools. ferro full-population peak: parse 11.2M/s, normalize 74.5k/s. See `docs/BENCHMARK_RUNBOOK.md` for the full method._
 
 **Parse**
 
@@ -232,9 +234,9 @@ _Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools dr
 | Tool | Throughput @ 1 worker | Throughput @ 8 workers | ferro speedup @ 8w |
 |------|----------------------:|-----------------------:|-------------------:|
 | ferro | 3.1M/s | 10.3M/s | — |
-| mutalyzer | 336/s | 336/s | 31,000× |
-| biocommons | 3.6k/s | 3.7k/s | 2,800× |
-| hgvs-rs | 3.5M/s | 3.5M/s | 3× |
+| mutalyzer | 336/s | single-threaded | 31,000× |
+| biocommons | 3.6k/s | single-threaded | 2,800× |
+| hgvs-rs | 3.5M/s | single-threaded | 3× |
 <!-- END perf:parse -->
 
 **Normalize**
