@@ -34,7 +34,7 @@ correctness or stability.
 
 - **Full HGVS Parsing**: All coordinate systems (g/c/n/r/p/m/o) and edit types
 - **Variant Normalization**: 3'/5' shifting per HGVS specification
-- **High Performance**: ~2.5M variants/sec parsing, zero-copy with nom
+- **High Performance**: ~3M variants/sec single-threaded parsing (>10M/s parallel), zero-copy with nom
 - **Type-Safe**: Leverages Rust's type system for correctness
 
 ## Installation
@@ -224,7 +224,7 @@ ferro-hgvs provides the most comprehensive HGVS variant normalization across all
 
 <!-- DO NOT EDIT — generated from data/benchmark/perf_results.json by `generate_perf_tables`. -->
 
-_Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools draw from one stratified ClinVar population; per-tool sample sizes are calibrated so each tool is measured over a meaningful interval (fast tools see millions of patterns, slow tools hundreds). All tools exclude process/interpreter startup from the timed region — the mutalyzer/biocommons Python subprocesses are timed by their own internal startup-excluded timer, matching ferro/hgvs-rs. Reference-data load is excluded for all tools. ferro full-population peak: parse 11.2M/s, normalize 74.5k/s. See `docs/BENCHMARK_RUNBOOK.md` for the full method._
+_Median patterns/sec over 5 reps on an Apple M2 Max, local/offline. All tools draw from one stratified ClinVar population; per-tool sample sizes are calibrated so each tool is measured over a meaningful interval — fast cells (e.g. ferro/hgvs-rs parse) draw from millions of patterns, while slower cells (e.g. the per-tool normalize columns) draw from as few as tens to thousands. All tools exclude process/interpreter startup from the timed region — the mutalyzer/biocommons Python subprocesses are timed by their own internal startup-excluded timer, matching ferro/hgvs-rs. Only ferro parallelizes natively (rayon); the other tools are single-threaded libraries, so their normalize *@8 workers* figures come from the benchmark harness running 8 independent instances in parallel, and parsing is not sharded for them (their @1- and @8-worker parse columns are the same single-threaded measurement). Every tool runs fully offline against shared local reference data — a local UTA database and SeqRepo provisioned by ferro's `prepare` command — with each tool pointed at it via its own settings (e.g. mutalyzer's network lookups are disabled through `--mutalyzer-settings`, not by `prepare` itself); the figures therefore reflect compute throughput, not per-variant network latency. Reference-data load is excluded for all tools. ferro full-population peak: parse 11.2M/s, normalize 74.5k/s. See `docs/BENCHMARK_RUNBOOK.md` for the full method._
 
 **Parse**
 
