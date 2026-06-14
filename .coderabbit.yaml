@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review configuration for ferro-hgvs (HGVS variant normalizer).
+#
+# This repo is output-stability-critical: parsing, normalization, and coordinate
+# projection must be idempotent, round-trip stable, and byte-identical to the
+# external oracles we conform to (biocommons hgvs, Mutalyzer, VariantValidator).
+# The `assertive` profile + the path instructions below aim the review at the
+# failure modes that actually bite here (output divergence, non-idempotent
+# normalization, parser/fast-path disagreement, coordinate off-by-one, panics on
+# adversarial input, spec-conformance drift) rather than generic style. CI
+# (proptests, fuzz targets, idempotency tests, conformance oracles) is the
+# primary correctness net; assertive makes CodeRabbit surface the borderline tier
+# that net can still miss — a false positive here is cheaper than a missed
+# output divergence.
+#
+# Scope: this tunes the auto-read GitHub CodeRabbit app. The local `coderabbit`
+# CLI does NOT reliably inherit this file via `-c .coderabbit.yaml` (it can miss
+# findings the bot catches), so treat the CLI as a lighter pre-push smoke check,
+# not a substitute for the bot review.
+
+language: en-US
+
+# Terse, technical, no praise or filler — match the codebase's review style.
+# NB: CodeRabbit caps tone_instructions at 250 characters — keep this terse.
+tone_instructions: >-
+  Concise and technical. Skip praise and restating the code. Lead with the risk
+  and a one-line fix. Favor correctness, idempotency, and byte-identity with the
+  conformance oracles over style. Skip clippy/rustfmt nits; CI enforces them.
+
+reviews:
+  # Surface borderline correctness findings, not just high-confidence ones. This
+  # codebase prefers a false positive to a missed output divergence.
+  profile: assertive
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: false
+  # Reviews are triggered on demand, not automatically. CodeRabbit enforces a
+  # per-developer hourly review rate limit; auto-review on PR-open (`enabled`)
+  # and on every push (`auto_incremental_review`) fire extra reviews into that
+  # one shared budget, so a burst of PRs/commits exhausts it and later reviews
+  # stall for hours. Disabling both keeps the budget under deliberate control —
+  # reviews run only when requested. On-demand `@coderabbitai review` still works
+  # with `enabled: false`, and the assertive profile + path instructions above
+  # still apply to those reviews.
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    drafts: false
+  # Never auto-block merges on a review verdict; findings are advisory.
+  request_changes_workflow: false
+
+  # Don't spend review budget on build output, vendored trees, lockfiles, or the
+  # generated spec fixture (regenerated from code, never hand-edited).
+  path_filters:
+    - "!**/target/**"
+    - "!**/*.lock"
+    - "!vendor/**"
+    - "!assets/**"
+    - "!tests/fixtures/grammar/hgvs_spec_normalization.json"
+
+  path_instructions:
+    - path: "src/hgvs/parser/**/*.rs"
+      instructions: >-
+        This is the HGVS grammar parser (nom-based). The fast path in
+        `fast_path.rs` is the DEFAULT parse route and is only sound if it is
+        observationally identical to the generic `parse_variant` for EVERY input
+        — both reject, or both accept and yield the same `HgvsVariant`. Treat any
+        change to fast-path eligibility or output as potentially behavior-changing
+        and confirm the differential test (`tests/fast_path_differential.rs`,
+        both its table and its proptest) still covers it. Flag: inputs the spec
+        rejects being accepted (or vice-versa); panics / unwraps / indexing on
+        attacker-controlled input (this parser is fuzzed — `fuzz/fuzz_targets/`);
+        loss of parse→Display round-trip stability; and `usize` arithmetic on
+        positions/offsets that can wrap or narrow.
+    - path: "src/normalize/**/*.rs"
+      instructions: >-
+        This is normalization: 3'-shifting, boundary handling, repeat shuffling,
+        edit merging, and overlap resolution. The core invariant is IDEMPOTENCY —
+        normalize(normalize(x)) == normalize(x) — and shift correctness
+        (3'-most placement, exact repeat-unit boundaries). Confirm changes are
+        covered by `tests/idempotency_tests.rs` and `tests/normalize_property_tests.rs`.
+        Flag: off-by-one in shuffle/boundary windows; wrong shift direction or
+        strand handling; mishandled circular/mitochondrial wraparound; overlap
+        merges that silently drop or reorder edits; and any path that can make a
+        second normalization pass change the output.
+    - path: "src/{project,convert,coords,spdi,liftover}/**/*.rs"
+      instructions: >-
+        This is coordinate projection and cross-system conversion (c/g/n/r/p,
+        SPDI, liftover, CDS/intron math, protein consequence + frameshift
+        classification). These are the off-by-one minefields. Flag: intronic
+        offset sign errors on the minus strand; CDS start/end clamp boundaries;
+        UTR/exon-junction edge cases; frame/codon arithmetic; and any projection
+        that emits coordinates without validating them against transcript/contig
+        bounds. Require coverage by the relevant `tests/projection*.rs`,
+        `tests/spdi_tests.rs`, or `issue_*`/`*_matrix` regression test.
+    - path: "tests/**/*.rs"
+      instructions: >-
+        Generate test data programmatically; do not add committed fixtures.
+        Conformance assertions must check against an INDEPENDENT oracle
+        (biocommons hgvs, Mutalyzer, VariantValidator) or a different internal
+        code path than the one under test — not a self-consistency check. Flag
+        assertions weaker than the stated contract, and `issue_*` regression
+        tests that assert the buggy output instead of the fixed one.
