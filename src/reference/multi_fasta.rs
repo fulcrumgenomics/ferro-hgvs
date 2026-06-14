@@ -706,6 +706,20 @@ impl MultiFastaProvider {
             return Some(name.to_string());
         }
 
+        // LRG genomic accession: HGVS `g.` variants reference the genomic
+        // sequence by its bare accession `LRG_<N>`, but the FASTA record is
+        // indexed under the LRG suffix convention `LRG_<N>g` (transcripts are
+        // `LRG_<N>t<k>`, proteins `LRG_<N>p<k>`, both of which match the index
+        // directly above). Map the bare genomic accession to its `g`-suffixed
+        // record so `LRG_<N>:g.` normalization can fetch reference bases
+        // instead of silently no-op'ing (issue #487).
+        if is_bare_lrg_genomic_accession(name) {
+            let genomic = format!("{name}g");
+            if self.index.contains_key(&genomic) {
+                return Some(genomic);
+            }
+        }
+
         // Try chromosome alias FIRST (before version fallback)
         // This ensures NC_000001.11 maps to chr1 rather than falling back to NC_000001.10
         if let Some(aliased) = self.aliases.get(name) {
@@ -1881,6 +1895,19 @@ fn load_fai_index<P: AsRef<Path>>(
     Ok(index)
 }
 
+/// Returns `true` for a bare LRG genomic accession (`LRG_<N>` with `N` a
+/// non-empty run of ASCII digits and no trailing `t<k>`/`p<k>` selector). These
+/// denote the LRG genomic sequence, whose FASTA record is suffixed `g`
+/// (`LRG_<N>g`). Transcript (`LRG_<N>t<k>`) and protein (`LRG_<N>p<k>`)
+/// accessions return `false` — they match the index directly under their own
+/// names and must not be remapped to the genomic record.
+fn is_bare_lrg_genomic_accession(name: &str) -> bool {
+    match name.strip_prefix("LRG_") {
+        Some(digits) => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
+    }
+}
+
 /// Count unique files in the index
 fn count_unique_files(index: &FxHashMap<String, FastaIndexEntry>) -> usize {
     let files: std::collections::HashSet<_> = index.values().map(|e| &e.file_path).collect();
@@ -2188,6 +2215,61 @@ mod tests {
 
         let seq = provider.get_sequence("NM_000001", 0, 4).unwrap();
         assert_eq!(seq, "ATGC");
+    }
+
+    /// LRG FASTA records follow the LRG suffix convention: the genomic
+    /// sequence is `LRG_<N>g`, transcripts are `LRG_<N>t<k>`, proteins
+    /// `LRG_<N>p<k>`. HGVS `g.` variants reference the genomic sequence by its
+    /// *bare* accession `LRG_<N>` (no `g` suffix), so the provider must map
+    /// `LRG_<N>` → the indexed `LRG_<N>g` record. Without this, every
+    /// `LRG_<N>:g.` normalization silently no-ops (the fetch errors and
+    /// `normalize_genome` echoes the input unchanged) — issue #487's
+    /// `LRG_303:g.6932_6933ins…` → `g.6908_6932dup` example among them.
+    #[test]
+    fn test_lrg_genomic_accession_resolves_to_g_suffixed_record() {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("lrg.fasta");
+        let fai_path = dir.path().join("lrg.fasta.fai");
+
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">LRG_303g").unwrap();
+        writeln!(fasta_file, "ACGTACGTAC").unwrap();
+        writeln!(fasta_file, ">LRG_303t1").unwrap();
+        writeln!(fasta_file, "TTTTGGGGCC").unwrap();
+        writeln!(fasta_file, ">LRG_303p1").unwrap();
+        writeln!(fasta_file, "MKMKMKMKMK").unwrap();
+
+        // FAI: name, length, offset, linebases, linewidth.
+        // ">LRG_303g\n" = 10 bytes → first seq offset 10.
+        // record 1: 10 bases + "\n" → next header at 21; ">LRG_303t1\n" = 11
+        // bytes → second seq offset 32.
+        // record 2: 10 bases + "\n" → next header at 43; ">LRG_303p1\n" = 11
+        // bytes → third seq offset 54.
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "LRG_303g\t10\t10\t10\t11").unwrap();
+        writeln!(fai_file, "LRG_303t1\t10\t32\t10\t11").unwrap();
+        writeln!(fai_file, "LRG_303p1\t10\t54\t10\t11").unwrap();
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        // Bare genomic accession resolves to the `g`-suffixed record.
+        let seq = provider
+            .get_sequence("LRG_303", 0, 4)
+            .expect("LRG_303 (genomic) must resolve to LRG_303g");
+        assert_eq!(seq, "ACGT");
+        assert_eq!(provider.sequence_length("LRG_303"), Some(10));
+
+        // The transcript accession still resolves directly (not remapped to g).
+        let tx = provider
+            .get_sequence("LRG_303t1", 0, 4)
+            .expect("LRG_303t1 (transcript) must resolve directly");
+        assert_eq!(tx, "TTTT");
+
+        // The protein accession likewise resolves directly (not remapped to g).
+        let protein = provider
+            .get_sequence("LRG_303p1", 0, 4)
+            .expect("LRG_303p1 (protein) must resolve directly");
+        assert_eq!(protein, "MKMK");
     }
 
     #[test]
