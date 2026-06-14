@@ -1307,7 +1307,11 @@ pub enum RepeatNormResult {
 ///
 /// Arguments:
 /// - ref_seq: The reference sequence (0-indexed)
-/// - pos: The position (0-indexed) where the repeat is specified
+/// - pos: The 0-indexed start of the input repeat range
+/// - end_pos: The 0-indexed inclusive end of the input repeat range. For a
+///   single-position anchor (`c.4CAT[1]`, where only the repeat start is named)
+///   this equals `pos`; for an explicit range (`g.3_4GT[5]`, `c.*16_*18T[8]`) it
+///   is the range's last base. See the flank-absorption note below.
 /// - repeat_unit: The repeated sequence (e.g., b"CAT")
 /// - specified_count: The count specified in the variant
 ///
@@ -1315,6 +1319,7 @@ pub enum RepeatNormResult {
 pub fn normalize_repeat(
     ref_seq: &[u8],
     pos: usize,
+    end_pos: usize,
     repeat_unit: &[u8],
     specified_count: u64,
     is_coding: bool,
@@ -1334,7 +1339,7 @@ pub fn normalize_repeat(
     // (2 ATs removed).
     let canonical_unit = smallest_repeat_unit(repeat_unit);
     let copies_per_input_unit = (repeat_unit.len() / canonical_unit.len()) as u64;
-    let specified_count = specified_count * copies_per_input_unit;
+    let mut specified_count = specified_count * copies_per_input_unit;
 
     // Count how many times the canonical unit appears in the reference
     let Some((ref_count, mut ref_start, mut ref_end)) =
@@ -1342,6 +1347,26 @@ pub fn normalize_repeat(
     else {
         return RepeatNormResult::Unchanged;
     };
+
+    // Flank absorption for an under-specified explicit range. `[N]` counts the
+    // alt copies of the *stated* reference units; reference repeat copies inside
+    // the maximal tract but outside the stated range are untouched by the edit
+    // and remain in the variant, so they must be added to the canonical count
+    // (which re-anchors to the full tract `count_tandem_repeats` found). This is
+    // mutalyzer-verified real-world behavior: `LRG_303:g.3_4GT[5]` ->
+    // `g.1_4GT[6]` (the 5' copy g.1_2 absorbs, 5+1=6); `c.*16_*18T[8]` ->
+    // `c.*16_*19T[9]` (the 3' copy *19 absorbs). A single-position anchor
+    // (`end_pos == pos`, e.g. `c.4CAT[1]`) names only the repeat start and means
+    // "the whole repeat -> N copies", so it absorbs nothing. A well-formed
+    // explicit range (stated span == true tract) also absorbs nothing (the
+    // flanks below are zero).
+    if end_pos > pos {
+        let unit_len = canonical_unit.len();
+        let three_prime_bases = ref_end.saturating_sub(end_pos + 1);
+        let five_prime_bases = pos.saturating_sub(ref_start);
+        let absorbed = ((three_prime_bases + five_prime_bases) / unit_len) as u64;
+        specified_count += absorbed;
+    }
 
     // 3'-rule unit rotation (repeated.md L44: "applying the 3'rule, the repeat
     // has to be described as an AGC repeat"). A repeat unit shifts 3' exactly
@@ -2719,7 +2744,7 @@ mod tests {
         // Specifying CAT[1]: ref_count=4, specified=1, k=3 >= 2, post=1 >= 1 → B2 → Repeat
         let ref_seq = b"GGGCATCATCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 1, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 1, false);
         match result {
             RepeatNormResult::Repeat {
                 sequence, count, ..
@@ -2737,7 +2762,7 @@ mod tests {
         // Specifying CAT[3] (ref is 2, so 2+1=3) should become duplication
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 3, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 3, false);
         match result {
             RepeatNormResult::Duplication {
                 start,
@@ -2757,7 +2782,7 @@ mod tests {
         // Specifying CAT[5] (ref is 2, 5 > 2+1) should stay as repeat
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 5, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 5, false);
         match result {
             RepeatNormResult::Repeat {
                 count, sequence, ..
@@ -2775,7 +2800,7 @@ mod tests {
         // Specifying CAT[2] (same as ref) should be unchanged
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, b"CAT", 2, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 2, false);
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -2789,7 +2814,7 @@ mod tests {
         // canonical_unit.len()` unless we guard up front. This test pins the
         // pre-refactor contract.
         let ref_seq = b"GGGCATCATGGG";
-        let result = normalize_repeat(ref_seq, 3, b"", 1, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"", 1, false);
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -2801,7 +2826,7 @@ mod tests {
         // this would fall to a 1-unit (ATAT) reduction → deletion (k<2).
         let ref_seq = b"GGGATATATATGGG"; // AT-tract at indices 3..11 (4 AT)
 
-        let result = normalize_repeat(ref_seq, 3, b"ATAT", 1, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"ATAT", 1, false);
         match result {
             RepeatNormResult::Repeat {
                 start,
@@ -3283,7 +3308,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_routes_contraction_to_deletion() {
         // 5-A tract, specified A[3] in coding → must NOT emit Repeat; emits Deletion.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, b"A", 3, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 3, true);
         match result {
             RepeatNormResult::Deletion { .. } => {}
             other => panic!("expected Deletion under gate, got {:?}", other),
@@ -3294,7 +3319,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_routes_expansion_to_insertion() {
         // 5-A tract, specified A[8] in coding → must NOT emit Repeat; emits Insertion.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, b"A", 8, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 8, true);
         match result {
             RepeatNormResult::Insertion { sequence, .. } => {
                 assert_eq!(sequence, b"AAA", "3 extra A's");
@@ -3307,7 +3332,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_passes_through_dup_branch() {
         // 5-A tract, specified A[6] in coding → +1 copy = dup, gate doesn't change this.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, b"A", 6, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 6, true);
         match result {
             RepeatNormResult::Duplication { .. } => {}
             other => panic!("expected Duplication, got {:?}", other),
