@@ -65,12 +65,22 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     // --- non-coding / RNA substitutions ---
     "NR_003051.3:n.100A>G",
     "NM_000088.3:r.100a>g",
-    // --- intronic / UTR (must fall back) ---
+    // --- intronic / UTR substitutions (now fast-pathed; must agree) ---
     "NM_000088.3:c.100+5A>G",
     "NM_000088.3:c.100-5A>G",
     "NM_000088.3:c.-50A>G",
     "NM_000088.3:c.*100A>G",
     "NM_000088.3:c.*1G>A",
+    "NM_000088.3:c.*100+5A>G", // 3' UTR with intronic offset
+    "NM_000088.3:c.-50-5A>G",  // 5' UTR with intronic offset
+    "ENST00000357033.8:c.100+1G>A",
+    // --- intronic / UTR edges that must defer to (and agree with) the generic parser ---
+    "NM_000088.3:c.100+?A>G",  // uncertain intronic offset
+    "NM_000088.3:c.100+05A>G", // leading-zero offset
+    "NM_000088.3:c.*0A>G",     // zero UTR3 base (invalid)
+    "NM_000088.3:c.-0A>G",     // zero UTR5 base (invalid)
+    "NM_000088.3:c.?A>G",      // unknown position
+    "NM_000088.3:c.(100)A>G",  // parenthesized/uncertain position
     // --- plain del/dup (now fast-pathed; must agree with the generic parser) ---
     "NM_000088.3:c.459del",
     "NM_000088.3:c.459_460del",

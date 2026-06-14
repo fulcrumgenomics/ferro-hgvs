@@ -24,11 +24,10 @@
 //! # Tradeoffs
 //!
 //! The fast-path adds a small overhead (~3-6%) for patterns it cannot optimize:
-//! - Intronic variants: `c.100+5G>A`, `c.100-10A>G`
-//! - UTR variants: `c.*100A>G`, `c.-50A>G`
 //! - Non-coding RNA: `n.100A>G`
 //! - RNA variants: `r.100a>g`
 //! - Non-coding RNA accessions: NR_/XR_ (any coordinate system)
+//! - Insertions / delins / inversions / repeats
 //!
 //! This overhead comes from the quick-rejection checks needed to identify
 //! fast-path candidates. For workloads dominated by substitutions, the net
@@ -36,9 +35,10 @@
 //!
 //! # Supported Fast-Paths
 //!
-//! Simple substitutions (position + single base change) and plain deletions /
-//! duplications (a single position or `a_b` range followed by a bare `del` /
-//! `dup`, with no trailing sequence or length) for:
+//! Substitutions (position + single base change), including intronic
+//! (`c.100+5A>G`) and UTR (`c.*100A>G`, `c.-50A>G`) coding positions, and plain
+//! deletions / duplications (a single position or `a_b` range followed by a bare
+//! `del` / `dup`, with no trailing sequence or length) for:
 //! - **RefSeq**: NC_, NM_, NG_, XM_ accessions with `g.` or `c.` variants
 //!   (`NR_`/`XR_` non-coding RNA transcripts are deferred to the generic
 //!   parser — their only valid coordinate systems are `n.`/`r.`)
@@ -212,18 +212,20 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
             let type_char = bytes[colon_pos + 1];
             let dot_char = bytes[colon_pos + 2];
 
-            // Exclude :n. (non-coding RNA) - not supported in fast path
-            if type_char == b'n' && dot_char == b'.' {
+            // Exclude :n. (non-coding RNA) and :r. (RNA) - not supported
+            if (type_char == b'n' || type_char == b'r') && dot_char == b'.' {
                 return FastPathResult::Fallback;
             }
 
-            // Exclude :r. (RNA) - not supported in fast path
-            if type_char == b'r' && dot_char == b'.' {
-                return FastPathResult::Fallback;
-            }
-
-            // For :c. variants, check for UTR and intronic patterns
-            if type_char == b'c' && dot_char == b'.' && colon_pos + 3 < len {
+            // For :c. del/dup, exclude UTR (`*`/`-`) and intronic (`+`/`-`)
+            // coordinates: the del/dup builders parse only plain in-CDS
+            // positions. Substitutions handle UTR/intronic positions themselves
+            // (see `scan_cds_sub_position`), so they are not excluded here.
+            if type_char == b'c'
+                && dot_char == b'.'
+                && colon_pos + 3 < len
+                && !matches!(edit_kind, FastEdit::Substitution)
+            {
                 let pos_start = bytes[colon_pos + 3];
                 // c.*100 (UTR3) or c.-50 (UTR5/negative position)
                 if pos_start == b'*' || pos_start == b'-' {
@@ -232,10 +234,9 @@ pub fn try_fast_path(input: &str) -> FastPathResult {
 
                 // Check for intronic offset using memchr (faster than loop).
                 // Look for + or - in the region between the position start and
-                // the trailing `X>Y`. Guard the bounds: for a very short `c.`
-                // body (e.g. a malformed `c.A>G` with no position number)
-                // `colon_pos + 4` can exceed `len - 3`, and an unchecked slice
-                // would panic instead of falling back. When the region is
+                // the trailing keyword. Guard the bounds: for a very short `c.`
+                // body `colon_pos + 4` can exceed `len - 3`, and an unchecked
+                // slice would panic instead of falling back. When the region is
                 // empty there is no room for an intronic offset anyway, so skip.
                 let region_start = colon_pos + 4;
                 let region_end = len - 3;
@@ -627,6 +628,67 @@ fn scan_cds_interval(bytes: &[u8], start: usize) -> Option<(CdsInterval, usize)>
     }
 }
 
+/// Scan a fast-path CDS *substitution* position at `start`: a plain in-CDS
+/// position, a 5'UTR (`-N`) or 3'UTR (`*N`) position, each with an optional
+/// intronic offset (`+M`/`-M`). Returns the [`CdsPos`] and the index just past
+/// it, or `None` to defer.
+///
+/// Defers on anything it does not reproduce exactly: leading zeros / `0` /
+/// `u64`-or-`i64` overflow (via [`scan_position`]), uncertain offsets (`+?` /
+/// `-?`), and `?` / `(` / special markers (which start with a non-`*`/`-`/digit
+/// byte and so fail [`scan_position`]). The generic parser owns those — and
+/// because the caller falls back on `None`, deferring stays observationally
+/// identical.
+#[inline]
+fn scan_cds_sub_position(bytes: &[u8], start: usize) -> Option<(CdsPos, usize)> {
+    if start >= bytes.len() {
+        return None;
+    }
+    // `scan_position` yields a canonical, non-zero `u64`; cap it at `i64::MAX`
+    // since `CdsPos::base`/`offset` are `i64`.
+    let to_i64 = |v: u64| (v <= i64::MAX as u64).then_some(v as i64);
+
+    let (base, utr3, after_base) = match bytes[start] {
+        b'*' => {
+            let (v, j) = scan_position(bytes, start + 1)?;
+            (to_i64(v)?, true, j)
+        }
+        b'-' => {
+            let (v, j) = scan_position(bytes, start + 1)?;
+            (-to_i64(v)?, false, j)
+        }
+        _ => {
+            let (v, j) = scan_position(bytes, start)?;
+            (to_i64(v)?, false, j)
+        }
+    };
+
+    let mut i = after_base;
+    let offset = if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        let neg = bytes[i] == b'-';
+        // Uncertain offset (`+?` / `-?`) defers to the generic parser.
+        if i + 1 < bytes.len() && bytes[i + 1] == b'?' {
+            return None;
+        }
+        let (v, j) = scan_position(bytes, i + 1)?;
+        let mag = to_i64(v)?;
+        i = j;
+        Some(if neg { -mag } else { mag })
+    } else {
+        None
+    };
+
+    Some((
+        CdsPos {
+            base,
+            offset,
+            utr3,
+            special: None,
+        },
+        i,
+    ))
+}
+
 /// Build a plain genomic deletion or duplication (`g.NNNdel`, `g.A_Bdup`).
 ///
 /// Only the bare forms (no trailing sequence or length) reach here — the edit
@@ -748,10 +810,10 @@ fn try_parse_genome_substitution(
     }))
 }
 
-/// Try to parse a simple CDS substitution (c.NNNA>G)
-///
-/// This handles the most common case: a simple position with a substitution.
-/// Does NOT handle intronic offsets (c.100+5A>G) or UTR positions (c.*100A>G).
+/// Try to parse a CDS substitution: a plain (`c.459A>G`), intronic
+/// (`c.100+5A>G`, `c.100-5A>G`), or UTR (`c.*100A>G`, `c.-50A>G`) position
+/// followed by a single base change. The position is parsed by
+/// [`scan_cds_sub_position`], which defers any form it cannot reproduce exactly.
 #[inline]
 fn try_parse_cds_substitution(
     _input: &str,
@@ -759,26 +821,12 @@ fn try_parse_cds_substitution(
     edit_start: usize,
     accession: Accession,
 ) -> FastPathResult {
-    // Parse a canonical position (no leading zero, fits u64); a non-canonical
-    // or overflowing position defers to the generic parser, which rejects it.
-    // Complex cases (-, *, (, ?) start with a non-digit and so also defer.
-    let (position, pos_end) = match scan_position(bytes, edit_start) {
+    // Parse the CDS position: plain in-CDS, 5'UTR (`-N`), or 3'UTR (`*N`), each
+    // with an optional intronic offset. Anything else defers.
+    let (pos, pos_end) = match scan_cds_sub_position(bytes, edit_start) {
         Some(p) => p,
         None => return FastPathResult::Fallback,
     };
-    // CdsPos is i64; a value beyond i64::MAX would wrap, so defer it.
-    if position > i64::MAX as u64 {
-        return FastPathResult::Fallback;
-    }
-
-    // If there's an intronic offset (+/-), fall back
-    if pos_end < bytes.len() && (bytes[pos_end] == b'+' || bytes[pos_end] == b'-') {
-        // Check if this is the substitution '>' or an intronic offset
-        // For intronic: c.100+5A>G - after position comes + or - then digits
-        if pos_end + 1 < bytes.len() && bytes[pos_end + 1].is_ascii_digit() {
-            return FastPathResult::Fallback;
-        }
-    }
 
     // Check for simple substitution pattern: A>G at end of string
     if pos_end + 3 != bytes.len() {
@@ -795,7 +843,6 @@ fn try_parse_cds_substitution(
     let reference = Base::from_char(bytes[pos_end] as char).unwrap();
     let alternative = Base::from_char(bytes[pos_end + 2] as char).unwrap();
 
-    let pos = CdsPos::new(position as i64);
     let interval = CdsInterval::point(pos);
     let edit = NaEdit::Substitution {
         reference,
@@ -899,15 +946,16 @@ mod tests {
 
     #[test]
     fn test_fallback_for_complex_patterns() {
-        // Intronic offset
+        // Uncertain intronic offset still defers (plain intronic/UTR subs are
+        // now fast-pathed; `+?`/`-?` are not)
         assert!(matches!(
-            try_fast_path("NM_000088.3:c.100+5A>G"),
+            try_fast_path("NM_000088.3:c.100+?A>G"),
             FastPathResult::Fallback
         ));
 
-        // UTR position
+        // Unknown / parenthesized positions still defer
         assert!(matches!(
-            try_fast_path("NM_000088.3:c.*100A>G"),
+            try_fast_path("NM_000088.3:c.?A>G"),
             FastPathResult::Fallback
         ));
 
@@ -935,6 +983,30 @@ mod tests {
             try_fast_path("NP_000079.2:p.Arg100Gly"),
             FastPathResult::Fallback
         ));
+    }
+
+    #[test]
+    fn test_fast_path_intronic_and_utr_substitution() {
+        use crate::hgvs::parser::variant::parse_variant;
+        // Intronic and UTR CDS substitutions are fast-pathed; each must equal
+        // the generic parser's output exactly.
+        let cases = [
+            "NM_000088.3:c.100+5A>G",  // intronic, downstream
+            "NM_000088.3:c.100-5A>G",  // intronic, upstream
+            "NM_000088.3:c.*100A>G",   // 3' UTR
+            "NM_000088.3:c.-50A>G",    // 5' UTR
+            "NM_000088.3:c.*100+5A>G", // 3' UTR with intronic offset
+            "NM_000088.3:c.-50-5A>G",  // 5' UTR with intronic offset
+            "ENST00000357033.8:c.100+1G>A",
+        ];
+        for input in cases {
+            let fast = match try_fast_path(input) {
+                FastPathResult::Success(v) => v,
+                FastPathResult::Fallback => panic!("expected fast-path Success for {input:?}"),
+            };
+            let generic = parse_variant(input).expect("generic should parse");
+            assert_eq!(fast, generic, "fast-path/generic mismatch for {input:?}");
+        }
     }
 
     #[test]
