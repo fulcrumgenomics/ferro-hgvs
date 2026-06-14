@@ -490,20 +490,29 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    fan-out below can enumerate and project onto the overlapping
         //    transcripts (#480 inverse).
         let (variant, parent) = self.deanchor_genomic_parent_input(variant);
-        // 1. Normalize once via the cached normalizer (built at construction time).
+        // 1. Normalize once in the genome frame, then fan out across the
+        //    overlapping transcripts.
         let normalized = self.normalizer.normalize(&variant)?;
-        let mut results = self.project_normalized_all(&normalized)?;
-        // 2. When the input was an NG_/LRG_ parent, re-frame each per-transcript
-        //    description back under that parent so the output matches the input's
-        //    reference frame (NG_(NM_):c., NG_(NP_):p., NG_:g.) rather than the
-        //    NC_ accession used internally for projection (#480).
-        if let Some(parent) = parent {
-            let placement = self.provider.genomic_placement(&parent);
-            for r in &mut results {
-                Self::frame_projection_under_parent(r, &parent, placement.as_ref());
-            }
+        let results = self.project_normalized_all(&normalized)?;
+        // 2. The plain (non-parent) path returns the genome-frame result directly.
+        let Some(parent) = parent else {
+            return Ok(results);
+        };
+        // 3. Parent path: the fan-out 3'-shifts the variant in the *genome*
+        //    frame, so a repeat-region edit can land at a transcript coordinate
+        //    two bases off from the HGVS-correct, transcript-frame-normalized
+        //    position. Re-project each transcript from its own coding form (which
+        //    normalizes in the transcript frame), then re-frame under the parent.
+        let placement = self.provider.genomic_placement(&parent);
+        let mut framed = Vec::with_capacity(results.len());
+        for r in results {
+            let r = match r.coding.as_ref() {
+                Some(coding) => self.project_variant(coding, &r.transcript_id).unwrap_or(r),
+                None => r,
+            };
+            framed.push(Self::frame_projection_owned(r, &parent, placement.as_ref()));
         }
-        Ok(results)
+        Ok(framed)
     }
 
     /// Re-frame a [`VariantProjection`] produced from a de-anchored `NC_` variant
@@ -515,11 +524,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// The synthesized gene-symbol selector is dropped: per #121 ferro does not
     /// emit a selector that was not in the input, and the mutalyzer `NG_(NM_)`
     /// form carries none.
-    fn frame_projection_under_parent(
-        result: &mut VariantProjection,
+    fn frame_projection_owned(
+        mut result: VariantProjection,
         parent: &Accession,
         placement: Option<&crate::reference::GenomicPlacement>,
-    ) {
+    ) -> VariantProjection {
         for field in [
             &mut result.coding,
             &mut result.noncoding,
@@ -537,6 +546,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             reanchored.gene_symbol = None;
             result.genomic = Some(HgvsVariant::Genome(reanchored));
         }
+        result
     }
 
     /// Return a clone of `variant` whose top-level accession carries `parent` as
