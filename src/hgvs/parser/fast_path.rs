@@ -307,10 +307,7 @@ fn try_refseq_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
 
     let prefix = &input[0..prefix_end];
     let accession = Accession::with_style(
-        prefix.to_string(),
-        number_str.to_string(),
-        version,
-        false, // RefSeq uses underscore style
+        prefix, number_str, version, false, // RefSeq uses underscore style
     );
 
     // Dispatch based on type
@@ -373,10 +370,7 @@ fn try_ensembl_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
 
     let prefix = &input[0..4]; // ENST, ENSG, etc.
     let accession = Accession::with_style(
-        prefix.to_string(),
-        number_str.to_string(),
-        version,
-        true, // Ensembl style (no underscore)
+        prefix, number_str, version, true, // Ensembl style (no underscore)
     );
 
     let var_type_char = bytes[var_type_start];
@@ -437,8 +431,8 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
     }
 
     let accession = Accession::with_style(
-        "LRG".to_string(),
-        full_number.to_string(),
+        "LRG",
+        full_number,
         None, // LRG doesn't use versions
         false,
     );
@@ -495,7 +489,7 @@ fn try_assembly_fast_path(input: &str, bytes: &[u8]) -> FastPathResult {
         return FastPathResult::Fallback;
     }
 
-    let accession = Accession::from_assembly(assembly.to_string(), chromosome.to_string());
+    let accession = Accession::from_assembly(assembly, chromosome);
 
     let type_char = bytes[type_start];
     let edit_start = type_start + 2;
