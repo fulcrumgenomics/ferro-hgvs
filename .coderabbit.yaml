@@ -35,9 +35,17 @@ reviews:
   high_level_summary: true
   poem: false
   collapse_walkthrough: false
-  # Review automatically on push; don't review draft PRs.
+  # Reviews are triggered on demand, not automatically. CodeRabbit enforces a
+  # per-developer hourly review rate limit; auto-review on PR-open (`enabled`)
+  # and on every push (`auto_incremental_review`) fire extra reviews into that
+  # one shared budget, so a burst of PRs/commits exhausts it and later reviews
+  # stall for hours. Disabling both keeps the budget under deliberate control —
+  # reviews run only when requested. On-demand `@coderabbitai review` still works
+  # with `enabled: false`, and the assertive profile + path instructions above
+  # still apply to those reviews.
   auto_review:
-    enabled: true
+    enabled: false
+    auto_incremental_review: false
     drafts: false
   # Never auto-block merges on a review verdict; findings are advisory.
   request_changes_workflow: false
