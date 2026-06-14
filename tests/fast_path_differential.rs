@@ -110,13 +110,24 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NP_000079.2:p.V600E", // 1-letter codes
     // --- protein non-missense / edges that must defer to (and agree with) generic ---
     "NP_000079.2:p.Arg100GlyfsTer5", // frameshift
-    "NP_000079.2:p.Asp427=",         // synonymous / identity
     "NP_000079.2:p.Lys23del",        // protein deletion
     "NP_000079.2:p.(Gly56Ala^Ser)",  // residue alternatives
     "NP_000079.2:p.Arg725Trp5",      // trailing annotation digit (generic ignores it)
     "NP_000079.2:p.Met1?",           // unknown
-    "NP_000079.2:p.=",               // whole-protein identity
     "NP_000079.2:p.0",               // no protein
+    // --- identity edits (now fast-pathed; must agree) ---
+    "NP_000079.2:p.Asp427=",       // protein identity
+    "NP_000079.2:p.(Asp427=)",     // protein identity, predicted
+    "NM_000088.3:c.123=",          // coding identity
+    "NM_000088.3:c.*100=",         // coding identity, UTR3
+    "NM_000088.3:c.100+5=",        // coding identity, intronic
+    "NC_000001.11:g.12345=",       // genomic identity
+    "NC_000001.11:g.12345_12350=", // genomic identity, range
+    // --- identity edges that must defer to (and agree with) generic ---
+    "NM_000088.3:c.=",        // whole-entity coding identity (no position)
+    "NP_000079.2:p.=",        // whole-protein identity
+    "NP_000079.2:p.(=)",      // whole-protein identity, predicted
+    "NM_000088.3:c.123_456=", // coding identity range (deferred)
     // --- other non-substitution edits (fall back) ---
     "NM_000088.3:c.459_460insACGT",
     "NM_000088.3:c.459_460delinsAC",
@@ -242,6 +253,26 @@ prop_compose! {
     }
 }
 
+prop_compose! {
+    /// A nucleotide identity edit: a `g.`/`c.` position (plain, range, intronic,
+    /// UTR, or whole-entity) followed by a bare `=`. Single positions are
+    /// fast-pathed; ranges and whole-entity `c.=` defer — both parsers must agree.
+    fn identity_edit()(
+        acc in prop_oneof![Just("NC_000001.11"), Just("NM_000088.3")],
+        sys in prop_oneof![Just("g"), Just("c")],
+        loc in prop_oneof![
+            Just("123"),
+            Just("123_456"),
+            Just("*100"),
+            Just("-50"),
+            Just("100+5"),
+            Just(""),       // whole-entity (c.=)
+        ],
+    ) -> String {
+        format!("{acc}:{sys}.{loc}=")
+    }
+}
+
 /// A protein accession flavor (RefSeq / Ensembl protein).
 fn protein_accession() -> impl Strategy<Value = &'static str> {
     prop_oneof![Just("NP_000079.2"), Just("ENSP00000369497.3")]
@@ -268,6 +299,12 @@ prop_compose! {
     /// A protein edit string: missense (`p.Arg100Gly`), its predicted-parens
     /// form, and non-missense forms (`fs`/`=`/`del`/`^`-alternatives/trailing
     /// annotation digit) the fast path must defer on. Both parsers must agree.
+    ///
+    /// `pos = 0` is a deferral-only draw: `p.<aa>0<aa>` always defers (the generic
+    /// `parse_prot_pos` rejects position 0, and the fast path defers in lockstep),
+    /// so it never reaches the missense `Success` branch — it pins agreement on the
+    /// invalid-position edge alongside the `Zzz` / trailing-`5` tails. The other
+    /// position draws (1/100/600) do exercise `Success`.
     fn protein_edit()(
         acc in protein_accession(),
         from in amino_acid(),
@@ -382,6 +419,11 @@ proptest! {
 
     #[test]
     fn fast_path_matches_standard_protein(input in protein_edit()) {
+        prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
+    }
+
+    #[test]
+    fn fast_path_matches_standard_identity(input in identity_edit()) {
         prop_assert!(divergence(&input).is_none(), "{}", divergence(&input).unwrap());
     }
 }
