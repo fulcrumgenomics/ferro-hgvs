@@ -1325,8 +1325,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   4. detect post-shift overlaps and emit warnings
         let mut all_warnings = Vec::new();
         let original_len = allele.variants.len();
+        // Collapse overlapping cis edits (insertions flanking a deletion/sub at
+        // one locus) into a single delins first; `merge_consecutive_edits` only
+        // handles strictly-consecutive non-overlapping edits (#487).
+        let pre_collapsed = merge::collapse_overlapping_cis_edits(
+            allele.variants.clone(),
+            allele.phase,
+            &self.provider,
+        );
         let merged_raw =
-            merge::merge_consecutive_edits(allele.variants.clone(), allele.phase, &self.provider);
+            merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);
 
         // Issue #160 + #165: any merged delins (or pre-existing delins
         // that survived merge unchanged) may decompose into a sequence of
