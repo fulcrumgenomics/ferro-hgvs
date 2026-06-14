@@ -106,14 +106,15 @@ pub struct Accession {
 impl Accession {
     /// Intern a prefix string, using a static Arc if available
     #[inline]
-    fn intern_prefix(prefix: impl Into<Arc<str>>) -> Arc<str> {
-        let prefix: Arc<str> = prefix.into();
-        // Try to use an interned version to avoid allocation
-        interned::get_prefix(&prefix).unwrap_or(prefix)
+    fn intern_prefix(prefix: impl AsRef<str> + Into<Arc<str>>) -> Arc<str> {
+        // Look up the interned static *before* allocating: for the common known
+        // prefixes (NC/NM/NP/ENST/…) this avoids allocating an `Arc<str>` on every
+        // parse just to discard it for the static. Only unknown prefixes allocate.
+        interned::get_prefix(prefix.as_ref()).unwrap_or_else(|| prefix.into())
     }
 
     pub fn new(
-        prefix: impl Into<Arc<str>>,
+        prefix: impl AsRef<str> + Into<Arc<str>>,
         number: impl Into<Arc<str>>,
         version: Option<u32>,
     ) -> Self {
@@ -139,7 +140,7 @@ impl Accession {
 
     /// Create with explicit Ensembl style setting
     pub fn with_style(
-        prefix: impl Into<Arc<str>>,
+        prefix: impl AsRef<str> + Into<Arc<str>>,
         number: impl Into<Arc<str>>,
         version: Option<u32>,
         ensembl_style: bool,

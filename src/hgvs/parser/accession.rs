@@ -216,7 +216,7 @@ fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
 
     Ok((
         &input[accession_end..],
-        Accession::with_style(name.to_string(), String::new(), version, true),
+        Accession::with_style(name, "", version, true),
     ))
 }
 
@@ -279,7 +279,7 @@ fn parse_uniprot_6char(input: &str) -> IResult<&str, Accession> {
     let number_part = &input[1..6];
     Ok((
         &input[6..],
-        Accession::with_style(first.to_string(), number_part.to_string(), None, true),
+        Accession::with_style(first, number_part, None, true),
     ))
 }
 
@@ -327,7 +327,7 @@ fn parse_uniprot_10char(input: &str) -> IResult<&str, Accession> {
     let number_part = &input[1..10];
     Ok((
         &input[10..],
-        Accession::with_style(first.to_string(), number_part.to_string(), None, true),
+        Accession::with_style(first, number_part, None, true),
     ))
 }
 
@@ -351,10 +351,7 @@ fn parse_assembly_accession(input: &str) -> IResult<&str, Accession> {
     let (input, chromosome) = take_while1(|c: char| c.is_ascii_alphanumeric()).parse(input)?;
     let (input, _) = tag(")").parse(input)?;
 
-    Ok((
-        input,
-        Accession::from_assembly(assembly.to_string(), chromosome.to_string()),
-    ))
+    Ok((input, Accession::from_assembly(assembly, chromosome)))
 }
 
 /// Parse a standard RefSeq-style accession with underscore (e.g., "NM_000088.3")
@@ -365,7 +362,7 @@ fn parse_standard_accession(input: &str) -> IResult<&str, Accession> {
     let (input, number) = parse_number(input)?;
     let (input, version) = opt(preceded(tag("."), parse_version)).parse(input)?;
 
-    let outer = Accession::with_style(prefix.to_string(), number.to_string(), version, false);
+    let outer = Accession::with_style(prefix, number, version, false);
 
     // Check for compound reference syntax: outer(inner)
     // Only attempt if the next char is '(' and the content looks like an accession
@@ -458,10 +455,7 @@ fn parse_ensembl_accession(input: &str) -> IResult<&str, Accession> {
     let (input, number) = digit1.parse(input)?;
     let (input, version) = opt(preceded(tag("."), parse_version)).parse(input)?;
 
-    Ok((
-        input,
-        Accession::with_style(prefix.to_string(), number.to_string(), version, true),
-    ))
+    Ok((input, Accession::with_style(prefix, number, version, true)))
 }
 
 /// Parse an Ensembl prefix of the shape `ENS<species_code><feature>`.
