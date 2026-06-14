@@ -252,7 +252,9 @@ for op, v in d['operations'].items():
 
 Once the smoke pass is clean, run the confident pass. This is the run whose output becomes the published `data/benchmark/perf_results.json`.
 
-The `--sample-size` controls how many patterns the slow tools (mutalyzer, biocommons, hgvs-rs) process per repetition. Mutalyzer normalize is the bottleneck at roughly 20 p/s; a sample size of ~60 patterns takes ~3 seconds per rep, giving a total run time of a few tens of minutes at `--reps 5`. Calibrate by timing a single mutalyzer normalize rep at your chosen sample size before committing.
+**Do not pass `--sample-size` for the confident run.** `--sample-size` pins one fixed N for every tool and *skips calibration* — it exists only for smoke runs. With it set, fast tools (ferro, hgvs-rs) are measured over a sample far too small to reflect their real throughput (e.g. ferro parse at N=60 reports a few hundred thousand p/s instead of millions), and the per-tool `sample_sizes` and `ferro_scaling` blocks are omitted, so `generate_perf_tables` cannot render the thread-scaling table.
+
+Instead, let the matrix **calibrate per-(tool, op) sample sizes**: it estimates each tool's rate, then picks N so each tool runs for about `--target-seconds` per rep, clamped to `[--min-sample, --max-sample]`. This is what produces the "fast tools see millions of patterns, slow tools hundreds" property described in the README footnote. The defaults (`--target-seconds 3 --min-sample 50 --max-sample 2000000`) are what the published numbers use; they give a total run time of a few tens of minutes at `--reps 5`, bounded by mutalyzer normalize.
 
 ```bash
 D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
@@ -260,7 +262,9 @@ D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
 pixi run ./target/release/ferro-benchmark benchmark matrix \
   --population "$D/clinvar/clinvar_patterns.txt" \
   --output data/benchmark/perf_results.json \
-  --sample-size 60 \
+  --target-seconds 3 \
+  --min-sample 50 \
+  --max-sample 2000000 \
   --reps 5 \
   --ferro-full-n 1000000 \
   --workers 1,8 \
@@ -278,7 +282,9 @@ pixi run ./target/release/ferro-benchmark benchmark matrix \
 
 | Flag | Purpose |
 |------|---------|
-| `--sample-size` | Patterns per rep for the slow tools. Controls total runtime (mutalyzer-bound). |
+| `--target-seconds` | Calibration target: per-(tool, op) N is chosen so each tool runs ~this long per rep. Default 3. |
+| `--min-sample` / `--max-sample` | Floor and ceiling on calibrated N. Defaults 50 / 2,000,000. The floor keeps very slow tools statistically meaningful; the ceiling bounds memory for very fast tools. |
+| `--sample-size` | **Smoke runs only.** Pins one fixed N for all tools and skips calibration. Do not use for the published run (see warning above). |
 | `--reps` | Repetitions per (tool, worker-count) cell. Median and min/max are computed across reps. |
 | `--ferro-full-n` | Cap on the ferro full-population headline pass. `0` = whole population; `1000000` = first 1 M lines. The full-population pass measures ferro only — it does not run the slow tools. |
 | `--workers` | Worker counts for the cross-tool comparison tables (e.g. `1,8` produces W=1 and W=8 columns). |
@@ -343,9 +349,11 @@ For each (tool, operation, worker-count) cell, `--reps` independent measurements
 
 For ferro parallel runs, one reference provider is constructed per rayon worker thread before the timer starts. Provider construction is excluded from the timed region, matching the discipline used by hgvs-rs parallel runs.
 
-### Timed-region caveat (issue #609)
+### Timed region (startup-excluded for all tools)
 
-Mutalyzer and biocommons throughput figures include Python interpreter startup and package import time in the timed region. ferro and hgvs-rs exclude equivalent setup costs. At the confident sample size (~60 patterns), startup is estimated at <2% of total elapsed time per rep, so the effect on the published numbers is small. This is disclosed in the `provenance.notes` field of `perf_results.json` and in the README footnote. A fix (reading the Python-internal timer from the subprocess output) is tracked in issue #609.
+All four tools exclude process/interpreter startup from the timed region. The mutalyzer and biocommons subprocesses are timed by their own internal (startup-excluded) `time.perf_counter()` timer for both parse and normalize, matching the discipline used by ferro and hgvs-rs — so Python interpreter startup and package import time are not folded into any published throughput figure. This is disclosed in the `provenance.notes` field of `perf_results.json` and in the README footnote.
+
+For mutalyzer normalize at more than one worker under the pre-sharded cache, the recorded internal time is the slowest shard's critical path — a lower bound that still excludes the dominant per-process startup term. This closed issue #609 (the prior methodology folded Python startup into mutalyzer/biocommons normalize throughput).
 
 ---
 
