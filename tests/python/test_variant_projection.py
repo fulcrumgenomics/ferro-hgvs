@@ -56,7 +56,7 @@ def projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
             }
         ],
         "genomic_sequences": {
-            "chr1": "N" * 1000 + "ATGCGCTAA" + "N" * 100,
+            "chr1": "N" * 999 + "ATGCGCTAA" + "N" * 100,
         },
     }
     path = tmp_path / "transcripts.json"
@@ -197,7 +197,7 @@ def long_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
             }
         ],
         "genomic_sequences": {
-            "chr2": "N" * 2000 + full_seq + "N" * 100,
+            "chr2": "N" * 1999 + full_seq + "N" * 100,
         },
     }
     path = tmp_path / "long_transcripts.json"
@@ -354,7 +354,7 @@ def two_tx_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
             },
         ],
         "genomic_sequences": {
-            "chr1": "N" * 1000 + "ATGCGCTAA" + "N" * 100,
+            "chr1": "N" * 999 + "ATGCGCTAA" + "N" * 100,
         },
     }
     path = tmp_path / "two_tx.json"
@@ -459,7 +459,7 @@ class TestIssue310NonRefSeqProtein:
             tx["protein_id"] = protein_id
         return {
             "transcripts": [tx],
-            "genomic_sequences": {"chr1": "N" * 1000 + "ATGCGCTAA" + "N" * 100},
+            "genomic_sequences": {"chr1": "N" * 999 + "ATGCGCTAA" + "N" * 100},
         }
 
     def test_explicit_protein_id_drives_p_name(self, tmp_path):

@@ -68,7 +68,12 @@ fn base_fixture() -> (Projector, MockProvider) {
         None,
         None,
     ));
-    let prefix = "N".repeat(1000);
+    // cdot exon genome coords are 1-based HGVS values (exon spans HGVS
+    // [1000, 1009)); sequence fetches convert to 0-based by subtracting 1, so
+    // HGVS g.1000 is 0-based index 999. Pad with 999 Ns so "ATGCGCTAA" lands at
+    // 0-based [999, 1008) and the exon's genome bases match the transcript —
+    // otherwise the #644 sequence-aware projection sees a phantom 1-bp indel.
+    let prefix = "N".repeat(999);
     let suffix = "N".repeat(100);
     provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
     (projector, provider)
@@ -233,7 +238,10 @@ fn bare_lrg_transcript_input_reanchors_to_lrg_frame() {
         None,
         None,
     ));
-    let prefix = "N".repeat(1000);
+    // 999-N pad so HGVS exon coord 1000 lands at 0-based index 999 (see the
+    // matching note in `base_fixture`): the exon's genome bases then match the
+    // transcript and the #644 sequence-aware projection sees no phantom indel.
+    let prefix = "N".repeat(999);
     let suffix = "N".repeat(100);
     provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
     provider.add_genomic_placement(

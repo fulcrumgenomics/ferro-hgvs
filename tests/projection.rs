@@ -60,9 +60,9 @@ fn fixture() -> (Projector, MockProvider) {
         None,
         None,
     ));
-    // Genomic sequence: 1000 N's + "ATGCGCTAA" + 100 N's.
-    // 0-based index 1000 = 'A', 1001 = 'T', 1002 = 'G', 1003 = 'C', ...
-    let prefix = "N".repeat(1000);
+    // Genomic sequence: 999 N's + "ATGCGCTAA" + 100 N's.
+    // 0-based index 999 = 'A', 1000 = 'T', 1001 = 'G', 1002 = 'C', ...
+    let prefix = "N".repeat(999);
     let suffix = "N".repeat(100);
     provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
     (projector, provider)

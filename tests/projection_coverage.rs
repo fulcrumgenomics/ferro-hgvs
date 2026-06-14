@@ -65,7 +65,7 @@ fn plus_single_exon() -> (Projector, MockProvider) {
         None,
         None,
     ));
-    let prefix = "N".repeat(1000);
+    let prefix = "N".repeat(999);
     let suffix = "N".repeat(100);
     provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
     (projector, provider)
@@ -165,7 +165,7 @@ fn plus_two_exon() -> (Projector, MockProvider) {
         None,
     ));
     // Build genome: exon1 + intron + exon2.
-    let mut genomic = "N".repeat(2000);
+    let mut genomic = "N".repeat(1999);
     genomic.push_str("ATGCGC"); // exon 1
     genomic.push_str(&"N".repeat(94)); // intron 2006..2100
     genomic.push_str("TAA"); // exon 2

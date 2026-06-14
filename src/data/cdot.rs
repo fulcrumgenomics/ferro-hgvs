@@ -24,6 +24,7 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use crate::error::FerroError;
+use crate::hgvs::location::CdsPos;
 use crate::liftover::aliases::ContigAliases;
 use crate::reference::transcript::GenomeBuild;
 use crate::reference::Strand;
@@ -997,6 +998,61 @@ impl CdotTranscript {
             // 3' UTR
             let offset = tx_pos - cds_end + 1;
             Some(CdsPosition::ThreePrimeUtr(offset as i64))
+        }
+    }
+
+    /// Convert a 0-based transcript position to a full [`CdsPos`], resolving the
+    /// CDS / 5'UTR / 3'UTR region exactly as the genome→cds mapping does.
+    ///
+    /// This is the exonic (non-intronic) `CdsPosition` → `CdsPos` mapping shared
+    /// by [`crate::data::mapping::CoordinateMapper::genome_pos_to_cds_pos`] and
+    /// the sequence-aware exon-indel correction in the projector (issue #644).
+    /// Returning a ready-to-use `CdsPos` keeps the two call sites from
+    /// duplicating the region-to-coordinate translation (and drifting apart).
+    ///
+    /// Returns `None` when the transcript has no CDS bounds or `tx_pos` is not a
+    /// resolvable transcript position.
+    pub fn cds_pos_from_tx_pos(&self, tx_pos: u64) -> Option<CdsPos> {
+        // Only resolve exonic transcript positions. `tx_to_cds` treats any
+        // `tx_pos >= cds_end` as 3' UTR with no upper bound, so without this
+        // guard a position past the last exon would be misreported as 3' UTR.
+        self.exon_for_tx_pos(tx_pos)?;
+        Some(Self::cds_pos_from_region(self.tx_to_cds(tx_pos)?))
+    }
+
+    /// Translate an already-resolved exonic [`CdsPosition`] into a [`CdsPos`].
+    ///
+    /// This is the pure region→coordinate step shared by
+    /// [`Self::cds_pos_from_tx_pos`] and the genome→cds mapping. It performs no
+    /// exon-bounds check, so callers that derive `tx_pos` from CIGAR-unaware
+    /// offset arithmetic (e.g.
+    /// [`crate::data::mapping::CoordinateMapper::genome_pos_to_cds_pos`], where a
+    /// matched base after a CIGAR deletion yields a `tx_pos` past the exon's
+    /// transcript span) can translate without being rejected. Callers that need
+    /// the past-last-exon guard go through [`Self::cds_pos_from_tx_pos`].
+    pub(crate) fn cds_pos_from_region(region: CdsPosition) -> CdsPos {
+        match region {
+            CdsPosition::FivePrimeUtr(offset) => CdsPos {
+                base: -offset,
+                offset: None,
+                utr3: false,
+                special: None,
+            },
+            CdsPosition::Cds(pos) => CdsPos {
+                base: pos,
+                offset: None,
+                utr3: false,
+                special: None,
+            },
+            // The `*N` distance is the `base` of a 3' UTR `CdsPos` (canonical
+            // `CdsPos::utr3`), with no `offset` — keeping it round-trippable
+            // through `cds_to_tx` and consistent with the genome→cds path.
+            CdsPosition::ThreePrimeUtr(offset) => CdsPos {
+                base: offset,
+                offset: None,
+                utr3: true,
+                special: None,
+            },
         }
     }
 
