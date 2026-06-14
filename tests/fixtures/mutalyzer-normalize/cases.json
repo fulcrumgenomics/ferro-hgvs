@@ -46,6 +46,12 @@
       "title": "Coding repeat: codon-multiple exception",
       "spec_section": "recommendations/DNA/repeated.md L21-23",
       "note": "On a coding DNA reference (c.), repeat notation unit[N] is permitted only for repeat units whose length is a multiple of 3 (cannot affect the reading frame); other expansions/contractions must be dup/ins/del. ferro emits the spec-mandated dup/ins/del for non-codon-aligned units in coding c.; mutalyzer's unit[N] form is invalid HGVS, so ferro's output is the spec-correct value."
+    },
+    {
+      "id": "exon-intron-3prime-shift",
+      "title": "3' rule across exon/intron boundaries (#670)",
+      "spec_section": "background/numbering.md#DNAc (exception 3' rule NOTE); recommendations/DNA/deletion.md L51-64",
+      "note": "ferro shuffles genomic-context c./n. variants in spliced transcript space (cross_boundaries hardcoded false), which has no intronic bases, so it under-applies the 3' rule at exon/intron and intron/exon junctions. The spec applies the 3' rule across these junctions (suppressing it only at exon/exon junctions). The fix requires 3'-shifting in genomic coordinate space, which depends on the c↔g projection keystone (#642/#647/#616). Tracked in #670."
     }
   ],
   "cases": [
@@ -267,6 +273,11 @@
         "M2: Just a variant where we should roll."
       ],
       "input": "NM_003002.2:c.273del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 672,
+        "note": "Not a normalize bug — reference-version-absent: NM_003002.2 is not in the prepared manifest (only .4 present), so ferro no-ops. The .2 and .4 CDS are byte-identical and ferro rolls NM_003002.4:c.273del -> c.274del correctly (the GG at c.273-274). Resolves (XPASS) once the exact version is provisioned (#672)."
+      },
       "normalized": "NM_003002.2:c.274del",
       "protein_description": "NP_002993.1:p.(Asp92ThrfsTer43)",
       "infos": [
@@ -2492,6 +2503,12 @@
     {
       "keywords": [],
       "input": "NG_007107.2(NM_004992.3):c.378-17delT",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 670,
+        "note": "Intronic 3'-shift off-by-one: ferro shifts the intronic deletion one position (c.378-16del) vs mutalyzer's c.378-17del. Version-independent (identical on local NG_007107.3). Intronic shifting is handled by the deficient pre-keystone path; the exact spec position must be adjudicated against the pinned NG_007107.2 intron sequence (#672) when #670 is implemented.",
+        "cluster": "exon-intron-3prime-shift"
+      },
       "normalized": "NG_007107.2(NM_004992.3):c.378-17del",
       "genomic": "NG_007107.2:g.110661del",
       "to_test": true
@@ -2513,6 +2530,12 @@
     {
       "keywords": [],
       "input": "NG_009497.1(NM_206933.2):c.8682-19dupT",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 670,
+        "note": "Intronic 3'-shift off-by-one: ferro shifts the intronic duplication one position (c.8682-18dup) vs mutalyzer's c.8682-19dup. Version-independent (identical on local NG_009497.2). Same family as #670; exact spec position adjudicated against the pinned NG_009497.1 intron sequence (#672) when #670 is implemented.",
+        "cluster": "exon-intron-3prime-shift"
+      },
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
       "to_test": true
@@ -3073,6 +3096,11 @@
         "plus strand"
       ],
       "input": "ENST00000375549:c.100del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 671,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+      },
       "normalized": "ENST00000375549.8:c.102del",
       "to_test": true
     },
@@ -3082,6 +3110,11 @@
         "plus strand"
       ],
       "input": "ENST00000375549.8:c.100del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 671,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+      },
       "normalized": "ENST00000375549.8:c.102del",
       "to_test": true
     },
@@ -3091,6 +3124,11 @@
         "plus strand"
       ],
       "input": "ENSG00000204370.13(ENST00000375549.8):c.100del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 671,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+      },
       "normalized": "ENSG00000204370.13(ENST00000375549.8):c.102del",
       "to_test": true
     },
@@ -3110,6 +3148,11 @@
         "minus strand"
       ],
       "input": "ENST00000452863.10:c.9del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 671,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+      },
       "normalized": "ENST00000452863.10:c.10del",
       "to_test": true
     },
@@ -3119,6 +3162,11 @@
         "minus strand"
       ],
       "input": "ENSG00000184937.16(ENST00000452863.10):c.9del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 671,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+      },
       "normalized": "ENSG00000184937.16(ENST00000452863.10):c.10del",
       "to_test": true
     },
@@ -3561,6 +3609,12 @@
         "protein reverse strand exon end splice site error"
       ],
       "input": "NG_008835.1(NM_022153.2):c.82del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 670,
+        "note": "Exon/intron boundary: ferro echoes c.82del; the 3' rule shifts the deletion into the intron (c.82+1del) per numbering.md#DNAc NOTE and deletion.md L57-59 (exon/intron border, 'not as c.1704del'). ferro shuffles in spliced space and cannot reach intronic positions; fix depends on the c↔g keystone (#642/#647/#616).",
+        "cluster": "exon-intron-3prime-shift"
+      },
       "normalized": "NG_008835.1(NM_022153.2):c.82+1del",
       "genomic": "NG_008835.1:g.381412del",
       "coding_protein_descriptions": [
@@ -3708,6 +3762,12 @@
         "protein reverse strand whole exon deletion with shift"
       ],
       "input": "NG_008835.1(NM_022153.2):c.677-21_704+62del",
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 670,
+        "note": "Intronic-span 3' shift: ferro echoes the input; the spec shifts both ends 3' across the intron/exon junctions (c.677-18_704+65del). Same root cause as #670 (spliced-space shuffle has no intronic bases); fix depends on the c↔g keystone (#642/#647/#616).",
+        "cluster": "exon-intron-3prime-shift"
+      },
       "normalized": "NG_008835.1(NM_022153.2):c.677-18_704+65del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
