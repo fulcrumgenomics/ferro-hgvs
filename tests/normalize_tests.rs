@@ -850,6 +850,40 @@ mod mutalyzer_verified {
         );
     }
 
+    /// 3'-rule unit rotation for repeats (HGVS DNA/repeated.md L44: "applying
+    /// the 3'rule, the repeat has to be described as an AGC repeat"). The
+    /// reference `CAACAACAAC` tract (c.3-12, CDS context, unit length 3 so the
+    /// coding codon exception does not apply) can be tiled as `CAA[3]` at
+    /// c.3-11 or, shifted one base 3', as `AAC[3]` at c.4-12. The 3' rule
+    /// mandates the 3'-most placement, so an expansion must be reported in the
+    /// rotated `AAC` phase, not the input's `CAA` phase.
+    #[test]
+    fn test_repeat_rotates_to_3prime_canonical_unit() {
+        let seq = "GGCAACAACAACGG";
+        let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
+        let out = normalize_to_string(provider, "NM_TEST.1:c.3CAA[6]");
+        assert_eq!(
+            out, "NM_TEST.1:c.4_12AAC[6]",
+            "expansion must adopt the 3'-most repeat unit phase (AAC), got '{out}'"
+        );
+    }
+
+    /// Counterpart to the rotation test: a tract bounded by a non-matching base
+    /// must NOT rotate. The `CAT` tract (c.3-11) is flanked by `G` on both
+    /// sides, so the base after the tract (`G`) never equals the unit's first
+    /// base (`C`) — the 3'-shift loop does not fire and the input `CAT` phase is
+    /// preserved. Pins the common no-rotation path against future edits.
+    #[test]
+    fn test_repeat_does_not_rotate_when_tract_is_boundary_blocked() {
+        let seq = "GGCATCATCATGG";
+        let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
+        let out = normalize_to_string(provider, "NM_TEST.1:c.3CAT[6]");
+        assert_eq!(
+            out, "NM_TEST.1:c.3_11CAT[6]",
+            "boundary-blocked tract must keep its input unit phase (CAT), got '{out}'"
+        );
+    }
+
     #[test]
     fn test_repeat_stays_repeat() {
         // When repeat count > reference count + 1, should stay as repeat
