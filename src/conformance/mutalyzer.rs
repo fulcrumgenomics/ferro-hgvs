@@ -454,6 +454,20 @@ pub enum SpecSection {
     /// is a tracked `improvement` rather than a bug.
     #[serde(rename = "HGVS §Standards (three-letter ext Ter preferred over ext*)")]
     ExtensionTerGlyph,
+    /// HGVS repeated sequences — coding-DNA codon exception. On a coding DNA
+    /// reference (`c.`), repeat notation `unit[N]` may be used **only** for
+    /// repeat units whose length is a multiple of 3 (i.e. that cannot affect
+    /// the reading frame); any other expansion/contraction must be described
+    /// as a `dup`, `ins`, or `del`
+    /// (`docs/recommendations/DNA/repeated.md` L21-23: use
+    /// `NM_024312.4:c.2692_2693dup` **not** `c.2686A[10]`, and
+    /// `NM_024312.4:c.1741_1742insTATATATA` **not** `c.1738TA[6]`). The
+    /// restriction applies only to the coding sequence, not introns or UTR.
+    /// For a non-codon-aligned unit in coding `c.`, ferro emits the
+    /// spec-mandated `dup`/`ins`/`del`; mutalyzer's `unit[N]` form is invalid
+    /// HGVS, so ferro's output is the spec-correct value (#487).
+    #[serde(rename = "HGVS §Repeated (coding codon exception)")]
+    RepeatCodingCodonException,
 }
 
 impl SpecSection {
@@ -473,6 +487,7 @@ impl SpecSection {
             SpecSection::ExtensionTerGlyph => {
                 "HGVS §Standards (three-letter ext Ter preferred over ext*)"
             }
+            SpecSection::RepeatCodingCodonException => "HGVS §Repeated (coding codon exception)",
         }
     }
 }

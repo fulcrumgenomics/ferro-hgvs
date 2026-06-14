@@ -108,6 +108,19 @@ ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound al
 | `NG_012337.1:g.[105_106insC;105del;104_105insA]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[105del;104_105insA;105_106insC]` | infos | accepted_divergence | — | — |
 
+### Coding repeat: codon-multiple exception
+
+Spec: `recommendations/DNA/repeated.md L21-23`
+
+On a coding DNA reference (c.), repeat notation unit[N] is permitted only for repeat units whose length is a multiple of 3 (cannot affect the reading frame); other expansions/contractions must be dup/ins/del. ferro emits the spec-mandated dup/ins/del for non-codon-aligned units in coding c.; mutalyzer's unit[N] form is invalid HGVS, so ferro's output is the spec-correct value.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_012337.1(NM_012459.2):c.10CA[5]` | normalized | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.3GC[5]` | normalized | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.6C[4]` | normalized | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.6delinsCCCC` | normalized | spec_citation | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -120,5 +133,5 @@ ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound al
 | axis | accepted_divergence | known_bug | improvement | spec_citation |
 |---|---:|---:|---:|---:|
 | infos | 4 | 0 | 0 | 0 |
-| normalized | 1 | 0 | 24 | 2 |
+| normalized | 1 | 0 | 24 | 6 |
 | protein_description | 0 | 0 | 0 | 19 |
