@@ -29,6 +29,7 @@ use crate::reference::transcript::GenomeBuild;
 use crate::reference::Strand;
 use bincode::Options;
 use once_cell::sync::OnceCell;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -45,6 +46,7 @@ mod rkyv_cache {
     use crate::error::FerroError;
     use crate::reference::Strand;
     use rkyv::{Archive, Deserialize, Serialize};
+    use rustc_hash::FxHashMap;
     use std::collections::HashMap;
 
     /// Bump whenever the layout below changes so a stale archive is rejected by
@@ -189,13 +191,13 @@ mod rkyv_cache {
 
     /// Owned cdot maps materialized directly from an archive (one pass).
     pub(super) struct CdotMaps {
-        pub transcripts: HashMap<String, CdotTranscript>,
-        pub contig_index: HashMap<String, Vec<String>>,
-        pub contig_alias_to_canonical: HashMap<String, String>,
-        pub base_to_versioned: HashMap<String, String>,
-        pub lrg_to_refseq: HashMap<String, String>,
+        pub transcripts: FxHashMap<String, CdotTranscript>,
+        pub contig_index: FxHashMap<String, Vec<String>>,
+        pub contig_alias_to_canonical: FxHashMap<String, String>,
+        pub base_to_versioned: FxHashMap<String, String>,
+        pub lrg_to_refseq: FxHashMap<String, String>,
         pub primary_build: Option<String>,
-        pub alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscript>>,
+        pub alt_build_transcripts: FxHashMap<String, FxHashMap<String, CdotTranscript>>,
     }
 
     pub(super) fn version_of(a: &ArchivedRkyvSnapshot) -> u32 {
@@ -209,7 +211,7 @@ mod rkyv_cache {
             rkyv::string::ArchivedString,
             ArchivedRkyvTx,
         >|
-         -> Result<HashMap<String, CdotTranscript>, FerroError> {
+         -> Result<FxHashMap<String, CdotTranscript>, FerroError> {
             m.iter()
                 .map(|(k, v)| Ok((k.as_str().to_string(), tx_from_archived(v)?)))
                 .collect()
@@ -218,7 +220,7 @@ mod rkyv_cache {
             rkyv::string::ArchivedString,
             rkyv::string::ArchivedString,
         >|
-         -> HashMap<String, String> {
+         -> FxHashMap<String, String> {
             m.iter()
                 .map(|(k, v)| (k.as_str().to_string(), v.as_str().to_string()))
                 .collect()
@@ -243,13 +245,13 @@ mod rkyv_cache {
                 .alt_build_transcripts
                 .iter()
                 .map(|(b, m)| Ok((b.as_str().to_string(), txs(m)?)))
-                .collect::<Result<HashMap<_, _>, FerroError>>()?,
+                .collect::<Result<FxHashMap<_, _>, FerroError>>()?,
         })
     }
 
     /// Build the rkyv snapshot mirror from a populated mapper (serialize side).
     pub(super) fn snapshot_from_mapper(m: &CdotMapper) -> RkyvSnapshot {
-        let map = |src: &HashMap<String, CdotTranscript>| -> HashMap<String, RkyvTx> {
+        let map = |src: &FxHashMap<String, CdotTranscript>| -> HashMap<String, RkyvTx> {
             src.iter()
                 .map(|(k, v)| (k.clone(), tx_to_rkyv(v)))
                 .collect()
@@ -257,10 +259,28 @@ mod rkyv_cache {
         RkyvSnapshot {
             format_version: RKYV_FORMAT_VERSION,
             transcripts: map(&m.transcripts),
-            contig_index: m.contig_index.clone(),
-            contig_alias_to_canonical: m.contig_alias_to_canonical.clone(),
-            base_to_versioned: m.base_to_versioned.clone(),
-            lrg_to_refseq: m.lrg_to_refseq.clone(),
+            // Re-collect the runtime `FxHashMap`s into plain `HashMap`s so the
+            // archived (on-disk) layout is unchanged by the runtime hasher swap.
+            contig_index: m
+                .contig_index
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            contig_alias_to_canonical: m
+                .contig_alias_to_canonical
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            base_to_versioned: m
+                .base_to_versioned
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            lrg_to_refseq: m
+                .lrg_to_refseq
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             primary_build: m.primary_build.clone(),
             alt_build_transcripts: m
                 .alt_build_transcripts
@@ -1202,11 +1222,14 @@ struct CdotMapperSnapshot {
 /// Borrowed view of CdotMapper for zero-copy serialization to bincode.
 #[derive(Serialize)]
 struct CdotMapperSnapshotRef<'a> {
+    // These borrow the runtime `FxHashMap` fields. serde/bincode serialize a map
+    // as length + entries regardless of the hasher, so the on-disk byte layout is
+    // identical to the previous `HashMap`-backed snapshot.
     transcripts: HashMap<&'a String, CdotTranscriptSnapshotRef<'a>>,
-    contig_index: &'a HashMap<String, Vec<String>>,
-    contig_alias_to_canonical: &'a HashMap<String, String>,
-    base_to_versioned: &'a HashMap<String, String>,
-    lrg_to_refseq: &'a HashMap<String, String>,
+    contig_index: &'a FxHashMap<String, Vec<String>>,
+    contig_alias_to_canonical: &'a FxHashMap<String, String>,
+    base_to_versioned: &'a FxHashMap<String, String>,
+    lrg_to_refseq: &'a FxHashMap<String, String>,
     primary_build: Option<&'a str>,
     alt_build_transcripts: HashMap<&'a String, HashMap<&'a String, CdotTranscriptSnapshotRef<'a>>>,
 }
@@ -1294,16 +1317,16 @@ pub struct CdotMapper {
     /// genome build was passed at load time (the "primary build"). Use
     /// [`get_transcript_on_build`](Self::get_transcript_on_build) to fetch a
     /// non-primary build's view of a transcript.
-    transcripts: HashMap<String, CdotTranscript>,
+    transcripts: FxHashMap<String, CdotTranscript>,
     /// Index from contig to transcript IDs that overlap.
-    contig_index: HashMap<String, Vec<String>>,
+    contig_index: FxHashMap<String, Vec<String>>,
     /// Alias-to-canonical contig name mapping (e.g., "chr7" -> "NC_000007.14").
     /// Allows lookups by UCSC-style names when `contig_index` keys are RefSeq accessions.
-    contig_alias_to_canonical: HashMap<String, String>,
+    contig_alias_to_canonical: FxHashMap<String, String>,
     /// Index from base accession (without version) to versioned accession.
-    base_to_versioned: HashMap<String, String>,
+    base_to_versioned: FxHashMap<String, String>,
     /// LRG transcript to RefSeq transcript mapping (e.g., "LRG_1t1" -> "NM_000088.3").
-    lrg_to_refseq: HashMap<String, String>,
+    lrg_to_refseq: FxHashMap<String, String>,
     /// Per-transcript data on builds OTHER than the primary load build.
     /// Outer key is the genome-build name (e.g. "GRCh37"); inner key is the
     /// transcript accession. Populated when the source cdot JSON nests
@@ -1314,7 +1337,7 @@ pub struct CdotMapper {
     /// The primary build's data lives in [`Self::transcripts`] only; it is
     /// NOT duplicated here. [`get_transcript_on_build`](Self::get_transcript_on_build)
     /// dispatches between the two maps.
-    alt_build_transcripts: HashMap<String, HashMap<String, CdotTranscript>>,
+    alt_build_transcripts: FxHashMap<String, FxHashMap<String, CdotTranscript>>,
     /// The genome-build name corresponding to entries in [`Self::transcripts`],
     /// or `None` if the build is unknown (e.g. a bincode snapshot produced
     /// by an older build that did not persist this field). Used by
@@ -1338,7 +1361,7 @@ pub struct CdotMapper {
     /// transcripts AFTER a query has populated the cell the new transcripts
     /// will be missing from the index — `add_transcript` clears the cell to
     /// guard against that.
-    contig_query_index: OnceCell<HashMap<String, IntervalMap<u32>>>,
+    contig_query_index: OnceCell<FxHashMap<String, IntervalMap<u32>>>,
     /// Lazily-built per-contig stab-query index for the NON-primary builds.
     ///
     /// Mirrors [`Self::contig_query_index`] but covers the contigs that only
@@ -1356,12 +1379,12 @@ pub struct CdotMapper {
     ///
     /// The inner `Vec<String>` is the accession list for the contig in the
     /// owning build's map; the `IntervalMap` payload is an index into it.
-    alt_build_query_index: OnceCell<HashMap<String, AltBuildContigStab>>,
+    alt_build_query_index: OnceCell<FxHashMap<String, AltBuildContigStab>>,
     /// Lazily-built per-transcript `(min_genome_start, max_genome_end)`
     /// cache so `VariantProjector::project_single_inner` doesn't re-fold the
     /// exon table on every projection. Sharing the same `OnceCell` build
     /// trigger as `contig_query_index` keeps the two views in sync.
-    transcript_genome_spans: OnceCell<HashMap<String, (u64, u64)>>,
+    transcript_genome_spans: OnceCell<FxHashMap<String, (u64, u64)>>,
     /// Deferred secondary builds: build name -> source cdot path. Set by
     /// `MultiFastaProvider::from_manifest` so a declared secondary (e.g. the
     /// GRCh37 cdot) is not loaded until a lookup for that build needs it. NOT
@@ -1393,12 +1416,12 @@ impl CdotMapper {
     /// Create a new empty mapper (primary build defaults to GRCh38).
     pub fn new() -> Self {
         Self {
-            transcripts: HashMap::new(),
-            contig_index: HashMap::new(),
-            contig_alias_to_canonical: HashMap::new(),
-            base_to_versioned: HashMap::new(),
-            lrg_to_refseq: HashMap::new(),
-            alt_build_transcripts: HashMap::new(),
+            transcripts: FxHashMap::default(),
+            contig_index: FxHashMap::default(),
+            contig_alias_to_canonical: FxHashMap::default(),
+            base_to_versioned: FxHashMap::default(),
+            lrg_to_refseq: FxHashMap::default(),
+            alt_build_transcripts: FxHashMap::default(),
             primary_build: Some("GRCh38".to_string()),
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
@@ -1575,10 +1598,13 @@ impl CdotMapper {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
-            contig_index: snapshot.contig_index,
-            contig_alias_to_canonical: snapshot.contig_alias_to_canonical,
-            base_to_versioned: snapshot.base_to_versioned,
-            lrg_to_refseq: snapshot.lrg_to_refseq,
+            // Re-collect the deserialized `HashMap`s into runtime `FxHashMap`s;
+            // the on-disk bincode layout is unchanged (the snapshot type still
+            // deserializes into plain `HashMap`s).
+            contig_index: snapshot.contig_index.into_iter().collect(),
+            contig_alias_to_canonical: snapshot.contig_alias_to_canonical.into_iter().collect(),
+            base_to_versioned: snapshot.base_to_versioned.into_iter().collect(),
+            lrg_to_refseq: snapshot.lrg_to_refseq.into_iter().collect(),
             // Alt-build maps are now part of the serialized format (v1), so
             // NG/NC-parent-aware resolution (#332) works on the fast path too.
             alt_build_transcripts: snapshot
@@ -2651,8 +2677,9 @@ impl CdotMapper {
     /// Build the per-transcript span side-table. Same single-pass shape as
     /// `build_query_index` so the two views can't disagree about what
     /// "transcript span" means.
-    fn build_transcript_genome_spans(&self) -> HashMap<String, (u64, u64)> {
-        let mut out = HashMap::with_capacity(self.transcripts.len());
+    fn build_transcript_genome_spans(&self) -> FxHashMap<String, (u64, u64)> {
+        let mut out =
+            FxHashMap::with_capacity_and_hasher(self.transcripts.len(), Default::default());
         for (acc, tx) in &self.transcripts {
             if tx.exons.is_empty() {
                 continue;
@@ -2670,9 +2697,9 @@ impl CdotMapper {
     /// SuperIntervals' intervals are end-inclusive (`[start, end]`). To
     /// preserve the old half-open `pos >= min && pos < max` semantics we
     /// insert `[min, max - 1]` and probe with `search_stabbed(pos)`.
-    fn build_query_index(&self) -> HashMap<String, IntervalMap<u32>> {
-        let mut by_contig: HashMap<String, IntervalMap<u32>> =
-            HashMap::with_capacity(self.contig_index.len());
+    fn build_query_index(&self) -> FxHashMap<String, IntervalMap<u32>> {
+        let mut by_contig: FxHashMap<String, IntervalMap<u32>> =
+            FxHashMap::with_capacity_and_hasher(self.contig_index.len(), Default::default());
         for (contig, accessions) in &self.contig_index {
             let mut im: IntervalMap<u32> = IntervalMap::new();
             for (idx, acc) in accessions.iter().enumerate() {
@@ -2717,15 +2744,15 @@ impl CdotMapper {
     /// gathers all `(build, accession)` pairs across **both** stores first, then
     /// builds exactly one `AltBuildContigStab` per contig from the combined,
     /// sorted accession list.
-    fn build_alt_build_query_index(&self) -> HashMap<String, AltBuildContigStab> {
+    fn build_alt_build_query_index(&self) -> FxHashMap<String, AltBuildContigStab> {
         // Step 1 — collect (build, Vec<accession>) per contig from every source.
         // A contig maps to exactly one build — NC_*.10 = GRCh37, NC_*.11 =
         // GRCh38 — so first-seen wins; the debug_assert guards the invariant
         // in test builds.
-        let mut contig_build: HashMap<String, String> = HashMap::new();
-        let mut contig_accs: HashMap<String, Vec<String>> = HashMap::new();
+        let mut contig_build: FxHashMap<String, String> = FxHashMap::default();
+        let mut contig_accs: FxHashMap<String, Vec<String>> = FxHashMap::default();
 
-        let mut add_transcripts = |build: &str, txs: &HashMap<String, CdotTranscript>| {
+        let mut add_transcripts = |build: &str, txs: &FxHashMap<String, CdotTranscript>| {
             for (acc, tx) in txs {
                 let contig = &tx.contig;
                 let existing = contig_build
@@ -2764,8 +2791,8 @@ impl CdotMapper {
         // one IntervalMap.  To resolve a transcript's exons we need to look the
         // accession up in a transcript map.  A given accession may live in either
         // the eager store or the deferred sub-mapper; try both.
-        let mut by_contig: HashMap<String, AltBuildContigStab> =
-            HashMap::with_capacity(contig_accs.len());
+        let mut by_contig: FxHashMap<String, AltBuildContigStab> =
+            FxHashMap::with_capacity_and_hasher(contig_accs.len(), Default::default());
         for (contig, mut accessions) in contig_accs {
             // Deterministic payload→accession mapping (HashMap iteration order
             // is random across runs; sort to stabilise the u32 index).
