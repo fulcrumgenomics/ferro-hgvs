@@ -9,7 +9,9 @@ it to every fixture.
 
 ```text
 tests/fixtures/<upstream>-normalize/
-├── cases.json                 # source of truth: upstream expected outputs
+├── cases.json                 # source of truth: upstream expected outputs + dispositions
+├── reference-windows.json     # GENERATED hermetic fixture (biocommons): the exact
+│                              # reference bases the manifest pass touches; never hand-edit
 ├── baseline-failures/         # current FAIL inputs per axis (manifest runs)
 │   ├── normalized.txt
 │   ├── genomic.txt
@@ -24,13 +26,17 @@ scripts/refresh-<upstream>-fixtures.py
                                # (uses `git show <sha>:<path>` against a
                                # local checkout; does NOT mutate upstream)
 
+examples/extract_<upstream>_windows.rs
+                               # GENERATOR for reference-windows.json: records the
+                               # bases a manifest-backed normalize pass reads (#478)
+
 tests/<upstream>_normalize_tests.rs
-                               # two test layers (see below)
+                               # test layers (see below)
 ```
 
-## The two-layer test pattern
+## The three-layer test pattern
 
-Each corpus's test binary runs **two** logical layers against the same
+Each corpus's test binary runs **three** logical layers against the same
 `cases.json`:
 
 ### Layer 1 — `regression_under_mock_<axis>` (CI-always)
@@ -61,19 +67,36 @@ The committed `baseline-failures/<axis>.txt` is the static ledger of
 known FAILs at the time of the most recent burn-down PR. It is
 informational — the runner does not consult it — and is meant for
 contributors to diff `/tmp/ferro-xfail/<axis>.txt` against, identifying
-new regressions vs. known gaps.
+new regressions vs. known gaps. Once a corpus is fully annotated with
+per-case dispositions (`accepted_divergence` / `known_bug` / `improvement`,
+see `cases.json` below) the ledger holds **no** unannotated FAILs and is
+empty — every divergence lives as a disposition the harness enforces.
 
-## Why two layers?
+### Layer 3 — `axis_<axis>_hermetic` (CI-always merge gate; biocommons)
 
-| | Layer 1 (Mock) | Layer 2 (Manifest) |
-|---|---|---|
-| Catches refactor regressions | ✓ | partial (only if manifest run) |
-| Catches correctness gaps | ✗ | ✓ |
-| Runs in CI without external data | ✓ | ✗ (skips) |
-| Pin shape | ferro behavior (ephemeral) | upstream truth (durable) |
-| Source of truth file | `mock-pin/<axis>.txt` | `cases.json` |
+The same correctness assertion as Layer 2, but against a
+`WindowProvider` built from the committed, generated `reference-windows.json`
+instead of the out-of-band manifest — so it runs **on every PR in CI** with
+zero external data and is the actual merge gate (#478 pillar 4). The fixture
+captures *exactly* the reference bases the manifest pass reads (transcripts
+whole; padded, clamped genomic windows), so this layer agrees with Layer 2
+row-for-row. Layer 2 is demoted to a nightly/dev tier that catches anything the
+committed windows miss and is the source `extract_<upstream>_windows` regenerates
+from. Pioneered by the biocommons corpus; the other corpora can adopt the same
+shape.
 
-Each layer answers a different question. Both are necessary.
+## Why these layers?
+
+| | Layer 1 (Mock) | Layer 2 (Manifest) | Layer 3 (Hermetic) |
+|---|---|---|---|
+| Catches refactor regressions | ✓ | partial (only if manifest run) | ✓ |
+| Catches correctness gaps | ✗ | ✓ | ✓ |
+| Runs in CI without external data | ✓ | ✗ (skips) | ✓ |
+| Is the merge gate | ✗ | ✗ | ✓ |
+| Pin shape | ferro behavior (ephemeral) | upstream truth (durable) | upstream truth (durable) |
+| Source of truth file | `mock-pin/<axis>.txt` | `cases.json` | `cases.json` + `reference-windows.json` |
+
+Each layer answers a different question.
 
 ## File schemas
 
@@ -141,6 +164,34 @@ non-hermetic (it needs the reference manifest) and is emitted only by the
 nightly run. To change what it shows, edit the `clusters` registry or the
 disposition annotations in `cases.json` and regenerate.
 
+### `reference-windows.json`
+
+**Generated** — never hand-edit. The hermetic fixture behind Layer 3, produced
+by `cargo run --features dev --example extract_<upstream>_windows` from the
+manifest. A `RecordingProvider` wraps the real `MultiFastaProvider`, runs the
+same per-case normalize loop the test does, and records every transcript
+resolved and every genomic range read; transcripts are stored whole, genomic
+accesses are clustered into disjoint windows padded by a safety margin, and each
+contig's true length is captured so `WindowProvider` reproduces the manifest
+provider's end-clamping (the short read that drives `CanonicalSplitSkipped` /
+W5003) while still erroring on a read inside the contig but outside a captured
+window — a genuine too-narrow extraction.
+
+```json
+{
+  "description": "string",                 // provenance + regen command
+  "captured_from": "string",               // manifest prepared_at
+  "contig_lengths": { "<contig>": 0 },     // true length per windowed contig
+  "transcripts": [ /* whole Transcript records (serde) */ ],
+  "genomic": [ { "contig": "string", "start": 0, "bases": "ACGT…" } ]
+}
+```
+
+Unlike `failure-patterns.md`, its `--check` needs the manifest (it derives from
+reference bases, not `cases.json`), so it is a local/nightly guard, not a per-PR
+CI check; the per-PR gate is Layer 3 consuming the committed file. Regenerate
+whenever `cases.json` or normalize behavior changes the reference access set.
+
 ### `NOTICE`
 
 Upstream attribution (required by most upstream licenses) + pinned SHA
@@ -161,6 +212,10 @@ BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock
 #    failure-patterns.md (example generate_conformance_summary) in the same PR
 #    as any cases.json disposition/cluster change; commit baseline-failures
 #    updates separately if applicable.
+# 6. If the corpus has a hermetic Layer 3, regenerate reference-windows.json
+#    from the manifest (example extract_<upstream>_windows) whenever the case
+#    set or normalize behavior changes the reference access set, and confirm
+#    axis_<axis>_hermetic agrees with the manifest Layer 2 run.
 ```
 
 ## Per-corpus extensions
