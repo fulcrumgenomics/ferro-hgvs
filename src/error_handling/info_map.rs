@@ -112,8 +112,11 @@ pub const NO_FERRO_INFO_EQUIV: &[&str] = &[
     // LRG-specific reference correction; ferro does not implement the LRG
     // reference system.
     "ICORRECTEDLRGREFERENCE",
-    // mutalyzer corrects a missing/wrong selector ID on the input; ferro
-    // requires explicit selectors and errors otherwise.
+    // mutalyzer corrects a missing/wrong selector ID on the input. ferro
+    // rewrites a coding-transcript selector to its protein accession for a
+    // `p.` coordinate on a genomic reference (NM_→NP_, #502) but emits no
+    // structured info for the rewrite; for other selector classes it requires
+    // explicit selectors. Either way there is no ferro info to map.
     "ICORRECTEDSELECTORID",
     // mutalyzer corrects the variant type (e.g. del→delins) when the
     // stated bases force the change. ferro canonicalizes via

@@ -4063,13 +4063,7 @@
       "infos": [
         "ICORRECTEDSELECTORID"
       ],
-      "to_test": true,
-      "accepted_divergence": {
-        "axis": "normalized",
-        "policy": "ferro-policy-121-gene-symbol-selector",
-        "note": "ferro emits the gene-symbol selector per closed issue #121; mutalyzer emits a legacy accession selector (NM_* / NP_*). Both are HGVS-allowed.",
-        "cluster": "gene-symbol-selector-121"
-      }
+      "to_test": true
     }
   ]
 }

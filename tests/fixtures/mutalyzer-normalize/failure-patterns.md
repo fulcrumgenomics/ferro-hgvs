@@ -91,9 +91,7 @@ Spec: `background/refseq.md (NM_(GENE) form)`
 
 ferro's terminal #121 policy preserves the NM_(GENE) gene-symbol selector; both forms are spec-allowed (an accepted divergence, not a convergence target).
 
-| input | axis | disposition | ferro output | tracking |
-|---|---|---|---|---|
-| `NG_012337.3(NM_003002.4):p.(Asp92Tyr)` | normalized | accepted_divergence | — | — |
+_No seeded member rows yet (manifest-gated seeding, #325)._
 
 ### Compound-allele SHUFFLE_APPLIED (#499)
 
@@ -152,5 +150,5 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 | axis | accepted_divergence | known_bug | improvement | spec_citation |
 |---|---:|---:|---:|---:|
 | infos | 4 | 0 | 0 | 0 |
-| normalized | 1 | 10 | 24 | 6 |
+| normalized | 0 | 10 | 24 | 6 |
 | protein_description | 0 | 0 | 0 | 19 |
