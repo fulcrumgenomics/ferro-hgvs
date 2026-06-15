@@ -69,8 +69,8 @@ pub use arbitration::{
     ArbitrationDecision, ArbitrationStats, ArbitrationSummary,
 };
 pub use biocommons::{
-    check_container_exists, check_container_running, check_docker_available, check_seqrepo,
-    check_uta_connection, check_uta_local, fetch_and_load_missing_accessions,
+    check_container_exists, check_container_running, check_seqrepo, check_uta_connection,
+    check_uta_local, docker_is_available, fetch_and_load_missing_accessions,
     has_biocommons_normalizer, load_biocommons_settings, load_sequences_to_seqrepo,
     normalize_single as normalize_biocommons_single, run_biocommons_normalizer_parallel,
     run_biocommons_normalizer_subprocess, setup_seqrepo, setup_uta, start_uta, stop_uta,

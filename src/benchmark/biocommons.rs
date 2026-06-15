@@ -43,6 +43,8 @@ pub struct BiocommonsLocalConfig {
     pub seqrepo_dir: PathBuf,
     /// SeqRepo instance version (e.g., "2021-01-29").
     pub seqrepo_instance: String,
+    /// Seconds to wait for the UTA schema to become ready during setup.
+    pub uta_ready_timeout_secs: u64,
 }
 
 impl Default for BiocommonsLocalConfig {
@@ -53,8 +55,131 @@ impl Default for BiocommonsLocalConfig {
             uta_port: 5432,
             seqrepo_dir: PathBuf::new(), // Must be specified by user
             seqrepo_instance: "2021-01-29".to_string(),
+            uta_ready_timeout_secs: 300,
         }
     }
+}
+
+impl BiocommonsLocalConfig {
+    /// Postgres schema name for the UTA database. The biocommons `uta:<tag>`
+    /// images name their schema identically to the image tag; we derive it here
+    /// so the coupling lives in one place rather than scattered string literals.
+    pub fn uta_schema(&self) -> &str {
+        &self.uta_image_tag
+    }
+}
+
+/// Why the UTA DB isn't ready yet (used only to craft the timeout error — the
+/// poll loop itself is binary ready/not-ready).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtaReadyState {
+    NotRunning,
+    PostgresDown,
+    SchemaMissing,
+    Unknown,
+}
+
+/// Classify a not-ready observation. `running` = container running;
+/// `pg_ok` = postgres accepting connections on the host port;
+/// `schema_ok` = the schema's `transcript` relation is queryable; `stderr` = the
+/// schema-probe stderr (locale-tolerant substring match).
+///
+/// `running` is always `true` from the sole production caller
+/// (`wait_for_uta_ready`), which fast-fails the not-running case on its own
+/// before classifying; the `running == false` -> `NotRunning` arm is retained
+/// for unit-test symmetry and as defensive completeness of the state machine.
+fn classify_uta_not_ready(
+    running: bool,
+    pg_ok: bool,
+    schema_ok: bool,
+    stderr: Option<&str>,
+) -> UtaReadyState {
+    if !running {
+        return UtaReadyState::NotRunning;
+    }
+    let s = stderr.unwrap_or("").to_ascii_lowercase();
+    if !pg_ok || s.contains("could not connect") || s.contains("starting up") {
+        return UtaReadyState::PostgresDown;
+    }
+    // Schema's `transcript` relation is absent. The probe uses `to_regclass`,
+    // which returns NULL (stdout `f`, no stderr) for a missing relation — the
+    // normal "dump still loading" case — so detect the missing schema from the
+    // negative probe result, not only from a "does not exist" error string
+    // (which a `to_regclass` probe never emits, but a future probe might).
+    if !schema_ok && (stderr.is_none() || s.contains("does not exist")) {
+        return UtaReadyState::SchemaMissing;
+    }
+    UtaReadyState::Unknown
+}
+
+/// Human-facing guidance for a timeout, given the classified state.
+fn uta_timeout_message(state: UtaReadyState, name: &str, schema: &str, secs: u64) -> String {
+    match state {
+        UtaReadyState::NotRunning => format!(
+            "container `{name}` is not running — it likely exited during init. \
+             Inspect `docker logs {name}`."
+        ),
+        UtaReadyState::PostgresDown => format!(
+            "postgres in `{name}` did not accept connections within {secs}s. \
+             Increase --uta-ready-timeout-secs or check `docker logs {name}`."
+        ),
+        UtaReadyState::SchemaMissing => format!(
+            "postgres is up but schema `{schema}` never appeared within {secs}s. \
+             The image/dump load may have failed, or --uta-image-tag does not match \
+             the image's schema. Try `--uta-dump <path>` or check `docker logs {name}`."
+        ),
+        UtaReadyState::Unknown => format!(
+            "UTA in `{name}` was not ready within {secs}s for an unrecognized reason. \
+             Check `docker logs {name}`; you can also retry `setup uta` (idempotent) \
+             with a larger --uta-ready-timeout-secs."
+        ),
+    }
+}
+
+/// Compare an existing container's inspected published port + image against the
+/// requested config. Returns `Some(reason)` if they differ (so the caller can
+/// refuse to silently reuse a mismatched container), `None` if they match.
+fn container_config_mismatch(
+    inspected_port: Option<u16>,
+    inspected_image: &str,
+    want_port: u16,
+    want_image: &str,
+) -> Option<String> {
+    match inspected_port {
+        None => Some(format!(
+            "could not determine the existing container's published port for 5432/tcp; \
+             expected {want_port}. Re-run with --force to recreate."
+        )),
+        Some(p) if p != want_port => Some(format!(
+            "existing container publishes port {p}, but config wants {want_port}. \
+             Re-run with --force, or pass --uta-port {p}."
+        )),
+        _ => {
+            if inspected_image != want_image {
+                Some(format!(
+                    "existing container uses image `{inspected_image}`, but config wants \
+                     `{want_image}`. Re-run with --force, or set --uta-image-tag to match."
+                ))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Validate that the first bytes of a `--uta-dump` file are the gzip magic
+/// (`1f 8b`). The biocommons dump URL is human-verification-gated, so a common
+/// mistake is saving the HTML verification page; reject that with a clear hint.
+fn validate_dump_is_gzip(head: &[u8]) -> Result<(), String> {
+    if head.len() >= 2 && head[0] == 0x1f && head[1] == 0x8b {
+        return Ok(());
+    }
+    Err(
+        "file is not a gzip UTA dump (expected gzip magic 1f 8b). It looks like \
+         HTML/text — likely the biocommons human-verification page, not the \
+         .pgd.gz. Complete verification in a browser and download the actual dump."
+            .to_string(),
+    )
 }
 
 /// Settings loaded from a biocommons configuration file.
@@ -96,13 +221,52 @@ pub struct SeqRepoSetupResult {
 // Docker and System Checks
 // ============================================================================
 
-/// Check if Docker is available and running.
-pub fn check_docker_available() -> bool {
-    Command::new("docker")
-        .args(["version"])
+/// Check if Docker is available and the daemon is responding.
+///
+/// Returns `Ok(())` when Docker is installed and the daemon is up, or `Err(msg)` with
+/// a human-readable message distinguishing binary-missing from daemon-down.
+pub fn check_docker_available() -> Result<(), String> {
+    match Command::new("docker").args(["version"]).output() {
+        Err(_) => Err("`docker` was not found on PATH — install Docker.".to_string()),
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(_) => {
+            Err("Docker is installed but the daemon is not responding — start Docker.".to_string())
+        }
+    }
+}
+
+/// Thin bool wrapper around [`check_docker_available`] for callers that only need a
+/// true/false answer and provide their own diagnostic messaging.
+pub fn docker_is_available() -> bool {
+    check_docker_available().is_ok()
+}
+
+/// Inspect an existing container's published host port for 5432/tcp and its image.
+fn inspect_uta_container(name: &str) -> (Option<u16>, String) {
+    let port = Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{ (index (index .NetworkSettings.Ports \"5432/tcp\") 0).HostPort }}",
+            name,
+        ])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u16>()
+                .ok()
+        });
+    let image = Command::new("docker")
+        .args(["inspect", "-f", "{{.Config.Image}}", name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    (port, image)
 }
 
 /// Check if a Docker container exists (running or stopped).
@@ -132,46 +296,59 @@ pub fn check_container_running(container_name: &str) -> bool {
     }
 }
 
-/// Check if we can connect to a local UTA PostgreSQL database.
-///
-/// This attempts a lightweight connection test to verify the database is accessible.
-/// First tries a direct psql check (faster, no Python needed), then falls back to
-/// the Python hgvs library check if available.
-pub fn check_uta_local(port: u16) -> bool {
-    // First try direct PostgreSQL check (works without Python)
-    if check_uta_local_direct(port) {
-        return true;
-    }
-
-    // Fall back to Python-based check
-    let uta_url = format!(
-        "postgresql://anonymous:anonymous@localhost:{}/uta/uta_20210129b",
-        port
-    );
-    check_uta_connection(Some(&uta_url))
+/// Probe result for one readiness poll.
+struct UtaProbe {
+    pg_ok: bool,
+    schema_ok: bool,
+    stderr: Option<String>,
 }
 
-/// Direct PostgreSQL check for local UTA database (no Python required).
-fn check_uta_local_direct(_port: u16) -> bool {
-    // Try to query the transcript table as the anonymous user
-    let output = Command::new("docker")
-        .args([
-            "exec",
-            "ferro-uta",
-            "psql",
-            "-U",
-            "anonymous",
-            "-d",
-            "uta",
-            "-c",
-            "SELECT 1 FROM uta_20210129b.transcript LIMIT 1;",
-        ])
-        .output();
-
-    match output {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
+/// Probe UTA over the HOST port (validates the published -p mapping, unlike a
+/// `docker exec` that only sees the in-container localhost). `schema` is the
+/// Postgres schema (== image tag by convention).
+fn probe_uta(port: u16, schema: &str) -> UtaProbe {
+    // 1) postgres accepting connections on the host port?
+    let pg_ok = Command::new("pg_isready")
+        .args(["-h", "localhost", "-p", &port.to_string()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !pg_ok {
+        return UtaProbe {
+            pg_ok: false,
+            schema_ok: false,
+            stderr: None,
+        };
     }
+    // 2) schema's transcript relation present over TCP?
+    let url = format!("postgresql://anonymous:anonymous@localhost:{port}/uta");
+    let sql = format!("SELECT to_regclass('{schema}.transcript') IS NOT NULL;");
+    let out = Command::new("psql").args([&url, "-tAc", &sql]).output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            UtaProbe {
+                pg_ok: true,
+                schema_ok: stdout.trim() == "t",
+                stderr: None,
+            }
+        }
+        Ok(o) => UtaProbe {
+            pg_ok: true,
+            schema_ok: false,
+            stderr: Some(String::from_utf8_lossy(&o.stderr).into_owned()),
+        },
+        Err(e) => UtaProbe {
+            pg_ok: true,
+            schema_ok: false,
+            stderr: Some(e.to_string()),
+        },
+    }
+}
+
+/// True when UTA is fully ready (schema queryable over the host port).
+pub fn check_uta_local(port: u16, schema: &str) -> bool {
+    probe_uta(port, schema).schema_ok
 }
 
 /// Check if SeqRepo is available at the specified directory.
@@ -229,19 +406,37 @@ pub fn setup_uta(
     force: bool,
     uta_dump: Option<&Path>,
 ) -> Result<UtaSetupResult, FerroError> {
-    // Check Docker is available
-    if !check_docker_available() {
-        return Err(FerroError::Io {
-            msg: "Docker is not available. Please install Docker and ensure it is running."
-                .to_string(),
-        });
-    }
+    // Check Docker is available (distinguishes binary-missing from daemon-down).
+    check_docker_available().map_err(|msg| FerroError::Io { msg })?;
 
     let mut image_pulled = false;
     let mut container_created = false;
 
     // Check if container already exists
     let container_exists = check_container_exists(&config.uta_container_name);
+
+    // Guard: refuse to silently reuse a container whose port or image differs from config.
+    // The expected image depends on which route was used to create the container:
+    // - dump route (`--uta-dump`): uses `postgres:14` as the base image
+    // - standard route: uses `biocommons/uta:<tag>`
+    if container_exists && !force {
+        let want_image = if uta_dump.is_some() {
+            "postgres:14".to_string()
+        } else {
+            format!("biocommons/uta:{}", config.uta_image_tag)
+        };
+        let (ins_port, ins_image) = inspect_uta_container(&config.uta_container_name);
+        if let Some(reason) =
+            container_config_mismatch(ins_port, &ins_image, config.uta_port, &want_image)
+        {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "container `{}` already exists but {reason}",
+                    config.uta_container_name
+                ),
+            });
+        }
+    }
 
     if container_exists && force {
         // Remove existing container
@@ -317,6 +512,10 @@ pub fn setup_uta(
                 "-p",
                 &format!("{}:5432", config.uta_port),
                 "-e",
+                // POSTGRES_HOST_AUTH_METHOD is consumed only on a fresh initdb (the
+                // --uta-dump route on postgres:14). The prebaked biocommons/uta image
+                // ships a populated PGDATA and its own pg_hba.conf, so this is ignored
+                // on the image route; it's harmless to pass.
                 "POSTGRES_HOST_AUTH_METHOD=trust",
                 &image_name,
             ])
@@ -327,8 +526,18 @@ pub fn setup_uta(
 
         if !create_output.status.success() {
             let stderr = String::from_utf8_lossy(&create_output.stderr);
+            let hint = if stderr.contains("port is already allocated")
+                || stderr.contains("address already in use")
+            {
+                format!(
+                    " — host port {} is in use; pass --uta-port <other>",
+                    config.uta_port
+                )
+            } else {
+                String::new()
+            };
             return Err(FerroError::Io {
-                msg: format!("Failed to create Docker container: {}", stderr),
+                msg: format!("Failed to create Docker container: {}{}", stderr, hint),
             });
         }
         container_created = true;
@@ -340,7 +549,12 @@ pub fn setup_uta(
     }
 
     // Wait for PostgreSQL to be ready
-    wait_for_uta_ready(config.uta_port, 30)?;
+    wait_for_uta_ready(
+        &config.uta_container_name,
+        config.uta_port,
+        config.uta_schema(),
+        config.uta_ready_timeout_secs,
+    )?;
 
     let uta_db_url = format!(
         "postgresql://anonymous:anonymous@localhost:{}/uta/{}",
@@ -375,6 +589,22 @@ fn setup_uta_from_dump(
                 config.uta_image_tag
             ),
         });
+    }
+
+    // Reject a non-gzip file (e.g. a saved HTML verification page) before we
+    // mount it and let postgres fail opaquely on init.
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(dump_path).map_err(|e| FerroError::Io {
+            msg: format!("Cannot open dump file {}: {}", dump_path.display(), e),
+        })?;
+        let mut head = [0u8; 2];
+        let n = f.read(&mut head).map_err(|e| FerroError::Io {
+            msg: format!("Cannot read dump file {}: {}", dump_path.display(), e),
+        })?;
+        validate_dump_is_gzip(&head[..n]).map_err(|msg| FerroError::Io {
+            msg: format!("{}: {}", dump_path.display(), msg),
+        })?;
     }
 
     let metadata = std::fs::metadata(dump_path).map_err(|e| FerroError::Io {
@@ -487,7 +717,12 @@ fn setup_uta_from_dump(
     }
 
     // Wait for UTA to be fully ready
-    wait_for_uta_ready(config.uta_port, 60)?;
+    wait_for_uta_ready(
+        &config.uta_container_name,
+        config.uta_port,
+        config.uta_schema(),
+        config.uta_ready_timeout_secs,
+    )?;
 
     let uta_db_url = format!(
         "postgresql://anonymous:anonymous@localhost:{}/uta/{}",
@@ -609,23 +844,83 @@ fn load_uta_dump(container_name: &str, schema_name: &str) -> Result<(), FerroErr
     Ok(())
 }
 
-/// Wait for UTA database to be ready with the schema.
-fn wait_for_uta_ready(port: u16, max_attempts: u32) -> Result<(), FerroError> {
-    eprintln!("Waiting for UTA database to be ready...");
-    for attempt in 1..=max_attempts {
-        if check_uta_local(port) {
-            eprintln!("UTA database is ready.");
-            return Ok(());
+/// Ensure the host has the PostgreSQL client binaries the readiness probe needs.
+///
+/// `probe_uta` reaches UTA over the published host port with `pg_isready` and
+/// `psql` (host binaries), which validates the `-p` mapping a `docker exec`
+/// probe cannot see. The trade-off is a host dependency: if these binaries are
+/// absent, every probe returns "not ready" and a healthy database is misreported
+/// as `PostgresDown` at timeout. Detect the missing client up front (a permanent
+/// condition that polling will never resolve) and fail fast with actionable
+/// guidance, distinguishing "binary not found" from "connection refused".
+fn ensure_postgres_client() -> Result<(), FerroError> {
+    for bin in ["pg_isready", "psql"] {
+        match Command::new(bin).arg("--version").output() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(FerroError::Io {
+                    msg: format!(
+                        "`{bin}` not found on PATH. The UTA readiness probe needs a \
+                         PostgreSQL client (`psql` + `pg_isready`) to reach the database \
+                         over the published host port. Install one (e.g. `postgresql-client` \
+                         on Debian/Ubuntu, `libpq` via Homebrew, or `postgresql` via conda/pixi) \
+                         and re-run `setup uta`."
+                    ),
+                });
+            }
+            // Present (Ok) or failed to run for another reason — let the probe proceed.
+            _ => {}
         }
-        if attempt == max_attempts {
-            return Err(FerroError::Io {
-                msg: "Timed out waiting for UTA database to be ready".to_string(),
-            });
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        eprint!(".");
     }
     Ok(())
+}
+
+/// Wait up to `timeout_secs` for UTA to be ready, polling the schema probe.
+/// Fails fast if the PostgreSQL client is missing or the container has exited.
+/// On timeout, classifies the failure for an actionable message.
+fn wait_for_uta_ready(
+    container_name: &str,
+    port: u16,
+    schema: &str,
+    timeout_secs: u64,
+) -> Result<(), FerroError> {
+    ensure_postgres_client()?;
+    eprintln!("Waiting for UTA database `{schema}` to be ready (up to {timeout_secs}s)...");
+    let start = std::time::Instant::now();
+    let mut last_heartbeat = 0u64;
+    loop {
+        let elapsed = start.elapsed().as_secs();
+        // Fail fast on a crashed/exited container.
+        if !check_container_running(container_name) {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "container `{container_name}` is not running — it exited during init. \
+                     Inspect `docker logs {container_name}`."
+                ),
+            });
+        }
+        let probe = probe_uta(port, schema);
+        if probe.schema_ok {
+            eprintln!("UTA database is ready ({elapsed}s).");
+            return Ok(());
+        }
+        if elapsed >= timeout_secs {
+            let state =
+                classify_uta_not_ready(true, probe.pg_ok, probe.schema_ok, probe.stderr.as_deref());
+            return Err(FerroError::Io {
+                msg: uta_timeout_message(state, container_name, schema, timeout_secs),
+            });
+        }
+        if elapsed - last_heartbeat >= 15 {
+            let phase = if probe.pg_ok {
+                format!("postgres up; waiting for schema `{schema}`")
+            } else {
+                "waiting for postgres to accept connections".to_string()
+            };
+            eprintln!("  … {phase} ({elapsed}s/{timeout_secs}s)");
+            last_heartbeat = elapsed;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 /// Find GNU rsync executable (not openrsync which macOS uses by default).
@@ -2416,5 +2711,114 @@ mod tests {
     fn test_check_biocommons_available() {
         // This test just verifies the function doesn't panic
         let _ = has_biocommons_normalizer();
+    }
+
+    #[test]
+    fn detects_container_config_mismatch() {
+        // match -> None
+        assert!(container_config_mismatch(
+            Some(5432),
+            "biocommons/uta:uta_20210129b",
+            5432,
+            "biocommons/uta:uta_20210129b"
+        )
+        .is_none());
+        // port mismatch
+        let m = container_config_mismatch(
+            Some(5432),
+            "biocommons/uta:uta_20210129b",
+            5544,
+            "biocommons/uta:uta_20210129b",
+        );
+        assert!(m.unwrap().contains("port"));
+        // image mismatch
+        let m = container_config_mismatch(
+            Some(5432),
+            "biocommons/uta:old",
+            5432,
+            "biocommons/uta:uta_20210129b",
+        );
+        assert!(m.unwrap().contains("image"));
+        // unknown inspected port -> treat as mismatch (can't confirm)
+        assert!(container_config_mismatch(
+            None,
+            "biocommons/uta:uta_20210129b",
+            5432,
+            "biocommons/uta:uta_20210129b"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn classifies_uta_not_ready() {
+        use UtaReadyState::*;
+        // container not running -> NotRunning (abort-worthy)
+        assert!(matches!(
+            classify_uta_not_ready(false, false, false, None),
+            NotRunning
+        ));
+        // running, postgres not accepting yet
+        assert!(matches!(
+            classify_uta_not_ready(true, false, false, Some("could not connect to server")),
+            PostgresDown
+        ));
+        assert!(matches!(
+            classify_uta_not_ready(
+                true,
+                false,
+                false,
+                Some("the database system is starting up")
+            ),
+            PostgresDown
+        ));
+        // running, postgres up, schema/table missing via an explicit error string
+        assert!(matches!(
+            classify_uta_not_ready(
+                true,
+                true,
+                false,
+                Some("relation \"uta_x.transcript\" does not exist")
+            ),
+            SchemaMissing
+        ));
+        assert!(matches!(
+            classify_uta_not_ready(true, true, false, Some("schema \"uta_x\" does not exist")),
+            SchemaMissing
+        ));
+        // running, postgres up, schema probe came back negative via `to_regclass`
+        // (stdout `f`, no stderr) -> SchemaMissing, not Unknown. This is the
+        // normal "dump still loading" case the production probe actually emits.
+        assert!(matches!(
+            classify_uta_not_ready(true, true, false, None),
+            SchemaMissing
+        ));
+        // unmatched failure while running -> Unknown (SchemaMissing would be wrong)
+        assert!(matches!(
+            classify_uta_not_ready(true, true, false, Some("weird error")),
+            Unknown
+        ));
+    }
+
+    #[test]
+    fn validates_gzip_dump_magic() {
+        assert!(validate_dump_is_gzip(&[0x1f, 0x8b, 0x08, 0x00]).is_ok());
+        let html = validate_dump_is_gzip(b"<!DOCTYPE html><html>verify</html>");
+        assert!(html.is_err());
+        assert!(html.unwrap_err().contains("verification page"));
+        assert!(validate_dump_is_gzip(b"").is_err());
+        assert!(validate_dump_is_gzip(b"\x1f").is_err()); // too short
+    }
+
+    #[test]
+    fn uta_schema_defaults_to_image_tag() {
+        let cfg = BiocommonsLocalConfig {
+            uta_container_name: "ferro-uta".into(),
+            uta_image_tag: "uta_20210129b".into(),
+            uta_port: 5432,
+            seqrepo_dir: std::path::PathBuf::from("/tmp/seqrepo"),
+            seqrepo_instance: "2021-01-29".into(),
+            uta_ready_timeout_secs: 300,
+        };
+        assert_eq!(cfg.uta_schema(), "uta_20210129b");
     }
 }

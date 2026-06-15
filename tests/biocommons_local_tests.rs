@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use ferro_hgvs::benchmark::{
-    check_docker_available, check_seqrepo, check_uta_connection, check_uta_local,
+    check_seqrepo, check_uta_connection, check_uta_local, docker_is_available,
     has_biocommons_normalizer, load_biocommons_settings, normalize_biocommons_single,
     write_biocommons_settings, BiocommonsLocalConfig, BiocommonsSettings,
 };
@@ -17,16 +17,15 @@ use ferro_hgvs::benchmark::{
 #[test]
 #[ignore = "Requires Docker installed"]
 fn test_docker_available() {
-    let available = check_docker_available();
-    assert!(available, "Docker should be available");
+    assert!(docker_is_available(), "Docker should be available");
 }
 
 /// Test local UTA database connection.
 #[test]
 #[ignore = "Requires local UTA database running"]
 fn test_local_uta_connection() {
-    // Default UTA port
-    let connected = check_uta_local(5432);
+    // Default UTA port and schema
+    let connected = check_uta_local(5432, "uta_20210129b");
     assert!(connected, "Should connect to local UTA at port 5432");
 }
 
@@ -101,7 +100,10 @@ fn test_local_biocommons_normalization() {
         .unwrap_or_else(|_| PathBuf::from("/usr/local/share/seqrepo/2021-01-29"));
 
     // Verify setup is available
-    assert!(check_uta_local(5432), "UTA must be running locally");
+    assert!(
+        check_uta_local(5432, "uta_20210129b"),
+        "UTA must be running locally"
+    );
     assert!(check_seqrepo(&seqrepo_dir), "SeqRepo must be available");
 
     // Test normalization of a simple variant
@@ -175,6 +177,7 @@ fn test_biocommons_local_config_defaults() {
         uta_port: 5432,
         seqrepo_dir: PathBuf::from("/path/to/seqrepo"),
         seqrepo_instance: "2021-01-29".to_string(),
+        ..Default::default()
     };
 
     assert_eq!(config.uta_container_name, "ferro-uta");
