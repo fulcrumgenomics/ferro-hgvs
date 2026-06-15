@@ -1483,6 +1483,16 @@ class VariantProjection:
         ...
 
     @property
+    def r_name(self) -> str | None:
+        """The predicted r. (RNA) consequence as an HGVS string, or None.
+
+        CDS-relative numbering (matches c.); None when not representable as a
+        concrete exonic RNA edit (no transcript sequence, non-c./n. input, or an
+        unresolved payload).
+        """
+        ...
+
+    @property
     def transcript_id(self) -> str:
         """The transcript accession (e.g., "NM_000088.3")."""
         ...

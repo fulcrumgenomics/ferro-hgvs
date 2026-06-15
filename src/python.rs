@@ -706,6 +706,12 @@ impl PyVariantProjection {
         self.inner.protein.as_ref().map(|v| v.to_string())
     }
 
+    /// The predicted r. variant as an HGVS string, or `None`.
+    #[getter]
+    fn r_name(&self) -> Option<String> {
+        self.inner.rna.as_ref().map(|v| v.to_string())
+    }
+
     #[getter]
     fn transcript_id(&self) -> String {
         self.inner.transcript_id.clone()
@@ -733,11 +739,12 @@ impl PyVariantProjection {
 
     fn __repr__(&self) -> String {
         format!(
-            "VariantProjection(g={:?}, c={:?}, n={:?}, p={:?}, transcript={:?})",
+            "VariantProjection(g={:?}, c={:?}, n={:?}, p={:?}, r={:?}, transcript={:?})",
             self.g_name(),
             self.c_name(),
             self.n_name(),
             self.p_name(),
+            self.r_name(),
             self.transcript_id()
         )
     }
