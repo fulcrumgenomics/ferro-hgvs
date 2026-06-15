@@ -1212,13 +1212,50 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // A minus-strand placement reverses coordinate order.
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
         let interval = GenomeInterval::new(GenomePos::new(lo), GenomePos::new(hi));
+        // Resolve any range-reference insertion (`ins<start>_<end>`, `delins…`)
+        // against the *parent* (`NG_`/`LRG_`) sequence in the parent frame BEFORE
+        // de-anchoring, so the de-anchored variant carries a frame-independent
+        // literal. The range-ref endpoints are parent-frame coordinates; left
+        // unresolved they would be fetched against the `NC_` accession stamped
+        // below and come back as `insNNN…` (#652). Best-effort: if the parent
+        // sequence can't be fetched, keep the original edit (no regression).
+        let parent_resolved_edit = gv.loc_edit.edit.clone().map(|inner| {
+            match crate::normalize::rules::canonicalize_insertion_expand(
+                &inner,
+                // The bare parent accession (strips any genomic_context), matching
+                // the accessor `reanchor_genome_to_parent` uses — `full()` would
+                // prepend a `CTX(…)` wrapper and fail the provider name lookup.
+                &gv.accession.transcript_accession(),
+                crate::normalize::rules::InsCoordKind::Direct,
+                &self.provider,
+            ) {
+                // Range reference resolved to a literal — carry the frame-independent bases.
+                Ok(Some(resolved)) => resolved,
+                // Legitimate no-op: a plain literal / count / non-range payload returns
+                // `Ok(None)` (src/normalize/rules.rs); keep the original edit.
+                Ok(None) => inner,
+                // A genuine resolution failure (out-of-bounds range, non-IUPAC base,
+                // provider error). Do NOT silently re-emit the unresolved
+                // `ins<start>_<end>` as `insNNN…` (#652) without a trace: surface it so
+                // an unresolvable range reference is at least visible, even though the
+                // `(HgvsVariant, Option<Accession>)` return type has no `Result` channel
+                // to decline through.
+                Err(e) => {
+                    log::warn!(
+                        "deanchor_genomic_parent_input: failed to resolve range-reference \
+                         insertion against parent {}: {} — keeping the unresolved edit",
+                        gv.accession.transcript_accession(),
+                        e,
+                    );
+                    inner
+                }
+            }
+        });
         let edit = if placement.strand == crate::reference::Strand::Minus {
-            gv.loc_edit
-                .edit
-                .clone()
+            parent_resolved_edit
                 .map(|inner| transform_edit_for_strand(&inner, crate::reference::Strand::Minus))
         } else {
-            gv.loc_edit.edit.clone()
+            parent_resolved_edit
         };
         let parent = gv.accession.clone();
         let nc_variant = HgvsVariant::Genome(GenomeVariant {
@@ -2911,6 +2948,129 @@ mod tests {
             2,
             "expected both transcripts overlapping the NG_ position, got {:?}",
             results.iter().map(|p| &p.transcript_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// #652: a range-reference insertion (`ins<start>_<end>`) on an `NG_`
+    /// genomic input must resolve to the literal parent bases — the range-ref
+    /// endpoints are in the `NG_` parent frame and, if left unresolved through
+    /// the de-anchor into the `NC_` frame, would be fetched against the `NC_`
+    /// accession and come back as `insNNN…`.
+    #[test]
+    fn deanchor_resolves_ng_range_reference_insertion_to_literal() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 30000,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        // NG_900.1 parent sequence: bases 4300..=4320 (1-based) are the insert.
+        let insert = "GTCCTGTGCTCATTATCTGGC"; // 21 bases
+        let mut seq = vec![b'A'; 4299];
+        seq.extend_from_slice(insert.as_bytes());
+        provider.add_genomic_sequence("NG_900.1", String::from_utf8(seq).unwrap());
+
+        let vp = VariantProjector::new(Projector::new(CdotMapper::new()), provider);
+        let variant = crate::parse_hgvs("NG_900.1:g.5207_5208ins4300_4320").unwrap();
+        let (deanchored, parent) = vp.deanchor_genomic_parent_input(&variant);
+
+        assert_eq!(
+            parent.as_ref().map(|a| a.full()),
+            Some("NG_900.1".to_string())
+        );
+        let rendered = deanchored.to_string();
+        assert!(
+            rendered.contains(&format!("ins{insert}")),
+            "expected the literal parent bases, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("insN"),
+            "must not emit insNNN (unresolved range reference): {rendered}"
+        );
+    }
+
+    /// #652, minus-strand placement: the range reference is resolved to the
+    /// literal parent bases in the parent frame, then the existing strand
+    /// transform reverse-complements that literal for the `NC_` frame (the same
+    /// path a literal `insACGT` already takes), never `insNNN`.
+    #[test]
+    fn deanchor_resolves_ng_range_reference_insertion_minus_strand() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 30000,
+                strand: crate::reference::Strand::Minus,
+            },
+        );
+        let insert = "GTCCTGTGCTCATTATCTGGC"; // parent bases 4300..=4320
+        let revcomp = "GCCAGATAATGAGCACAGGAC"; // reverse-complement of `insert`
+        let mut seq = vec![b'A'; 4299];
+        seq.extend_from_slice(insert.as_bytes());
+        provider.add_genomic_sequence("NG_900.1", String::from_utf8(seq).unwrap());
+
+        let vp = VariantProjector::new(Projector::new(CdotMapper::new()), provider);
+        let variant = crate::parse_hgvs("NG_900.1:g.5207_5208ins4300_4320").unwrap();
+        let (deanchored, _) = vp.deanchor_genomic_parent_input(&variant);
+        let rendered = deanchored.to_string();
+        assert!(
+            rendered.contains(&format!("ins{revcomp}")),
+            "expected the reverse-complemented literal, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("insN"),
+            "must not emit insNNN: {rendered}"
+        );
+    }
+
+    /// #652, `delins` range reference: `canonicalize_insertion_expand` and the
+    /// production doc-comment explicitly handle `delins<start>_<end>`, so a
+    /// `delins`-shaped range-ref input must also resolve to the literal parent
+    /// bases (never `insNNN…`), exercising the named-but-otherwise-untested edit
+    /// kind alongside the plain `Insertion` cases above.
+    #[test]
+    fn deanchor_resolves_ng_range_reference_delins_to_literal() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 30000,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        // NG_900.1 parent sequence: bases 4300..=4320 (1-based) are the insert.
+        let insert = "GTCCTGTGCTCATTATCTGGC"; // 21 bases
+        let mut seq = vec![b'A'; 4299];
+        seq.extend_from_slice(insert.as_bytes());
+        provider.add_genomic_sequence("NG_900.1", String::from_utf8(seq).unwrap());
+
+        let vp = VariantProjector::new(Projector::new(CdotMapper::new()), provider);
+        let variant = crate::parse_hgvs("NG_900.1:g.5207_5208delins4300_4320").unwrap();
+        let (deanchored, parent) = vp.deanchor_genomic_parent_input(&variant);
+
+        assert_eq!(
+            parent.as_ref().map(|a| a.full()),
+            Some("NG_900.1".to_string())
+        );
+        let rendered = deanchored.to_string();
+        assert!(
+            rendered.contains(&format!("delins{insert}")),
+            "expected the literal parent bases, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("insN"),
+            "must not emit insNNN (unresolved range reference): {rendered}"
         );
     }
 
