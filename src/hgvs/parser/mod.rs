@@ -52,12 +52,38 @@ use crate::hgvs::HgvsVariant;
 /// println!("Parsed: {}", variant);
 /// ```
 pub fn parse_hgvs(input: &str) -> Result<HgvsVariant, FerroError> {
-    let trimmed = input.trim();
+    let trimmed = trim_hgvs(input);
     match fast_path::try_fast_path(trimmed) {
         fast_path::FastPathResult::Success(variant) => Ok(variant),
         // Fall back on the original (untrimmed) input so the generic parser
         // sees exactly what it did before the fast path existed.
         fast_path::FastPathResult::Fallback => variant::parse_variant(input),
+    }
+}
+
+/// Trim surrounding whitespace, skipping the work when there is none.
+///
+/// `str::trim` is Unicode-aware, so even a string with no surrounding whitespace
+/// pays for boundary `char` decoding + the Unicode-whitespace test on every call.
+/// Virtually all HGVS strings begin and end with an ASCII non-whitespace byte
+/// (`NM…`, `…A>G`, `…del`, `…=`, `…)`), so when both boundary bytes are ASCII and
+/// non-whitespace the input cannot have surrounding whitespace (an ASCII byte is
+/// never part of a multi-byte UTF-8 whitespace char) and is returned untouched.
+/// Any ASCII-whitespace or non-ASCII (`>= 0x80`) boundary defers to `str::trim`,
+/// so Unicode-whitespace handling is byte-for-byte unchanged.
+#[inline]
+fn trim_hgvs(input: &str) -> &str {
+    let bytes = input.as_bytes();
+    match (bytes.first(), bytes.last()) {
+        (Some(&first), Some(&last))
+            if first < 0x80
+                && last < 0x80
+                && !first.is_ascii_whitespace()
+                && !last.is_ascii_whitespace() =>
+        {
+            input
+        }
+        _ => input.trim(),
     }
 }
 
@@ -349,6 +375,30 @@ mod tests {
     fn test_parse_simple_substitution() {
         let result = parse_hgvs("NC_000001.11:g.12345A>G");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_trim_hgvs_matches_str_trim() {
+        // `trim_hgvs` must be byte-for-byte identical to `str::trim` on every
+        // input, including ASCII and multi-byte Unicode whitespace at either end.
+        let cases = [
+            "NM_000088.3:c.459A>G",                 // no whitespace (the fast path)
+            "  NM_000088.3:c.459A>G  ",             // ASCII spaces
+            "\tNM_000088.3:c.459A>G\n",             // ASCII tab / newline
+            "\u{00A0}NM_000088.3:c.459A>G",         // leading non-breaking space (U+00A0)
+            "NM_000088.3:c.459A>G\u{3000}",         // trailing ideographic space (U+3000)
+            "\u{2028}NM_000088.3:c.459A>G\u{2029}", // line/paragraph separators
+            "  ",                                   // all whitespace
+            "",                                     // empty
+            "x",                                    // single non-ws byte
+        ];
+        for input in cases {
+            assert_eq!(
+                trim_hgvs(input),
+                input.trim(),
+                "trim mismatch for {input:?}"
+            );
+        }
     }
 
     #[test]
