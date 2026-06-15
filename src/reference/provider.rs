@@ -63,6 +63,25 @@ impl GenomicPlacement {
             Strand::Unknown => None,
         }
     }
+
+    /// Map a 1-based parent-frame coordinate back onto its chromosome (`NC_`)
+    /// coordinate — the inverse of [`Self::nc_to_parent`] (#480). Used to take an
+    /// `NG_`/`LRG_`-relative genomic *input* position into the chromosome frame so
+    /// cdot can enumerate the transcripts overlapping it.
+    ///
+    /// Returns `None` when `parent_pos` lies outside the placed span (parent
+    /// coordinates `parent_start ..= parent_start + (nc_end - nc_start)`).
+    pub fn parent_to_nc(&self, parent_pos: u64) -> Option<u64> {
+        let parent_end = self.parent_start + (self.nc_end - self.nc_start);
+        if parent_pos < self.parent_start || parent_pos > parent_end {
+            return None;
+        }
+        let offset = parent_pos - self.parent_start;
+        match self.strand {
+            Strand::Plus | Strand::Unknown => Some(self.nc_start + offset),
+            Strand::Minus => Some(self.nc_end - offset),
+        }
+    }
 }
 
 /// Trait for providing reference sequence data
@@ -479,4 +498,55 @@ fn _assert_provider_send_sync() {
     // Concrete types used by create_reference_provider in benchmark builds.
     assert_send_sync::<crate::reference::multi_fasta::MultiFastaProvider>();
     assert_send_sync::<crate::reference::mock::MockProvider>();
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    fn placement(strand: Strand) -> GenomicPlacement {
+        // Parent base 1 (plus) or the high NC base (minus) anchors at nc 1000;
+        // a 9-base span 1000..=1008, so parent runs 1..=9.
+        GenomicPlacement {
+            nc: Accession::new("NC", "000001", Some(11)),
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end: 1008,
+            strand,
+        }
+    }
+
+    #[test]
+    fn parent_to_nc_plus_strand_is_inverse_of_nc_to_parent() {
+        let p = placement(Strand::Plus);
+        // Parent base 1 sits at nc 1000; parent base 9 at nc 1008.
+        assert_eq!(p.parent_to_nc(1), Some(1000));
+        assert_eq!(p.parent_to_nc(4), Some(1003));
+        assert_eq!(p.parent_to_nc(9), Some(1008));
+        // Round-trips with nc_to_parent across the whole span.
+        for nc in p.nc_start..=p.nc_end {
+            let parent = p.nc_to_parent(nc).expect("in span");
+            assert_eq!(p.parent_to_nc(parent), Some(nc), "round-trip at nc {nc}");
+        }
+    }
+
+    #[test]
+    fn parent_to_nc_minus_strand_reverses_order() {
+        let p = placement(Strand::Minus);
+        // Minus: parent base 1 anchors at the HIGH nc end (1008).
+        assert_eq!(p.parent_to_nc(1), Some(1008));
+        assert_eq!(p.parent_to_nc(9), Some(1000));
+        for nc in p.nc_start..=p.nc_end {
+            let parent = p.nc_to_parent(nc).expect("in span");
+            assert_eq!(p.parent_to_nc(parent), Some(nc), "round-trip at nc {nc}");
+        }
+    }
+
+    #[test]
+    fn parent_to_nc_out_of_span_is_none() {
+        let p = placement(Strand::Plus);
+        // Parent span is 1..=9; 0 and 10 fall outside.
+        assert_eq!(p.parent_to_nc(0), None);
+        assert_eq!(p.parent_to_nc(10), None);
+    }
 }
