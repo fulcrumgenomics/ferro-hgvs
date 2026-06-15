@@ -123,6 +123,26 @@ impl PerfResults {
             }
         };
 
+        // The benchmark harness only shards the single-threaded competitor
+        // libraries for normalize, not parse: `measure_{mutalyzer,biocommons,
+        // hgvs_rs}_parse` ignore the worker count and run one instance, so their
+        // 8-worker parse run is the same single-threaded measurement as the
+        // 1-worker run. Repeating that number in the "@8 workers" column reads as
+        // "ran 8 workers and failed to scale", which is false — they were never
+        // run 8-wide. Label the cell instead. Only ferro parallelizes parse
+        // (rayon), so only ferro keeps a number here. (If competitor parse is
+        // ever sharded, drop this special case.)
+        let w8_cell = |tool: &str| -> String {
+            if op == "parse" && tool != "ferro" {
+                match w8.tools.get(tool) {
+                    Some(m) if !m.not_run => "single-threaded".to_string(),
+                    _ => "—".to_string(),
+                }
+            } else {
+                cell(w8, tool)
+            }
+        };
+
         let ferro8 = w8.tools.get("ferro").filter(|m| !m.not_run);
 
         let mut out = String::new();
@@ -149,7 +169,7 @@ impl PerfResults {
                 "| {} | {} | {} | {} |\n",
                 tool,
                 cell(w1, tool),
-                cell(w8, tool),
+                w8_cell(tool),
                 speedup
             ));
         }
@@ -300,10 +320,13 @@ mod tests {
         assert!(out.contains(
             "| Tool | Throughput @ 1 worker | Throughput @ 8 workers | ferro speedup @ 8w |"
         ));
-        // ferro is the baseline row (no speedup vs itself).
+        // ferro is the baseline row (no speedup vs itself); ferro parallelizes
+        // parse, so its @8w cell keeps the real number (never relabeled).
         assert!(out.contains("| ferro | 1.2M/s | 8.0M/s | — |"));
-        // mutalyzer: 8000000/150 -> ~53,000x.
-        assert!(out.contains("| mutalyzer | 21/s | 150/s | 53,000× |"));
+        // mutalyzer parse is single-threaded (harness ignores workers for parse),
+        // so its @8w cell is labeled, not a repeated number; speedup is still
+        // ferro@8w / mutalyzer (8000000/150 -> ~53,000x).
+        assert!(out.contains("| mutalyzer | 21/s | single-threaded | 53,000× |"));
         // Tools absent from the JSON are omitted (only ferro+mutalyzer in SAMPLE).
         assert!(!out.contains("biocommons"));
     }
@@ -317,6 +340,43 @@ mod tests {
         let r = PerfResults::from_json_str(&json).unwrap();
         let out = r.render_cross_tool("parse").unwrap();
         assert!(out.contains("| mutalyzer | 21/s | — | — |")); // W=1 ran, W=8 not_run
+    }
+
+    #[test]
+    fn normalize_competitor_8w_keeps_number() {
+        // For normalize the harness DOES shard the competitors, so their @8w
+        // cell must show the measured parallel number — the "single-threaded"
+        // label is parse-only.
+        let json = r#"{
+          "schema_version": 1,
+          "provenance": {
+            "generated": "2026-06-14T00:00:00Z", "corpus_id": "clinvar_patterns",
+            "corpus_sha": "abc123", "machine": "m", "os": "darwin-arm64",
+            "tool_versions": {"ferro":"0.6.0","mutalyzer":"3.1.1","biocommons":"fa02ca5","hgvs-rs":"0.20.2"}
+          },
+          "operations": {
+            "normalize": {
+              "sample_size_slow": 50, "ferro_full_population_n": 1000000,
+              "ferro_full_population_pps": 74000.0,
+              "by_workers": {
+                "1": {"tools": {
+                  "ferro": {"median_pps": 12000.0, "min_pps": 11000.0, "max_pps": 13000.0, "reps": 5, "success_rate": 1.0},
+                  "hgvs-rs": {"median_pps": 162.0, "min_pps": 150.0, "max_pps": 170.0, "reps": 5, "success_rate": 0.66}
+                }},
+                "8": {"tools": {
+                  "ferro": {"median_pps": 88000.0, "min_pps": 80000.0, "max_pps": 90000.0, "reps": 5, "success_rate": 1.0},
+                  "hgvs-rs": {"median_pps": 934.0, "min_pps": 900.0, "max_pps": 960.0, "reps": 5, "success_rate": 0.66}
+                }}
+              },
+              "ferro_scaling": {}
+            }
+          }
+        }"#;
+        let r = PerfResults::from_json_str(json).unwrap();
+        let out = r.render_cross_tool("normalize").unwrap();
+        // hgvs-rs normalize @8w is a real (harness-sharded) number, not a label.
+        assert!(out.contains("| hgvs-rs | 162/s | 934/s |"));
+        assert!(!out.contains("single-threaded"));
     }
 
     #[test]

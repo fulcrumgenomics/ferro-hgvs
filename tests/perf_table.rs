@@ -22,9 +22,9 @@ fn parse_cross_tool_renders_expected() {
 | Tool | Throughput @ 1 worker | Throughput @ 8 workers | ferro speedup @ 8w |
 |------|----------------------:|-----------------------:|-------------------:|
 | ferro | 1.2M/s | 8.0M/s | — |
-| mutalyzer | 21/s | 150/s | 53,000× |
-| biocommons | 20/s | 140/s | 57,000× |
-| hgvs-rs | 2/s | 14/s | 570,000× |
+| mutalyzer | 21/s | single-threaded | 53,000× |
+| biocommons | 20/s | single-threaded | 57,000× |
+| hgvs-rs | 2/s | single-threaded | 570,000× |
 ";
     assert_eq!(out, expected);
 }
