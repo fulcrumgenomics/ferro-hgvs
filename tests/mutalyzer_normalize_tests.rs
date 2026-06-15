@@ -34,8 +34,8 @@
 //!     `BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock_normalized)'`
 
 use ferro_hgvs::conformance::mutalyzer::{
-    AcceptedDivergence, Axis, Case, Fixture, Improvement, KnownBug, Policy, SpecCitation,
-    SpecSection,
+    AcceptedDivergence, Axis, Case, Fixture, Improvement, KnownBug, Policy,
+    ReferenceUnavailableReason, SpecCitation, SpecSection,
 };
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::error_handling::{ErrorOverride, ErrorType};
@@ -240,6 +240,12 @@ struct AxisTally {
     /// summary line as `improvement` and NOT written to
     /// `baseline-failures/<axis>.txt`. Stores `(input, "#<issue>")`.
     improvement: Vec<(String, String)>,
+    /// Mismatches gated by a `reference_unavailable` annotation whose `axis`
+    /// matches this tally's axis: the prepared manifest lacks the reference, so
+    /// ferro no-ops — a reference-availability artifact, NOT a ferro defect.
+    /// Tracked-but-non-failing; reported separately from `known_bug`. Stores
+    /// `(input, "<reason> #<issue>")`.
+    reference_unavailable: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
     /// Count of rows for which ferro produced an **empty / degenerate
@@ -258,6 +264,7 @@ impl AxisTally {
             spec_overridden: Vec::new(),
             known_bug: Vec::new(),
             improvement: Vec::new(),
+            reference_unavailable: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
             empty_got: 0,
@@ -277,15 +284,18 @@ impl AxisTally {
     ///    matching this tally's axis.
     /// 4. `improvement` (xfail) when the case carries an `improvement`
     ///    matching this tally's axis.
-    /// 5. `spec_overridden` when the case carries a `spec_citation`
+    /// 5. `reference_unavailable` when the case carries a `reference_unavailable`
+    ///    annotation matching this tally's axis (the prepared manifest lacks the
+    ///    reference, so ferro no-ops — not a ferro defect).
+    /// 6. `spec_overridden` when the case carries a `spec_citation`
     ///    matching this tally's axis.
-    /// 6. FAIL otherwise.
+    /// 7. FAIL otherwise.
     ///
-    /// `accepted_divergence`, `known_bug`, `improvement`, and `spec_citation`
-    /// only catch a *string mismatch* from a successful run. An `Err` means ferro failed
-    /// to produce any result (panic, parse error, normalize failure) —
-    /// those are real bugs and must surface as FAIL even when an
-    /// annotation is present.
+    /// `accepted_divergence`, `known_bug`, `improvement`, `reference_unavailable`,
+    /// and `spec_citation` only catch a *string mismatch* from a successful run.
+    /// An `Err` means ferro failed to produce any result (panic, parse error,
+    /// normalize failure) — those are real bugs and must surface as FAIL even
+    /// when an annotation is present.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
         // Output-quality signal (#651): the axis runner stamps
         // `EMPTY_PROJECTION_SENTINEL` on its `Err` when ferro produced nothing
@@ -340,6 +350,18 @@ impl AxisTally {
                     return;
                 }
             }
+            if let Some(ru) = &case.reference_unavailable {
+                if ru.axis == self.axis {
+                    self.fail.push((
+                        case.input.clone(),
+                        format!(
+                            "XPASS: reference_unavailable ({}) #{} now matches mutalyzer; the reference became available — remove the annotation and demote the row",
+                            ru.reason, ru.tracking_issue
+                        ),
+                    ));
+                    return;
+                }
+            }
             self.pass += 1;
             return;
         }
@@ -362,6 +384,15 @@ impl AxisTally {
                 if imp.axis == self.axis {
                     self.improvement
                         .push((case.input.clone(), format!("#{}", imp.tracking_issue)));
+                    return;
+                }
+            }
+            if let Some(ru) = &case.reference_unavailable {
+                if ru.axis == self.axis {
+                    self.reference_unavailable.push((
+                        case.input.clone(),
+                        format!("{} #{}", ru.reason, ru.tracking_issue),
+                    ));
                     return;
                 }
             }
@@ -392,12 +423,13 @@ impl AxisTally {
     /// format used by both `finish()` and unit tests.
     fn summary_line(&self, report_path: &Path) -> String {
         format!(
-            "{}: {} pass / {} divergence_accepted / {} known_bug / {} improvement / {} spec_overridden / {} FAIL / {} empty / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} divergence_accepted / {} known_bug / {} improvement / {} reference_unavailable / {} spec_overridden / {} FAIL / {} empty / {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
             self.divergence_accepted.len(),
             self.known_bug.len(),
             self.improvement.len(),
+            self.reference_unavailable.len(),
             self.spec_overridden.len(),
             self.fail.len(),
             self.empty_got,
@@ -463,6 +495,19 @@ impl AxisTally {
             eprintln!(
                 "  ... {} more improvement",
                 self.improvement.len() - FAIL_PRINT_LIMIT,
+            );
+        }
+
+        for (input, reason) in self.reference_unavailable.iter().take(FAIL_PRINT_LIMIT) {
+            eprintln!(
+                "  REFERENCE_UNAVAILABLE  [{}] {} | {}",
+                self.axis, input, reason
+            );
+        }
+        if self.reference_unavailable.len() > FAIL_PRINT_LIMIT {
+            eprintln!(
+                "  ... {} more reference_unavailable",
+                self.reference_unavailable.len() - FAIL_PRINT_LIMIT,
             );
         }
 
@@ -1301,6 +1346,7 @@ mod comparator_tests {
             accepted_divergence,
             known_bug: None,
             improvement: None,
+            reference_unavailable: None,
             spec_citation,
         }
     }
@@ -1591,6 +1637,172 @@ mod comparator_tests {
         assert!(t.fail[0].1.contains("expected=\"X\" got=\"Y\""));
     }
 
+    // (7c) `reference_unavailable` deserializes including its closed `reason`
+    // enum and optional `note`.
+    #[test]
+    fn case_parses_with_reference_unavailable() {
+        let case = parse_case(
+            r#"{
+                "input": "NM_003002.2:c.273del",
+                "normalized": "NM_003002.2:c.274del",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "accession-version-absent",
+                    "tracking_issue": 672,
+                    "note": "NM_003002.2 absent from the prepared manifest; ferro no-ops"
+                }
+            }"#,
+        );
+        let ru = case
+            .reference_unavailable
+            .as_ref()
+            .expect("reference_unavailable present");
+        assert_eq!(ru.axis, Axis::Normalized);
+        assert_eq!(
+            ru.reason,
+            ReferenceUnavailableReason::AccessionVersionAbsent
+        );
+        assert_eq!(ru.tracking_issue, 672);
+        assert!(ru.note.as_deref().unwrap().contains("no-ops"));
+    }
+
+    // (7d) A typo'd `reason` is rejected at deserialization — the closed enum
+    // turns an ad-hoc string into a hard parse error (mirrors the axis/policy/
+    // section typo guards, #397 item 2).
+    #[test]
+    fn case_reference_unavailable_reason_typo_rejected_at_deserialization() {
+        let result: Result<Case, _> = serde_json::from_str(
+            r#"{
+                "input": "x",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "version-missing",
+                    "tracking_issue": 672
+                }
+            }"#,
+        );
+        assert!(
+            result.is_err(),
+            "expected unknown reason (`version-missing`) to be rejected; got {:?}",
+            result.ok(),
+        );
+    }
+
+    // (7e) A no-op mismatch on the annotated axis routes to the
+    // `reference_unavailable` bucket — NOT `fail` and NOT `known_bug` (ferro
+    // is not wrong; the oracle simply lacks the reference). ferro echoes the
+    // input (`Ok`), so the bucket is reached via the `actual.is_ok()` path.
+    #[test]
+    fn tally_reference_unavailable_routes_to_its_bucket() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = parse_case(
+            r#"{
+                "input": "NM_003002.2:c.273del",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "accession-version-absent",
+                    "tracking_issue": 672
+                }
+            }"#,
+        );
+        // expected = mutalyzer's normalized output; actual = ferro echoing input.
+        t.record(
+            &case,
+            "NM_003002.2:c.274del",
+            Ok("NM_003002.2:c.273del".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert!(t.known_bug.is_empty(), "must not land in known_bug");
+        assert!(t.fail.is_empty(), "must not land in fail");
+        assert_eq!(
+            t.reference_unavailable,
+            vec![(
+                "NM_003002.2:c.273del".to_string(),
+                "accession-version-absent #672".to_string()
+            )]
+        );
+    }
+
+    // (7f) XPASS guard: if a `reference_unavailable` row now MATCHES, the
+    // reference became available (the provisioning landed) — fail loudly so the
+    // annotation is removed and the row demoted.
+    #[test]
+    fn tally_reference_unavailable_xpass_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = parse_case(
+            r#"{
+                "input": "NM_003002.2:c.273del",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "accession-version-absent",
+                    "tracking_issue": 672
+                }
+            }"#,
+        );
+        t.record(
+            &case,
+            "NM_003002.2:c.274del",
+            Ok("NM_003002.2:c.274del".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert!(t.reference_unavailable.is_empty());
+        assert_eq!(t.fail.len(), 1);
+        assert!(
+            t.fail[0].1.contains("XPASS: reference_unavailable"),
+            "diagnostic must flag the stale annotation: {}",
+            t.fail[0].1
+        );
+    }
+
+    // (7g) Axis scoping: a `reference_unavailable` whose axis does NOT match the
+    // tally's axis is still a FAIL — dispositions are strictly per-axis.
+    #[test]
+    fn tally_reference_unavailable_axis_mismatch_is_fail() {
+        let mut t = AxisTally::new(Axis::Genomic);
+        let case = parse_case(
+            r#"{
+                "input": "in",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "ensembl-absent-from-refseq-manifest",
+                    "tracking_issue": 671
+                }
+            }"#,
+        );
+        t.record(&case, "X", Ok("Y".to_string()));
+        assert!(t.reference_unavailable.is_empty());
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7h) An `Err` result with `reference_unavailable` on the matching axis is
+    // STILL FAIL — the annotation accepts a no-op string difference, not a
+    // catastrophic failure (panic / parse / normalize Err). The bucket is
+    // reached only inside the `actual.is_ok()` block, so an `Err` must fall
+    // through to `fail`; this pins that contract (mirrors the sibling
+    // `tally_err_with_{accepted_divergence,known_bug,improvement,spec_citation}_still_fails`).
+    #[test]
+    fn tally_err_with_reference_unavailable_still_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = parse_case(
+            r#"{
+                "input": "in",
+                "reference_unavailable": {
+                    "axis": "normalized",
+                    "reason": "accession-version-absent",
+                    "tracking_issue": 672
+                }
+            }"#,
+        );
+        t.record(&case, "X", Err("normalize: panic boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.reference_unavailable.is_empty(),
+            "Err must not silence into the reference_unavailable bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.fail[0].1.contains("err=normalize: panic boom"));
+    }
+
     // (8) `spec_citation` routes a string mismatch on the cited axis into
     // the `spec_overridden` bucket — non-failing, separately tracked.
     #[test]
@@ -1665,8 +1877,8 @@ mod comparator_tests {
     #[test]
     fn tally_finish_summary_string_includes_new_bucket() {
         let mut t = AxisTally::new(Axis::Normalized);
-        // 1 pass, 1 divergence_accepted, 1 spec_overridden, 1 fail,
-        // 0 skipped.
+        // 1 pass, 1 divergence_accepted, 1 reference_unavailable,
+        // 1 spec_overridden, 1 fail, 0 skipped.
         t.record(&make_case("a", None, None), "X", Ok("X".to_string()));
         t.record(
             &make_case(
@@ -1696,13 +1908,21 @@ mod comparator_tests {
             "X",
             Ok("Y".to_string()),
         );
+        t.record(
+            &parse_case(
+                r#"{"input":"e","reference_unavailable":{"axis":"normalized",
+                   "reason":"accession-version-absent","tracking_issue":672}}"#,
+            ),
+            "X",
+            Ok("e".to_string()),
+        );
         t.record(&make_case("c", None, None), "X", Ok("Y".to_string()));
 
         let path = PathBuf::from("/tmp/example.txt");
         let line = t.summary_line(&path);
         assert_eq!(
             line,
-            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 0 improvement / 1 spec_overridden / 1 FAIL / 0 empty / 0 skipped \
+            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 0 improvement / 1 reference_unavailable / 1 spec_overridden / 1 FAIL / 0 empty / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
         );
     }
