@@ -207,45 +207,53 @@ mod rkyv_cache {
     /// Materialize owned cdot maps from a validated archive in a single pass.
     /// Returns an error if any transcript carries an out-of-range enum tag.
     pub(super) fn maps_from_archived(a: &ArchivedRkyvSnapshot) -> Result<CdotMaps, FerroError> {
+        // Pre-size each runtime map to the archive's known entry count. The
+        // `ArchivedHashMap` iterators do not report an exact `size_hint`, so a
+        // plain `collect()` under-reserves and rehashes repeatedly while
+        // rebuilding millions of entries; reserving up front removes that.
         let txs = |m: &rkyv::collections::swiss_table::ArchivedHashMap<
             rkyv::string::ArchivedString,
             ArchivedRkyvTx,
         >|
          -> Result<FxHashMap<String, CdotTranscript>, FerroError> {
-            m.iter()
-                .map(|(k, v)| Ok((k.as_str().to_string(), tx_from_archived(v)?)))
-                .collect()
+            let mut out = FxHashMap::with_capacity_and_hasher(m.len(), Default::default());
+            for (k, v) in m.iter() {
+                out.insert(k.as_str().to_string(), tx_from_archived(v)?);
+            }
+            Ok(out)
         };
         let str_map = |m: &rkyv::collections::swiss_table::ArchivedHashMap<
             rkyv::string::ArchivedString,
             rkyv::string::ArchivedString,
         >|
          -> FxHashMap<String, String> {
-            m.iter()
-                .map(|(k, v)| (k.as_str().to_string(), v.as_str().to_string()))
-                .collect()
+            let mut out = FxHashMap::with_capacity_and_hasher(m.len(), Default::default());
+            for (k, v) in m.iter() {
+                out.insert(k.as_str().to_string(), v.as_str().to_string());
+            }
+            out
         };
+        let mut contig_index =
+            FxHashMap::with_capacity_and_hasher(a.contig_index.len(), Default::default());
+        for (k, v) in a.contig_index.iter() {
+            contig_index.insert(
+                k.as_str().to_string(),
+                v.iter().map(|s| s.as_str().to_string()).collect(),
+            );
+        }
+        let mut alt_build_transcripts =
+            FxHashMap::with_capacity_and_hasher(a.alt_build_transcripts.len(), Default::default());
+        for (b, m) in a.alt_build_transcripts.iter() {
+            alt_build_transcripts.insert(b.as_str().to_string(), txs(m)?);
+        }
         Ok(CdotMaps {
             transcripts: txs(&a.transcripts)?,
-            contig_index: a
-                .contig_index
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.as_str().to_string(),
-                        v.iter().map(|s| s.as_str().to_string()).collect(),
-                    )
-                })
-                .collect(),
+            contig_index,
             contig_alias_to_canonical: str_map(&a.contig_alias_to_canonical),
             base_to_versioned: str_map(&a.base_to_versioned),
             lrg_to_refseq: str_map(&a.lrg_to_refseq),
             primary_build: a.primary_build.as_ref().map(|s| s.as_str().to_string()),
-            alt_build_transcripts: a
-                .alt_build_transcripts
-                .iter()
-                .map(|(b, m)| Ok((b.as_str().to_string(), txs(m)?)))
-                .collect::<Result<FxHashMap<_, _>, FerroError>>()?,
+            alt_build_transcripts,
         })
     }
 
