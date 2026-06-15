@@ -1331,6 +1331,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 // Empty allele: no inner member to derive an n. form from.
                 noncoding: None,
                 protein: None,
+                rna: None,
                 transcript_id: transcript_id.to_string(),
                 gene_symbol,
                 is_frameshift: false,
@@ -1410,6 +1411,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             coding,
             noncoding,
             protein,
+            rna: None,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
             is_frameshift,
@@ -1744,11 +1746,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             Err(_) => None,
         };
 
+        let rna = self
+            .cached_get_transcript_for_variant(normalized, transcript_id)
+            .ok()
+            .and_then(|tx| crate::project::rna::predict_rna(normalized, &tx));
+
         Ok(VariantProjection {
             genomic: None,
             coding: Some(normalized.clone()),
             noncoding,
             protein,
+            rna,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
             is_frameshift: frameshift,
@@ -1915,6 +1923,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 coding: None,
                 noncoding: Some(normalized.clone()),
                 protein: None,
+                // No coding form on a non-coding transcript; the RNA prediction
+                // surface (#485) predicts from the c. form, so it's unavailable here.
+                rna: None,
                 transcript_id: transcript_id.to_string(),
                 gene_symbol,
                 is_frameshift: false,
@@ -1961,12 +1972,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         let frameshift = is_frameshift(normalized);
 
+        let rna = crate::project::rna::predict_rna(&coding, &tx);
         Ok(VariantProjection {
             genomic: None,
             coding: Some(coding),
             // The non-coding axis is the input itself.
             noncoding: Some(normalized.clone()),
             protein,
+            rna,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
             is_frameshift: frameshift,
@@ -2527,11 +2540,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 other => Some(other),
             },
         };
+
+        // Predicted RNA consequence (#485): derived best-effort from the c. form
+        // and the transcript sequence; `None` when not representable.
+        let rna = self
+            .cached_get_transcript_for_variant(&cache_variant, transcript_id)
+            .ok()
+            .and_then(|tx| crate::project::rna::predict_rna(&coding, &tx));
+
         Ok(VariantProjection {
             genomic,
             coding: Some(coding),
             noncoding,
             protein,
+            rna,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
             is_frameshift: frameshift,
@@ -5169,6 +5191,7 @@ mod tests {
                 coding: Some(coding),
                 noncoding: None,
                 protein: None,
+                rna: None,
                 transcript_id: "NM_900.1".to_string(),
                 gene_symbol: Some("GENE900".to_string()),
                 is_frameshift: false,

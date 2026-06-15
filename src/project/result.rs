@@ -26,6 +26,10 @@ pub struct VariantProjection {
     /// gives callers a single field that always means "the `n.` form".
     pub noncoding: Option<HgvsVariant>,
     pub protein: Option<HgvsVariant>,
+    /// The predicted RNA consequence `r.(…)` on this transcript, when derivable.
+    /// CDS-relative numbering (matches `c.`); `None` when not representable
+    /// (no transcript sequence, non-c./n. input, or an unresolved payload).
+    pub rna: Option<HgvsVariant>,
     pub transcript_id: String,
     pub gene_symbol: Option<String>,
     pub is_frameshift: bool,
