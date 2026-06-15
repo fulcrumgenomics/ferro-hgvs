@@ -291,6 +291,10 @@ enum Commands {
         /// Output timing information to JSON file
         #[arg(short = 't', long)]
         timing: Option<PathBuf>,
+
+        /// Number of parallel workers (default: 1)
+        #[arg(short = 'j', long, default_value = "1")]
+        workers: usize,
     },
 
     /// Explain an error or warning code
@@ -702,6 +706,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ignore,
             reject,
             timing,
+            workers,
         } => {
             let config = build_error_config(&error_mode, &ignore, &reject);
             run_parse(
@@ -710,6 +715,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output.as_ref(),
                 &format,
                 timing.as_ref(),
+                workers,
                 &config,
             )
         }
@@ -1478,12 +1484,14 @@ fn run_normalize(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_parse(
     variant: Option<&str>,
     input: Option<&PathBuf>,
     output: Option<&PathBuf>,
     format: &str,
     timing: Option<&PathBuf>,
+    workers: usize,
     error_config: &ErrorConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::time::Instant;
@@ -1500,7 +1508,10 @@ fn run_parse(
     let mut total_count = 0usize;
     let start = Instant::now();
 
-    let process = |v: &str, writer: &mut dyn Write| -> Result<(), FerroError> {
+    // Per-line work, factored so it can run serially or in parallel: `out`
+    // receives the success output (the order-critical stdout/file stream) and
+    // `err` receives text-mode warnings. Mirrors `run_normalize`'s `process`.
+    let process = |v: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<(), FerroError> {
         // Preprocess input according to error mode
         let preprocess_result = preprocessor.preprocess(v);
         if !preprocess_result.success {
@@ -1534,7 +1545,7 @@ fn run_parse(
                     })
                     .collect();
                 writeln!(
-                    writer,
+                    out,
                     r#"{{"input": "{}", "parsed": "{}", "status": "ok", "corrections": [{}]}}"#,
                     v,
                     parsed,
@@ -1543,15 +1554,17 @@ fn run_parse(
                 .map_err(|e| FerroError::Io { msg: e.to_string() })?;
             }
             _ => {
-                // Print warnings to stderr if any
+                // Emit warnings to the stderr buffer if any
                 for warning in &preprocess_result.warnings {
-                    eprintln!(
+                    writeln!(
+                        err,
                         "warning[{}]: {}",
                         warning.error_type.code(),
                         warning.message
-                    );
+                    )
+                    .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 }
-                writeln!(writer, "{} -> {}", v, parsed)
+                writeln!(out, "{} -> {}", v, parsed)
                     .map_err(|e| FerroError::Io { msg: e.to_string() })?;
             }
         }
@@ -1559,44 +1572,63 @@ fn run_parse(
     };
 
     if let Some(v) = variant {
+        // Single-variant path: unchanged (no line context, errors via
+        // `output_error`). Warnings go straight to the live stderr.
         total_count += 1;
-        if let Err(e) = process(v, &mut writer) {
+        let mut stderr = io::stderr();
+        if let Err(e) = process(v, &mut writer, &mut stderr) {
             output_error(v, &e, format)?;
             error_count += 1;
         } else {
             success_count += 1;
         }
-    } else if let Some(input_path) = input {
-        let file = std::fs::File::open(input_path)?;
-        let reader = io::BufReader::new(file);
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            let is_first = line_num == 0;
-            if let Some(variant_str) = process_input_line(&line, is_first) {
-                total_count += 1;
-                if let Err(e) = process(variant_str, &mut writer) {
-                    output_error_with_line(variant_str, &e, format, Some(line_num + 1))?;
-                    error_count += 1;
-                } else {
-                    success_count += 1;
-                }
-            }
-        }
     } else {
-        let stdin = io::stdin();
-        for (line_num, line) in stdin.lock().lines().enumerate() {
-            let line = line?;
+        // Batch path (file or stdin): same order-preserving, optionally parallel
+        // driver as `run_normalize`, producing byte-identical output to serial.
+        let format_owned: OutputFormat = format.parse().unwrap_or_default();
+        let item = |line_num: usize, line: &str| -> LineResult {
             let is_first = line_num == 0;
-            if let Some(variant_str) = process_input_line(&line, is_first) {
-                total_count += 1;
-                if let Err(e) = process(variant_str, &mut writer) {
-                    output_error_with_line(variant_str, &e, format, Some(line_num + 1))?;
-                    error_count += 1;
-                } else {
-                    success_count += 1;
+            let Some(variant_str) = process_input_line(line, is_first) else {
+                return LineResult::skipped();
+            };
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let status = match process(variant_str, &mut out, &mut err) {
+                Ok(()) => LineStatus::Ok,
+                Err(e) => {
+                    let _ = cli_output_error_with_context(
+                        &mut err,
+                        variant_str,
+                        &e,
+                        format_owned,
+                        Some(line_num + 1),
+                    );
+                    LineStatus::Err
                 }
+            };
+            LineResult {
+                stdout: out,
+                stderr: err,
+                status,
             }
-        }
+        };
+
+        let (t, s, er) = if let Some(input_path) = input {
+            let file = std::fs::File::open(input_path)?;
+            run_batch(
+                io::BufReader::new(file).lines(),
+                &mut writer,
+                workers,
+                &item,
+            )?
+        } else {
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+            run_batch(reader.lines(), &mut writer, workers, &item)?
+        };
+        total_count += t;
+        success_count += s;
+        error_count += er;
     }
 
     let elapsed = start.elapsed();
@@ -2953,23 +2985,6 @@ fn output_error(input: &str, error: &FerroError, format: &str) -> io::Result<()>
         input,
         error,
         format.parse().unwrap_or_default(),
-    )
-}
-
-fn output_error_with_line(
-    input: &str,
-    error: &FerroError,
-    format: &str,
-    line_number: Option<usize>,
-) -> io::Result<()> {
-    let stderr = io::stderr();
-    let mut handle = stderr.lock();
-    cli_output_error_with_context(
-        &mut handle,
-        input,
-        error,
-        format.parse().unwrap_or_default(),
-        line_number,
     )
 }
 
