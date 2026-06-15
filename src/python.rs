@@ -132,6 +132,19 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.genomic_placement(parent),
         }
     }
+
+    fn genomic_placement_on_build(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+        build: Option<&str>,
+    ) -> Option<crate::reference::GenomicPlacement> {
+        // Forward the build hint to the inner provider so per-build placement
+        // selection survives the PyProvider wrapper, matching the Arc/Box impls.
+        match self {
+            PyProvider::Mock(p) => p.genomic_placement_on_build(parent, build),
+            PyProvider::MultiFasta(p) => p.genomic_placement_on_build(parent, build),
+        }
+    }
 }
 
 impl PyProvider {
