@@ -7,6 +7,7 @@ use super::edit::{NaEdit, ProteinEdit};
 use super::interval::{CdsInterval, GenomeInterval, ProtInterval, RnaInterval, TxInterval};
 use super::uncertainty::Mu;
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 use std::fmt;
 use std::sync::Arc;
 
@@ -77,15 +78,21 @@ mod interned {
 
 /// Accession number with optional version
 ///
-/// Uses `Arc<str>` internally for cheap cloning - accession strings are frequently
-/// cloned during parsing and normalization, and `Arc<str>` reduces this to a
-/// simple reference count increment.
+/// The `prefix`, `assembly`, and `chromosome` fields use `Arc<str>` internally for
+/// cheap cloning - these strings are frequently cloned during parsing and
+/// normalization, and `Arc<str>` reduces this to a simple reference count increment.
+/// The `number` field is a `SmolStr`, which inlines short strings (no heap
+/// allocation) while still cloning cheaply (see its field doc below).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Accession {
     /// Accession prefix (e.g., "NC", "NM", "NP", "ENST")
     pub prefix: Arc<str>,
     /// Accession number
-    pub number: Arc<str>,
+    ///
+    /// `SmolStr` inlines strings up to 23 bytes (every real accession number
+    /// qualifies), so the number is stored without a heap allocation. It still
+    /// clones cheaply and serializes identically to a plain string.
+    pub number: SmolStr,
     /// Version number (e.g., .3 in NM_000088.3)
     pub version: Option<u32>,
     /// Whether this is an Ensembl-style accession (no underscore separator)
@@ -106,15 +113,16 @@ pub struct Accession {
 impl Accession {
     /// Intern a prefix string, using a static Arc if available
     #[inline]
-    fn intern_prefix(prefix: impl Into<Arc<str>>) -> Arc<str> {
-        let prefix: Arc<str> = prefix.into();
-        // Try to use an interned version to avoid allocation
-        interned::get_prefix(&prefix).unwrap_or(prefix)
+    fn intern_prefix(prefix: impl AsRef<str> + Into<Arc<str>>) -> Arc<str> {
+        // Look up the interned static *before* allocating: for the common known
+        // prefixes (NC/NM/NP/ENST/…) this avoids allocating an `Arc<str>` on every
+        // parse just to discard it for the static. Only unknown prefixes allocate.
+        interned::get_prefix(prefix.as_ref()).unwrap_or_else(|| prefix.into())
     }
 
     pub fn new(
-        prefix: impl Into<Arc<str>>,
-        number: impl Into<Arc<str>>,
+        prefix: impl AsRef<str> + Into<Arc<str>>,
+        number: impl Into<SmolStr>,
         version: Option<u32>,
     ) -> Self {
         let prefix = Self::intern_prefix(prefix);
@@ -139,8 +147,8 @@ impl Accession {
 
     /// Create with explicit Ensembl style setting
     pub fn with_style(
-        prefix: impl Into<Arc<str>>,
-        number: impl Into<Arc<str>>,
+        prefix: impl AsRef<str> + Into<Arc<str>>,
+        number: impl Into<SmolStr>,
         version: Option<u32>,
         ensembl_style: bool,
     ) -> Self {
@@ -166,7 +174,7 @@ impl Accession {
     pub fn from_assembly(assembly: impl Into<Arc<str>>, chromosome: impl Into<Arc<str>>) -> Self {
         Self {
             prefix: interned::empty(),
-            number: interned::empty(),
+            number: SmolStr::default(),
             version: None,
             ensembl_style: false,
             assembly: Some(assembly.into()),
