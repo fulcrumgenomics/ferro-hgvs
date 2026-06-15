@@ -2081,6 +2081,84 @@ impl CdotMapper {
             .saturating_sub(before)
     }
 
+    /// Merge the transcripts of an independently-loaded cdot file into this
+    /// mapper's **primary** build.
+    ///
+    /// Unlike [`Self::load_secondary_build`] — which layers the *same*
+    /// transcripts on a *different* genome build into `alt_build_transcripts` —
+    /// this absorbs *distinct* accessions that live on the *same* primary build
+    /// (e.g. Ensembl `ENST`/`ENSG`/`ENSP` records from `cdot-*.ensembl.*.json`,
+    /// alongside RefSeq `NM_`), so they resolve through the normal primary
+    /// lookup path. Returns the number of transcripts merged.
+    pub fn merge_primary_build<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, FerroError> {
+        let other = Self::load(path.as_ref())?;
+        Ok(self.absorb_primary_build(other))
+    }
+
+    /// Reader-based variant of [`Self::merge_primary_build`] for tests and
+    /// in-memory callers. Parses a single-build cdot JSON from `reader` using
+    /// this mapper's primary build (defaulting to `GRCh38`).
+    pub fn merge_primary_build_from_reader<R: Read>(
+        &mut self,
+        reader: R,
+    ) -> Result<usize, FerroError> {
+        let build = self
+            .primary_build
+            .clone()
+            .unwrap_or_else(|| "GRCh38".to_string());
+        let other = Self::from_reader_with_build(reader, &build)?;
+        Ok(self.absorb_primary_build(other))
+    }
+
+    /// Absorb `other`'s primary-build transcripts into this mapper's primary
+    /// build via [`Self::add_transcript`] (which maintains `contig_index` and
+    /// the highest-version `base_to_versioned` fallback, and invalidates the
+    /// lazy query indexes). Non-primary builds `other` nests under
+    /// `genome_builds` are folded into the matching `alt_build_transcripts`
+    /// slot so e.g. Ensembl GRCh37 views remain available. Returns the count of
+    /// primary-build transcripts merged.
+    fn absorb_primary_build(&mut self, other: Self) -> usize {
+        let CdotMapper {
+            transcripts: other_transcripts,
+            alt_build_transcripts: other_alt,
+            lrg_to_refseq: other_lrg,
+            contig_alias_to_canonical: other_aliases,
+            ..
+        } = other;
+
+        let mut merged = 0usize;
+        for (accession, tx) in other_transcripts {
+            self.add_transcript(accession, tx);
+            merged += 1;
+        }
+        // Fold in any non-primary builds the merged file nested under
+        // `genome_builds` (e.g. GRCh37 ENST views), without overwriting the
+        // authoritative primary build.
+        for (nested_build, txs) in other_alt {
+            if Some(nested_build.as_str()) == self.primary_build.as_deref() {
+                continue;
+            }
+            let dest = self.alt_build_transcripts.entry(nested_build).or_default();
+            for (acc, tx) in txs {
+                dest.insert(acc, tx);
+            }
+        }
+        // Carry over contig aliases and LRG mappings without clobbering ours.
+        for (alias, canonical) in other_aliases {
+            self.contig_alias_to_canonical
+                .entry(alias)
+                .or_insert(canonical);
+        }
+        for (lrg, refseq) in other_lrg {
+            self.lrg_to_refseq.entry(lrg).or_insert(refseq);
+        }
+        // The alt-build fold above mutated `alt_build_transcripts` directly, so
+        // invalidate the lazy alt-build index (the primary index is already
+        // cleared per-transcript by `add_transcript`).
+        self.alt_build_query_index = OnceCell::new();
+        merged
+    }
+
     /// Create from a raw CdotFile, converting to internal format.
     ///
     /// Captures both the primary build's data (into [`Self::transcripts`])
@@ -3229,6 +3307,62 @@ mod tests {
         assert_eq!(tx.exons.len(), 1);
         assert_eq!(tx.exons[0][0], 48263025); // genome_start
         assert_eq!(tx.exons[0][1], 48263098); // genome_end
+    }
+
+    #[test]
+    fn test_merge_primary_build_adds_ensembl_alongside_refseq() {
+        // A RefSeq cdot mapper (NM_) ...
+        let refseq = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "contig": "NC_000017.11",
+                    "strand": "+",
+                    "exons": [[50184096, 50184169, 0, 73]],
+                    "cds_start": 10,
+                    "cds_end": 60
+                }
+            }
+        }
+        "#;
+        let mut mapper = CdotMapper::from_reader(refseq.as_bytes()).unwrap();
+        assert!(mapper.get_transcript("NM_000088.3").is_some());
+        assert!(mapper.get_transcript("ENST00000375549.8").is_none());
+
+        // ... merged with an Ensembl cdot file (ENST, distinct accession on the
+        // same primary build) resolves BOTH through the primary lookup path.
+        let ensembl = r#"
+        {
+            "transcripts": {
+                "ENST00000375549.8": {
+                    "gene_name": "EDN1",
+                    "contig": "NC_000006.12",
+                    "strand": "+",
+                    "exons": [[12290360, 12290460, 0, 100]],
+                    "cds_start": 5,
+                    "cds_end": 95
+                }
+            }
+        }
+        "#;
+        let merged = mapper
+            .merge_primary_build_from_reader(ensembl.as_bytes())
+            .unwrap();
+        assert_eq!(merged, 1, "one Ensembl transcript merged");
+
+        // RefSeq still resolves; Ensembl now resolves too.
+        assert!(mapper.get_transcript("NM_000088.3").is_some());
+        let enst = mapper
+            .get_transcript("ENST00000375549.8")
+            .expect("merged ENST resolves");
+        assert_eq!(enst.gene_name.as_deref(), Some("EDN1"));
+
+        // Version-fallback (base -> highest version) works for the merged ENST.
+        assert!(mapper.get_transcript("ENST00000375549").is_some());
+        // The Ensembl contig was indexed alongside the RefSeq one.
+        assert_eq!(mapper.transcripts_on_contig("NC_000006.12").len(), 1);
+        assert_eq!(mapper.transcripts_on_contig("NC_000017.11").len(), 1);
     }
 
     #[test]

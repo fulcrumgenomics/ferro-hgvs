@@ -87,6 +87,30 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    // Validate Ensembl cDNA files exist.
+    //
+    // `ensembl_transcript_fastas` holds the downloaded Ensembl cDNA `.fa.gz`
+    // paths; `prepare_references` decompresses and `index_fasta`s the companion
+    // `.fa`, which is what `MultiFastaProvider` actually resolves from. Mirror
+    // the RefSeq loop above: map a trailing `.fa.gz`/`.fna.gz` to its
+    // decompressed sidecar and warn if that file is missing, so a missing or
+    // un-decompressed Ensembl FASTA surfaces here rather than as a silent
+    // runtime resolution miss. Any other extension is checked as-is.
+    for fasta in &manifest.ensembl_transcript_fastas {
+        let check_path = fasta
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|name| name.ends_with(".fa.gz") || name.ends_with(".fna.gz"))
+            .map(|name| fasta.with_file_name(&name[..name.len() - ".gz".len()]))
+            .unwrap_or_else(|| fasta.clone());
+        if !check_path.exists() {
+            result.warnings.push(format!(
+                "Ensembl cDNA FASTA not found: {}",
+                check_path.display()
+            ));
+        }
+    }
+
     // Validate genome file if specified
     if let Some(ref genome) = manifest.genome_fasta {
         if !genome.exists() {
@@ -110,6 +134,23 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
             result
                 .warnings
                 .push(format!("cdot GRCh37 JSON not found: {}", cdot.display()));
+        }
+    }
+
+    if let Some(ref cdot) = manifest.ensembl_cdot_json {
+        if !cdot.exists() {
+            result
+                .warnings
+                .push(format!("Ensembl cdot JSON not found: {}", cdot.display()));
+        }
+    }
+
+    if let Some(ref cdot) = manifest.ensembl_cdot_grch37_json {
+        if !cdot.exists() {
+            result.warnings.push(format!(
+                "Ensembl cdot GRCh37 JSON not found: {}",
+                cdot.display()
+            ));
         }
     }
 
@@ -174,6 +215,21 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
         eprintln!("  cdot metadata (GRCh37): {}", cdot.display());
     } else {
         eprintln!("  cdot metadata (GRCh37): not available");
+    }
+
+    if !manifest.ensembl_transcript_fastas.is_empty() {
+        eprintln!(
+            "  Ensembl cDNA files: {}",
+            manifest.ensembl_transcript_fastas.len()
+        );
+    }
+
+    if let Some(ref cdot) = manifest.ensembl_cdot_json {
+        eprintln!("  Ensembl cdot metadata (GRCh38): {}", cdot.display());
+    }
+
+    if let Some(ref cdot) = manifest.ensembl_cdot_grch37_json {
+        eprintln!("  Ensembl cdot metadata (GRCh37): {}", cdot.display());
     }
 
     if !manifest.protein_fastas.is_empty() {
@@ -241,6 +297,9 @@ mod tests {
             lrg_refseq_mapping: None,
             cdot_json: None,
             cdot_grch37_json: None,
+            ensembl_cdot_json: None,
+            ensembl_cdot_grch37_json: None,
+            ensembl_transcript_fastas: Vec::new(),
             supplemental_fasta: None,
             legacy_transcripts_fasta: None,
             legacy_transcripts_metadata: None,

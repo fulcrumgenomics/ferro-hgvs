@@ -49,6 +49,9 @@ pub struct PrepareConfig {
     pub download_cdot: bool,
     /// Download GRCh37 cdot transcript metadata (CDS positions, exon coords, ~200MB)
     pub download_cdot_grch37: bool,
+    /// Download Ensembl cDNA transcript sequences (ENST_ accessions, ~75MB) and
+    /// the Ensembl cdot metadata. Off by default — opt in with `--ensembl`.
+    pub download_ensembl: bool,
     /// Skip download if files exist
     pub skip_existing: bool,
     /// ClinVar file to extract missing accessions from
@@ -75,6 +78,7 @@ impl Default for PrepareConfig {
             download_lrg: false,
             download_cdot: true,
             download_cdot_grch37: false,
+            download_ensembl: false,
             skip_existing: true,
             clinvar_file: None,
             patterns_file: None,
@@ -122,6 +126,22 @@ pub mod urls {
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
     pub const CDOT_REFSEQ_GRCH37: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh37.json.gz";
+
+    /// Ensembl cdot transcript database (ENST/ENSG/ENSP), same SACGF/cdot
+    /// release as the RefSeq files above and the identical JSON schema.
+    pub const CDOT_ENSEMBL_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.ensembl.GRCh38.json.gz";
+    pub const CDOT_ENSEMBL_GRCH37: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.ensembl.GRCh37.json.gz";
+
+    /// Ensembl cDNA (transcript) sequences (ENST_ accessions). Release 110 is
+    /// contemporaneous with cdot `data_v0.2.32`; both GRCh38 and GRCh37 mirrors
+    /// share the same file name under their respective release trees.
+    pub const ENSEMBL_CDNA_GRCH38: &str = "https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz";
+    /// GRCh37 cDNA mirror. Intentionally unused by the prepare flow: a
+    /// transcript's cDNA sequence is build-independent (only its genomic mapping
+    /// differs between GRCh37 and GRCh38), so the GRCh38 download above already
+    /// covers both builds. Kept here as the documented source URL should a
+    /// build-specific cDNA set ever be needed.
+    pub const ENSEMBL_CDNA_GRCH37: &str = "https://ftp.ensembl.org/pub/grch37/release-110/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh37.cdna.all.fa.gz";
 
     /// LRG (Locus Reference Genomic) sequences from EBI
     /// ~1325 FASTA files
@@ -543,6 +563,62 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             &cdot_dir,
             config.skip_existing,
         )?);
+    }
+
+    // Download Ensembl reference (cDNA sequences + cdot metadata). Opt-in via
+    // `--ensembl`: lets variants on Ensembl transcripts/genes (ENST/ENSG/ENSP)
+    // resolve instead of no-op'ing.
+    if config.download_ensembl {
+        let ensembl_dir = config.output_dir.join("ensembl");
+        fs::create_dir_all(&ensembl_dir).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create directory: {}", e),
+        })?;
+        let cdot_dir = config.output_dir.join("cdot");
+
+        // 1. Ensembl cDNA FASTA (ENST_ sequences). Decompress + index so the
+        //    provider's directory scan picks it up like the RefSeq transcripts.
+        eprintln!("\n=== Downloading Ensembl cDNA transcripts (GRCh38, ~75MB) ===");
+        let gz_path = ensembl_dir.join("Homo_sapiens.GRCh38.cdna.all.fa.gz");
+        if config.skip_existing && gz_path.exists() {
+            eprintln!("  Skipping {} (exists)", gz_path.display());
+        } else {
+            download_file(urls::ENSEMBL_CDNA_GRCH38, &gz_path)?;
+            eprintln!("  Downloaded {}", gz_path.display());
+        }
+        // `with_extension("")` strips only the `.gz`, leaving the `.fa`.
+        let fasta_path = gz_path.with_extension("");
+        if config.skip_existing && fasta_path.exists() {
+            eprintln!("  Skipping decompress {} (exists)", fasta_path.display());
+        } else {
+            decompress_gzip(&gz_path, &fasta_path)?;
+            eprintln!("  Decompressed {}", fasta_path.display());
+        }
+        let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
+        if config.skip_existing && fai_path.exists() {
+            eprintln!("  Skipping index {} (exists)", fai_path.display());
+        } else {
+            index_fasta(&fasta_path)?;
+            eprintln!("  Indexed {}", fasta_path.display());
+        }
+        if !manifest.ensembl_transcript_fastas.contains(&gz_path) {
+            manifest.ensembl_transcript_fastas.push(gz_path);
+        }
+
+        // 2. Ensembl cdot metadata (GRCh38 primary; GRCh37 secondary if asked).
+        eprintln!("\n=== Downloading Ensembl cdot transcript metadata (GRCh38) ===");
+        manifest.ensembl_cdot_json = Some(download_cdot(
+            urls::CDOT_ENSEMBL_GRCH38,
+            &cdot_dir,
+            config.skip_existing,
+        )?);
+        if config.download_cdot_grch37 {
+            eprintln!("\n=== Downloading Ensembl cdot transcript metadata (GRCh37) ===");
+            manifest.ensembl_cdot_grch37_json = Some(download_cdot(
+                urls::CDOT_ENSEMBL_GRCH37,
+                &cdot_dir,
+                config.skip_existing,
+            )?);
+        }
     }
 
     // Fetch missing transcripts from ClinVar or pattern files (requires benchmark feature)

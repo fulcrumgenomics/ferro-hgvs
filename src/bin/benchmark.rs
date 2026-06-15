@@ -1505,6 +1505,7 @@ fn run_prepare_tool(
                 download_lrg: !no_lrg,
                 download_cdot: matches!(genome, GenomeOption::Grch38 | GenomeOption::All),
                 download_cdot_grch37: matches!(genome, GenomeOption::Grch37 | GenomeOption::All),
+                download_ensembl: false,
                 skip_existing: !force,
                 clinvar_file: None,
                 patterns_file: None,
