@@ -65,7 +65,10 @@ lru = "0.12.5"
 [features]
 default = []
 dhat-heap = ["dep:dhat"]
-parallel = ["dep:rayon"]
+# rayon is now an unconditional dependency (the `ferro normalize -j` batch
+# driver uses it); this feature is retained as a no-op alias and to gate the
+# library `parallel` module's public API.
+parallel = []
 validation = ["dep:ahash"]
 python = ["dep:pyo3"]
 # memmap2 is now an unconditional dependency (used by the cdot rkyv loader);
@@ -73,7 +76,7 @@ python = ["dep:pyo3"]
 # still pass `--features mmap`.
 mmap = []
 protein-fetch = ["dep:ureq"]
-benchmark = ["dep:rayon", "dep:num_cpus", "dep:urlencoding", "dep:rand", "dep:tempfile", "protein-fetch", "dep:tokio", "dep:tokio-postgres", "dep:bytes", "dep:futures-util", "dep:rusqlite"]
+benchmark = ["dep:num_cpus", "dep:urlencoding", "dep:rand", "dep:tempfile", "protein-fetch", "dep:tokio", "dep:tokio-postgres", "dep:bytes", "dep:futures-util", "dep:rusqlite"]
 # hgvs-rs integration for native Rust HGVS normalization comparison
 hgvs-rs = ["benchmark", "dep:hgvs", "dep:postgres", "dep:biocommons-bioutils", "dep:indexmap", "dep:seqrepo"]
 # Web service for multi-tool HGVS variant normalization
@@ -89,7 +92,6 @@ optional = true
 
 [dependencies.rayon]
 version = "1.10"
-optional = true
 
 
 [dependencies.num_cpus]
