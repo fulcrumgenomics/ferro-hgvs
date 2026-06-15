@@ -450,6 +450,95 @@ impl<P: ReferenceProvider> BatchProcessor<P> {
     }
 }
 
+/// Parallel batch processing. Each input is independent, so the batch is mapped
+/// across a rayon pool; `rayon`'s ordered `collect` preserves input order, so
+/// results are identical to the serial methods (same order, same per-item
+/// success/error classification). Requires the provider to be `Sync`.
+///
+/// `num_threads` semantics: `0` uses rayon's global pool (all available cores),
+/// `1` runs serially (no pool, no fan-out overhead), and `N > 1` runs on a
+/// dedicated pool of `N` threads. These have no progress-callback variants —
+/// ordered progress under parallelism is ill-defined; use the serial
+/// `*_with_progress` methods when a callback is needed.
+#[cfg(feature = "parallel")]
+impl<P: ReferenceProvider + Sync> BatchProcessor<P> {
+    /// Parse multiple HGVS strings in parallel. Order-preserving; equivalent to
+    /// [`parse`](Self::parse) but spread across `num_threads` workers.
+    pub fn parse_parallel<S: AsRef<str> + Sync>(
+        &self,
+        variants: &[S],
+        num_threads: usize,
+    ) -> BatchResult<HgvsVariant> {
+        let start = Instant::now();
+        let map = |input: &S| match parse_hgvs(input.as_ref()) {
+            Ok(v) => ItemResult::Ok(v),
+            Err(error) => ItemResult::Err {
+                input: Some(input.as_ref().to_string()),
+                error,
+            },
+        };
+        let results = self.map_collect(variants, num_threads, map);
+        BatchResult::new(results, start.elapsed())
+    }
+
+    /// Parse and normalize multiple HGVS strings in parallel. Order-preserving;
+    /// equivalent to [`parse_and_normalize`](Self::parse_and_normalize) but
+    /// spread across `num_threads` workers.
+    pub fn parse_and_normalize_parallel<S: AsRef<str> + Sync>(
+        &self,
+        variants: &[S],
+        num_threads: usize,
+    ) -> BatchResult<HgvsVariant> {
+        let start = Instant::now();
+        let map = |input: &S| match parse_hgvs(input.as_ref())
+            .and_then(|v| self.normalizer.normalize(&v))
+        {
+            Ok(normalized) => ItemResult::Ok(normalized),
+            Err(error) => ItemResult::Err {
+                input: Some(input.as_ref().to_string()),
+                error,
+            },
+        };
+        let results = self.map_collect(variants, num_threads, map);
+        BatchResult::new(results, start.elapsed())
+    }
+
+    /// Map `f` over `variants`, preserving order. Serial for `num_threads == 1`,
+    /// the global rayon pool for `0`, or a dedicated `num_threads`-thread pool
+    /// otherwise (falling back to the global pool if one can't be built).
+    fn map_collect<S, F>(
+        &self,
+        variants: &[S],
+        num_threads: usize,
+        f: F,
+    ) -> Vec<ItemResult<HgvsVariant>>
+    where
+        S: AsRef<str> + Sync,
+        F: Fn(&S) -> ItemResult<HgvsVariant> + Sync + Send,
+    {
+        use rayon::prelude::*;
+        if num_threads == 1 {
+            return variants.iter().map(f).collect();
+        }
+        if num_threads == 0 {
+            return variants.par_iter().map(f).collect();
+        }
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+        {
+            Ok(pool) => pool.install(|| variants.par_iter().map(f).collect()),
+            Err(err) => {
+                log::warn!(
+                    "failed to build a dedicated {num_threads}-thread pool ({err}); \
+                     falling back to the global rayon pool"
+                );
+                variants.par_iter().map(f).collect()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

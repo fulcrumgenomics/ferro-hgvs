@@ -67,7 +67,9 @@ default = []
 dhat-heap = ["dep:dhat"]
 parallel = ["dep:rayon"]
 validation = ["dep:ahash"]
-python = ["dep:pyo3"]
+# The Python batch API parallelizes across a rayon pool, so the `parallel`
+# (rayon) feature is pulled in whenever the bindings are built.
+python = ["dep:pyo3", "parallel"]
 # memmap2 is now an unconditional dependency (used by the cdot rkyv loader);
 # this feature is retained as a no-op for compatibility with callers that
 # still pass `--features mmap`.
