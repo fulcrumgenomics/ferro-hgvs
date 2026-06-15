@@ -15,6 +15,15 @@
 //!
 //! Fixture: NM_TEST.1 on chr1 plus strand, "ATGCGCTAA" at genomic [1000, 1009);
 //! `c.4C>A` resolves to chromosome position 1003.
+//!
+//! #646 extends this `NG_`/`LRG_` framing to the *cross-isoform* fan-out: a
+//! c./n./r. input with an `NG_` genomic context is de-anchored into the
+//! chromosome frame and enumerated against all overlapping transcripts, each
+//! re-framed under the parent. That enumeration path is exercised by
+//! `project_variant_all_frames_coding_input_with_ng_context` in
+//! `src/project/projector.rs` (not in this file).
+//!
+//! Source (#646): <https://github.com/fulcrumgenomics/ferro-hgvs/issues/646>.
 
 use ferro_hgvs::data::cdot::{CdotMapper, CdotTranscript};
 use ferro_hgvs::data::projection::Projector;

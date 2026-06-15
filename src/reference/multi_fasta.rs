@@ -2269,6 +2269,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_plus_strand_main_assembly_placement_from_lrg_xml() {
+        // The shared `LRG_XML_SAMPLE` only covers a minus-strand placement; the
+        // plus-strand branch (`strand="1"`, the `Strand::Plus` default) is
+        // otherwise exercised only indirectly via the RefSeqGene GFF3 path.
+        let xml = r#"
+          <mapping coord_system="GRCh38.p13" other_name="1" other_id="NC_000001.11" other_start="1000" other_end="1099" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="100" other_start="1000" other_end="1099" strand="1" />
+          </mapping>
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml)
+            .expect("plus-strand main_assembly mapping should parse");
+        assert_eq!(p.nc.to_string(), "NC_000001.11");
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 1000);
+        assert_eq!(p.nc_end, 1099);
+        assert_eq!(p.strand, crate::reference::transcript::Strand::Plus);
+        // Plus strand: the LRG runs parallel to the chromosome, so `nc_to_parent`
+        // ascends — the low chromosome coordinate maps to the low parent base.
+        assert_eq!(p.nc_to_parent(1000), Some(1));
+        assert_eq!(p.nc_to_parent(1050), Some(51));
+        assert_eq!(p.nc_to_parent(1099), Some(100));
+    }
+
+    #[test]
     fn no_placement_when_main_assembly_mapping_is_absent() {
         let xml = r#"
           <mapping other_id="NC_000017.10" type="other_assembly">
