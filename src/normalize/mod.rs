@@ -1022,13 +1022,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant,
                     coordinate_system,
                 } => Some(FerroError::IntronicVariant {
-                    // Embed a distinguishing clarifier in the `variant` field so
+                    // Keep `variant` the raw HGVS string (machine-readable).
+                    variant: variant.clone(),
+                    // Carry the distinguishing clarifier in `detail` instead, so
                     // this spec-form rejection is not confused (in logs) with the
                     // capability-failure `IntronicVariant` from
-                    // `normalize_intronic_cds` ("no genomic data"). The EINTRONIC
-                    // tag in mutalyzer_map.rs keys off the variant *name*, not this
-                    // string, so the clarifier does not affect conformance mapping.
-                    variant: {
+                    // `normalize_intronic_cds` ("no genomic data") — without
+                    // polluting the `variant` field. The EINTRONIC tag in
+                    // mutalyzer_map.rs keys off the variant *name*, not this
+                    // string, so the clarifier does not affect conformance
+                    // mapping.
+                    detail: Some({
                         // Parent-reference example matching the input axis: a
                         // coding `NM_` parent for c., a non-coding `NR_` for n.
                         let parent_example = if coordinate_system == "n" {
@@ -1037,11 +1041,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             "NG_(NM_)/NC_(NM_)"
                         };
                         format!(
-                            "{variant} (intronic offset on a bare {coordinate_system}. transcript \
+                            "intronic offset on a bare {coordinate_system}. transcript \
                              reference; a genomic reference is required, e.g. {parent_example} — \
-                             IntronicOnBareTranscript / W4007 / EINTRONIC)"
+                             IntronicOnBareTranscript / W4007 / EINTRONIC"
                         )
-                    },
+                    }),
                 }),
                 _ => None,
             }) {
@@ -2667,6 +2671,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Variant spans exon-intron boundary - not yet supported for n. coords
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
+                detail: None,
             });
         }
 
@@ -3632,6 +3637,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if start_pos.is_intronic() || end_pos.is_intronic() {
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
+                detail: None,
             });
         }
 
@@ -4109,6 +4115,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !self.provider.has_genomic_data() {
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
+                detail: None,
             });
         }
 
@@ -4312,6 +4319,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !self.provider.has_genomic_data() {
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
+                detail: None,
             });
         }
 

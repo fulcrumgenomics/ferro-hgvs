@@ -528,6 +528,7 @@ mod tests {
             },
             FerroError::IntronicVariant {
                 variant: "c.1+1del".to_string(),
+                detail: None,
             },
             FerroError::GenomicReferenceNotAvailable {
                 contig: "chr1".to_string(),
