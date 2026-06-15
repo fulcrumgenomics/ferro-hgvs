@@ -2912,7 +2912,76 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // #502: a `p.` coordinate on a genomic reference whose parenthetical
+        // selector is a coding transcript (`NM_`/`XM_`) should carry the
+        // protein accession (`NP_`/`XP_`) — the spec-preferred selector for a
+        // protein-level statement (background/refseq.md L38-42). Rewrite the
+        // selector when the reference data resolves the paired protein;
+        // otherwise the input selector is preserved (#121).
+        let final_variant = match self.resolve_genomic_protein_selector(&final_variant.accession) {
+            Some(protein_accession) => ProteinVariant {
+                accession: protein_accession,
+                ..final_variant
+            },
+            None => final_variant,
+        };
+
         Ok((HV::Protein(final_variant), warnings))
+    }
+
+    /// Resolve the spec-preferred protein-accession (`NP_`/`XP_`) selector for a
+    /// `p.` variant on a genomic reference (#502).
+    ///
+    /// For an input like `NG_012337.3(NM_003002.4):p.(Asp92Tyr)` the
+    /// parenthetical selector is a coding *transcript* (`NM_`), but a `p.`
+    /// coordinate is a protein-level statement; per HGVS
+    /// (`background/refseq.md` L38-42) a protein accession (`NP_`) is an
+    /// accepted parenthetical specification for a protein coordinate (the
+    /// spec-preferred selector here). When the reference
+    /// data resolves the transcript's paired protein, this returns that
+    /// `NP_`/`XP_` accession with the genomic-context wrapper preserved, to
+    /// replace the `NM_`/`XM_` selector.
+    ///
+    /// Returns `None` (leave the selector unchanged) when there is no genomic
+    /// context, the selector is not a coding transcript, the provider has no
+    /// such transcript, or it carries no `protein_id`. This is never an error:
+    /// a genome-less or data-poor environment (e.g. `MockProvider`) simply
+    /// preserves the input `NM_` selector, mirroring the #121 "preserve when
+    /// present, don't synthesize" policy.
+    fn resolve_genomic_protein_selector(
+        &self,
+        accession: &crate::hgvs::variant::Accession,
+    ) -> Option<crate::hgvs::variant::Accession> {
+        use crate::hgvs::parser::accession::parse_accession;
+
+        // Only a genomic-reference compound accession (NG_/LRG_/NC_ wrapper) is
+        // in scope; a bare transcript selector is left untouched.
+        let context = accession.genomic_context.as_ref()?;
+        // Only a coding-transcript selector (NM_/XM_) has a paired NP_/XP_.
+        if !matches!(accession.prefix.as_ref(), "NM" | "XM") {
+            return None;
+        }
+        // Resolve the transcript's paired protein accession from reference data.
+        let transcript = self
+            .provider
+            .get_transcript(&accession.transcript_accession())
+            .ok()?;
+        let protein_id = transcript.protein_id.as_deref()?;
+        // Parse the protein accession and re-attach the genomic-context wrapper.
+        let (rest, protein_accession) = parse_accession(protein_id).ok()?;
+        if !rest.is_empty() {
+            // Malformed `protein_id`: preserve the input selector rather than
+            // emit a partially-parsed accession.
+            return None;
+        }
+        // The provider's `protein_id` must be an actual protein accession
+        // (`NP_`/`XP_`). A non-protein value (e.g. a transcript or gene
+        // accession) is semantically malformed for a protein selector, so
+        // preserve the input selector rather than emit it as a `p.` selector.
+        if !matches!(protein_accession.prefix.as_ref(), "NP" | "XP") {
+            return None;
+        }
+        Some(protein_accession.with_genomic_context((**context).clone()))
     }
 
     /// Apply the HGVS 3' rule to a protein deletion or duplication.
