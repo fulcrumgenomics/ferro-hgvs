@@ -3,11 +3,12 @@
 //! See `docs/superpowers/specs/2026-04-30-merge-consecutive-allele-edits-design.md`.
 
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
-use crate::hgvs::interval::{Interval, UncertainBoundary};
+use crate::hgvs::interval::{GenomeInterval, Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
-    AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant, TxVariant,
+    Accession, AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant,
+    TxVariant,
 };
 use crate::reference::ReferenceProvider;
 
@@ -192,6 +193,304 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
         reconcile_head(&mut output, head_anchor.take().unwrap());
     }
     output
+}
+
+/// One extracted genomic cis edit for the overlap-collapse pass.
+enum GEdit {
+    /// Insertion between reference positions `gap` and `gap + 1`.
+    Ins { gap: i64, alt: Vec<Base> },
+    /// Deletion of the inclusive 1-based span `[s, e]`.
+    Del { s: i64, e: i64 },
+    /// Single-base substitution at `pos`.
+    Sub { pos: i64, alt: Base },
+    /// `delins` of the inclusive span `[s, e]` with replacement `alt`.
+    Delins { s: i64, e: i64, alt: Vec<Base> },
+}
+
+/// Collapse a contiguous run of *overlapping* cis genomic edits — insertions
+/// flanking/within a deletion or substitution at one locus — into a single
+/// `delins`, by applying them to the reference and re-deriving the minimal
+/// edit. This is the case the strict-adjacency chain in
+/// `merge_consecutive_edits` cannot express (it only merges non-overlapping
+/// consecutive edits). Example (mutalyzer-verified): `g.[104_105insA;
+/// 105_106insC;105del]` -> `g.105delinsAC`.
+///
+/// Deliberately conservative and all-or-nothing — it returns the input
+/// unchanged unless **every** sub-variant participates in one collapsible
+/// group:
+///   * all sub-variants are same-accession genomic `NaEdit`s with simple
+///     (certain, non-special, non-offset) positions, and one of
+///     ins/del/sub/delins (literal payloads only);
+///   * the del/sub/delins spans form one contiguous interval with no
+///     unchanged interior base (no holes);
+///   * every insertion attaches to that interval (its gap lies in
+///     `[c_lo - 1, c_hi]`);
+///   * the group has BOTH an insertion and a del/sub/delins.
+///
+/// Anything else passes through untouched, so pure-insertion groups,
+/// pure-deletion groups (owned by `merge_consecutive_edits`), and
+/// non-overlapping inputs are unaffected.
+pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
+    variants: Vec<HgvsVariant>,
+    phase: AllelePhase,
+    provider: &P,
+) -> Vec<HgvsVariant> {
+    if phase != AllelePhase::Cis || variants.len() < 2 {
+        return variants;
+    }
+    // The genomic (`g.`) and mitochondrial (`m.`) axes share one single-axis
+    // coordinate system (`Region::Genome`), so both flow through this collapse.
+    // Track which kind the group is so we rebuild the correct variant at the
+    // end; a mixed Genome+Mt group is refused (mirrors the accession check).
+    let kind = match &variants[0] {
+        HgvsVariant::Genome(_) => CisKind::Genome,
+        HgvsVariant::Mt(_) => CisKind::Mt,
+        _ => return variants,
+    };
+    // Borrow the head's `(accession, loc_edit)` as the template once; the
+    // helper rejects any variant whose kind doesn't match `kind`.
+    let Some((template_accession, _)) = cis_genome_axis_parts(&variants[0], kind) else {
+        return variants;
+    };
+    let template_accession = template_accession.clone();
+
+    let mut edits: Vec<GEdit> = Vec::with_capacity(variants.len());
+    for v in &variants {
+        let Some((accession, loc_edit)) = cis_genome_axis_parts(v, kind) else {
+            return variants;
+        };
+        if *accession != template_accession {
+            return variants;
+        }
+        let Some((_region, s, e)) = simple_genome_range(&loc_edit.location) else {
+            return variants;
+        };
+        if !loc_edit.edit.is_certain() {
+            return variants;
+        }
+        let Some(edit) = loc_edit.edit.inner() else {
+            return variants;
+        };
+        match edit {
+            NaEdit::Insertion { sequence } => {
+                let Some(bases) = sequence.bases() else {
+                    return variants;
+                };
+                // Insertion location is the two flanking positions `[gap, gap+1]`.
+                if e != s + 1 {
+                    return variants;
+                }
+                edits.push(GEdit::Ins {
+                    gap: s,
+                    alt: bases.to_vec(),
+                });
+            }
+            NaEdit::Deletion { .. } => edits.push(GEdit::Del { s, e }),
+            NaEdit::Substitution { alternative, .. } => {
+                if s != e {
+                    return variants;
+                }
+                edits.push(GEdit::Sub {
+                    pos: s,
+                    alt: *alternative,
+                });
+            }
+            NaEdit::Delins { sequence, .. } => {
+                let Some(bases) = sequence.bases() else {
+                    return variants;
+                };
+                edits.push(GEdit::Delins {
+                    s,
+                    e,
+                    alt: bases.to_vec(),
+                });
+            }
+            // dup / repeat / inversion / identity etc. — not handled here.
+            _ => return variants,
+        }
+    }
+
+    // Require a genuinely mixed group: at least one insertion AND at least one
+    // replacement (del/sub/delins). This excludes pure-insertion groups (which
+    // must stay separate when separated by unchanged bases) and pure-deletion /
+    // pure-substitution groups (owned by `merge_consecutive_edits`).
+    let has_ins = edits.iter().any(|e| matches!(e, GEdit::Ins { .. }));
+    let has_repl = edits.iter().any(|e| !matches!(e, GEdit::Ins { .. }));
+    if !has_ins || !has_repl {
+        return variants;
+    }
+
+    // Changed interval = union of replacement spans; must be contiguous.
+    let covered: Vec<(i64, i64)> = edits
+        .iter()
+        .filter_map(|e| match e {
+            GEdit::Del { s, e } | GEdit::Delins { s, e, .. } => Some((*s, *e)),
+            GEdit::Sub { pos, .. } => Some((*pos, *pos)),
+            GEdit::Ins { .. } => None,
+        })
+        .collect();
+    let c_lo = covered.iter().map(|(s, _)| *s).min().unwrap();
+    let c_hi = covered.iter().map(|(_, e)| *e).max().unwrap();
+    // No unchanged interior base: every position in [c_lo, c_hi] is covered.
+    for p in c_lo..=c_hi {
+        if !covered.iter().any(|(s, e)| *s <= p && p <= *e) {
+            return variants;
+        }
+    }
+    // Every insertion must attach to the changed interval. Two insertions at
+    // the *same* gap would concatenate into `after[idx(gap)]` in member order,
+    // making the collapsed result order-dependent (e.g. `[gap insA; gap insB]`
+    // vs the reverse yields `...AB...` vs `...BA...`). Refuse such a group —
+    // matches the conservative all-or-nothing philosophy and preserves the
+    // member-order invariance the collapse otherwise guarantees.
+    let mut seen_insertion_gaps = std::collections::HashSet::new();
+    for e in &edits {
+        if let GEdit::Ins { gap, .. } = e {
+            if *gap < c_lo - 1 || *gap > c_hi {
+                return variants;
+            }
+            if !seen_insertion_gaps.insert(*gap) {
+                return variants;
+            }
+        }
+    }
+
+    // Window covers the changed interval plus all insertion flanks.
+    let mut w_lo = c_lo;
+    let mut w_hi = c_hi;
+    for e in &edits {
+        if let GEdit::Ins { gap, .. } = e {
+            w_lo = w_lo.min(*gap);
+            w_hi = w_hi.max(*gap + 1);
+        }
+    }
+    if w_lo < 1 {
+        return variants;
+    }
+
+    // Fetch the reference window [w_lo, w_hi] (1-based inclusive -> 0-based
+    // half-open). Bail on any provider miss or short read.
+    let accession = template_accession.transcript_accession();
+    let Ok(ref_seq) = provider.get_sequence(&accession, (w_lo - 1) as u64, w_hi as u64) else {
+        return variants;
+    };
+    let ref_bytes = ref_seq.as_bytes();
+    let n = (w_hi - w_lo + 1) as usize;
+    if ref_bytes.len() != n {
+        return variants;
+    }
+
+    // Apply edits over the window: `cell[i]` is the kept ref byte (or None if
+    // deleted) for position `w_lo + i`; `after[i]` is bases inserted after that
+    // position; `before` is bases inserted before the window's first base.
+    let idx = |p: i64| -> usize { (p - w_lo) as usize };
+    let mut cell: Vec<Option<u8>> = ref_bytes.iter().map(|b| Some(*b)).collect();
+    let mut after: Vec<Vec<u8>> = vec![Vec::new(); n];
+    let mut before: Vec<u8> = Vec::new();
+    for e in &edits {
+        match e {
+            GEdit::Del { s, e } => {
+                for p in *s..=*e {
+                    cell[idx(p)] = None;
+                }
+            }
+            GEdit::Sub { pos, alt } => cell[idx(*pos)] = Some(alt.to_u8()),
+            GEdit::Delins { s, e, alt } => {
+                for p in *s..=*e {
+                    cell[idx(p)] = None;
+                }
+                let bytes: Vec<u8> = alt.iter().map(|b| b.to_u8()).collect();
+                if *s > w_lo {
+                    after[idx(*s - 1)].extend(bytes);
+                } else {
+                    before.extend(bytes);
+                }
+            }
+            GEdit::Ins { gap, alt } => {
+                let bytes: Vec<u8> = alt.iter().map(|b| b.to_u8()).collect();
+                if *gap >= w_lo {
+                    after[idx(*gap)].extend(bytes);
+                } else {
+                    before.extend(bytes);
+                }
+            }
+        }
+    }
+    let mut variant: Vec<u8> = before;
+    for i in 0..n {
+        if let Some(b) = cell[i] {
+            variant.push(b);
+        }
+        variant.extend(&after[i]);
+    }
+
+    // Minimal-trim diff vs the reference window.
+    let mut lo = 0usize;
+    while lo < ref_bytes.len() && lo < variant.len() && ref_bytes[lo] == variant[lo] {
+        lo += 1;
+    }
+    let mut hi_ref = ref_bytes.len();
+    let mut hi_var = variant.len();
+    while hi_ref > lo && hi_var > lo && ref_bytes[hi_ref - 1] == variant[hi_var - 1] {
+        hi_ref -= 1;
+        hi_var -= 1;
+    }
+    let alt_bases: Vec<Base> = variant[lo..hi_var]
+        .iter()
+        .filter_map(|b| Base::from_char(*b as char))
+        .collect();
+    if alt_bases.len() != hi_var - lo {
+        return variants; // non-IUPAC byte from the reference; refuse.
+    }
+    let del_start = w_lo + lo as i64;
+    let (a_start, a_end) = if hi_ref == lo {
+        // Net pure insertion at the boundary: anchor span = 1 nt (start = end+1).
+        (del_start, del_start - 1)
+    } else {
+        (del_start, w_lo + hi_ref as i64 - 1)
+    };
+    let anchor = Anchor {
+        region: Region::Genome,
+        start: a_start,
+        end: a_end,
+        alt: alt_bases,
+    };
+    // Rebuild the variant kind the group came in as. Both `g.` and `m.` use
+    // the same single-axis `Region::Genome` anchor; the head carries the
+    // accession / gene symbol to seed the merged variant. `kind` was derived
+    // from `variants[0]` and every member passed `cis_genome_axis_parts(_,
+    // kind)`, so the head necessarily matches `kind` here.
+    match (kind, &variants[0]) {
+        (CisKind::Genome, HgvsVariant::Genome(g)) => {
+            vec![HgvsVariant::Genome(build_genome_merged(g, anchor))]
+        }
+        (CisKind::Mt, HgvsVariant::Mt(m)) => vec![HgvsVariant::Mt(build_mt_merged(m, anchor))],
+        _ => variants,
+    }
+}
+
+/// Which single-axis variant kind a cis-collapse group is. `g.` and `m.`
+/// share `Region::Genome` and the same `GenomeInterval`/`NaEdit` machinery,
+/// so the collapse handles both — but they must rebuild to distinct variant
+/// kinds, and a group mixing the two is refused.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CisKind {
+    Genome,
+    Mt,
+}
+
+/// Borrow the `(accession, loc_edit)` of a `g.`/`m.` variant, but only when
+/// its kind matches `kind`. Returns `None` for any other variant kind (or a
+/// kind mismatch), which the caller treats as "decline to collapse".
+fn cis_genome_axis_parts(
+    v: &HgvsVariant,
+    kind: CisKind,
+) -> Option<(&Accession, &LocEdit<GenomeInterval, NaEdit>)> {
+    match (kind, v) {
+        (CisKind::Genome, HgvsVariant::Genome(g)) => Some((&g.accession, &g.loc_edit)),
+        (CisKind::Mt, HgvsVariant::Mt(m)) => Some((&m.accession, &m.loc_edit)),
+        _ => None,
+    }
 }
 
 /// Replace `output.last()` with a freshly-built variant from `anchor`.
