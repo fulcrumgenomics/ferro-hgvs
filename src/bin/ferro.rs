@@ -77,6 +77,11 @@ enum Commands {
         /// Include all transcripts (default: true)
         #[arg(long, default_value = "true")]
         all_transcripts: bool,
+
+        /// Number of parallel workers for record annotation (default: 1).
+        /// Only applies to file input; stdin is always processed serially.
+        #[arg(short = 'j', long, default_value = "1")]
+        workers: usize,
     },
 
     /// Liftover genomic coordinates between genome builds
@@ -594,6 +599,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             build,
             ann_format,
             all_transcripts,
+            workers,
         } => run_annotate_vcf(
             &input,
             output.as_ref(),
@@ -601,6 +607,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &build,
             ann_format,
             all_transcripts,
+            workers,
         ),
         Commands::Liftover {
             position,
@@ -859,6 +866,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_annotate_vcf(
     input: &PathBuf,
     output: Option<&PathBuf>,
@@ -866,6 +874,7 @@ fn run_annotate_vcf(
     build: &str,
     ann_format: bool,
     all_transcripts: bool,
+    workers: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Parse genome build
     let genome_build = parse_genome_build(build);
@@ -943,11 +952,45 @@ fn run_annotate_vcf(
         }
         writeln!(writer, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")?;
 
-        // Process records
-        for record in reader.records() {
-            let record = record?;
-            let annotated = annotator.annotate(&record)?;
-            writeln!(writer, "{}", annotated)?;
+        // Process records. Annotation is independent per record, so with
+        // `workers > 1` we annotate fixed-size chunks across a rayon pool and
+        // write the results in input order — output is byte-identical to the
+        // serial path. The first per-record annotation error is propagated
+        // (matching the serial `?`).
+        if workers > 1 {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()?;
+            const ANNOTATE_CHUNK: usize = 4096;
+            let mut records = reader.records();
+            let mut chunk: Vec<VcfRecord> = Vec::with_capacity(ANNOTATE_CHUNK);
+            loop {
+                chunk.clear();
+                for record in records.by_ref() {
+                    chunk.push(record?);
+                    if chunk.len() >= ANNOTATE_CHUNK {
+                        break;
+                    }
+                }
+                if chunk.is_empty() {
+                    break;
+                }
+                let annotated: Vec<Result<String, FerroError>> = pool.install(|| {
+                    chunk
+                        .par_iter()
+                        .map(|r| annotator.annotate(r).map(|a| a.to_string()))
+                        .collect()
+                });
+                for line in annotated {
+                    writeln!(writer, "{}", line?)?;
+                }
+            }
+        } else {
+            for record in reader.records() {
+                let record = record?;
+                let annotated = annotator.annotate(&record)?;
+                writeln!(writer, "{}", annotated)?;
+            }
         }
     }
 

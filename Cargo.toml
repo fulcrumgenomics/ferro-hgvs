@@ -65,9 +65,9 @@ lru = "0.12.5"
 [features]
 default = []
 dhat-heap = ["dep:dhat"]
-# rayon is now an unconditional dependency (the `ferro normalize -j` batch
-# driver uses it); this feature is retained as a no-op alias and to gate the
-# library `parallel` module's public API.
+# rayon is now an unconditional dependency (the CLI `-j` batch drivers use it);
+# this feature is retained as a no-op alias and to gate the library `parallel`
+# module's public API.
 parallel = []
 validation = ["dep:ahash"]
 # The Python batch API parallelizes across a rayon pool, so the `parallel`
