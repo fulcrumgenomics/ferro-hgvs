@@ -40,6 +40,12 @@
       "title": "Compound-allele SHUFFLE_APPLIED (#499)",
       "spec_section": "recommendations/DNA (3' shifting); mutalyzer info model",
       "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound allele; mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Accepted divergence per #499 (precedent #481)."
+    },
+    {
+      "id": "coding-repeat-codon-exception",
+      "title": "Coding repeat: codon-multiple exception",
+      "spec_section": "recommendations/DNA/repeated.md L21-23",
+      "note": "On a coding DNA reference (c.), repeat notation unit[N] is permitted only for repeat units whose length is a multiple of 3 (cannot affect the reading frame); other expansions/contractions must be dup/ins/del. ferro emits the spec-mandated dup/ins/del for non-codon-aligned units in coding c.; mutalyzer's unit[N] form is invalid HGVS, so ferro's output is the spec-correct value."
     }
   ],
   "cases": [
@@ -3424,7 +3430,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.3_6GC[5]",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insAlaArg)",
       "genomic": "NG_012337.1:g.4917_4920GC[5]",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (coding codon exception)",
+        "cluster": "coding-repeat-codon-exception",
+        "note": "Unit GC (length 2) in coding c.; repeat notation forbidden (length not a multiple of 3). Reference has GC[2], so GC[5] is a +3-copy expansion -> ferro emits c.6_7insGCGCGC; mutalyzer's c.3_6GC[5] is invalid."
+      }
     },
     {
       "keywords": [
@@ -3449,7 +3461,13 @@
       "input": "NG_012337.1(NM_012459.2):c.10CA[5]",
       "normalized": "NG_012337.1(NM_012459.2):c.10_13CA[5]",
       "genomic": "NG_012337.1:g.4911_4914GT[5]",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (coding codon exception)",
+        "cluster": "coding-repeat-codon-exception",
+        "note": "Unit CA (length 2) in coding c.; repeat notation forbidden (length not a multiple of 3). Reference has CA[2], so CA[5] is a +3-copy expansion -> ferro emits c.13_14insCACACA; mutalyzer's c.10_13CA[5] is invalid."
+      }
     },
     {
       "keywords": [
@@ -3459,7 +3477,13 @@
       "input": "NG_012337.1(NM_012459.2):c.6delinsCCCC",
       "normalized": "NG_012337.1(NM_012459.2):c.6C[4]",
       "genomic": "NG_012337.1:g.4917G[4]",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (coding codon exception)",
+        "cluster": "coding-repeat-codon-exception",
+        "note": "Homopolymer delins equivalent to C[4] (unit length 1) in coding c.; repeat notation forbidden. ferro emits c.6_7insCCC (spec-mandated ins literal); mutalyzer's c.6C[4] is invalid."
+      }
     },
     {
       "keywords": [
@@ -3470,7 +3494,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.6C[4]",
       "genomic": "NG_012337.1:g.4917G[4]",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insPro)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (coding codon exception)",
+        "cluster": "coding-repeat-codon-exception",
+        "note": "Unit C (length 1) in coding c.; repeat notation forbidden (repeated.md L21). Reference has one C at c.6, so C[4] is a +3-copy expansion -> ferro emits c.6_7insCCC (the spec-mandated ins literal); mutalyzer's c.6C[4] is invalid."
+      }
     },
     {
       "keywords": [
