@@ -5,11 +5,12 @@ divergence between ferro-hgvs and mutalyzer on that axis (sorted + unique, one
 input per line).
 
 These files are **informational** — not read by the test runner or CI. The
-enforced gates are the per-case dispositions in `cases.json` (XPASS-guarded) and
-the `mock-pin/*.txt` regression pins. The committed live-FAIL set here is a
-**non-hermetic snapshot** (it can only be reproduced from a reference manifest);
-its principled retirement — seeding the untriaged rows into `cases.json` and
-deleting these snapshots — is tracked by #325 / #326.
+enforced gates are the per-case dispositions in `cases.json` (XPASS-guarded),
+the `mock-pin/*.txt` regression pins, and (on manifest runs only) the
+`empty-projection/<axis>.count` output-quality budget (#651). The committed
+live-FAIL set here is a **non-hermetic snapshot** (it can only be reproduced
+from a reference manifest); its principled retirement — seeding the untriaged
+rows into `cases.json` and deleting these snapshots — is tracked by #325 / #326.
 
 Do **not** hand-maintain counts in this directory. Per-axis disposition tallies
 are derived into the generated `../failure-patterns.md`

@@ -18,6 +18,8 @@ tests/fixtures/<upstream>-normalize/
 │   └── ...
 ├── mock-pin/                  # ferro's current behavior under MockProvider
 │   └── normalized.txt         # one line per case: `<input>\t<ferro_output_or_error>`
+├── empty-projection/          # per-axis empty/degenerate-projection count baseline (manifest runs)
+│   └── <axis>.count           # single integer; a rise above it fails the axis test (#651)
 ├── failure-patterns.md        # GENERATED summary (cluster taxonomy + tallies); never hand-edit
 └── NOTICE                     # upstream attribution + pinned SHA + refresh
 
@@ -62,6 +64,16 @@ Each corpus's test binary runs **three** logical layers against the same
   reports `skipping — no manifest` and exits 0.
 - Divergences fail the test on dev boxes; FAIL inputs are written to
   `/tmp/ferro-xfail/<axis>.{txt,tsv}` for burn-down tracking.
+- **Output-quality gate (#651):** the burn-down compares which inputs fail,
+  not the *quality* of each row's output, so a populated projection silently
+  degrading to empty (e.g. a framed `NG_(NM_):c…/NG_(NP_):p…` pair collapsing
+  to `[]`) stays in the same FAIL/annotated bucket and the membership diff
+  reports "0 regressions". To catch this, each axis also counts rows where
+  ferro produced an **empty/degenerate projection** (no protein predicted, or
+  `project_variant_all` yielded zero pairs) and fails if that count rises above
+  the committed `empty-projection/<axis>.count` baseline. Regenerate after an
+  intentional change with
+  `BLESS_EMPTY_PROJECTION=1 cargo nextest run --features dev -E 'test(axis_)'`.
 
 The committed `baseline-failures/<axis>.txt` is the static ledger of
 known FAILs at the time of the most recent burn-down PR. It is

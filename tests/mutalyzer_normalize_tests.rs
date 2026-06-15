@@ -75,6 +75,26 @@ const FIXTURE_PATH: &str = "tests/fixtures/mutalyzer-normalize/cases.json";
 const XFAIL_REPORT_DIR: &str = "/tmp/ferro-xfail";
 const FAIL_PRINT_LIMIT: usize = 10;
 
+/// Prefix an axis runner stamps on the `Err` it returns when ferro produced an
+/// **empty / degenerate projection** for a row — no protein predicted, or
+/// `project_variant_all` yielded zero coding/protein pairs (issue #651).
+///
+/// This is an *output-quality* signal distinct from bucket membership: the
+/// burn-down compares which inputs fail, not the *quality* of each row's `got`,
+/// so a populated projection silently degrading to empty (#498's regression
+/// shape: a framed `NG_(NM_):c…/NG_(NP_):p…` pair collapsing to `[]`) stays in
+/// the same FAIL/annotated bucket and the membership diff reports "0
+/// regressions". [`AxisTally::record`] recognizes this prefix and counts it in
+/// `empty_got` so a rise is caught even when membership is unchanged. The prefix
+/// is stripped from the human-facing diagnostic.
+const EMPTY_PROJECTION_SENTINEL: &str = "<empty-projection> ";
+
+/// Directory of committed per-axis empty-projection count baselines (one
+/// integer per `<axis>.count` file). A run with a manifest fails if an axis's
+/// `empty_got` rises above its baseline; regenerate with
+/// `BLESS_EMPTY_PROJECTION=1`. Absent file ⇒ baseline 0.
+const EMPTY_PROJECTION_BASELINE_DIR: &str = "tests/fixtures/mutalyzer-normalize/empty-projection";
+
 /// Policy label recorded for `infos`-axis accepted divergences. The upstream
 /// mutalyzer code is one ferro intentionally does not model
 /// (`error_handling::info_map::NO_FERRO_INFO_EQUIV`): a mutalyzer *internal*
@@ -222,6 +242,11 @@ struct AxisTally {
     improvement: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
+    /// Count of rows for which ferro produced an **empty / degenerate
+    /// projection** (tagged by [`EMPTY_PROJECTION_SENTINEL`]) — an
+    /// output-quality signal independent of which bucket the row lands in
+    /// (#651). Gated against a committed baseline in [`finish`](Self::finish).
+    empty_got: usize,
 }
 
 impl AxisTally {
@@ -235,6 +260,7 @@ impl AxisTally {
             improvement: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
+            empty_got: 0,
         }
     }
 
@@ -261,6 +287,16 @@ impl AxisTally {
     /// those are real bugs and must surface as FAIL even when an
     /// annotation is present.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
+        // Output-quality signal (#651): the axis runner stamps
+        // `EMPTY_PROJECTION_SENTINEL` on its `Err` when ferro produced nothing
+        // (no protein / zero pairs). Count it independently of the bucket the
+        // row falls into below, so a populated→empty degradation is visible
+        // even when bucket membership is unchanged. (An empty projection is
+        // always an `Err`, so it still falls through to `fail` as before.)
+        if matches!(&actual, Err(e) if e.starts_with(EMPTY_PROJECTION_SENTINEL)) {
+            self.empty_got += 1;
+        }
+
         let matches = matches!(&actual, Ok(s) if s == expected);
         if matches {
             // XPASS detection: a match on an axis that carries an
@@ -339,7 +375,15 @@ impl AxisTally {
         }
         let diag = match actual {
             Ok(got) => format!("expected={expected:?} got={got:?}"),
-            Err(e) => format!("expected={expected:?} err={e}"),
+            Err(e) => {
+                // Strip the internal empty-projection sentinel from the
+                // human-facing diagnostic (it's already accounted in
+                // `empty_got`); tag it so the FAIL line still reads clearly.
+                match e.strip_prefix(EMPTY_PROJECTION_SENTINEL) {
+                    Some(rest) => format!("expected={expected:?} err=[empty projection] {rest}"),
+                    None => format!("expected={expected:?} err={e}"),
+                }
+            }
         };
         self.fail.push((case.input.clone(), diag));
     }
@@ -348,7 +392,7 @@ impl AxisTally {
     /// format used by both `finish()` and unit tests.
     fn summary_line(&self, report_path: &Path) -> String {
         format!(
-            "{}: {} pass / {} divergence_accepted / {} known_bug / {} improvement / {} spec_overridden / {} FAIL / {} skipped (FAIL inputs -> {})",
+            "{}: {} pass / {} divergence_accepted / {} known_bug / {} improvement / {} spec_overridden / {} FAIL / {} empty / {} skipped (FAIL inputs -> {})",
             self.axis,
             self.pass,
             self.divergence_accepted.len(),
@@ -356,6 +400,7 @@ impl AxisTally {
             self.improvement.len(),
             self.spec_overridden.len(),
             self.fail.len(),
+            self.empty_got,
             self.skipped,
             report_path.display()
         )
@@ -445,6 +490,37 @@ impl AxisTally {
             );
         }
 
+        // Output-quality gate (#651): an empty/degenerate-projection count that
+        // rose above the committed baseline is a regression even if the FAIL
+        // *set* is unchanged. `finish` only runs with a manifest (the axis tests
+        // early-return otherwise), so this never affects manifest-less CI.
+        let baseline_path = empty_projection_baseline_path(self.axis);
+        if std::env::var("BLESS_EMPTY_PROJECTION").is_ok() {
+            if self.empty_got > 0 {
+                let _ = fs::create_dir_all(Path::new(EMPTY_PROJECTION_BASELINE_DIR));
+                fs::write(&baseline_path, format!("{}\n", self.empty_got))
+                    .unwrap_or_else(|e| panic!("write {}: {e}", baseline_path.display()));
+            } else {
+                // An axis with no empty projections needs no baseline file
+                // (load treats a missing file as 0); drop any stale one.
+                let _ = fs::remove_file(&baseline_path);
+            }
+            eprintln!(
+                "blessed empty-projection baseline {} = {}",
+                self.axis, self.empty_got
+            );
+            return;
+        }
+        let baseline = load_empty_projection_baseline(self.axis);
+        if let Err(msg) = empty_budget_verdict(self.empty_got, baseline) {
+            panic!(
+                "{}: {msg} — a populated projection degraded to empty (output quality regressed \
+                 even though the FAIL set may be unchanged). Investigate, or re-bless with \
+                 BLESS_EMPTY_PROJECTION=1 if the increase is intentional.",
+                self.axis
+            );
+        }
+
         assert!(
             self.fail.is_empty(),
             "{}: {} divergence(s) from mutalyzer — see {} and tests/fixtures/mutalyzer-normalize/failure-patterns.md",
@@ -452,6 +528,39 @@ impl AxisTally {
             self.fail.len(),
             report_path.display()
         );
+    }
+}
+
+/// Path of the committed empty-projection count baseline for `axis`.
+fn empty_projection_baseline_path(axis: Axis) -> PathBuf {
+    Path::new(EMPTY_PROJECTION_BASELINE_DIR).join(format!("{axis}.count"))
+}
+
+/// Load the committed empty-projection baseline count for `axis`. A missing file
+/// is treated as baseline `0` (no empty projections expected); an existing but
+/// unparseable file panics so corruption surfaces immediately rather than being
+/// silently read as `0` (which would lose the true baseline and misreport the
+/// regression as `0 -> N`).
+fn load_empty_projection_baseline(axis: Axis) -> usize {
+    let path = empty_projection_baseline_path(axis);
+    match fs::read_to_string(&path) {
+        Ok(s) => s.trim().parse::<usize>().unwrap_or_else(|e| {
+            panic!("baseline file {} is not a valid usize: {e}", path.display())
+        }),
+        Err(_) => 0, // missing file -> baseline 0
+    }
+}
+
+/// Verdict for the #651 empty-projection budget: `Ok` while the observed count
+/// is at or below the committed baseline (equal = unchanged, below =
+/// improvement), `Err` with a message when it rises (a regression).
+fn empty_budget_verdict(observed: usize, baseline: usize) -> Result<(), String> {
+    if observed > baseline {
+        Err(format!(
+            "empty-projection count rose {baseline} -> {observed}"
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -734,7 +843,10 @@ fn axis_protein_description() {
                 .protein
                 .as_ref()
                 .map(|p| format!("{p}"))
-                .ok_or_else(|| "no protein predicted".to_string())
+                // Empty/degenerate projection (#651): expected a protein but
+                // ferro predicted none. Tag it so the harness counts the
+                // output-quality degradation, not just the bucket membership.
+                .ok_or_else(|| format!("{EMPTY_PROJECTION_SENTINEL}no protein predicted"))
         });
 
         t.record(case, expected, actual);
@@ -777,6 +889,17 @@ fn axis_coding_protein_descriptions() {
                     Some((c, p))
                 })
                 .collect();
+
+            // Empty/degenerate projection (#651): mutalyzer expects at least
+            // one coding/protein pair but `project_variant_all` yielded none.
+            // Tag it as an empty projection (distinct from "produced some pairs
+            // but missing a specific one") so a populated→empty degradation is
+            // counted as an output-quality regression, not just a set member.
+            if actual_pairs.is_empty() && pairs.iter().any(|p| p.len() == 2) {
+                return Err(format!(
+                    "{EMPTY_PROJECTION_SENTINEL}project_variant_all produced no coding/protein pairs; expected {expected_repr}"
+                ));
+            }
 
             for pair in pairs {
                 if pair.len() != 2 {
@@ -1579,7 +1702,7 @@ mod comparator_tests {
         let line = t.summary_line(&path);
         assert_eq!(
             line,
-            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 0 improvement / 1 spec_overridden / 1 FAIL / 0 skipped \
+            "normalized: 1 pass / 1 divergence_accepted / 0 known_bug / 0 improvement / 1 spec_overridden / 1 FAIL / 0 empty / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
         );
     }
@@ -1852,5 +1975,84 @@ mod comparator_tests {
         );
         assert_eq!(t.fail.len(), 1);
         assert!(t.fail[0].1.contains("err=normalize: panic boom"));
+    }
+
+    // ---- Output-quality / empty-projection signal (#651) -------------------
+
+    // (21) An empty-projection-sentinel `Err` increments `empty_got`, and the
+    // sentinel is stripped (and tagged) in the FAIL diagnostic.
+    #[test]
+    fn tally_empty_projection_sentinel_counts_and_strips() {
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        let case = make_case("in", None, None);
+        t.record(
+            &case,
+            "NP_x:p.(Arg1Cys)",
+            Err(format!("{EMPTY_PROJECTION_SENTINEL}no protein predicted")),
+        );
+        assert_eq!(t.empty_got, 1);
+        // Still a FAIL (an empty projection is an Err), with a clean diagnostic.
+        assert_eq!(t.fail.len(), 1);
+        assert!(
+            t.fail[0]
+                .1
+                .contains("err=[empty projection] no protein predicted"),
+            "diagnostic should strip the sentinel and tag it: {}",
+            t.fail[0].1
+        );
+        assert!(!t.fail[0].1.contains(EMPTY_PROJECTION_SENTINEL));
+    }
+
+    // (22) A non-empty (ordinary) `Err` mismatch does NOT count as empty.
+    #[test]
+    fn tally_ordinary_err_is_not_counted_empty() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case("in", None, None);
+        t.record(
+            &case,
+            "[...]",
+            Err("missing pair (\"c\", \"p\"); got []".to_string()),
+        );
+        assert_eq!(t.empty_got, 0);
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (23) An empty projection on an *annotated* axis is counted as empty even
+    // though the annotation would otherwise silence a string mismatch — and an
+    // `Err` is never silenced into the annotation bucket, so it still FAILs.
+    // This is the core #651 guarantee: a populated→empty degradation surfaces.
+    #[test]
+    fn tally_empty_projection_on_annotated_row_still_surfaces() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let mut case = make_case("in", None, None);
+        case.known_bug = Some(KnownBug {
+            axis: Axis::CodingProteinDescriptions,
+            tracking_issue: 326,
+            note: None,
+            cluster: None,
+        });
+        t.record(
+            &case,
+            "[(\"c\", \"p\")]",
+            Err(format!(
+                "{EMPTY_PROJECTION_SENTINEL}project_variant_all produced no coding/protein pairs"
+            )),
+        );
+        assert_eq!(t.empty_got, 1);
+        assert!(
+            t.known_bug.is_empty(),
+            "empty-projection Err must not be silenced into the known_bug bucket"
+        );
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (24) The budget verdict: at-or-below baseline passes, above fails.
+    #[test]
+    fn empty_budget_verdict_gates_only_on_rise() {
+        assert!(empty_budget_verdict(0, 0).is_ok());
+        assert!(empty_budget_verdict(5, 5).is_ok(), "equal = unchanged");
+        assert!(empty_budget_verdict(3, 5).is_ok(), "below = improvement");
+        let err = empty_budget_verdict(6, 5).expect_err("rise must fail");
+        assert!(err.contains("5 -> 6"), "message names the rise: {err}");
     }
 }
