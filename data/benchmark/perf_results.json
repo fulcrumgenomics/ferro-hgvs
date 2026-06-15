@@ -2,7 +2,7 @@
   "schema_version": 1,
   "placeholder": false,
   "provenance": {
-    "generated": "2026-06-13T06:17:50.943027+00:00",
+    "generated": "2026-06-14T01:47:23.095282+00:00",
     "corpus_id": "clinvar_patterns",
     "corpus_sha": "2382f8f849b749ae",
     "machine": "Apple M2 Max (12 cores)",
@@ -14,45 +14,46 @@
       "mutalyzer": "3.1.1"
     },
     "notes": [
-      "normalize throughput for mutalyzer/biocommons includes Python subprocess startup in the timed region (ferro/hgvs-rs exclude it; <2% at this sample size); parse throughput excludes Python startup (measured by the subprocess's internal timer). See issue tracker."
+      "All tools exclude process/interpreter startup from the timed region: the mutalyzer/biocommons subprocesses are timed by their own internal (startup-excluded) timer for both parse and normalize, matching ferro/hgvs-rs (#609). For mutalyzer normalize at >1 worker under the pre-sharded cache, the internal time is the slowest shard's critical path — a lower bound that still excludes the dominant per-process startup term.",
+      "Known anomaly: operations.normalize.ferro_scaling['2'] (~221515 pps) is a transient single-rep measurement outlier — ~13x the 1-thread value and higher than the 4- and 8-thread values, which is physically impossible for thread scaling. The ferro_scaling series is single-rep (no median/min/max), so it is vulnerable to a one-off outlier rep. Treat the normalize 2-thread scaling figure as unreliable; the parse ferro_scaling series and all by_workers blocks are unaffected. To be resolved by a re-run of the benchmark matrix (see docs/BENCHMARK_RUNBOOK.md)."
     ]
   },
   "operations": {
     "normalize": {
       "sample_size_slow": 50,
       "ferro_full_population_n": 1000000,
-      "ferro_full_population_pps": 72539.12228707611,
+      "ferro_full_population_pps": 74504.55471894334,
       "by_workers": {
         "1": {
           "tools": {
             "biocommons": {
-              "median_pps": 225.6803785454343,
-              "min_pps": 221.30470783283315,
-              "max_pps": 231.44967838988464,
+              "median_pps": 314.0610024944673,
+              "min_pps": 162.7770502467187,
+              "max_pps": 326.6881045966133,
               "reps": 5,
-              "success_rate": 0.65,
+              "success_rate": 0.6521246458923512,
               "not_run": false
             },
             "ferro": {
-              "median_pps": 5387.4181457778695,
-              "min_pps": 5283.0529305022155,
-              "max_pps": 5615.825095221871,
+              "median_pps": 12202.390927599748,
+              "min_pps": 12043.348194992586,
+              "max_pps": 17732.148629240502,
               "reps": 5,
-              "success_rate": 0.9989089255947871,
+              "success_rate": 0.9990671641791046,
               "not_run": false
             },
             "hgvs-rs": {
-              "median_pps": 144.43102388563642,
-              "min_pps": 133.22230913658052,
-              "max_pps": 158.36538620398883,
+              "median_pps": 162.28888942477965,
+              "min_pps": 158.78540769464283,
+              "max_pps": 171.86633164318854,
               "reps": 5,
-              "success_rate": 0.6596958174904943,
+              "success_rate": 0.6635814889336016,
               "not_run": false
             },
             "mutalyzer": {
-              "median_pps": 1.1651671305536855,
-              "min_pps": 0.8702070366994676,
-              "max_pps": 1.4285070896324739,
+              "median_pps": 3.7847514219736875,
+              "min_pps": 2.2000254161280237,
+              "max_pps": 7.624112594997838,
               "reps": 5,
               "success_rate": 0.78,
               "not_run": false
@@ -62,33 +63,33 @@
         "8": {
           "tools": {
             "biocommons": {
-              "median_pps": 205.88388571642858,
-              "min_pps": 196.40325443531455,
-              "max_pps": 223.46030617678812,
+              "median_pps": 302.4743883745074,
+              "min_pps": 281.186390298519,
+              "max_pps": 352.5645387635826,
               "reps": 5,
-              "success_rate": 0.6214285714285714,
+              "success_rate": 0.6453257790368271,
               "not_run": false
             },
             "ferro": {
-              "median_pps": 38125.40013182295,
-              "min_pps": 37663.74275062132,
-              "max_pps": 39070.214853973484,
+              "median_pps": 88850.05750906999,
+              "min_pps": 63629.20555308756,
+              "max_pps": 108856.66232983212,
               "reps": 5,
-              "success_rate": 0.9989089255947871,
+              "success_rate": 0.9990671641791046,
               "not_run": false
             },
             "hgvs-rs": {
-              "median_pps": 1013.7143740996071,
-              "min_pps": 940.0093250712137,
-              "max_pps": 1024.3639413181625,
+              "median_pps": 934.269796251172,
+              "min_pps": 682.767414921551,
+              "max_pps": 975.9562763733405,
               "reps": 5,
-              "success_rate": 0.6596958174904943,
+              "success_rate": 0.6635814889336016,
               "not_run": false
             },
             "mutalyzer": {
-              "median_pps": 2.9159343703053517,
-              "min_pps": 1.673894746444094,
-              "max_pps": 3.6740359766789106,
+              "median_pps": 3.459116095913316,
+              "min_pps": 1.0744647382362809,
+              "max_pps": 6.794467274050015,
               "reps": 5,
               "success_rate": 0.78,
               "not_run": false
@@ -97,55 +98,55 @@
         }
       },
       "ferro_scaling": {
-        "1": 6018.6702836914155,
-        "2": 13496.678112459193,
-        "4": 33081.52887396095,
-        "8": 56136.60022882874
+        "1": 17119.094259064434,
+        "2": 221515.01807765051,
+        "4": 50145.96182042237,
+        "8": 86348.17527507598
       },
       "sample_sizes": {
-        "biocommons": 280,
-        "ferro": 6599,
-        "hgvs-rs": 526,
+        "biocommons": 353,
+        "ferro": 8576,
+        "hgvs-rs": 497,
         "mutalyzer": 50
       }
     },
     "parse": {
-      "sample_size_slow": 791,
+      "sample_size_slow": 795,
       "ferro_full_population_n": 1000000,
-      "ferro_full_population_pps": 11554576.795599721,
+      "ferro_full_population_pps": 11243071.41507894,
       "by_workers": {
         "1": {
           "tools": {
             "biocommons": {
-              "median_pps": 3767.472280072449,
-              "min_pps": 3572.603918371806,
-              "max_pps": 3796.6520307804526,
+              "median_pps": 3616.998433534247,
+              "min_pps": 3524.071655764142,
+              "max_pps": 3872.246837174446,
               "reps": 5,
-              "success_rate": 0.9913922737879182,
+              "success_rate": 0.9913817486066051,
               "not_run": false
             },
             "ferro": {
-              "median_pps": 3052936.3299215375,
-              "min_pps": 3025615.5162915573,
-              "max_pps": 3081288.925399054,
+              "median_pps": 3081456.4938758854,
+              "min_pps": 2693023.189901545,
+              "max_pps": 3102989.4961899845,
               "reps": 5,
-              "success_rate": 0.9999883266495295,
+              "success_rate": 0.9999877752988799,
               "not_run": false
             },
             "hgvs-rs": {
-              "median_pps": 3563356.7008815734,
-              "min_pps": 3532722.9151984337,
-              "max_pps": 3586412.6739475843,
+              "median_pps": 3537316.103535877,
+              "min_pps": 3442493.3635182623,
+              "max_pps": 3579113.27915898,
               "reps": 5,
-              "success_rate": 0.9911943352532907,
+              "success_rate": 0.9911977000000001,
               "not_run": false
             },
             "mutalyzer": {
-              "median_pps": 337.1276831104815,
-              "min_pps": 327.5870089507934,
-              "max_pps": 340.27847479705434,
+              "median_pps": 335.9756077870706,
+              "min_pps": 323.96841067460633,
+              "max_pps": 339.1216371682769,
               "reps": 5,
-              "success_rate": 0.9987357774968395,
+              "success_rate": 0.9987421383647799,
               "not_run": false
             }
           }
@@ -153,51 +154,51 @@
         "8": {
           "tools": {
             "biocommons": {
-              "median_pps": 3805.9840909064174,
-              "min_pps": 3728.1717007411207,
-              "max_pps": 3841.9332144736118,
+              "median_pps": 3692.446437194751,
+              "min_pps": 3588.7909811958298,
+              "max_pps": 3829.1619811835394,
               "reps": 5,
-              "success_rate": 0.9913922737879182,
+              "success_rate": 0.9913817486066051,
               "not_run": false
             },
             "ferro": {
-              "median_pps": 9280211.014646983,
-              "min_pps": 7916425.611381981,
-              "max_pps": 9794341.99432776,
+              "median_pps": 10324710.298715437,
+              "min_pps": 9220947.324262096,
+              "max_pps": 10401746.144627254,
               "reps": 5,
-              "success_rate": 0.9999883266495295,
+              "success_rate": 0.9999877752988799,
               "not_run": false
             },
             "hgvs-rs": {
-              "median_pps": 3575212.6139989714,
-              "min_pps": 2926769.0762921283,
-              "max_pps": 3628555.538104296,
+              "median_pps": 3525264.651664404,
+              "min_pps": 3504675.198162922,
+              "max_pps": 3551151.8620938864,
               "reps": 5,
-              "success_rate": 0.9911943352532907,
+              "success_rate": 0.9911977000000001,
               "not_run": false
             },
             "mutalyzer": {
-              "median_pps": 336.0508835160341,
-              "min_pps": 240.7632834960466,
-              "max_pps": 339.9351068762025,
+              "median_pps": 335.7832841866961,
+              "min_pps": 163.99244807644243,
+              "max_pps": 336.92885399858403,
               "reps": 5,
-              "success_rate": 0.9987357774968395,
+              "success_rate": 0.9987421383647799,
               "not_run": false
             }
           }
         }
       },
       "ferro_scaling": {
-        "1": 3004761.7003280125,
-        "2": 5077909.134826253,
-        "4": 7333766.874772978,
-        "8": 9049465.3472973
+        "1": 3025491.785910047,
+        "2": 5066775.747067773,
+        "4": 7958707.101128423,
+        "8": 9259498.654412013
       },
       "sample_sizes": {
-        "biocommons": 11571,
-        "ferro": 411193,
-        "hgvs-rs": 1795526,
-        "mutalyzer": 791
+        "biocommons": 12021,
+        "ferro": 1079781,
+        "hgvs-rs": 2000000,
+        "mutalyzer": 795
       }
     }
   }
