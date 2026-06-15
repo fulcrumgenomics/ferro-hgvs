@@ -264,6 +264,36 @@ enum Commands {
         workers: usize,
     },
 
+    /// Project an HGVS variant onto a chosen output axis (g/c/n/p/r)
+    Project {
+        /// HGVS variant to project
+        variant: Option<String>,
+
+        /// Output axis: g (genomic), c (coding), n (non-coding), p (protein), r (RNA)
+        #[arg(long, required = true, value_parser = ["g", "c", "n", "p", "r"])]
+        axis: String,
+
+        /// Transcript accession to project onto (required for a bare g. input)
+        #[arg(long)]
+        transcript: Option<String>,
+
+        /// Input file (one variant per line)
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format
+        #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+
+        /// Reference directory (with manifest.json from 'ferro prepare')
+        #[arg(long, required = true)]
+        reference: PathBuf,
+    },
+
     /// Parse HGVS variants (validation only)
     Parse {
         /// HGVS variant to parse
@@ -704,6 +734,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &config,
             )
         }
+        Commands::Project {
+            variant,
+            axis,
+            transcript,
+            input,
+            output,
+            format,
+            reference,
+        } => run_project(
+            variant.as_deref(),
+            &axis,
+            transcript.as_deref(),
+            input.as_ref(),
+            output.as_ref(),
+            &format,
+            &reference,
+        ),
         Commands::Parse {
             variant,
             input,
@@ -1528,6 +1575,123 @@ fn run_normalize(
 
     if error_count > 0 {
         Err(format!("{} variant(s) failed to normalize", error_count).into())
+    } else {
+        Ok(())
+    }
+}
+
+fn run_project(
+    variant: Option<&str>,
+    axis: &str,
+    transcript: Option<&str>,
+    input: Option<&PathBuf>,
+    output: Option<&PathBuf>,
+    format: &str,
+    reference: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::cli::format::{output_project_error, output_projection};
+    use ferro_hgvs::cli::{project_axis, Axis, OutputFormat};
+    use ferro_hgvs::data::cdot::CdotMapper;
+    use ferro_hgvs::data::projection::Projector;
+    use ferro_hgvs::project::VariantProjector;
+    use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
+    use std::sync::Arc;
+
+    let axis = Axis::parse(axis).expect("clap value_parser guarantees a valid axis");
+    // OutputFormat: FromStr (Infallible) — use the inherent str::parse so no
+    // `use std::str::FromStr` is needed; Default = Text covers the never-taken err arm.
+    let out_format: OutputFormat = format.parse().unwrap_or_default();
+
+    // Build the projector. The Box<dyn ReferenceProvider> from
+    // create_reference_provider is not Clone, and VariantProjector requires
+    // P: Clone. MultiFastaProvider is itself NOT Clone, but `Arc<T>` has a
+    // blanket `impl ReferenceProvider` (reference/provider.rs) and is Clone, so
+    // build the concrete provider, extract the owned cdot, then project through
+    // an Arc.
+    let manifest_path = reference.join("manifest.json");
+    let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+    // Extract owned cdot BEFORE moving the provider into the Arc.
+    let cdot = provider
+        .cdot_mapper()
+        .cloned()
+        .unwrap_or_else(CdotMapper::new);
+    let provider = Arc::new(provider);
+    let projector = VariantProjector::new(Projector::new(cdot), provider);
+
+    let mut writer: Box<dyn Write> = match output {
+        Some(path) => Box::new(BufWriter::new(File::create(path)?)),
+        None => Box::new(io::stdout()),
+    };
+    let mut error_count = 0usize;
+
+    let process = |v: &str, writer: &mut dyn Write, line: Option<usize>| -> bool {
+        let parsed = match parse_hgvs(v) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = cli_output_error_with_context(&mut io::stderr(), v, &e, out_format, line);
+                return false;
+            }
+        };
+        match project_axis(&projector, &parsed, axis, transcript) {
+            Ok(outcome) => {
+                // A failed write to the result stream (e.g. a full or unwritable
+                // --output file) must not be reported as success; count it so the
+                // exit code reflects the truncated output. (A broken pipe from a
+                // downstream `| head` lands here too and exits nonzero, which is
+                // acceptable — the output was genuinely truncated.)
+                if let Err(e) = output_projection(writer, v, axis, &outcome, out_format, line) {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "ERROR: failed writing output for {}: {}",
+                        v,
+                        e
+                    );
+                    return false;
+                }
+                true
+            }
+            Err(e) => {
+                // Format-aware so `--format json` stays parseable (parity with the
+                // parse-error path above, which uses cli_output_error_with_context).
+                let _ = output_project_error(&mut io::stderr(), v, &e.0, out_format, line);
+                false
+            }
+        }
+    };
+
+    if let Some(v) = variant {
+        if !process(v, &mut writer, None) {
+            error_count += 1;
+        }
+    } else if let Some(input_path) = input {
+        let file = std::fs::File::open(input_path)?;
+        let reader = io::BufReader::new(file);
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if let Some(vs) = process_input_line(&line, line_num == 0) {
+                if !process(vs, &mut writer, Some(line_num + 1)) {
+                    error_count += 1;
+                }
+            }
+        }
+    } else {
+        let stdin = io::stdin();
+        for (line_num, line) in stdin.lock().lines().enumerate() {
+            let line = line?;
+            if let Some(vs) = process_input_line(&line, line_num == 0) {
+                if !process(vs, &mut writer, Some(line_num + 1)) {
+                    error_count += 1;
+                }
+            }
+        }
+    }
+
+    // Flush the BufWriter explicitly so a write error surfaces here rather than
+    // being silently swallowed by the drop-time flush (parity with run_parse).
+    writer.flush()?;
+
+    if error_count > 0 {
+        Err(format!("{} variant(s) failed to project", error_count).into())
     } else {
         Ok(())
     }
