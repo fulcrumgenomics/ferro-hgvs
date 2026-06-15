@@ -246,10 +246,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {
                     // Keep original
@@ -284,10 +284,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -317,10 +317,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -353,10 +353,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -427,10 +427,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -467,10 +467,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -579,10 +579,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -619,10 +619,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -653,10 +653,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -690,10 +690,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -726,10 +726,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -767,10 +767,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -803,10 +803,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -842,10 +842,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1005,10 +1005,10 @@ impl InputPreprocessor {
                     for c in &dup_seq_hits {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = rewritten_dup_seq;
+                    current = rewritten_dup_seq.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = rewritten_dup_seq;
+                    current = rewritten_dup_seq.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1046,10 +1046,10 @@ impl InputPreprocessor {
                     for c in &del_seq_hits {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = rewritten_del_seq;
+                    current = rewritten_del_seq.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = rewritten_del_seq;
+                    current = rewritten_del_seq.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1083,10 +1083,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1120,10 +1120,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1162,10 +1162,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
@@ -1206,10 +1206,10 @@ impl InputPreprocessor {
                     for c in &corrections {
                         all_warnings.push(CorrectionWarning::from_correction(c));
                     }
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::SilentCorrect => {
-                    current = corrected;
+                    current = corrected.into_owned();
                 }
                 ResolvedAction::Accept => {}
             }
