@@ -8,7 +8,7 @@
 use clap::{Parser, Subcommand};
 use ferro_hgvs::cli::{
     output_error as cli_output_error, output_error_with_context as cli_output_error_with_context,
-    parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line,
+    parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line, OutputFormat,
 };
 use ferro_hgvs::config::{warn_unmapped_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
@@ -22,6 +22,7 @@ use ferro_hgvs::sequence::reverse_complement;
 use ferro_hgvs::vcf::{generate_info_header_lines, open_vcf, VcfAnnotator, VcfRecord};
 use ferro_hgvs::{parse_hgvs, FerroError, NormalizeConfig, Normalizer, ReferenceProvider};
 use flate2::read::MultiGzDecoder;
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -1124,6 +1125,126 @@ fn run_hgvs_to_vcf(
     Ok(())
 }
 
+/// Outcome of processing one input line in the batch normalize/parse driver.
+enum LineStatus {
+    /// Line was blank/comment and produced no output (not counted).
+    Skipped,
+    /// Variant processed successfully.
+    Ok,
+    /// Variant failed (error already formatted into `stderr`).
+    Err,
+}
+
+/// One input line's fully-formatted output, captured into per-line buffers so
+/// the batch driver can write results in input order regardless of whether they
+/// were produced serially or in parallel.
+struct LineResult {
+    /// Bytes destined for the order-critical stdout/file stream.
+    stdout: Vec<u8>,
+    /// Bytes destined for stderr (warnings and/or error diagnostics).
+    stderr: Vec<u8>,
+    status: LineStatus,
+}
+
+impl LineResult {
+    fn skipped() -> Self {
+        LineResult {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            status: LineStatus::Skipped,
+        }
+    }
+}
+
+/// Number of input lines processed per batch before their results are written.
+/// Bounds memory (only one chunk is in flight) while giving rayon enough work
+/// per fan-out to amortize scheduling overhead.
+const BATCH_CHUNK_LINES: usize = 8192;
+
+/// Drive a batch of input lines through `item`, writing each line's output in
+/// input order. With `workers <= 1` the work runs serially; with `workers > 1`
+/// each chunk is mapped across a dedicated rayon pool (order preserved by
+/// `par_iter().collect()`), then drained serially. Returns
+/// `(total, success, error)` counts (skipped lines are not counted).
+fn run_batch<I, F>(
+    lines: I,
+    writer: &mut dyn Write,
+    workers: usize,
+    item: &F,
+) -> io::Result<(usize, usize, usize)>
+where
+    I: Iterator<Item = io::Result<String>>,
+    F: Fn(usize, &str) -> LineResult + Sync,
+{
+    let pool = if workers > 1 {
+        Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .map_err(|e| io::Error::other(e.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let stderr = io::stderr();
+
+    let mut counts = (0usize, 0usize, 0usize);
+    let mut chunk: Vec<(usize, String)> = Vec::with_capacity(BATCH_CHUNK_LINES);
+    for (line_num, line) in lines.enumerate() {
+        chunk.push((line_num, line?));
+        if chunk.len() >= BATCH_CHUNK_LINES {
+            flush_chunk(&chunk, pool.as_ref(), item, writer, &stderr, &mut counts)?;
+            chunk.clear();
+        }
+    }
+    flush_chunk(&chunk, pool.as_ref(), item, writer, &stderr, &mut counts)?;
+    Ok(counts)
+}
+
+/// Process one chunk (in parallel when `pool` is `Some`, else serially) and
+/// write its results to `writer`/`stderr` in input order, updating
+/// `(total, success, error)`.
+fn flush_chunk<F>(
+    chunk: &[(usize, String)],
+    pool: Option<&rayon::ThreadPool>,
+    item: &F,
+    writer: &mut dyn Write,
+    stderr: &io::Stderr,
+    counts: &mut (usize, usize, usize),
+) -> io::Result<()>
+where
+    F: Fn(usize, &str) -> LineResult + Sync,
+{
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    let results: Vec<LineResult> = match pool {
+        Some(p) => p.install(|| chunk.par_iter().map(|(ln, l)| item(*ln, l)).collect()),
+        None => chunk.iter().map(|(ln, l)| item(*ln, l)).collect(),
+    };
+    let mut err_handle = stderr.lock();
+    for r in &results {
+        match r.status {
+            LineStatus::Skipped => continue,
+            LineStatus::Ok => {
+                counts.0 += 1;
+                counts.1 += 1;
+            }
+            LineStatus::Err => {
+                counts.0 += 1;
+                counts.2 += 1;
+            }
+        }
+        if !r.stdout.is_empty() {
+            writer.write_all(&r.stdout)?;
+        }
+        if !r.stderr.is_empty() {
+            err_handle.write_all(&r.stderr)?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_normalize(
     variant: Option<&str>,
@@ -1133,7 +1254,7 @@ fn run_normalize(
     direction: &str,
     reference: Option<&PathBuf>,
     timing: Option<&PathBuf>,
-    _workers: usize, // Reserved for future parallel implementation
+    workers: usize,
     error_config: &ErrorConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::commands::create_reference_provider;
@@ -1159,7 +1280,11 @@ fn run_normalize(
     let mut total_count = 0usize;
     let start = Instant::now();
 
-    let process = |v: &str, writer: &mut dyn Write| -> Result<(), FerroError> {
+    // Per-line work, factored so it can run serially or in parallel: `out`
+    // receives the success output (the order-critical stdout/file stream) and
+    // `err` receives text-mode warnings. Both are written into per-line buffers
+    // by the batch driver, so parallel output is byte-identical to serial.
+    let process = |v: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<(), FerroError> {
         // Preprocess input according to error mode
         let preprocess_result = preprocessor.preprocess(v);
         if !preprocess_result.success {
@@ -1194,7 +1319,7 @@ fn run_normalize(
                     })
                     .collect();
                 writeln!(
-                    writer,
+                    out,
                     r#"{{"input": "{}", "output": "{}", "status": "ok", "corrections": [{}]}}"#,
                     v,
                     normalized,
@@ -1203,13 +1328,15 @@ fn run_normalize(
                 .map_err(|e| FerroError::Io { msg: e.to_string() })?;
             }
             _ => {
-                // Print warnings to stderr if any
+                // Emit warnings to the stderr buffer if any
                 for warning in &preprocess_result.warnings {
-                    eprintln!(
+                    writeln!(
+                        err,
                         "warning[{}]: {}",
                         warning.error_type.code(),
                         warning.message
-                    );
+                    )
+                    .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 }
                 // Format the normalized variant once and reuse it for both the
                 // unchanged-vs-changed comparison and the written output. The
@@ -1218,10 +1345,10 @@ fn run_normalize(
                 // the `Display` cost twice per line (~8% of a batch run).
                 let normalized_str = normalized.to_string();
                 if v == normalized_str {
-                    writeln!(writer, "{}", normalized_str)
+                    writeln!(out, "{}", normalized_str)
                         .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 } else {
-                    writeln!(writer, "{} -> {}", v, normalized_str)
+                    writeln!(out, "{} -> {}", v, normalized_str)
                         .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 }
             }
@@ -1230,44 +1357,69 @@ fn run_normalize(
     };
 
     if let Some(v) = variant {
+        // Single-variant path: unchanged (no line context, errors via
+        // `output_error`). Warnings go straight to the live stderr.
         total_count += 1;
-        if let Err(e) = process(v, &mut writer) {
+        let mut stderr = io::stderr();
+        if let Err(e) = process(v, &mut writer, &mut stderr) {
             output_error(v, &e, format)?;
             error_count += 1;
         } else {
             success_count += 1;
         }
-    } else if let Some(input_path) = input {
-        let file = std::fs::File::open(input_path)?;
-        let reader = io::BufReader::new(file);
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            let is_first = line_num == 0;
-            if let Some(variant_str) = process_input_line(&line, is_first) {
-                total_count += 1;
-                if let Err(e) = process(variant_str, &mut writer) {
-                    output_error_with_line(variant_str, &e, format, Some(line_num + 1))?;
-                    error_count += 1;
-                } else {
-                    success_count += 1;
-                }
-            }
-        }
     } else {
-        let stdin = io::stdin();
-        for (line_num, line) in stdin.lock().lines().enumerate() {
-            let line = line?;
+        // Batch path (file or stdin): each input line is turned into a
+        // `LineResult` (success output + warnings/error pre-formatted into
+        // per-line buffers) by `item`, then `run_batch` writes them in input
+        // order — serially or, when `workers > 1`, across a rayon pool. Because
+        // every line is formatted into its own buffers with the exact same
+        // code, parallel output is byte-identical to serial.
+        let format_owned: OutputFormat = format.parse().unwrap_or_default();
+        let item = |line_num: usize, line: &str| -> LineResult {
             let is_first = line_num == 0;
-            if let Some(variant_str) = process_input_line(&line, is_first) {
-                total_count += 1;
-                if let Err(e) = process(variant_str, &mut writer) {
-                    output_error_with_line(variant_str, &e, format, Some(line_num + 1))?;
-                    error_count += 1;
-                } else {
-                    success_count += 1;
+            let Some(variant_str) = process_input_line(line, is_first) else {
+                return LineResult::skipped();
+            };
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let status = match process(variant_str, &mut out, &mut err) {
+                Ok(()) => LineStatus::Ok,
+                Err(e) => {
+                    // Mirror `output_error_with_line`: format the error (with
+                    // 1-based line number) into the per-line stderr buffer.
+                    let _ = cli_output_error_with_context(
+                        &mut err,
+                        variant_str,
+                        &e,
+                        format_owned,
+                        Some(line_num + 1),
+                    );
+                    LineStatus::Err
                 }
+            };
+            LineResult {
+                stdout: out,
+                stderr: err,
+                status,
             }
-        }
+        };
+
+        let (t, s, er) = if let Some(input_path) = input {
+            let file = std::fs::File::open(input_path)?;
+            run_batch(
+                io::BufReader::new(file).lines(),
+                &mut writer,
+                workers,
+                &item,
+            )?
+        } else {
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+            run_batch(reader.lines(), &mut writer, workers, &item)?
+        };
+        total_count += t;
+        success_count += s;
+        error_count += er;
     }
 
     let elapsed = start.elapsed();
