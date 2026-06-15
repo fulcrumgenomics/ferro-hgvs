@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use bincode::Options;
 use serde::{Deserialize, Serialize};
+use superintervals::IntervalMap;
 
 use crate::error::FerroError;
 use crate::reference::annotation::AnnotationFormat;
@@ -172,6 +174,47 @@ pub struct TranscriptDb {
     mane_plus_clinical_index: HashMap<String, Vec<String>>,
     /// Genome build
     pub genome_build: GenomeBuild,
+    /// Lazily-built per-contig interval index for `get_by_region`, derived from
+    /// `region_index`. The flat `region_index` is a linear scan per query; this
+    /// turns each overlap query into O(log n + k). Runtime-only — not part of
+    /// the serialized snapshot/cache (rebuilt on first query after a load).
+    /// `take()`n whenever `region_index` changes (see `add_transcript`).
+    region_query_index: OnceLock<HashMap<String, RegionIntervalIndex>>,
+}
+
+/// One contig's interval index plus the transcript ids its `u32` payloads point
+/// into. Built from `TranscriptDb::region_index` by `build_region_query_index`.
+#[derive(Debug)]
+struct RegionIntervalIndex {
+    /// Interval index over transcript genomic spans; payload indexes `ids`.
+    index: IntervalMap<u32>,
+    /// Transcript ids in the order the `index` payloads address them.
+    ids: Vec<String>,
+}
+
+/// Build the per-contig interval index from the flat `region_index`. Each
+/// transcript span is added with a `u32` payload indexing the contig's `ids`
+/// vec; intervals whose coordinates don't fit `i32` (well beyond any real
+/// genomic position) are skipped rather than wrapped.
+fn build_region_query_index(
+    region_index: &HashMap<String, Vec<(u64, u64, String)>>,
+) -> HashMap<String, RegionIntervalIndex> {
+    let mut out = HashMap::with_capacity(region_index.len());
+    for (contig, regions) in region_index {
+        let mut index: IntervalMap<u32> = IntervalMap::new();
+        let mut ids: Vec<String> = Vec::with_capacity(regions.len());
+        for (start, end, id) in regions {
+            let (Ok(s), Ok(e)) = (i32::try_from(*start), i32::try_from(*end)) else {
+                continue;
+            };
+            let payload = ids.len() as u32;
+            ids.push(id.clone());
+            index.add(s, e, payload);
+        }
+        index.build();
+        out.insert(contig.clone(), RegionIntervalIndex { index, ids });
+    }
+    out
 }
 
 impl TranscriptDb {
@@ -295,6 +338,7 @@ impl TranscriptDb {
             mane_select_index: snap.mane_select_index,
             mane_plus_clinical_index: snap.mane_plus_clinical_index,
             genome_build: snap.genome_build,
+            region_query_index: OnceLock::new(),
         })
     }
 
@@ -357,6 +401,11 @@ impl TranscriptDb {
 
     /// Add a transcript to the database
     pub fn add(&mut self, transcript: Transcript) {
+        // Invalidate the lazily-built region interval index: `region_index` is
+        // about to change, so any cached index is stale and must be rebuilt on
+        // the next query.
+        self.region_query_index.take();
+
         let id = transcript.id.clone();
 
         // Index by gene symbol
@@ -429,19 +478,29 @@ impl TranscriptDb {
 
     /// Get all transcripts overlapping a genomic region
     pub fn get_by_region(&self, chrom: &str, start: u64, end: u64) -> Vec<&Transcript> {
-        self.region_index
+        // Resolve the per-contig interval index (built once, lazily, from
+        // `region_index`), then range-query it. This replaces a linear scan over
+        // every transcript on the contig with an O(log n + k) overlap query —
+        // worth it because annotation fires this per variant.
+        let Some(contig) = self
+            .region_query_index
+            .get_or_init(|| build_region_query_index(&self.region_index))
             .get(chrom)
-            .map(|regions| {
-                regions
-                    .iter()
-                    .filter(|(tx_start, tx_end, _)| {
-                        // Check for overlap
-                        *tx_start <= end && *tx_end >= start
-                    })
-                    .filter_map(|(_, _, id)| self.transcripts.get(id))
-                    .collect()
-            })
-            .unwrap_or_default()
+        else {
+            return Vec::new();
+        };
+        // superintervals uses i32 coordinates; clamp defensively (human genomic
+        // positions fit comfortably, but a malformed huge coordinate must not
+        // wrap). An out-of-range query simply returns no hits.
+        let (Ok(qs), Ok(qe)) = (i32::try_from(start), i32::try_from(end)) else {
+            return Vec::new();
+        };
+        let mut hits: Vec<u32> = Vec::new();
+        contig.index.search_values(qs, qe, &mut hits);
+        hits.iter()
+            .filter_map(|&i| contig.ids.get(i as usize))
+            .filter_map(|id| self.transcripts.get(id))
+            .collect()
     }
 
     /// Get the MANE Select transcript for a gene
@@ -621,6 +680,75 @@ mod tests {
 
         assert_eq!(db.len(), 1);
         assert!(db.get("NM_000088.3").is_some());
+    }
+
+    /// Build a minimal transcript spanning `[start, end]` on `chrom`.
+    fn region_tx(id: &str, chrom: &str, start: u64, end: u64) -> Transcript {
+        Transcript {
+            id: id.to_string(),
+            gene_symbol: Some(id.to_string()),
+            strand: Strand::Plus,
+            sequence: None,
+            cds_start: None,
+            cds_end: None,
+            exons: Vec::new(),
+            chromosome: Some(chrom.to_string()),
+            genomic_start: Some(start),
+            genomic_end: Some(end),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        }
+    }
+
+    /// Sorted ids returned by `get_by_region`, for order-independent assertions.
+    fn region_ids(db: &TranscriptDb, chrom: &str, start: u64, end: u64) -> Vec<String> {
+        let mut ids: Vec<String> = db
+            .get_by_region(chrom, start, end)
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn get_by_region_interval_index_overlap_semantics() {
+        let mut db = TranscriptDb::new();
+        db.add(region_tx("A", "chr1", 1000, 2000));
+        db.add(region_tx("B", "chr1", 1500, 2500));
+        db.add(region_tx("C", "chr1", 5000, 6000));
+        db.add(region_tx("D", "chr2", 1000, 2000));
+
+        // Overlaps both A and B.
+        assert_eq!(region_ids(&db, "chr1", 1800, 1900), vec!["A", "B"]);
+        // Touches only A.
+        assert_eq!(region_ids(&db, "chr1", 1000, 1100), vec!["A"]);
+        // Boundary: query end == A.start and query start == B-region gap — A only
+        // (inclusive overlap, matching the previous linear scan).
+        assert_eq!(region_ids(&db, "chr1", 500, 1000), vec!["A"]);
+        // Between B and C: no overlap.
+        assert!(region_ids(&db, "chr1", 3000, 4000).is_empty());
+        // Spanning everything on chr1.
+        assert_eq!(region_ids(&db, "chr1", 0, 100_000), vec!["A", "B", "C"]);
+        // Wrong contig / unknown contig.
+        assert_eq!(region_ids(&db, "chr2", 1500, 1600), vec!["D"]);
+        assert!(region_ids(&db, "chrX", 1500, 1600).is_empty());
+    }
+
+    #[test]
+    fn get_by_region_index_rebuilds_after_add() {
+        let mut db = TranscriptDb::new();
+        db.add(region_tx("A", "chr1", 1000, 2000));
+        // Build the lazy index via a query.
+        assert_eq!(region_ids(&db, "chr1", 1500, 1600), vec!["A"]);
+        // Adding must invalidate the cached index so the new transcript is seen.
+        db.add(region_tx("B", "chr1", 1400, 1700));
+        assert_eq!(region_ids(&db, "chr1", 1500, 1600), vec!["A", "B"]);
     }
 
     #[test]
