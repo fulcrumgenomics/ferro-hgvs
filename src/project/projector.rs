@@ -507,7 +507,26 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let mut framed = Vec::with_capacity(results.len());
         for r in results {
             let r = match r.coding.as_ref() {
-                Some(coding) => self.project_variant(coding, &r.transcript_id).unwrap_or(r),
+                // Re-project from the coding form to pick up transcript-frame
+                // normalization. Tolerate a failure the same way the fan-out in
+                // `project_normalized_all` tolerates a failing transcript — but
+                // log it rather than swallow it silently. The genome-frame `r` we
+                // fall back to is itself a valid projection (only a repeat-region
+                // edit can be off — by up to the repeat-unit length — from the
+                // transcript-frame-optimal position); emitting it is preferable to
+                // dropping the transcript outright.
+                Some(coding) => match self.project_variant(coding, &r.transcript_id) {
+                    Ok(reframed) => reframed,
+                    Err(e) => {
+                        log::trace!(
+                            "project_variant_all: transcript-frame re-projection failed for {}: \
+                             {}; keeping genome-frame projection",
+                            r.transcript_id,
+                            e
+                        );
+                        r
+                    }
+                },
                 None => r,
             };
             framed.push(Self::frame_projection_owned(r, &parent, placement.as_ref()));
@@ -821,7 +840,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    GRCh38) we ask cdot for that build's view so multi-build cdot
         //    loads project against the correct alignment (issue #389).
         let transcript_id = accession.transcript_accession();
-        let build_hint = crate::liftover::aliases::infer_genome_build_from_accession(&parent);
+        // Prefer the genome build encoded by the parent's chromosomal placement.
+        // An `NG_`/`LRG_` parent accession carries no build, so without this the
+        // cdot pivot below would fall back to cdot's primary build and could
+        // compute coordinates on a different `NC_` build than the one the
+        // placement — and the downstream re-anchor / de-anchor steps that stamp
+        // `placement.nc` — assume (#646). Fall back to the parent's own build tag
+        // (e.g. an explicit `NC_*` parent) when there is no placement.
+        let build_hint = self
+            .provider
+            .genomic_placement(&parent)
+            .and_then(|p| crate::liftover::aliases::infer_genome_build_from_accession(&p.nc))
+            .or_else(|| crate::liftover::aliases::infer_genome_build_from_accession(&parent));
         let cdot_mapper = self.projector.mapper();
         let cdot_tx = match build_hint {
             Some(b) => cdot_mapper
@@ -996,6 +1026,45 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ) -> (HgvsVariant, Option<Accession>) {
         use crate::hgvs::interval::GenomeInterval;
         use crate::hgvs::variant::GenomeVariant;
+
+        // Transcript-coordinate inputs (c./n./r.) carrying an NG_/LRG_
+        // genomic_context are taken into the chromosome (NC_) frame here too, so
+        // the fan-out below enumerates the OTHER overlapping transcripts
+        // (cross-isoform) and frames each result under the parent (#646). Without
+        // this they project only onto the input transcript, unframed.
+        let cnr_accession = match variant {
+            HgvsVariant::Cds(c) => Some(&c.accession),
+            HgvsVariant::Tx(t) => Some(&t.accession),
+            HgvsVariant::Rna(r) => Some(&r.accession),
+            _ => None,
+        };
+        if let Some(acc) = cnr_accession {
+            if let Some(ctx) = acc.genomic_context.as_deref() {
+                if let Some(placement) = (ctx.prefix.as_ref() == "NG" || ctx.is_lrg())
+                    .then(|| self.provider.genomic_placement(ctx))
+                    .flatten()
+                {
+                    if let Ok(HgvsVariant::Genome(nc_gv)) = self.project_to_genomic_nc(variant) {
+                        // `nc_gv` carries the parent (NG_/LRG_) accession but NC_
+                        // coordinates. Stamp the placement's own `NC_` accession —
+                        // the authoritative chromosome for this parent — so the
+                        // projector enumerates transcripts at the locus. This
+                        // mirrors the bare-genomic branch below and
+                        // `reanchor_genome_to_parent`, which also key off
+                        // `placement.nc`; deriving the contig from cdot instead can
+                        // disagree when cdot stores a `chr`-style alias rather than
+                        // the `NC_` accession.
+                        let nc_variant = HgvsVariant::Genome(GenomeVariant {
+                            accession: placement.nc.clone(),
+                            gene_symbol: None,
+                            loc_edit: nc_gv.loc_edit,
+                        });
+                        return (nc_variant, Some(ctx.clone()));
+                    }
+                }
+            }
+        }
+
         let HgvsVariant::Genome(gv) = variant else {
             return (variant.clone(), None);
         };
@@ -2278,6 +2347,67 @@ mod tests {
                 assert!(
                     g.starts_with("NG_900.1:g.4"),
                     "genomic description should be in the NG_ frame, got {g:?}"
+                );
+            }
+        }
+    }
+
+    /// A transcript-coordinate input carrying an `NG_` `genomic_context`
+    /// (`NG_900.1(NM_TX1.1):c.4C>A`) must, like a bare `NG_:g.` input, enumerate
+    /// the overlapping transcripts and frame each description under the `NG_`
+    /// parent — not return only the input transcript, bare (#646 / Mode A).
+    #[test]
+    fn project_variant_all_frames_coding_input_with_ng_context() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        let vp = VariantProjector::new(projector, provider);
+
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::CdsVariant;
+        // NG_900.1(NM_TX1.1):c.4C>A — c. input carrying an NG_ genomic_context.
+        let cds = CdsVariant {
+            accession: parse_accession("NM_TX1.1").with_genomic_context(Accession::new(
+                "NG",
+                "900",
+                Some(1),
+            )),
+            gene_symbol: Some("GENE1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        };
+        let v = HgvsVariant::Cds(cds);
+        let results = vp
+            .project_variant_all(&v)
+            .expect("project_all should succeed for a c. input with NG_ context");
+
+        // Both overlapping transcripts are enumerated.
+        let txs: Vec<&str> = results.iter().map(|r| r.transcript_id.as_str()).collect();
+        assert!(
+            txs.contains(&"NM_TX1.1") && txs.contains(&"NM_TX2.1"),
+            "expected both transcripts enumerated, got {txs:?}"
+        );
+        // Every coding description is framed under the NG_ parent.
+        for r in &results {
+            if let Some(c) = r.coding.as_ref().map(|c| c.to_string()) {
+                assert!(
+                    c.starts_with("NG_900.1("),
+                    "coding should be framed under the NG_ parent, got {c:?}"
                 );
             }
         }
