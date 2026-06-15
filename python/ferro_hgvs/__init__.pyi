@@ -904,12 +904,28 @@ class BatchProcessor:
         """
         ...
 
-    def parse(self, variants: list[str]) -> BatchResult:
-        """Parse multiple HGVS strings."""
+    def parse(self, variants: list[str], workers: int = 0) -> BatchResult:
+        """Parse multiple HGVS strings in parallel (GIL released).
+
+        The returned BatchResult preserves the order of the input variants
+        regardless of the worker count used.
+
+        Args:
+            variants: HGVS strings to parse.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+        """
         ...
 
-    def parse_and_normalize(self, variants: list[str]) -> BatchResult:
-        """Parse and normalize multiple HGVS strings."""
+    def parse_and_normalize(self, variants: list[str], workers: int = 0) -> BatchResult:
+        """Parse and normalize multiple HGVS strings in parallel (GIL released).
+
+        The returned BatchResult preserves the order of the input variants
+        regardless of the worker count used.
+
+        Args:
+            variants: HGVS strings to parse and normalize.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+        """
         ...
 
     def parse_with_progress(
