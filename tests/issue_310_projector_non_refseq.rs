@@ -42,9 +42,9 @@ fn make_provider(transcript_id: &str, protein_id: Option<&str>) -> MockProvider 
     )
     .with_protein_id(protein_id.map(str::to_string));
     provider.add_transcript(tx);
-    // Genomic sequence: 1000 N's + "ATGCGCTAA" + 100 N's so g.1003 is the
+    // Genomic sequence: 999 N's + "ATGCGCTAA" + 100 N's so g.1003 is the
     // 4th base of the CDS (= c.4, the first base of codon 2 "CGC" → Arg).
-    let prefix = "N".repeat(1000);
+    let prefix = "N".repeat(999);
     let suffix = "N".repeat(100);
     provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
     provider

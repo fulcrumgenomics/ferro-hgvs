@@ -441,55 +441,30 @@ impl CoordinateMapper {
                 });
             }
 
-            // Convert to CDS position
-            let cds_pos = tx
-                .tx_to_cds(tx_pos)
-                .ok_or_else(|| FerroError::InvalidCoordinates {
-                    msg: format!("Cannot convert tx position {} to CDS", tx_pos),
-                })?;
-
-            match cds_pos {
-                CdsPosition::FivePrimeUtr(offset) => {
-                    info.in_5utr = true;
-                    Ok((
-                        CdsPos {
-                            base: -offset,
-                            offset: None,
-                            utr3: false,
-                            special: None,
-                        },
-                        info,
-                    ))
-                }
-                CdsPosition::Cds(pos) => {
-                    info.in_cds = true;
-                    Ok((
-                        CdsPos {
-                            base: pos,
-                            offset: None,
-                            utr3: false,
-                            special: None,
-                        },
-                        info,
-                    ))
-                }
-                CdsPosition::ThreePrimeUtr(offset) => {
-                    info.in_3utr = true;
-                    // Get the last CDS position
-                    let cds_end = tx.cds_end.unwrap_or(0);
-                    let cds_start = tx.cds_start.unwrap_or(0);
-                    let last_cds_pos = (cds_end - cds_start) as i64;
-                    Ok((
-                        CdsPos {
-                            base: last_cds_pos,
-                            offset: Some(offset),
-                            utr3: true,
-                            special: None,
-                        },
-                        info,
-                    ))
-                }
+            // Convert to CDS position. The region flags on `info` are derived
+            // from the same `CdsPosition` that is translated into the returned
+            // `CdsPos`, so they stay consistent.
+            //
+            // Translate the region directly rather than via the bounds-guarded
+            // `cds_pos_from_tx_pos`: `locate_genome_pos` derives `tx_pos` from
+            // CIGAR-unaware offset arithmetic, so a matched base after a CIGAR
+            // deletion gets a `tx_pos` past the exon's transcript span. That is
+            // not a real "off transcript" position (it is within the exon's
+            // genome span and was gap-rejected above), and this low-level path
+            // has always mapped it — the guard belongs to the projector, which
+            // feeds the helper a CIGAR-corrected `tx_pos`.
+            let cds_region =
+                tx.tx_to_cds(tx_pos)
+                    .ok_or_else(|| FerroError::InvalidCoordinates {
+                        msg: format!("Cannot convert tx position {} to CDS", tx_pos),
+                    })?;
+            match cds_region {
+                CdsPosition::FivePrimeUtr(_) => info.in_5utr = true,
+                CdsPosition::Cds(_) => info.in_cds = true,
+                CdsPosition::ThreePrimeUtr(_) => info.in_3utr = true,
             }
+            let cds_pos = CdotTranscript::cds_pos_from_region(cds_region);
+            Ok((cds_pos, info))
         } else {
             // Position is intronic - find the nearest exon boundary
             let exons = tx.get_exons();

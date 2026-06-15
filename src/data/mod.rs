@@ -25,6 +25,7 @@
 //! ```
 
 pub mod cdot;
+pub mod exon_realign;
 pub mod mapping;
 pub mod projection;
 

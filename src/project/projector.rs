@@ -881,7 +881,23 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
             if is_coding {
                 let result = cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint)?;
-                Ok(result.variant.base)
+                // Sequence-aware correction (#644), mirroring the g.→c. path.
+                // Only simple exonic positions are corrected; intronic / special
+                // positions are derived by boundary arithmetic the realignment
+                // doesn't model, so leave them to the naive result.
+                if p.offset.is_some() || p.special.is_some() || p.utr3 {
+                    return Ok(result.variant.base);
+                }
+                let tx_pos = match cdot_tx.cds_to_tx(p.base) {
+                    Some(t) => t,
+                    None => return Ok(result.variant.base),
+                };
+                self.correct_genome_for_exon_indel(
+                    cdot_tx,
+                    &transcript_id,
+                    tx_pos,
+                    result.variant.base,
+                )
             } else {
                 if p.offset.is_some() {
                     // Intronic n. offsets require coding-style exon-boundary
@@ -906,14 +922,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     });
                 }
                 let tx_pos_0based = (p.base - 1) as u64;
-                cdot_tx
-                    .tx_to_genome(tx_pos_0based)
-                    .ok_or_else(|| FerroError::InvalidCoordinates {
+                let naive = cdot_tx.tx_to_genome(tx_pos_0based).ok_or_else(|| {
+                    FerroError::InvalidCoordinates {
                         msg: format!(
                             "tx position {} not in any exon of {}",
                             p.base, transcript_id
                         ),
-                    })
+                    }
+                })?;
+                // Sequence-aware correction (#644): the inbound g.→n. path runs
+                // `correct_cds_for_exon_indel` regardless of coding status, so a
+                // non-coding `n.`/`r.` coordinate is corrected on the way in.
+                // Apply the matching outbound correction here so it round-trips.
+                self.correct_genome_for_exon_indel(cdot_tx, &transcript_id, tx_pos_0based, naive)
             }
         };
 
@@ -1851,6 +1872,215 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         })
     }
 
+    /// Fetch the exon's genome and transcript sequence slices in transcript
+    /// 5'→3' orientation, ready to feed [`crate::data::exon_realign`].
+    ///
+    /// Returns `None` (decline) on any condition where a sequence-aware
+    /// correction should not be attempted: the exon already carries a cdot
+    /// CIGAR (its alignment is modelled — leave the existing E3007 / arithmetic
+    /// behavior untouched), genomic data is unavailable, or a slice cannot be
+    /// fetched. The two slices are returned `(genome, tx)` with the genome slice
+    /// reverse-complemented on a minus-strand transcript so both read in
+    /// transcript orientation.
+    fn exon_slices_for_realign(
+        &self,
+        cdot_tx: &CdotTranscript,
+        transcript_id: &str,
+        exon_idx: usize,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        // Only the ungapped-but-divergent class is in scope (#644). Exons cdot
+        // models with a CIGAR keep their existing semantics.
+        match cdot_tx.exon_cigars.get(exon_idx) {
+            Some(None) | None => {}
+            Some(Some(_)) => return None,
+        }
+        if !self.provider.has_genomic_data() {
+            return None;
+        }
+        let exon = cdot_tx.exons.get(exon_idx)?;
+        let (genome_start, genome_end, tx_start, tx_end) = (exon[0], exon[1], exon[2], exon[3]);
+        if genome_end <= genome_start || tx_end <= tx_start {
+            return None;
+        }
+
+        // Transcript slice: cdot tx coords are 0-based half-open; the provider's
+        // `get_sequence` is also 0-based half-open.
+        let tx_seq = self
+            .provider
+            .get_sequence(transcript_id, tx_start, tx_end)
+            .ok()?;
+        // Genome slice: cdot genome coords are HGVS-value-based, so HGVS g.X is
+        // 0-based X-1. The exon spans HGVS [genome_start, genome_end), i.e.
+        // 0-based [genome_start - 1, genome_end - 1).
+        let genome_seq = self
+            .provider
+            .get_genomic_sequence(&cdot_tx.contig, genome_start - 1, genome_end - 1)
+            .ok()?;
+
+        let genome_bytes = if cdot_tx.strand == crate::reference::Strand::Minus {
+            crate::sequence::reverse_complement(&genome_seq).into_bytes()
+        } else {
+            genome_seq.into_bytes()
+        };
+        Some((genome_bytes, tx_seq.into_bytes()))
+    }
+
+    /// Apply the sequence-aware exon-indel correction to a genome→CDS mapping
+    /// (issue #644).
+    ///
+    /// `naive` is the `CdsPos` the cdot arithmetic produced for `genome_pos`.
+    /// When the containing exon is reported ungapped by cdot but its transcript
+    /// and genome sequences differ by an indel, the naive position is off by the
+    /// indel size; this re-derives the position from a local realignment. Only
+    /// simple exonic positions are corrected — intronic / special / UTR-range
+    /// positions (which carry an `offset` or a `special` marker) are returned
+    /// unchanged, as is any position the realignment cannot confidently place.
+    ///
+    /// Returns `AlignmentGap` when the corrected position would fall strictly
+    /// inside a genome-only gap discovered by the realignment (a genome base
+    /// with no transcript counterpart) — consistent with the #603 E3007
+    /// semantics for modelled CIGAR deletions.
+    fn correct_cds_for_exon_indel(
+        &self,
+        cdot_tx: &CdotTranscript,
+        transcript_id: &str,
+        info: &MappingInfo,
+        genome_pos: &GenomePos,
+        naive: &CdsPos,
+    ) -> Result<CdsPos, FerroError> {
+        use crate::data::exon_realign::{correct_genome_offset, ExonOffsetCorrection};
+
+        // Only correct simple exonic positions. Intronic offsets and special
+        // sentinels are derived by boundary arithmetic the realignment doesn't
+        // model; leave them alone.
+        if info.is_intronic || naive.offset.is_some() || naive.special.is_some() {
+            return Ok(*naive);
+        }
+        // The mapping records the 1-based exon number; the parallel exon /
+        // exon_cigars index is `number - 1`.
+        let exon_number = match info.exon_numbers.first() {
+            Some(n) => *n,
+            None => return Ok(*naive),
+        };
+        let exon_idx = (exon_number as usize).saturating_sub(1);
+        let exon = match cdot_tx.exons.get(exon_idx) {
+            Some(e) => e,
+            None => return Ok(*naive),
+        };
+        let (genome_start, genome_end) = (exon[0], exon[1]);
+
+        let (genome_seq, tx_seq) =
+            match self.exon_slices_for_realign(cdot_tx, transcript_id, exon_idx) {
+                Some(slices) => slices,
+                None => return Ok(*naive),
+            };
+
+        // Offset of the queried genome position from the exon's transcript-5'
+        // end, measured on the genome axis — the same orientation the slices
+        // are in (see `cigar_deletion_gap_at_genome_pos`).
+        let genome_offset = match cdot_tx.strand {
+            crate::reference::Strand::Plus => {
+                if genome_pos.base < genome_start || genome_pos.base >= genome_end {
+                    return Ok(*naive);
+                }
+                (genome_pos.base - genome_start) as usize
+            }
+            crate::reference::Strand::Minus => {
+                if genome_pos.base < genome_start || genome_pos.base >= genome_end {
+                    return Ok(*naive);
+                }
+                (genome_end - 1 - genome_pos.base) as usize
+            }
+            crate::reference::Strand::Unknown => return Ok(*naive),
+        };
+
+        match correct_genome_offset(&genome_seq, &tx_seq, genome_offset) {
+            None => Ok(*naive),
+            Some(ExonOffsetCorrection::InsideGenomeOnlyGap) => Err(FerroError::AlignmentGap {
+                msg: format!(
+                    "genomic position {} falls in a transcript-genome alignment gap \
+                     (sequence-detected genome-only indel) in exon {}",
+                    genome_pos.base, exon_number
+                ),
+            }),
+            Some(ExonOffsetCorrection::Delta(0)) => Ok(*naive),
+            Some(ExonOffsetCorrection::Delta(delta)) => {
+                // Apply the correction in transcript space and re-derive the
+                // CDS position so a correction crossing a CDS/UTR boundary is
+                // resolved correctly.
+                let naive_tx = (exon[2] as i64) + (genome_offset as i64);
+                let corrected_tx = naive_tx + delta;
+                if corrected_tx < 0 {
+                    return Ok(*naive);
+                }
+                cdot_tx
+                    .cds_pos_from_tx_pos(corrected_tx as u64)
+                    .map(Ok)
+                    .unwrap_or(Ok(*naive))
+            }
+        }
+    }
+
+    /// Apply the sequence-aware exon-indel correction to a transcript→genome
+    /// mapping — the c.→g. mirror of [`Self::correct_cds_for_exon_indel`]
+    /// (issue #644).
+    ///
+    /// `tx_pos` is the 0-based transcript position being mapped and `naive` is
+    /// the genome coordinate the cdot arithmetic produced for it. When the
+    /// containing exon is reported ungapped by cdot but its sequences differ by
+    /// an indel, the naive genome coordinate is off by the indel size; this
+    /// re-derives it from the local realignment. Returns `naive` unchanged when
+    /// no confident correction applies, and `AlignmentGap` when the transcript
+    /// position has no genome counterpart (a transcript-only indel base).
+    fn correct_genome_for_exon_indel(
+        &self,
+        cdot_tx: &CdotTranscript,
+        transcript_id: &str,
+        tx_pos: u64,
+        naive: u64,
+    ) -> Result<u64, FerroError> {
+        use crate::data::exon_realign::{correct_tx_offset, TxOffsetCorrection};
+
+        let exon = match cdot_tx.exon_for_tx_pos(tx_pos) {
+            Some(e) => e,
+            None => return Ok(naive),
+        };
+        let exon_idx = (exon.number as usize).saturating_sub(1);
+        let (genome_seq, tx_seq) =
+            match self.exon_slices_for_realign(cdot_tx, transcript_id, exon_idx) {
+                Some(slices) => slices,
+                None => return Ok(naive),
+            };
+
+        let tx_offset = (tx_pos - exon.tx_start) as usize;
+        match correct_tx_offset(&genome_seq, &tx_seq, tx_offset) {
+            None | Some(TxOffsetCorrection::Delta(0)) => Ok(naive),
+            Some(TxOffsetCorrection::InsideTxOnlyGap) => Err(FerroError::AlignmentGap {
+                msg: format!(
+                    "transcript position {} falls in a transcript-genome alignment gap \
+                     (sequence-detected transcript-only indel) in exon {}",
+                    tx_pos, exon.number
+                ),
+            }),
+            Some(TxOffsetCorrection::Delta(delta)) => {
+                // The delta is in the genome axis, measured from the exon's
+                // transcript-5' end. Apply it to the naive genome coordinate in
+                // the strand's genomic direction (the naive coord already came
+                // from `genome_start + tx_offset` on plus, `genome_end - 1 -
+                // tx_offset` on minus, so on minus the axis runs the other way).
+                let corrected = match cdot_tx.strand {
+                    crate::reference::Strand::Plus => naive as i64 + delta,
+                    crate::reference::Strand::Minus => naive as i64 - delta,
+                    crate::reference::Strand::Unknown => return Ok(naive),
+                };
+                if corrected < 0 {
+                    return Ok(naive);
+                }
+                Ok(corrected as u64)
+            }
+        }
+    }
+
     fn project_single_inner(
         &self,
         normalized: &HgvsVariant,
@@ -2020,7 +2250,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 });
             }
             match mapper.genome_to_cds_on_build(transcript_id, gp, build_hint) {
-                Ok(res) => Ok((res.variant, res.info)),
+                Ok(res) => {
+                    // Sequence-aware correction (#644): when cdot reports the
+                    // containing exon ungapped but the transcript and genome
+                    // FASTAs genuinely differ by an indel, the naive arithmetic
+                    // `res.variant` is off by the indel's size. Re-derive the
+                    // CDS position from a local realignment of the exon's two
+                    // sequences. A no-op (and unchanged behavior) when the
+                    // sequences agree, the exon already carries a CIGAR, or the
+                    // alignment is not confident enough to correct.
+                    let corrected = self.correct_cds_for_exon_indel(
+                        cdot_tx,
+                        transcript_id,
+                        &res.info,
+                        gp,
+                        &res.variant,
+                    )?;
+                    Ok((corrected, res.info))
+                }
                 Err(FerroError::InvalidCoordinates { .. })
                 | Err(FerroError::ConversionError { .. }) => {
                     Err(FerroError::TranscriptNotOverlapping {
@@ -2874,6 +3121,337 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Sequence-aware exon-indel correction (issue #644)
+    // ------------------------------------------------------------------
+
+    /// Build a projector + provider for a plus-strand transcript whose cdot
+    /// record is **ungapped** (`exon_cigars` empty) but whose transcript and
+    /// genome sequences genuinely differ by an indel — the cdot 0.2.32 /
+    /// `NM_000532.5` (PCCB) failure shape, reduced to a CI-runnable fixture.
+    ///
+    /// Single exon, genome HGVS `[1000, 1012)` (12 bp) ↔ tx `[0, 11)` (11 bp),
+    /// `cds_start = 0`. The true alignment (recoverable from the sequences) is:
+    /// 2 genome-only bases at the exon start, then 10 matched bases, then 1
+    /// transcript-only base at the end (net genome − tx = +1). So a genomic
+    /// position in the matched region maps to a transcript position 2 lower than
+    /// the naive cdot arithmetic would give.
+    fn make_ungapped_indel_provider_and_projector() -> (Projector, MockProvider) {
+        let common = "ATGCGCTAAC"; // 10 bases, matched region
+        let genome_exon = format!("CA{common}"); // 12 bp: 2 genome-only + 10 matched
+        let tx_exon = format!("{common}T"); // 11 bp: 10 matched + 1 tx-only
+        debug_assert_eq!(genome_exon.len(), 12);
+        debug_assert_eq!(tx_exon.len(), 11);
+
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_GAP644.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("GAPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                // genome [1000, 1012) (HGVS-value), tx [0, 11) — lengths match
+                // the FASTAs, but cdot records NO CIGAR (the bug shape).
+                exons: vec![[1000, 1012, 0, 11]],
+                cds_start: Some(0),
+                cds_end: Some(11),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_GAP644.1".to_string(),
+            gene_symbol: Some("GAPGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some(tx_exon.clone()),
+            cds_start: Some(1), // 1-based per Transcript convention
+            cds_end: Some(11),
+            exons: vec![Exon::new(1, 1, 11)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1011),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // Genomic contig: 999 N's (so HGVS g.1000 == 0-based index 999) + the
+        // exon sequence + trailing N's.
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(50);
+        provider.add_genomic_sequence("chr1", format!("{prefix}{genome_exon}{suffix}"));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_corrects_genome_to_cds_across_unmodelled_indel() {
+        // The reproducer class: a g. SNV in the matched region must project to a
+        // c. coordinate corrected by the 2-bp genome-only prefix.
+        //
+        // First matched genome base is HGVS g.1002 (0-based exon offset 2). It
+        // maps to tx offset 0 → c.1. Without the correction the naive arithmetic
+        // would give tx offset 2 → c.3.
+        let (projector, provider) = make_ungapped_indel_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        // g.1006 is exon offset 6 → naive tx 6 (c.7); corrected tx 4 (c.5).
+        let result = vp
+            .project("chr1:g.1006A>T", "NM_GAP644.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. present").to_string();
+        assert!(
+            c.contains(":c.5"),
+            "expected corrected ':c.5' (not naive ':c.7') in '{c}'"
+        );
+    }
+
+    #[test]
+    fn project_first_matched_base_maps_to_c1() {
+        let (projector, provider) = make_ungapped_indel_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1002 is the first matched base → c.1.
+        let result = vp
+            .project("chr1:g.1002A>T", "NM_GAP644.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. present").to_string();
+        assert!(c.contains(":c.1A>T"), "expected ':c.1A>T' in '{c}'");
+    }
+
+    /// Non-coding (`cds_start`/`cds_end == None`) sibling of
+    /// `make_ungapped_indel_provider_and_projector`: same 2-bp genome-only
+    /// prefix + 10-bp matched + 1-bp tx-only exon shape, but the transcript
+    /// carries no CDS so it projects on the `n.` axis.
+    fn make_noncoding_ungapped_indel_provider_and_projector() -> (Projector, MockProvider) {
+        let common = "ATGCGCTAAC"; // 10 bases, matched region
+        let genome_exon = format!("CA{common}"); // 12 bp: 2 genome-only + 10 matched
+        let tx_exon = format!("{common}T"); // 11 bp: 10 matched + 1 tx-only
+
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NR_GAP644.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("GAPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1012, 0, 11]],
+                // Non-coding: no CDS bounds.
+                cds_start: None,
+                cds_end: None,
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NR_GAP644.1".to_string(),
+            gene_symbol: Some("GAPGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some(tx_exon.clone()),
+            cds_start: None,
+            cds_end: None,
+            exons: vec![Exon::new(1, 1, 11)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1011),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(50);
+        provider.add_genomic_sequence("chr1", format!("{prefix}{genome_exon}{suffix}"));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_to_genomic_noncoding_corrects_across_unmodelled_indel() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::TxInterval;
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{Accession, TxVariant};
+
+        // The outbound n.→g. path must apply the same #644 sequence-aware
+        // correction the inbound g.→n. path (`correct_cds_for_exon_indel`, which
+        // is coding-agnostic) applies, so the two round-trip. Without the
+        // correction in the non-coding `else` branch of `map_pos`, n.5 would map
+        // to the naive g.1004; with it, the 2-bp genome-only prefix shifts it to
+        // g.1006 (tx offset 4 → tx-oriented genome offset 6 → HGVS g.1006).
+        let (projector, provider) = make_noncoding_ungapped_indel_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        let n = TxVariant {
+            accession: parse_accession("NR_GAP644.1").with_genomic_context(Accession::new(
+                "NC",
+                "000001",
+                Some(11),
+            )),
+            gene_symbol: Some("GAPGENE".to_string()),
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(5)),
+                NaEdit::Substitution {
+                    reference: Base::G,
+                    alternative: Base::T,
+                },
+            ),
+        };
+        let g = vp
+            .project_to_genomic(&HgvsVariant::Tx(n))
+            .expect("n. → g. projection should succeed");
+        assert!(
+            g.to_string().contains("g.1006"),
+            "expected corrected 'g.1006' (not naive 'g.1004'), got '{g}'"
+        );
+    }
+
+    /// Minus-strand sibling of `make_ungapped_indel_provider_and_projector`.
+    /// The transcript-oriented exon is the same shape (2 genome-only prefix +
+    /// 10 matched + 1 tx-only), but the transcript reads off the minus strand,
+    /// so the genome FASTA stores the reverse complement of the
+    /// transcript-oriented exon. This is the only fixture that drives the
+    /// minus-strand axis-flip arithmetic in `correct_cds_for_exon_indel`
+    /// (`genome_end - 1 - genome_pos.base`) and `correct_genome_for_exon_indel`
+    /// (`naive - delta`).
+    fn make_minus_ungapped_indel_provider_and_projector() -> (Projector, MockProvider) {
+        // Transcript-oriented exon (5'→3' as the transcript reads it):
+        let common = "ATGCGCTAAC"; // 10 matched bases
+        let tx_oriented_genome_exon = format!("CA{common}"); // 12 bp: 2 genome-only + 10 matched
+        let tx_exon = format!("{common}T"); // 11 bp: 10 matched + 1 tx-only
+                                            // The genome FASTA stores the minus-strand (reference) orientation:
+        let genome_fasta_exon = crate::sequence::reverse_complement(&tx_oriented_genome_exon);
+
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_GAP644M.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("GAPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Minus,
+                // genome HGVS [1000, 1012); tx [0, 11). No CIGAR (the bug shape).
+                exons: vec![[1000, 1012, 0, 11]],
+                cds_start: Some(0),
+                cds_end: Some(11),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_GAP644M.1".to_string(),
+            gene_symbol: Some("GAPGENE".to_string()),
+            strand: TxStrand::Minus,
+            sequence: Some(tx_exon.clone()),
+            cds_start: Some(1),
+            cds_end: Some(11),
+            exons: vec![Exon::new(1, 1, 11)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1011),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(50);
+        provider.add_genomic_sequence("chr1", format!("{prefix}{genome_fasta_exon}{suffix}"));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_minus_strand_corrects_and_roundtrips_across_unmodelled_indel() {
+        use crate::hgvs::variant::Accession;
+
+        // On minus strand the transcript-5' end is the exon's genome-3' end
+        // (HGVS g.1011). The first matched base is tx-oriented genome offset 2
+        // → HGVS g.1009 → c.1. A SNV at HGVS g.1005 is tx-oriented genome
+        // offset 6 → naive tx 6 (c.7); the 2-bp genome-only prefix corrects it
+        // to tx 4 (c.5).
+        let (projector, provider) = make_minus_ungapped_indel_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        // g.→c. correction (drives the minus-strand `correct_cds_for_exon_indel`
+        // axis flip). Base at g.1005 is 'C' in reference orientation.
+        let result = vp
+            .project("chr1:g.1005C>A", "NM_GAP644M.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. present").clone();
+        assert!(
+            c.to_string().contains(":c.5"),
+            "expected corrected ':c.5' (not naive ':c.7') in '{c}'"
+        );
+
+        // c.→g. round-trip (drives the minus-strand
+        // `correct_genome_for_exon_indel` `naive - delta` branch).
+        let c_with_parent = match c {
+            HgvsVariant::Cds(mut cds) => {
+                cds.accession =
+                    cds.accession
+                        .with_genomic_context(Accession::new("NC", "000001", Some(11)));
+                HgvsVariant::Cds(cds)
+            }
+            other => panic!("expected a Cds (c.) variant, got {other:?}"),
+        };
+        let g = vp
+            .project_to_genomic(&c_with_parent)
+            .expect("c. → g. round-trip should succeed");
+        assert!(
+            g.to_string().contains("g.1005"),
+            "expected round-trip back to 'g.1005', got '{g}'"
+        );
+    }
+
+    #[test]
+    fn project_inside_genome_only_gap_errors_alignment_gap() {
+        // A variant on a genome-only base (the 2-bp prefix) has no transcript
+        // counterpart and must surface as AlignmentGap, not a wrong coordinate.
+        let (projector, provider) = make_ungapped_indel_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // g.1000 / g.1001 are the genome-only prefix bases.
+        let err = vp
+            .project("chr1:g.1000C>A", "NM_GAP644.1")
+            .expect_err("expected AlignmentGap for a genome-only base");
+        assert!(
+            matches!(err, FerroError::AlignmentGap { .. }),
+            "expected AlignmentGap, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn project_identical_sequences_unaffected_by_correction() {
+        // Control: the normal fixture (transcript == genome sequence) must be
+        // byte-identical to its pre-#644 behavior — no spurious correction.
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "NM_TEST.1")
+            .expect("projection should succeed");
+        let c = result.coding.as_ref().expect("c. present").to_string();
+        assert!(
+            c.contains(":c.4C>A"),
+            "expected uncorrected ':c.4C>A' in '{c}'"
+        );
+    }
+
     #[test]
     fn project_substitution_plus_strand_missense() {
         let (projector, provider) = make_test_provider_and_projector();
@@ -2965,7 +3543,14 @@ mod tests {
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
-        let prefix = "N".repeat(1000);
+        // cdot genome coords are HGVS-value-based (HGVS g.X == 0-based index
+        // X-1), matching every other fixture here, so the exon's genome_start
+        // 1000 lands the CDS at 0-based index 999 (999 N's of prefix). The
+        // sequence-aware exon-indel correction (#644) reads the genome FASTA
+        // through these cdot coords, so the FASTA must be placed consistently or
+        // the realign would fabricate a phantom 1-bp indel against the identical
+        // transcript sequence.
+        let prefix = "N".repeat(999);
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{prefix}{seq}{suffix}"));
         (projector, provider)
@@ -4341,7 +4926,12 @@ mod tests {
                 cached_introns: OnceLock::new(),
                 protein_id: Some("NP_UTR.1".to_string()),
             });
-            let prefix = "N".repeat(1000);
+            // 999 leading Ns so HGVS g.1000 (the exon's `genome_start`) maps to
+            // 0-based index 999, matching every other fixture and the real
+            // genome-coordinate convention (HGVS g.X == 0-based X-1). The exon
+            // genome and transcript sequences are then identical, so the #644
+            // sequence-aware correction is a no-op here.
+            let prefix = "N".repeat(999);
             let suffix = "N".repeat(100);
             provider.add_genomic_sequence("chr1", format!("{}TTTATGCGCTAAGGG{}", prefix, suffix));
             (projector, provider)
