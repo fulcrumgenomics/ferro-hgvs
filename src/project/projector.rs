@@ -723,10 +723,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// The output ref-base is **not** validated against the genomic reference;
     /// mismatches surface downstream in `Normalizer`.
     ///
-    /// **Limitation (`r.`):** plus-strand RNA inputs whose edit carries
-    /// `Base::U` are forwarded unchanged into the g. output, producing an
-    /// invalid DNA emission. Callers should pre-translate U→T before
-    /// constructing the r. variant. Tracked separately.
+    /// `r.` inputs carrying `Base::U` are translated to DNA on the way to the
+    /// g. output (`U`→`T` on the plus strand, `U`→`A` via complement on the
+    /// minus strand), so the emitted g. variant is always valid DNA (#395 item 4).
     fn project_to_genomic_nc(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::GenomeInterval;
@@ -4870,15 +4869,10 @@ mod tests {
             use crate::hgvs::variant::RnaVariant;
 
             // Verifies r. → g. coordinate projection on the plus strand with
-            // DNA-typed bases (the case ferro emits internally after parsing).
-            // RnaPos shape mirrors CdsPos so the coordinate math is identical.
-            //
-            // Plus-strand `Base::U` in r. inputs is NOT auto-translated to
-            // `Base::T` on the g. output today — the impl forwards the edit
-            // verbatim on plus strand. Translating U→T at the r. boundary is
-            // a follow-up (tracked separately); for now the impl assumes the
-            // caller supplies DNA-typed bases. Test below pins the working
-            // path and intentionally leaves the U-input gap uncovered.
+            // DNA-typed bases. RnaPos shape mirrors CdsPos so the coordinate
+            // math is identical. (Plus-strand `Base::U` inputs are translated
+            // U→T on the g. output — covered separately by
+            // `project_to_genomic_rna_u_base_translated_to_t`.)
             let (projector, provider) = make_test_provider_and_projector();
             let vp = VariantProjector::new(projector, provider);
 
@@ -4913,6 +4907,47 @@ mod tests {
                 s
             );
             assert_eq!(g.accession.to_string(), "NC_000001.11");
+        }
+
+        /// A plus-strand `r.` input carrying `Base::U` is translated to DNA
+        /// (`U`→`T`) on the g. output, so the emitted g. variant is valid DNA
+        /// rather than an `…U>…` shape (#395 item 4).
+        #[test]
+        fn project_to_genomic_rna_u_base_translated_to_t() {
+            use crate::hgvs::interval::RnaInterval;
+            use crate::hgvs::location::RnaPos;
+            use crate::hgvs::variant::RnaVariant;
+
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // r.4u>g on NM_TEST.1 (plus strand) → g.1003; the RNA `u` reference
+            // base must surface as DNA `T`, giving g.1003T>G (ref not validated
+            // against the genome, so the edit's own bases are emitted).
+            let mut rna = RnaVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    RnaInterval::point(RnaPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::U,
+                        alternative: Base::G,
+                    },
+                ),
+            };
+            rna.accession = rna.accession.with_genomic_context(nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Rna(rna))
+                .expect("r. → g. projection should succeed");
+            let s = out.to_string();
+            assert!(
+                s.contains(":g.1003T>G"),
+                "RNA u> reference should emit DNA T (g.1003T>G), got: {s}"
+            );
+            assert!(
+                !s.contains('U'),
+                "g. output must not carry an RNA U base, got: {s}"
+            );
         }
 
         // -- 8b: NG_/LRG_ re-anchor decline → error, not invalid HGVS (#655) ---
