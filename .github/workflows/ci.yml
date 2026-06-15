@@ -217,10 +217,6 @@ jobs:
         with:
           toolchain: stable
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
-        with:
-          python-version: "3.12"
-          enable-cache: true
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
@@ -261,10 +257,12 @@ jobs:
         run: cargo run --features dev --example generate_tool_support_tables -- --check
       - name: Perf tables up to date
         run: cargo run --features dev --example generate_perf_tables -- --check
-      - name: Install dev dependencies
-        run: uv sync --group dev --locked --no-install-project
-      - name: Run Python tests
-        run: uv run poe check-tests
+      # Python tests run in the parallel `python-wheel-test` job, which
+      # exercises the same `tests/python/` suite against a from-scratch
+      # release wheel. Running them here too forced a serial
+      # `--features python` rebuild of the extension (~80s; the job's cache
+      # is warm only for `--features dev`) for a 0.3s pytest run, so the
+      # duplicate has been dropped from this job's critical path.
 
   # Builds the release wheel with maturin and exercises it from a clean venv,
   # outside the source tree. This catches packaging issues (missing data files,
