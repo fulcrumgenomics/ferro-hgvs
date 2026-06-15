@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use superintervals::IntervalMap;
 
 /// rkyv-archivable mirror of the cdot cache. Kept fully separate from the
@@ -1362,6 +1362,15 @@ pub struct CdotMapper {
     /// exon table on every projection. Sharing the same `OnceCell` build
     /// trigger as `contig_query_index` keeps the two views in sync.
     transcript_genome_spans: OnceCell<HashMap<String, (u64, u64)>>,
+    /// Deferred secondary builds: build name -> source cdot path. Set by
+    /// `MultiFastaProvider::from_manifest` so a declared secondary (e.g. the
+    /// GRCh37 cdot) is not loaded until a lookup for that build needs it. NOT
+    /// part of any rkyv/bincode snapshot — purely a runtime handle.
+    deferred_alt_sources: HashMap<String, PathBuf>,
+    /// Lazily-loaded secondary-build mappers, keyed by build name. `get_or_init`
+    /// loads `deferred_alt_sources[build]` on first use; the inner `Option` is
+    /// `None` when the source is missing/unreadable (best-effort, never retried).
+    lazy_alt_mappers: HashMap<String, OnceCell<Option<Box<CdotMapper>>>>,
 }
 
 /// Per-contig stab-query index entry for a non-primary build, used by
@@ -1394,6 +1403,8 @@ impl CdotMapper {
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
+            deferred_alt_sources: HashMap::new(),
+            lazy_alt_mappers: HashMap::new(),
         }
     }
 
@@ -1582,6 +1593,8 @@ impl CdotMapper {
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
+            deferred_alt_sources: HashMap::new(),
+            lazy_alt_mappers: HashMap::new(),
         })
     }
 
@@ -1721,6 +1734,8 @@ impl CdotMapper {
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
+            deferred_alt_sources: HashMap::new(),
+            lazy_alt_mappers: HashMap::new(),
         })
     }
 
@@ -2325,9 +2340,12 @@ impl CdotMapper {
     /// When `build` matches the mapper's primary load build, delegates to
     /// [`get_transcript`](Self::get_transcript). Otherwise consults the
     /// alt-build cache (populated from the source cdot JSON's `genome_builds`
-    /// section). Returns `None` if the transcript is absent from the requested
-    /// build (or if the alt-build cache is empty, e.g. for bincode-loaded
-    /// mappers or `from_transcripts`-built mappers).
+    /// section). If the transcript is not found in the eagerly-captured alt
+    /// views, falls back to a lazily-loaded deferred secondary build registered
+    /// via [`defer_secondary_build`](Self::defer_secondary_build), if any.
+    /// Returns `None` if the transcript is absent from the requested build (or
+    /// if neither the alt-build cache nor any deferred secondary covers it,
+    /// e.g. for bincode-loaded mappers or `from_transcripts`-built mappers).
     ///
     /// This is the lookup used by NG/NC-parent-aware transcript resolution
     /// (issue #332): when the input is `NG_*(NM_*):c.…` or
@@ -2359,36 +2377,93 @@ impl CdotMapper {
         } else {
             accession
         };
-        let alt = self.alt_build_transcripts.get(build)?;
-        if let Some(tx) = alt.get(resolved) {
-            return Some(tx);
-        }
-        // Version fallback within the alt-build map. Deterministically pick
-        // the highest numeric version among siblings sharing the base, rather
-        // than the first HashMap iteration hit — alt-build maps occasionally
-        // hold more than one version of the same base accession, and
-        // returning whichever the hasher landed on first was nondeterministic
-        // across runs (#389 follow-up).
-        if let Some(base) = resolved.split('.').next() {
-            let mut best: Option<(u32, &CdotTranscript)> = None;
-            for (k, v) in alt {
-                if !(k.starts_with(base) && k[base.len()..].starts_with('.')) {
-                    continue;
-                }
-                let ver = k[base.len() + 1..]
-                    .split('.')
-                    .next()
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .unwrap_or(0);
-                if best.is_none_or(|(cur, _)| ver > cur) {
-                    best = Some((ver, v));
-                }
-            }
-            if let Some((_, tx)) = best {
+        // Eagerly-captured alt views for this build, if any. Absent when the
+        // build is deferred (consulted below).
+        if let Some(alt) = self.alt_build_transcripts.get(build) {
+            if let Some(tx) = alt.get(resolved) {
                 return Some(tx);
             }
+            // Version fallback within the alt-build map. Deterministically pick
+            // the highest numeric version among siblings sharing the base, rather
+            // than the first HashMap iteration hit — alt-build maps occasionally
+            // hold more than one version of the same base accession, and
+            // returning whichever the hasher landed on first was nondeterministic
+            // across runs (#389 follow-up).
+            if let Some(base) = resolved.split('.').next() {
+                let mut best: Option<(u32, &CdotTranscript)> = None;
+                for (k, v) in alt {
+                    if !(k.starts_with(base) && k[base.len()..].starts_with('.')) {
+                        continue;
+                    }
+                    let ver = k[base.len() + 1..]
+                        .split('.')
+                        .next()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    if best.is_none_or(|(cur, _)| ver > cur) {
+                        best = Some((ver, v));
+                    }
+                }
+                if let Some((_, tx)) = best {
+                    return Some(tx);
+                }
+            }
         }
-        None
+        // Not in the eagerly-captured alt views — consult a deferred secondary
+        // build (e.g. a manifest's GRCh37 cdot) loaded lazily on first use.
+        self.deferred_alt_mapper(build)?
+            .get_transcript_on_build(accession, build)
+    }
+
+    /// Record a secondary build to load lazily on first use, instead of folding
+    /// it in eagerly. `path` is any cdot source `load()` accepts (`.json`,
+    /// `.json.gz`, `.rkyv`, `.bin`). The build's transcripts are not read until
+    /// `deferred_alt_mapper(build)` is first called.
+    ///
+    /// Calling this again after the `OnceCell` for `build` has already been
+    /// initialized updates the recorded path but has no effect on the
+    /// already-loaded mapper — `OnceCell` is init-once and the existing value
+    /// is returned on all subsequent calls.
+    pub fn defer_secondary_build(&mut self, build: &str, path: PathBuf) {
+        self.deferred_alt_sources.insert(build.to_string(), path);
+        self.lazy_alt_mappers.entry(build.to_string()).or_default();
+        // A newly-deferred build adds alt-build contigs; invalidate the lazy
+        // overlap index so a previously force-built index doesn't omit them
+        // (mirrors the eager `load_secondary_build` reset).
+        self.alt_build_query_index = OnceCell::new();
+    }
+
+    /// Return the lazily-loaded secondary mapper for `build`, loading it from its
+    /// deferred source on first call. `None` if `build` was never deferred or its
+    /// source could not be loaded (best-effort; resolved once and not retried).
+    fn deferred_alt_mapper(&self, build: &str) -> Option<&CdotMapper> {
+        let cell = self.lazy_alt_mappers.get(build)?;
+        cell.get_or_init(|| {
+            let path = self.deferred_alt_sources.get(build)?;
+            match Self::load(path) {
+                Ok(m) => {
+                    let n = m.alt_build_transcripts.get(build).map_or(0, |t| t.len());
+                    eprintln!("Loaded {n} {build} transcripts (deferred secondary build)");
+                    Some(Box::new(m))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to load deferred {build} cdot {}: {e}",
+                        path.display()
+                    );
+                    None
+                }
+            }
+        })
+        .as_deref()
+    }
+
+    /// Test probe: has the deferred-load attempt for `build` completed (whether it loaded or failed)?
+    #[cfg(test)]
+    pub(crate) fn deferred_alt_loaded(&self, build: &str) -> bool {
+        self.lazy_alt_mappers
+            .get(build)
+            .is_some_and(|c| c.get().is_some())
     }
 
     /// List every genome build that has data for the given transcript.
@@ -2396,6 +2471,11 @@ impl CdotMapper {
     /// Includes the primary build if the transcript is present there. The
     /// returned list is unordered; callers that want a deterministic probe
     /// order (e.g. GRCh38-then-GRCh37) should sort externally.
+    ///
+    /// Side effect: this can force-load a deferred secondary build on first
+    /// use (via `deferred_alt_mapper`), which may read a large cdot source
+    /// (~198k transcripts) from disk. Callers on a hot path should be aware
+    /// this is not a cheap metadata-only query.
     pub fn available_builds_for(&self, accession: &str) -> Vec<String> {
         let mut builds = Vec::new();
         // Only claim the primary build when we actually know what it is —
@@ -2416,6 +2496,22 @@ impl CdotMapper {
                 });
             if hit {
                 builds.push(build.clone());
+            }
+        }
+        // Also consider deferred secondary builds (loaded on demand). Only report
+        // a deferred build when it actually has the transcript, mirroring the
+        // eager check above.
+        let deferred: Vec<String> = self.lazy_alt_mappers.keys().cloned().collect();
+        for build in deferred {
+            if builds.iter().any(|b| b == &build) {
+                continue;
+            }
+            // `get_transcript_on_build` applies its own version-fallback, so we
+            // don't repeat the eager loop's inline fallback here.
+            if let Some(sub) = self.deferred_alt_mapper(&build) {
+                if sub.get_transcript_on_build(accession, &build).is_some() {
+                    builds.push(build);
+                }
             }
         }
         builds
@@ -2465,21 +2561,39 @@ impl CdotMapper {
         // Non-primary build: GRCh37/GRCh38 contig accessions are distinct, so
         // the contig itself names the owning build. Route the query into that
         // build's `alt_build_transcripts` map.
+        //
+        // The index is built lazily and includes contigs from both eagerly-loaded
+        // secondary builds (`alt_build_transcripts`) and deferred secondary builds
+        // (force-loaded from `lazy_alt_mappers` at index-build time). Transcripts
+        // for a given build may be split across both stores (the primary cdot's
+        // eager alt-build view and the deferred secondary file), so each hit
+        // accession is resolved from both stores before being dropped as missing.
         let alt_by_contig = self
             .alt_build_query_index
             .get_or_init(|| self.build_alt_build_query_index());
         let Some(stab) = alt_by_contig.get(canonical) else {
             return Vec::new();
         };
-        let Some(alt) = self.alt_build_transcripts.get(&stab.build) else {
+        let eager_alt = self.alt_build_transcripts.get(&stab.build);
+        // Resolve the deferred sub-mapper now (force-loading if needed) so we
+        // can check both stores per accession below. If neither store has data
+        // for this build the whole query returns empty.
+        let deferred_alt = self
+            .deferred_alt_mapper(&stab.build)
+            .and_then(|sub| sub.alt_build_transcripts.get(&stab.build));
+        if eager_alt.is_none() && deferred_alt.is_none() {
             return Vec::new();
-        };
+        }
         let mut hits: Vec<u32> = Vec::with_capacity(16);
         stab.index.search_stabbed(p, &mut hits);
         hits.into_iter()
             .filter_map(|idx| {
                 let acc = stab.accessions.get(idx as usize)?;
-                let tx = alt.get(acc)?;
+                // Check the eager store first; fall back to the deferred store.
+                // A transcript can only live in one of the two stores.
+                let tx = eager_alt
+                    .and_then(|m| m.get(acc))
+                    .or_else(|| deferred_alt.and_then(|m| m.get(acc)))?;
                 Some((acc.as_str(), tx))
             })
             .collect()
@@ -2585,62 +2699,124 @@ impl CdotMapper {
     }
 
     /// Construct the per-contig stab-query index for the non-primary builds,
-    /// derived from [`Self::alt_build_transcripts`]. Mirrors
-    /// [`Self::build_query_index`] but groups by `(build, contig)` so a query
-    /// on an alt-build contig can recover both the owning build and the
-    /// accession.
+    /// derived from [`Self::alt_build_transcripts`] and any deferred secondary
+    /// builds registered via [`Self::defer_secondary_build`] (which are
+    /// force-loaded here). Mirrors [`Self::build_query_index`] but groups by
+    /// `(build, contig)` so a query on an alt-build contig can recover both the
+    /// owning build and the accession.
     ///
     /// Because GRCh37 and GRCh38 contig accessions are distinct, no contig is
-    /// claimed by two builds; the per-contig map is therefore unambiguous. If
-    /// a future build did share a contig accession, the last build iterated
-    /// would win for that contig — acceptable until such a build exists.
+    /// claimed by two builds; the per-contig map is therefore unambiguous.
+    ///
+    /// **Merge semantics**: a single build (e.g. "GRCh37") can have transcripts
+    /// in *both* the eager store (`self.alt_build_transcripts`) and in a deferred
+    /// secondary mapper, potentially on the *same* contig.  The old two-pass
+    /// approach (call `index_one_build` once for eager, once for deferred) used
+    /// `HashMap::insert` which silently replaced the eager contig stab with the
+    /// deferred one, discarding all eagerly-indexed accessions.  The fix below
+    /// gathers all `(build, accession)` pairs across **both** stores first, then
+    /// builds exactly one `AltBuildContigStab` per contig from the combined,
+    /// sorted accession list.
     fn build_alt_build_query_index(&self) -> HashMap<String, AltBuildContigStab> {
-        let mut by_contig: HashMap<String, AltBuildContigStab> = HashMap::new();
-        for (build, transcripts) in &self.alt_build_transcripts {
-            // Group this build's transcripts by contig so each contig gets its
-            // own accession list + interval index.
-            let mut accessions_by_contig: HashMap<String, Vec<String>> = HashMap::new();
-            for acc in transcripts.keys() {
-                let Some(tx) = transcripts.get(acc) else {
-                    continue;
-                };
-                accessions_by_contig
-                    .entry(tx.contig.clone())
+        // Step 1 — collect (build, Vec<accession>) per contig from every source.
+        // A contig maps to exactly one build — NC_*.10 = GRCh37, NC_*.11 =
+        // GRCh38 — so first-seen wins; the debug_assert guards the invariant
+        // in test builds.
+        let mut contig_build: HashMap<String, String> = HashMap::new();
+        let mut contig_accs: HashMap<String, Vec<String>> = HashMap::new();
+
+        let mut add_transcripts = |build: &str, txs: &HashMap<String, CdotTranscript>| {
+            for (acc, tx) in txs {
+                let contig = &tx.contig;
+                let existing = contig_build
+                    .entry(contig.clone())
+                    .or_insert_with(|| build.to_string());
+                debug_assert_eq!(
+                    existing.as_str(),
+                    build,
+                    "contig {contig} claimed by two builds"
+                );
+                contig_accs
+                    .entry(contig.clone())
                     .or_default()
                     .push(acc.clone());
             }
-            for (contig, mut accessions) in accessions_by_contig {
-                // Deterministic order so the `u32` payload→accession mapping is
-                // stable across runs (HashMap key iteration is not).
-                accessions.sort();
-                let mut im: IntervalMap<u32> = IntervalMap::new();
-                for (idx, acc) in accessions.iter().enumerate() {
-                    let Some(tx) = transcripts.get(acc) else {
-                        continue;
-                    };
-                    if tx.exons.is_empty() {
-                        continue;
-                    }
-                    let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
-                    let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
-                    if max <= min {
-                        continue;
-                    }
-                    let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
-                        continue;
-                    };
-                    im.add(s, e, idx as u32);
+        };
+
+        // Eager store.
+        for (build, transcripts) in &self.alt_build_transcripts {
+            add_transcripts(build, transcripts);
+        }
+
+        // Deferred secondary builds. Collect the keys first to avoid holding a
+        // borrow on `self.lazy_alt_mappers` while calling `deferred_alt_mapper`
+        // (which also borrows `self`).
+        let deferred: Vec<String> = self.lazy_alt_mappers.keys().cloned().collect();
+        for build in &deferred {
+            if let Some(sub) = self.deferred_alt_mapper(build) {
+                if let Some(transcripts) = sub.alt_build_transcripts.get(build.as_str()) {
+                    add_transcripts(build, transcripts);
                 }
-                im.build();
-                by_contig.insert(
-                    contig,
-                    AltBuildContigStab {
-                        build: build.clone(),
-                        accessions,
-                        index: im,
-                    },
-                );
             }
+        }
+
+        // Step 2 — for every contig, sort the combined accession list and build
+        // one IntervalMap.  To resolve a transcript's exons we need to look the
+        // accession up in a transcript map.  A given accession may live in either
+        // the eager store or the deferred sub-mapper; try both.
+        let mut by_contig: HashMap<String, AltBuildContigStab> =
+            HashMap::with_capacity(contig_accs.len());
+        for (contig, mut accessions) in contig_accs {
+            // Deterministic payload→accession mapping (HashMap iteration order
+            // is random across runs; sort to stabilise the u32 index).
+            accessions.sort();
+            // An accession present in BOTH the eager alt-build view and the deferred sub-mapper
+            // would appear twice in the combined list; dedup keeps the IntervalMap
+            // payload->accession mapping 1:1.
+            accessions.dedup();
+
+            let build = contig_build
+                .get(&contig)
+                .expect("contig_build populated in same loop")
+                .as_str();
+
+            let eager_map = self.alt_build_transcripts.get(build);
+            // Resolve the deferred sub-mapper (force-loading if needed).
+            let deferred_map = self
+                .deferred_alt_mapper(build)
+                .and_then(|sub| sub.alt_build_transcripts.get(build));
+
+            let mut im: IntervalMap<u32> = IntervalMap::new();
+            for (idx, acc) in accessions.iter().enumerate() {
+                // Look up the transcript in the eager store first, then deferred.
+                let tx = eager_map
+                    .and_then(|m| m.get(acc))
+                    .or_else(|| deferred_map.and_then(|m| m.get(acc)));
+                let Some(tx) = tx else {
+                    continue;
+                };
+                if tx.exons.is_empty() {
+                    continue;
+                }
+                let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
+                let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
+                if max <= min {
+                    continue;
+                }
+                let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
+                    continue;
+                };
+                im.add(s, e, idx as u32);
+            }
+            im.build();
+            by_contig.insert(
+                contig,
+                AltBuildContigStab {
+                    build: build.to_string(),
+                    accessions,
+                    index: im,
+                },
+            );
         }
         by_contig
     }
@@ -4428,6 +4604,36 @@ mod tests {
     }
 
     #[test]
+    fn test_available_builds_for_includes_deferred_build() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+
+        let mut builds = lazy.available_builds_for("NM_000001.1");
+        builds.sort();
+        assert_eq!(
+            builds,
+            vec!["GRCh37".to_string()],
+            "deferred GRCh37 must be the sole available build"
+        );
+    }
+
+    #[test]
     fn test_get_transcript_on_build_version_fallback_in_alt() {
         // NM_000088.4 falls back to NM_000088.3 inside the alt-build map too.
         let json = multi_build_cdot_json();
@@ -4919,5 +5125,286 @@ mod tests {
         let ids: Vec<&str> = hits.iter().map(|(acc, _)| *acc).collect();
         assert_eq!(ids, vec!["NM_000088.3"]);
         assert_eq!(hits[0].1.contig, "NC_000017.10");
+    }
+
+    // -------------------------------------------------------------------------
+    // Deferred secondary-build: lazy-load tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn deferred_alt_mapper_loads_once_on_first_access() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        mapper.defer_secondary_build("GRCh37", path);
+        assert!(
+            !mapper.deferred_alt_loaded("GRCh37"),
+            "deferral must not load eagerly"
+        );
+
+        let tx = mapper
+            .deferred_alt_mapper("GRCh37")
+            .and_then(|m| m.get_transcript_on_build("NM_000001.1", "GRCh37"));
+        assert!(
+            tx.is_some(),
+            "deferred mapper must expose its GRCh37 transcript"
+        );
+        assert!(
+            mapper.deferred_alt_loaded("GRCh37"),
+            "first access must load it"
+        );
+
+        assert!(mapper.deferred_alt_mapper("GRCh37").is_some());
+        assert!(mapper.deferred_alt_loaded("GRCh37"));
+    }
+
+    #[test]
+    fn deferred_alt_mapper_missing_source_resolves_to_none() {
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        mapper.defer_secondary_build("GRCh37", PathBuf::from("/no/such/cdot.json"));
+        assert!(
+            mapper.deferred_alt_mapper("GRCh37").is_none(),
+            "missing source -> None, no panic"
+        );
+        assert!(mapper.deferred_alt_loaded("GRCh37"));
+        assert!(mapper.deferred_alt_mapper("GRCh99").is_none());
+    }
+
+    #[test]
+    fn get_transcript_on_build_deferred_matches_eager() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut eager = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        eager.load_secondary_build(&path, "GRCh37").unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path.clone());
+
+        let e = eager
+            .get_transcript_on_build("NM_000001.1", "GRCh37")
+            .unwrap();
+        let l = lazy
+            .get_transcript_on_build("NM_000001.1", "GRCh37")
+            .unwrap();
+        assert_eq!(e.contig, l.contig);
+        assert_eq!(e.contig, "NC_000001.10");
+        assert_eq!(e.strand, l.strand);
+        assert_eq!(e.exons, l.exons);
+
+        let mut lazy2 = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy2.defer_secondary_build("GRCh37", path);
+        // A GRCh37 lookup satisfied by the PRIMARY cdot's own eager GRCh37 alt view
+        // must NOT spill into (load) the deferred secondary.
+        let _ = lazy2
+            .get_transcript_on_build("NM_000088.3", "GRCh37")
+            .unwrap();
+        assert!(
+            !lazy2.deferred_alt_loaded("GRCh37"),
+            "an eagerly-satisfiable GRCh37 lookup must not load the deferred secondary"
+        );
+    }
+
+    #[test]
+    fn test_overlap_index_includes_deferred_grch37_contigs() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut eager = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        eager.load_secondary_build(&path, "GRCh37").unwrap();
+        let eager_hits = eager.transcripts_at_position("NC_000001.10", 150);
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+        let lazy_hits = lazy.transcripts_at_position("NC_000001.10", 150);
+
+        let mut e: Vec<&str> = eager_hits.iter().map(|(a, _)| *a).collect();
+        let mut l: Vec<&str> = lazy_hits.iter().map(|(a, _)| *a).collect();
+        e.sort();
+        l.sort();
+        assert_eq!(e, l, "deferred overlap must match eager overlap");
+        assert!(
+            lazy.deferred_alt_loaded("GRCh37"),
+            "an overlap query must force-load the deferred secondary"
+        );
+        assert!(
+            l.contains(&"NM_000001.1"),
+            "overlap result must include NM_000001.1 at position 150"
+        );
+    }
+
+    #[test]
+    fn test_overlap_merges_eager_and_deferred_same_contig() {
+        // The primary (multi_build) cdot puts NM_000088.3 on GRCh37 contig
+        // NC_000017.10 (eager alt view). A deferred GRCh37 file adds another
+        // transcript on the SAME contig. Both must appear in an overlap query —
+        // the deferred index must MERGE with, not replace, the eager contig stab.
+        //
+        // Regression: the old `index_one_build`-based approach called
+        // `HashMap::insert` per contig, so the deferred pass silently overwrote
+        // the eager stab for NC_000017.10, discarding NM_000088.3.
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_999999.1": {
+                    "gene_name": "GENE_X",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000017.10", "strand": "+", "exons": [[48263025, 48263098, 1, 0, 73, "M73"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        let mut lazy = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        lazy.defer_secondary_build("GRCh37", path);
+
+        // A position inside NM_000088.3's GRCh37 exon (NC_000017.10:48263025-48263098).
+        // NM_999999.1 has an identical exon, so both transcripts overlap pos 48263050.
+        let hits = lazy.transcripts_at_position("NC_000017.10", 48263050);
+        let mut accs: Vec<&str> = hits.iter().map(|(a, _)| *a).collect();
+        accs.sort();
+        assert!(
+            accs.contains(&"NM_000088.3"),
+            "eager GRCh37 transcript must not be dropped by the deferred merge; got: {accs:?}"
+        );
+        assert!(
+            accs.contains(&"NM_999999.1"),
+            "deferred GRCh37 transcript must be present; got: {accs:?}"
+        );
+    }
+
+    #[test]
+    fn deferred_grch37_not_loaded_for_grch38_only_sequence() {
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+
+        // A sequence of GRCh38 / primary-build-only lookups must NOT load the deferred GRCh37 mapper.
+        let mut m = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        m.defer_secondary_build("GRCh37", path);
+        let _ = m.get_transcript("NM_000088.3");
+        let _ = m.get_transcript_on_build("NM_000088.3", "GRCh38");
+        assert!(
+            !m.deferred_alt_loaded("GRCh37"),
+            "GRCh38/primary lookups must not load the GRCh37 secondary"
+        );
+    }
+
+    #[test]
+    fn deferred_grch37_loads_once_under_concurrency() {
+        use std::sync::Arc;
+        let secondary_grch37_json = r#"
+        {
+            "transcripts": {
+                "NM_000001.1": {
+                    "gene_name": "GENE_A",
+                    "genome_builds": {
+                        "GRCh37": { "contig": "NC_000001.10", "strand": "+", "exons": [[100, 200, 1, 0, 100, "M100"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("grch37.json");
+        std::fs::write(&path, secondary_grch37_json).unwrap();
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        mapper.defer_secondary_build("GRCh37", path);
+        let shared = Arc::new(mapper);
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let m = Arc::clone(&shared);
+            handles.push(std::thread::spawn(move || {
+                m.get_transcript_on_build("NM_000001.1", "GRCh37")
+                    .map(|t| t.contig.clone())
+            }));
+        }
+        for h in handles {
+            assert_eq!(h.join().unwrap().as_deref(), Some("NC_000001.10"));
+        }
+        assert!(shared.deferred_alt_loaded("GRCh37"));
+    }
+
+    #[test]
+    fn deferred_state_is_not_serialized() {
+        // The deferred source is runtime-only: serializing and reloading drops it
+        // (from_manifest re-establishes it). Round-trip must not panic and must yield
+        // a mapper with no deferred state, while primary data survives.
+        let mut mapper = CdotMapper::from_reader(multi_build_cdot_json().as_bytes()).unwrap();
+        mapper.defer_secondary_build("GRCh37", PathBuf::from("/tmp/whatever.json"));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let rkyv_path = dir.path().join("m.rkyv");
+        mapper.to_rkyv_file(&rkyv_path).unwrap();
+        let reloaded = CdotMapper::from_rkyv_file(&rkyv_path).unwrap();
+
+        // Deferred state did not survive serialization.
+        assert!(
+            !reloaded.deferred_alt_loaded("GRCh37"),
+            "deferred state must not survive serialization"
+        );
+        assert!(
+            reloaded.deferred_alt_mapper("GRCh37").is_none(),
+            "no deferred source should be reconstructed from a snapshot"
+        );
+        // Primary data survives normally.
+        assert!(reloaded.get_transcript("NM_000088.3").is_some());
     }
 }
