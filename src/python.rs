@@ -3109,7 +3109,8 @@ impl PyPrepareConfig {
         download_cdot=true,
         skip_existing=true,
         dry_run=false,
-        download_cdot_grch37=false
+        download_cdot_grch37=false,
+        download_ensembl=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -3123,6 +3124,7 @@ impl PyPrepareConfig {
         skip_existing: bool,
         dry_run: bool,
         download_cdot_grch37: bool,
+        download_ensembl: bool,
     ) -> Self {
         Self {
             inner: PrepareConfig {
@@ -3135,6 +3137,7 @@ impl PyPrepareConfig {
                 download_lrg,
                 download_cdot,
                 download_cdot_grch37,
+                download_ensembl,
                 skip_existing,
                 clinvar_file: None,
                 patterns_file: None,
@@ -3167,6 +3170,11 @@ impl PyPrepareConfig {
     #[getter]
     fn download_cdot_grch37(&self) -> bool {
         self.inner.download_cdot_grch37
+    }
+
+    #[getter]
+    fn download_ensembl(&self) -> bool {
+        self.inner.download_ensembl
     }
 }
 

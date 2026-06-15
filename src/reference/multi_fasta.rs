@@ -398,6 +398,69 @@ impl MultiFastaProvider {
         mapper.defer_secondary_build("GRCh37", grch37_path);
     }
 
+    /// Merge Ensembl cdot metadata (GRCh38 primary, plus an optional GRCh37
+    /// secondary build) into an already-loaded RefSeq `mapper`. Ensembl
+    /// transcripts (`ENST`/`ENSG`/`ENSP`) are distinct accessions on the same
+    /// primary build, so they merge into the primary lookup path via
+    /// [`CdotMapper::merge_primary_build`] (not as an alt build). Best-effort:
+    /// warns but does not fail, like the LRG/GRCh37 loads. Returns the number of
+    /// Ensembl transcripts merged into the primary build.
+    fn load_ensembl_cdot(
+        mapper: &mut CdotMapper,
+        manifest: &serde_json::Value,
+        resolve_path: &impl Fn(&str) -> PathBuf,
+    ) -> usize {
+        let Some(ensembl_path_str) = manifest.get("ensembl_cdot_json").and_then(|v| v.as_str())
+        else {
+            return 0;
+        };
+        let ensembl_path = resolve_path(ensembl_path_str);
+        if !ensembl_path.exists() {
+            eprintln!(
+                "Warning: ensembl_cdot_json path does not exist: {}",
+                ensembl_path.display()
+            );
+            return 0;
+        }
+        eprintln!(
+            "Loading Ensembl cdot transcript metadata from {}...",
+            ensembl_path.display()
+        );
+        let merged = match mapper.merge_primary_build(&ensembl_path) {
+            Ok(count) => {
+                eprintln!("Merged {} Ensembl transcripts (primary build)", count);
+                count
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load Ensembl cdot: {}", e);
+                0
+            }
+        };
+
+        // Layer the Ensembl GRCh37 cdot as a secondary build, if provided.
+        if let Some(grch37_str) = manifest
+            .get("ensembl_cdot_grch37_json")
+            .and_then(|v| v.as_str())
+        {
+            let grch37_path = resolve_path(grch37_str);
+            if grch37_path.exists() {
+                match mapper.load_secondary_build(&grch37_path, "GRCh37") {
+                    Ok(count) => {
+                        eprintln!(
+                            "Loaded {} Ensembl GRCh37 transcripts (secondary build)",
+                            count
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load Ensembl GRCh37 cdot: {}", e);
+                    }
+                }
+            }
+        }
+
+        merged
+    }
+
     /// Create a provider from a manifest file
     pub fn from_manifest<P: AsRef<Path>>(manifest_path: P) -> Result<Self, FerroError> {
         let manifest_path = manifest_path.as_ref();
@@ -468,6 +531,24 @@ impl MultiFastaProvider {
                 if let Some(lrg_dir) = path.parent() {
                     if !dirs.contains(&lrg_dir.to_path_buf()) {
                         dirs.push(lrg_dir.to_path_buf());
+                    }
+                }
+            }
+        }
+
+        // Get Ensembl cDNA directory (ENST_ accessions)
+        if let Some(fastas) = manifest
+            .get("ensembl_transcript_fastas")
+            .and_then(|v| v.as_array())
+        {
+            if let Some(first) = fastas.first().and_then(|v| v.as_str()) {
+                // Remove .gz extension if present (the indexed sidecar is the
+                // decompressed FASTA, as for RefSeq transcripts).
+                let path_str = first.strip_suffix(".gz").unwrap_or(first);
+                let path = resolve_path(path_str);
+                if let Some(ensembl_dir) = path.parent() {
+                    if !dirs.contains(&ensembl_dir.to_path_buf()) {
+                        dirs.push(ensembl_dir.to_path_buf());
                     }
                 }
             }
@@ -581,6 +662,12 @@ impl MultiFastaProvider {
                         // GRCh38/context-free workloads never pay for it.
                         // Best-effort: a missing key/file is a no-op.
                         Self::defer_grch37_secondary_cdot(&mut mapper, &manifest, &resolve_path);
+
+                        // Merge Ensembl cdot (ENST/ENSG/ENSP) into the primary
+                        // build alongside RefSeq, if the manifest provides it
+                        // (`ferro prepare --ensembl`). Best-effort, like the
+                        // LRG/GRCh37 loads above.
+                        Self::load_ensembl_cdot(&mut mapper, &manifest, &resolve_path);
 
                         provider.cdot_mapper = Some(mapper);
                     }
@@ -2658,6 +2745,160 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
         let entry = index.get("NM_000001.1").unwrap();
         assert_eq!(entry.length, 10);
         assert_eq!(entry.offset, 13);
+    }
+
+    #[test]
+    fn test_from_manifest_resolves_ensembl_sequence_and_cdot() {
+        use crate::reference::ReferenceProvider;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // Ensembl cDNA FASTA (ENST_) + its .fai. Header ">ENST00000375549.8\n"
+        // is 19 bytes (1 + 17 + 1), so the sequence offset is 19.
+        fs::write(
+            d.join("ensembl_cdna.fna"),
+            ">ENST00000375549.8\nACGTACGTACGT\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("ensembl_cdna.fna.fai"),
+            "ENST00000375549.8\t12\t19\t12\t13\n",
+        )
+        .unwrap();
+
+        // Minimal RefSeq cdot (so the cdot-loading block fires) ...
+        fs::write(
+            d.join("refseq_cdot.json"),
+            r#"{"transcripts":{"NM_000088.3":{"gene_name":"COL1A1","contig":"NC_000017.11","strand":"+","exons":[[50184096,50184108,0,12]],"cds_start":0,"cds_end":12}}}"#,
+        )
+        .unwrap();
+        // ... and the Ensembl cdot it merges in.
+        fs::write(
+            d.join("ensembl_cdot.json"),
+            r#"{"transcripts":{"ENST00000375549.8":{"gene_name":"EDN1","contig":"NC_000006.12","strand":"+","exons":[[12290360,12290372,0,12]],"cds_start":0,"cds_end":12}}}"#,
+        )
+        .unwrap();
+
+        // Manifest references everything by relative path (resolved against its dir).
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": [],
+                "ensembl_transcript_fastas": ["ensembl_cdna.fna"],
+                "cdot_json": "refseq_cdot.json",
+                "ensembl_cdot_json": "ensembl_cdot.json",
+                "transcript_count": 2,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        // Sequence resolution for the Ensembl transcript (versioned + length).
+        assert_eq!(
+            provider.get_sequence("ENST00000375549.8", 0, 4).unwrap(),
+            "ACGT"
+        );
+        assert_eq!(
+            provider.get_sequence_length("ENST00000375549.8").unwrap(),
+            12
+        );
+        // Version-less fallback resolves to the highest indexed version.
+        assert_eq!(
+            provider.get_sequence("ENST00000375549", 0, 4).unwrap(),
+            "ACGT"
+        );
+
+        // Coordinate mapping: the Ensembl cdot merged into the primary build
+        // alongside RefSeq, so both resolve through the same mapper.
+        let cdot = provider.cdot_mapper().expect("cdot mapper loaded");
+        assert!(
+            cdot.get_transcript("ENST00000375549.8").is_some(),
+            "Ensembl transcript resolves in cdot"
+        );
+        assert!(
+            cdot.get_transcript("NM_000088.3").is_some(),
+            "RefSeq transcript still resolves in cdot"
+        );
+    }
+
+    #[test]
+    fn test_from_manifest_layers_ensembl_grch37_secondary_build() {
+        // Covers the `ensembl_cdot_grch37_json` → `load_secondary_build(.., "GRCh37")`
+        // branch in `load_ensembl_cdot`: a GRCh37 Ensembl cdot named by the
+        // manifest must be absorbed as the GRCh37 alt build (distinct GRCh37
+        // contig accession), resolvable via `get_transcript_on_build`.
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // Ensembl cDNA FASTA so the provider has at least one FASTA directory.
+        fs::write(
+            d.join("ensembl_cdna.fna"),
+            ">ENST00000375549.8\nACGTACGTACGT\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("ensembl_cdna.fna.fai"),
+            "ENST00000375549.8\t12\t19\t12\t13\n",
+        )
+        .unwrap();
+
+        // Minimal RefSeq cdot so the cdot-loading block fires and creates the
+        // primary mapper that `load_ensembl_cdot` merges the Ensembl cdot into.
+        fs::write(
+            d.join("refseq_cdot.json"),
+            r#"{"transcripts":{"NM_000088.3":{"gene_name":"COL1A1","contig":"NC_000017.11","strand":"+","exons":[[50184096,50184108,0,12]],"cds_start":0,"cds_end":12}}}"#,
+        )
+        .unwrap();
+        // Primary (GRCh38) Ensembl cdot: contig is the GRCh38 accession.
+        fs::write(
+            d.join("ensembl_cdot.json"),
+            r#"{"transcripts":{"ENST00000375549.8":{"gene_name":"EDN1","contig":"NC_000006.12","strand":"+","exons":[[12290360,12290372,0,12]],"cds_start":0,"cds_end":12}}}"#,
+        )
+        .unwrap();
+        // Secondary (GRCh37) Ensembl cdot: same accession, GRCh37 contig.
+        fs::write(
+            d.join("ensembl_cdot_grch37.json"),
+            r#"{"transcripts":{"ENST00000375549.8":{"gene_name":"EDN1","contig":"NC_000006.11","strand":"+","exons":[[12290560,12290572,0,12]],"cds_start":0,"cds_end":12}}}"#,
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": [],
+                "ensembl_transcript_fastas": ["ensembl_cdna.fna"],
+                "cdot_json": "refseq_cdot.json",
+                "ensembl_cdot_json": "ensembl_cdot.json",
+                "ensembl_cdot_grch37_json": "ensembl_cdot_grch37.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+        let cdot = provider.cdot_mapper().expect("cdot mapper loaded");
+
+        // Primary build resolves to the GRCh38 contig.
+        let tx38 = cdot
+            .get_transcript_on_build("ENST00000375549.8", "GRCh38")
+            .expect("Ensembl transcript on GRCh38 (primary build)");
+        assert_eq!(tx38.contig, "NC_000006.12");
+
+        // The GRCh37 secondary build (the branch under test) resolves to the
+        // GRCh37 contig — proving the secondary cdot was layered, not dropped.
+        let tx37 = cdot
+            .get_transcript_on_build("ENST00000375549.8", "GRCh37")
+            .expect("Ensembl transcript on GRCh37 (secondary build)");
+        assert_eq!(tx37.contig, "NC_000006.11");
     }
 
     #[test]

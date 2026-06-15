@@ -45,6 +45,17 @@ pub struct ReferenceManifest {
     /// cdot transcript metadata JSON for GRCh37 (if downloaded)
     #[serde(default)]
     pub cdot_grch37_json: Option<PathBuf>,
+    /// Ensembl cdot transcript metadata JSON for GRCh38 (ENST/ENSG/ENSP), if
+    /// downloaded via `ferro prepare --ensembl`. Same schema as `cdot_json`.
+    #[serde(default)]
+    pub ensembl_cdot_json: Option<PathBuf>,
+    /// Ensembl cdot transcript metadata JSON for GRCh37, if downloaded.
+    #[serde(default)]
+    pub ensembl_cdot_grch37_json: Option<PathBuf>,
+    /// Ensembl cDNA FASTA files (ENST_* transcript sequences), if downloaded
+    /// via `ferro prepare --ensembl`.
+    #[serde(default)]
+    pub ensembl_transcript_fastas: Vec<PathBuf>,
     /// Supplemental FASTA file (missing ClinVar transcripts fetched from NCBI)
     #[serde(default)]
     pub supplemental_fasta: Option<PathBuf>,
@@ -91,6 +102,9 @@ impl Default for ReferenceManifest {
             lrg_refseq_mapping: None,
             cdot_json: None,
             cdot_grch37_json: None,
+            ensembl_cdot_json: None,
+            ensembl_cdot_grch37_json: None,
+            ensembl_transcript_fastas: Vec::new(),
             supplemental_fasta: None,
             legacy_transcripts_fasta: None,
             legacy_transcripts_metadata: None,
@@ -218,6 +232,7 @@ impl ReferenceManifest {
             .chain(self.refseqgene_fastas.iter())
             .chain(self.lrg_fastas.iter())
             .chain(self.lrg_xmls.iter())
+            .chain(self.ensembl_transcript_fastas.iter())
         {
             f(p);
         }
@@ -228,6 +243,8 @@ impl ReferenceManifest {
             &self.lrg_refseq_mapping,
             &self.cdot_json,
             &self.cdot_grch37_json,
+            &self.ensembl_cdot_json,
+            &self.ensembl_cdot_grch37_json,
             &self.supplemental_fasta,
             &self.legacy_transcripts_fasta,
             &self.legacy_transcripts_metadata,
@@ -250,6 +267,7 @@ impl ReferenceManifest {
             &mut self.refseqgene_fastas,
             &mut self.lrg_fastas,
             &mut self.lrg_xmls,
+            &mut self.ensembl_transcript_fastas,
         ] {
             for p in v.iter_mut() {
                 f(p);
@@ -262,6 +280,8 @@ impl ReferenceManifest {
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
             &mut self.cdot_grch37_json,
+            &mut self.ensembl_cdot_json,
+            &mut self.ensembl_cdot_grch37_json,
             &mut self.supplemental_fasta,
             &mut self.legacy_transcripts_fasta,
             &mut self.legacy_transcripts_metadata,
@@ -312,6 +332,7 @@ impl ReferenceManifest {
             &mut self.refseqgene_fastas,
             &mut self.lrg_fastas,
             &mut self.lrg_xmls,
+            &mut self.ensembl_transcript_fastas,
         ] {
             v.sort();
             v.dedup();
@@ -461,6 +482,9 @@ mod tests {
             lrg_refseq_mapping: Some(ref_dir.join("lrg_mapping.txt")),
             cdot_json: Some(ref_dir.join("cdot.json")),
             cdot_grch37_json: Some(ref_dir.join("cdot37.json")),
+            ensembl_cdot_json: Some(ref_dir.join("ensembl_cdot.json")),
+            ensembl_cdot_grch37_json: Some(ref_dir.join("ensembl_cdot37.json")),
+            ensembl_transcript_fastas: vec![ref_dir.join("ensembl_cdna.fa")],
             supplemental_fasta: Some(ref_dir.join("supplemental.fa")),
             legacy_transcripts_fasta: Some(ref_dir.join("legacy.fa")),
             legacy_transcripts_metadata: Some(ref_dir.join("legacy.json")),
@@ -529,6 +553,31 @@ mod tests {
             loaded.cdot_json,
             Some(ref_dir.join("cdot.json")),
             "cdot_json should be absolute after load"
+        );
+
+        // Ensembl fields round-trip: relative on disk, absolute after load.
+        assert_eq!(
+            json["ensembl_cdot_json"], "ensembl_cdot.json",
+            "ensembl_cdot_json should be stored as relative path"
+        );
+        assert_eq!(
+            json["ensembl_transcript_fastas"][0], "ensembl_cdna.fa",
+            "ensembl_transcript_fastas should be stored as relative path"
+        );
+        assert_eq!(
+            loaded.ensembl_cdot_json,
+            Some(ref_dir.join("ensembl_cdot.json")),
+            "ensembl_cdot_json should be absolute after load"
+        );
+        assert_eq!(
+            loaded.ensembl_cdot_grch37_json,
+            Some(ref_dir.join("ensembl_cdot37.json")),
+            "ensembl_cdot_grch37_json should be absolute after load"
+        );
+        assert_eq!(
+            loaded.ensembl_transcript_fastas,
+            vec![ref_dir.join("ensembl_cdna.fa")],
+            "ensembl_transcript_fastas should be absolute after load"
         );
 
         // Verify all other fields are preserved

@@ -489,6 +489,11 @@ enum Commands {
         #[arg(long)]
         validate_canonical: Option<PathBuf>,
 
+        /// Also download Ensembl reference (cDNA sequences + cdot metadata) so
+        /// variants on Ensembl transcripts/genes (ENST/ENSG/ENSP) resolve
+        #[arg(long)]
+        ensembl: bool,
+
         /// Dry run - show what would be downloaded without downloading
         #[arg(long)]
         dry_run: bool,
@@ -795,6 +800,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             patterns,
             clinvar,
             validate_canonical,
+            ensembl,
             dry_run,
         } => run_prepare(
             &output_dir,
@@ -808,6 +814,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             patterns.as_deref(),
             clinvar.as_deref(),
             validate_canonical.as_deref(),
+            ensembl,
             dry_run,
         ),
         Commands::Check {
@@ -2839,6 +2846,7 @@ fn run_prepare(
     patterns: Option<&Path>,
     clinvar: Option<&Path>,
     validate_canonical: Option<&Path>,
+    ensembl: bool,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::prepare::{prepare_references, PrepareConfig};
@@ -2853,6 +2861,7 @@ fn run_prepare(
         download_lrg: !no_lrg,
         download_cdot: !no_cdot && (genome == "grch38" || genome == "all"),
         download_cdot_grch37: !no_cdot && (genome == "grch37" || genome == "all"),
+        download_ensembl: ensembl,
         skip_existing: !force,
         clinvar_file: clinvar.map(|p| p.to_path_buf()),
         patterns_file: patterns.map(|p| p.to_path_buf()),

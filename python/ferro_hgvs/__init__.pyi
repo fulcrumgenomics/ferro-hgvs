@@ -1238,6 +1238,7 @@ class PrepareConfig:
         skip_existing: bool = True,
         dry_run: bool = False,
         download_cdot_grch37: bool = False,
+        download_ensembl: bool = False,
     ) -> None: ...
     @property
     def output_dir(self) -> str: ...
@@ -1249,6 +1250,8 @@ class PrepareConfig:
     def download_cdot(self) -> bool: ...
     @property
     def download_cdot_grch37(self) -> bool: ...
+    @property
+    def download_ensembl(self) -> bool: ...
 
 class ReferenceManifest:
     """Manifest of prepared reference data."""
