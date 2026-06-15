@@ -267,8 +267,8 @@ The `ferro prepare` command downloads and organizes all reference data needed fo
 | **RefSeq transcripts** | NCBI | ~1GB | NM_/NR_/XM_ normalization |
 | **cdot metadata** | MANE | ~200MB | Transcript-to-genome mappings |
 | **GRCh38 + GRCh37 genomes** | NCBI | ~4GB | NC_ genomic normalization |
-| **RefSeqGene** | NCBI | ~600MB | NG_ gene region normalization |
-| **LRG sequences** | EBI | ~50MB | LRG_ stable reference normalization |
+| **RefSeqGene** (sequences + genome alignments) | NCBI | ~600MB | NG_ gene-region normalization; projecting c./n. variants into an NG_ parent's own g. frame (via the RefSeqGene→genome alignment GFF3) |
+| **LRG sequences + XML** | EBI | ~50MB | LRG_ stable-reference normalization; projecting c./n. variants into an LRG_ parent's own g. frame (via the LRG XML genomic mapping) |
 | **Protein sequences** | Derived from CDS | ~200MB | NP_/XP_ protein normalization |
 | **Legacy transcript versions** | NCBI | ~50MB | Historical ClinVar variants |
 

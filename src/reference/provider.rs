@@ -7,6 +7,63 @@ use std::sync::Arc;
 use crate::error::FerroError;
 use crate::hgvs::variant::{Accession, HgvsVariant};
 use crate::reference::transcript::Transcript;
+use crate::reference::Strand;
+
+/// Chromosomal placement of a genomic *parent* reference — an `NG_` RefSeqGene
+/// or an `LRG_` — on its `NC_` chromosome contig, as a single contiguous affine
+/// span.
+///
+/// cdot aligns transcripts only to chromosomes (`NM_`→`NC_`), so a c./n./r.
+/// input parented on an `NG_`/`LRG_` resolves to chromosome coordinates that do
+/// not match the parent accession's own frame. This placement lets those
+/// chromosome coordinates be re-expressed in the parent's frame (#480).
+///
+/// All coordinates are 1-based. `parent_start` is the parent-frame coordinate of
+/// the low-strand span endpoint — the base at `nc_start` on the plus strand, or
+/// the base at `nc_end` on the minus strand (see [`GenomicPlacement::nc_to_parent`]);
+/// `nc_start`/`nc_end` are the inclusive chromosome span
+/// (`nc_start <= nc_end`); `strand` is the parent's orientation relative to the
+/// chromosome (`Minus` ⇒ the parent sequence is the reverse complement of the
+/// chromosome region, so coordinates count down as chromosome coordinates count
+/// up, and edits must be reverse-complemented into the parent frame).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenomicPlacement {
+    /// The chromosome (`NC_`) accession the parent is placed on.
+    pub nc: Accession,
+    /// Parent-frame (1-based) coordinate of the low-strand span endpoint: the
+    /// base at `nc_start` on the plus strand, or the base at `nc_end` on the
+    /// minus strand (the parent's own first base). See
+    /// [`GenomicPlacement::nc_to_parent`].
+    pub parent_start: u64,
+    /// Inclusive 1-based chromosome start of the placed span.
+    pub nc_start: u64,
+    /// Inclusive 1-based chromosome end of the placed span (`>= nc_start`).
+    pub nc_end: u64,
+    /// Parent orientation relative to the chromosome.
+    pub strand: Strand,
+}
+
+impl GenomicPlacement {
+    /// Map a 1-based chromosome (`NC_`) coordinate into the parent's own frame.
+    ///
+    /// Returns `None` when `nc_pos` lies outside the placed span, or when the
+    /// parent's strand is unknown — the caller should then decline to re-anchor
+    /// rather than emit an out-of-frame coordinate.
+    pub fn nc_to_parent(&self, nc_pos: u64) -> Option<u64> {
+        if nc_pos < self.nc_start || nc_pos > self.nc_end {
+            return None;
+        }
+        match self.strand {
+            Strand::Plus => Some(self.parent_start + (nc_pos - self.nc_start)),
+            Strand::Minus => Some(self.parent_start + (self.nc_end - nc_pos)),
+            // An unknown-orientation parent has no defined parent frame, so
+            // decline rather than guess `Plus`. This matches how the rest of the
+            // codebase treats `Strand::Unknown` (transcript projection, annotation
+            // validation), and the placement parsers only ever emit Plus/Minus.
+            Strand::Unknown => None,
+        }
+    }
+}
 
 /// Trait for providing reference sequence data
 ///
@@ -72,6 +129,17 @@ pub trait ReferenceProvider {
         accession: &Accession,
     ) -> Result<Arc<Transcript>, FerroError> {
         self.get_transcript(&accession.transcript_accession())
+    }
+
+    /// Return the chromosomal placement of a genomic *parent* reference
+    /// (`NG_`/`LRG_`) so transcript coordinates that cdot resolves on the
+    /// chromosome can be re-expressed in the parent's own frame (#480).
+    ///
+    /// The default returns `None` (no placement known); providers that ingest
+    /// RefSeqGene / LRG placement data override this. A `None` result means the
+    /// projector keeps the chromosome coordinates as-is.
+    fn genomic_placement(&self, _parent: &Accession) -> Option<GenomicPlacement> {
+        None
     }
 
     /// Get a sequence region
@@ -294,6 +362,10 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).has_genomic_data()
     }
 
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        (**self).genomic_placement(parent)
+    }
+
     fn get_protein_sequence(
         &self,
         accession: &str,
@@ -363,6 +435,10 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
 
     fn has_genomic_data(&self) -> bool {
         (**self).has_genomic_data()
+    }
+
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        (**self).genomic_placement(parent)
     }
 
     fn get_protein_sequence(

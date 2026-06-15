@@ -172,6 +172,14 @@ impl ReferenceProvider for ArcProvider {
     fn has_protein_data(&self) -> bool {
         self.0.has_protein_data()
     }
+    fn genomic_placement(
+        &self,
+        parent: &ferro_hgvs::hgvs::variant::Accession,
+    ) -> Option<ferro_hgvs::reference::GenomicPlacement> {
+        // Must delegate, or NG_/LRG_ re-anchoring (#480) silently no-ops behind
+        // the wrapper via the trait's `None` default.
+        self.0.genomic_placement(parent)
+    }
 }
 
 fn normalizer() -> Option<Normalizer<ArcProvider>> {
@@ -566,7 +574,7 @@ fn axis_normalized() {
 
 #[test]
 fn axis_genomic() {
-    let Some(normalizer) = normalizer() else {
+    let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
         eprintln!("axis_genomic: skipping — no manifest");
         return;
     };
@@ -583,13 +591,25 @@ fn axis_genomic() {
 
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
+            // Project transcript-coordinate (c./n./r.) inputs onto their genomic
+            // reference frame; pass g./allele/etc. inputs through unchanged
+            // (project_to_genomic only handles single c./n./r. variants — #328).
+            // Then normalize the genomic form so the output matches mutalyzer's
+            // normalized g. (3'-shift, ins→dup, …).
+            let g = if matches!(
+                v,
+                HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_)
+            ) {
+                projector
+                    .project_to_genomic(&v)
+                    .map_err(|e| format!("project: {e}"))?
+            } else {
+                v
+            };
             let n = normalizer
-                .normalize(&v)
+                .normalize(&g)
                 .map_err(|e| format!("normalize: {e}"))?;
-            match &n {
-                HgvsVariant::Genome(_) => Ok(format!("{n}")),
-                _ => Err("c→g projection API not yet exposed".to_string()),
-            }
+            Ok(format!("{n}"))
         });
 
         t.record(case, expected, actual);

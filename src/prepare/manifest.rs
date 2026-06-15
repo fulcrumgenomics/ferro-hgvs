@@ -26,6 +26,11 @@ pub struct ReferenceManifest {
     /// RefSeqGene FASTA files (NG_* accessions)
     #[serde(default)]
     pub refseqgene_fastas: Vec<PathBuf>,
+    /// RefSeqGene→genome alignment GFF3 (NCBI `GCF_*_refseqgene_alignments.gff3`),
+    /// giving each NG_ record's chromosomal placement. Consumed to re-express
+    /// transcript coordinates in an NG_ parent's own frame (#480).
+    #[serde(default)]
+    pub refseqgene_alignments: Option<PathBuf>,
     /// LRG FASTA files (LRG_* accessions)
     #[serde(default)]
     pub lrg_fastas: Vec<PathBuf>,
@@ -80,6 +85,7 @@ impl Default for ReferenceManifest {
             genome_fasta: None,
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
@@ -218,6 +224,7 @@ impl ReferenceManifest {
         for p in [
             &self.genome_fasta,
             &self.genome_grch37_fasta,
+            &self.refseqgene_alignments,
             &self.lrg_refseq_mapping,
             &self.cdot_json,
             &self.cdot_grch37_json,
@@ -251,6 +258,7 @@ impl ReferenceManifest {
         for o in [
             &mut self.genome_fasta,
             &mut self.genome_grch37_fasta,
+            &mut self.refseqgene_alignments,
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
             &mut self.cdot_grch37_json,
@@ -447,6 +455,7 @@ mod tests {
             genome_fasta: Some(ref_dir.join("genome.fa")),
             genome_grch37_fasta: Some(ref_dir.join("genome37.fa")),
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],
+            refseqgene_alignments: Some(ref_dir.join("refseqgene_alignments.gff3")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
             lrg_xmls: vec![ref_dir.join("lrg.xml")],
             lrg_refseq_mapping: Some(ref_dir.join("lrg_mapping.txt")),

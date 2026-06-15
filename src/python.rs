@@ -39,9 +39,13 @@ use crate::{parse_hgvs, NormalizeConfig, Normalizer};
 ///
 /// `MultiFasta` is wrapped in `Arc` because `MultiFastaProvider` is large and
 /// is cloned on every Python call to construct a fresh `Normalizer<P>`.
+///
+/// `Mock` is boxed because `MockProvider` is itself large (it owns the test
+/// reference maps); without the box this variant dwarfs the 8-byte `Arc`
+/// `MultiFasta` variant and trips `clippy::large_enum_variant`.
 #[derive(Clone)]
 enum PyProvider {
-    Mock(MockProvider),
+    Mock(Box<MockProvider>),
     MultiFasta(Arc<MultiFastaProvider>),
 }
 
@@ -115,13 +119,26 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.has_transcript_version_exact(id),
         }
     }
+
+    fn genomic_placement(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<crate::reference::GenomicPlacement> {
+        // Forward to the inner provider so NG_/LRG_ parent re-anchoring (#480)
+        // works on the Python path; the trait default `None` would otherwise
+        // silently disable it for Python consumers.
+        match self {
+            PyProvider::Mock(p) => p.genomic_placement(parent),
+            PyProvider::MultiFasta(p) => p.genomic_placement(parent),
+        }
+    }
 }
 
 impl PyProvider {
     /// Load from a JSON file (delegates to MockProvider::from_json).
     fn from_json(path: &Path) -> PyResult<Self> {
         MockProvider::from_json(path)
-            .map(PyProvider::Mock)
+            .map(|p| PyProvider::Mock(Box::new(p)))
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))
     }
 
@@ -134,7 +151,7 @@ impl PyProvider {
 
     /// Default: built-in test data.
     fn test_data() -> Self {
-        PyProvider::Mock(MockProvider::with_test_data())
+        PyProvider::Mock(Box::new(MockProvider::with_test_data()))
     }
 
     /// Build / extract a CdotMapper for this provider.
