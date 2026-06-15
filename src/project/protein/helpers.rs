@@ -52,6 +52,37 @@ pub(crate) fn build_initiator_unknown(
     })
 }
 
+/// Does the reference CDS begin with a canonical `ATG` start codon?
+///
+/// The protein-consequence path translates a transcript's CDS bases directly,
+/// trusting that `Transcript.cds_start` points at the first base of the
+/// initiation codon. When the cdot CDS annotation is inconsistent with the
+/// transcript FASTA (cds_start lands mid-frame, not on an `ATG`), translation
+/// reads the wrong frame and fabricates a garbage protein (issue #625). A
+/// non-`ATG` first codon is the dominant signal of that inconsistency, so
+/// callers decline protein prediction when this returns `false`.
+///
+/// This is a deliberate over-approximation: RefSeq does annotate a small number
+/// of transcripts with experimentally-supported non-AUG initiation (CUG/GUG
+/// starts carried with a `transl_except` exception), whose `cds_start` *is*
+/// consistent with the FASTA. Keying on `ATG` declines protein on those too. We
+/// accept that rare false-decline rather than translate the common
+/// inconsistent-annotation case from the wrong frame.
+///
+/// The check keys on the **start codon only**. It deliberately does *not*
+/// inspect internal codons: selenoproteins (e.g. SELENON / NM_020451.2)
+/// legitimately carry an in-frame internal `TGA` recoded as selenocysteine,
+/// and they begin with `ATG` — rejecting internal stops would wrongly decline
+/// every selenoprotein.
+///
+/// `ref_cds` is expected uppercase (the form [`read_full_cds`] /
+/// [`read_cds_start_codon`] return); the comparison is therefore a plain byte
+/// compare of the first three bases. A CDS shorter than three bases returns
+/// `false` (no start codon is possible), so callers correctly decline on it.
+pub(crate) fn cds_has_valid_start(ref_cds: &str) -> bool {
+    ref_cds.as_bytes().get(..3) == Some(b"ATG")
+}
+
 // ── CDS sequence readers ──────────────────────────────────────────────────────
 
 /// Read the full CDS as an uppercase `String` from a transcript.
@@ -84,6 +115,43 @@ pub(crate) fn read_full_cds(transcript: &Transcript) -> Result<String, FerroErro
     // Transcript.cds_start is 1-based → 0-based index = cds_start - 1.
     // Transcript.cds_end is 1-based inclusive → exclusive index = cds_end.
     Ok(seq[cds_start - 1..cds_end].to_uppercase())
+}
+
+/// Read **only** the three start-codon bases of the CDS, uppercase.
+///
+/// Same coordinate validation as [`read_full_cds`] (returns
+/// [`FerroError::ProteinSequenceUnavailable`] on a missing sequence or
+/// degenerate coords, including a CDS shorter than three bases), but slices and
+/// uppercases just the first codon instead of the whole 1–10 kbp CDS. Used by
+/// the issue-#625 CDS-start sanity guard, which needs nothing more than the
+/// first codon to decide whether the annotation begins with an `ATG`.
+pub(crate) fn read_cds_start_codon(transcript: &Transcript) -> Result<String, FerroError> {
+    let cds_start = transcript
+        .cds_start
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS start", transcript.id),
+        })? as usize;
+    let cds_end = transcript
+        .cds_end
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS end", transcript.id),
+        })? as usize;
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
+    // Reject the same degenerate coords as `read_full_cds`, plus require at
+    // least three CDS bases so the start codon exists.
+    if cds_start < 1 || cds_end > seq.len() || cds_start > cds_end + 1 || cds_end < cds_start + 2 {
+        return Err(FerroError::ProteinSequenceUnavailable {
+            accession: transcript.id.clone(),
+        });
+    }
+    // Transcript.cds_start is 1-based → 0-based index = cds_start - 1.
+    Ok(seq[cds_start - 1..cds_start + 2].to_uppercase())
 }
 
 /// Build the mutated CDS sequence by applying `edit` at a given CDS coordinate.
