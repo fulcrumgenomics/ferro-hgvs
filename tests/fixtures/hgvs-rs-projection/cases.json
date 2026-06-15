@@ -16,6 +16,24 @@
       "title": "expected transcript absent/not-selected in ferro cdot-0.2.32.refseq vs UTA",
       "spec_section": "recommendations/general/refseq.md",
       "note": "ferro does not return the expected base transcript at all (selection-coverage miss): the expected accession is absent from, or not prioritized by, ferro cdot-0.2.32.refseq relative to the 2021 UTA snapshot. Auto-quarantined structurally when no returned consequence carries the expected base accession."
+    },
+    {
+      "id": "predicted-parenthesization",
+      "title": "ferro emits the spec-preferred parenthesized predicted protein form (p.(X)) vs hgvs-rs bare p.X",
+      "spec_section": "recommendations/protein/substitution.md",
+      "note": "On a (c., p.) pair where the coding component matches version-insensitively, ferro renders the DNA-predicted protein consequence parenthesized (p.(Arg268Trp)) per the HGVS predicted-consequence rule (a consequence predicted from a DNA change is uncertain and rendered p.(...); docs/recommendations/protein/substitution.md). hgvs-rs carries the bare legacy form (p.Arg268Trp). ferro is spec-correct, so these are routed structurally to `improvement` in tests/hgvs_rs_projection_tests.rs (is_predicted_parenthesization_pairs) rather than FAIL. #615-related: the same predicted-consequence machinery now renders the C-terminal stop-loss extension correctly after the #615 fix (PR #621)."
+    },
+    {
+      "id": "extter-vs-legacy-glyph",
+      "title": "ferro emits the spec-preferred three-letter extension glyph (extTer) vs hgvs-rs legacy ext*",
+      "spec_section": "background/standards.md",
+      "note": "For a C-terminal stop-loss extension, ferro canonicalizes to the three-letter form p.(...extTer<n>) (#224); the corpus carries the legacy single-character p.(...ext*<n>). Three-letter codes (including Ter) are the preferred canonical form, with `*` an accepted alternative (background/standards.md). Both are valid HGVS, so these rows are dispositioned per-case as `improvement` (#224), XPASS-guarded."
+    },
+    {
+      "id": "wholeCDSdel-form",
+      "title": "whole-CDS-deletion protein form: corpus p.0? vs ferro p.(Met1?)",
+      "spec_section": "recommendations/protein/deletion.md",
+      "note": "For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced) while ferro emits p.(Met1?) (uncertain start-loss). Both are spec-allowed predicted forms for a variant removing the start codon; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1), not a bug; p.0? is arguably preferable as a future refinement."
     }
   ],
   "cases": [
@@ -9844,7 +9862,14 @@
       ],
       "to_test": true,
       "input": "NM_000051.3:c.9170_9171delGA",
-      "protein_description": "NP_000042.3:p.Ter3057Pheext*4"
+      "protein_description": "NP_000042.3:p.Ter3057Pheext*4",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000042.3:p.Ter3057Pheext*4. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
+      }
     },
     {
       "keywords": [
@@ -9853,7 +9878,13 @@
       ],
       "to_test": true,
       "input": "NM_000249.3:c.-7_*46del",
-      "protein_description": "NP_000240.1:p.0?"
+      "protein_description": "NP_000240.1:p.0?",
+      "accepted_divergence": {
+        "axis": "protein_description",
+        "policy": "ferro-policy-whole-cds-del-met1",
+        "cluster": "wholeCDSdel-form",
+        "note": "whole-CDS deletion (spans the initiation codon): the corpus emits NP_000240.1:p.0? (no protein), ferro emits NP_000240.1:p.(Met1?) (start-loss, uncertain). Both are spec-allowed predicted forms for a variant removing the start codon; p.0? is arguably preferable and is tracked as a possible future refinement."
+      }
     },
     {
       "keywords": [
@@ -9862,7 +9893,14 @@
       ],
       "to_test": true,
       "input": "NM_000249.3:c.2266_2269dupTGTT",
-      "protein_description": "NP_000240.1:p.Ter757Leuext*34"
+      "protein_description": "NP_000240.1:p.Ter757Leuext*34",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "ferro emits the spec-preferred three-letter extension glyph NP_000240.1:p.(Ter757LeuextTer34); the corpus carries the legacy single-character form NP_000240.1:p.Ter757Leuext*34. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). XPASS-guarded."
+      }
     },
     {
       "keywords": [
@@ -9871,7 +9909,14 @@
       ],
       "to_test": true,
       "input": "NM_000249.3:c.2269dupT",
-      "protein_description": "NP_000240.1:p.Ter757Leuext*33"
+      "protein_description": "NP_000240.1:p.Ter757Leuext*33",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "ferro emits the spec-preferred three-letter extension glyph NP_000240.1:p.(Ter757LeuextTer33); the corpus carries the legacy single-character form NP_000240.1:p.Ter757Leuext*33. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). XPASS-guarded."
+      }
     },
     {
       "keywords": [
@@ -9880,7 +9925,14 @@
       ],
       "to_test": true,
       "input": "NM_000425.3:c.3772dupT",
-      "protein_description": "NP_000416.1:p.Ter1258Leuext*96"
+      "protein_description": "NP_000416.1:p.Ter1258Leuext*96",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000416.1:p.Ter1258Leuext*96. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
+      }
     },
     {
       "keywords": [
@@ -9889,7 +9941,14 @@
       ],
       "to_test": true,
       "input": "NM_000488.3:c.1391dupA",
-      "protein_description": "NP_000479.1:p.Ter465Valext*18"
+      "protein_description": "NP_000479.1:p.Ter465Valext*18",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_000479.1:p.Ter465Valext*18. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
+      }
     },
     {
       "keywords": [
@@ -9898,7 +9957,14 @@
       ],
       "to_test": true,
       "input": "NM_152263.2:c.855delA",
-      "protein_description": "NP_689476.2:p.Ter286Asnext*73"
+      "protein_description": "NP_689476.2:p.Ter286Asnext*73",
+      "improvement": {
+        "axis": "protein_description",
+        "tracking_issue": 224,
+        "section": "HGVS §Standards (three-letter ext Ter preferred over ext*)",
+        "cluster": "extter-vs-legacy-glyph",
+        "note": "stop-loss extension: with #615 fixed (PR #621 routes stop-disrupting indels to a C-terminal extension), ferro emits the spec-preferred three-letter parenthesized extension form p.(...extTer...) rather than the corpus legacy single-character NP_689476.2:p.Ter286Asnext*73. Three-letter codes (incl. Ter) are preferred per standards.md; ferro canonicalizes ext* to extTer (#224). Previously known_bug #615 (an Xaa placeholder) until the fix landed; XPASS-guarded."
+      }
     }
   ]
 }

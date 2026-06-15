@@ -574,6 +574,51 @@ fn consequence_matches(expected: &str, actual: &str) -> bool {
     }
 }
 
+/// Structural detector for the **predicted-parenthesization** improvement: is
+/// `actual` exactly `expected` with the `p.`-token wrapped in `(...)`?
+///
+/// Returns `true` iff `expected` and `actual` share the same base accession
+/// (version digit and `(GENE)` suffix forgiven, like [`consequence_matches`])
+/// and `actual`'s consequence is `expected`'s consequence with the body after
+/// the `p.` datum prefix wrapped in parentheses — e.g. `p.Arg268Trp` →
+/// `p.(Arg268Trp)`. The inner token must be byte-identical; a different inner
+/// token (`p.(Arg268Cys)`), an already-wrapped `expected`, or a base-accession
+/// mismatch all return `false`.
+///
+/// This is ferro's spec-correct form: a DNA-predicted protein consequence must
+/// be parenthesized (`docs/recommendations/protein/substitution.md` — predicted
+/// consequences are uncertain and rendered `p.(…)`). hgvs-rs emits the bare
+/// legacy form. The classifier routes these to `improvement` rather than FAIL.
+fn is_predicted_parenthesization(expected: &str, actual: &str) -> bool {
+    let (Some(expected_base), Some(actual_base)) =
+        (base_accession(expected), base_accession(actual))
+    else {
+        return false;
+    };
+    if expected_base != actual_base {
+        return false;
+    }
+    let expected_consequence = consequence_part(expected);
+    let actual_consequence = consequence_part(actual);
+    // Split each consequence into its `p.` datum prefix and the body token.
+    let (Some((expected_datum, expected_body)), Some((actual_datum, actual_body))) = (
+        expected_consequence.split_once('.'),
+        actual_consequence.split_once('.'),
+    ) else {
+        return false;
+    };
+    // The datum type (`p`) must agree; only the body wrapping may differ.
+    if expected_datum != actual_datum {
+        return false;
+    }
+    // The bare body must not already be wrapped (no wrap to add), and the
+    // wrapped body must be exactly the bare body inside one `(...)` group.
+    if expected_body.starts_with('(') {
+        return false;
+    }
+    actual_body == format!("({expected_body})")
+}
+
 /// Why a case diverges from the corpus expectation, used to route structural
 /// data-source skew into `divergence_accepted` while keeping genuine
 /// algorithm/convention deltas as FAILs.
@@ -662,7 +707,17 @@ fn classify_divergence(expected: &str, actual_set: &[String]) -> Divergence {
 /// data-source skew and is auto-quarantined as `divergence_accepted`; a
 /// coordinate skew on any *other* transcript stays a FAIL (the gate list is
 /// incomplete — surface it, don't silently accept).
+///
+/// Two sub-kinds, both alignment-source skew (see the provenance doc):
+/// - **gapped-CIGAR skew**: the UTA splign CIGAR carries a within-exon `D`/`I`
+///   gap or an exon-boundary off-by-one, so the `c.`/`n.` coordinate shifts
+///   downstream of the gap.
+/// - **genomic-anchor skew**: the per-exon CIGARs are ungapped *and* ferro's
+///   CDS start agrees with UTA's `cds_start_i`, yet a uniform `+2` `c.`-offset
+///   remains — a 2 bp difference in where the two sources anchor the transcript
+///   on the genome. Confirmed for the last three entries below.
 const SOURCE_SKEW_TRANSCRIPTS: &[&str] = &[
+    // Gapped-CIGAR skew (within-exon indel or boundary off-by-one).
     "NM_001080519",
     "NM_001077527",
     "NM_000804",
@@ -670,6 +725,11 @@ const SOURCE_SKEW_TRANSCRIPTS: &[&str] = &[
     "NM_003777",
     "NM_006158",
     "NM_001277115",
+    // Genomic-anchor skew (ungapped CIGAR, CDS start agrees with UTA, uniform
+    // +2 c.-offset from a 2 bp genomic alignment-anchor difference).
+    "NM_020451",
+    "NM_007199",
+    "NM_002386",
 ];
 
 /// Cluster id for the alignment-source skew (coordinate differs, base matches,
@@ -678,6 +738,39 @@ const CLUSTER_ALIGNMENT_SOURCE_SKEW: &str = "alignment-source-skew";
 
 /// Cluster id for transcript selection/absence (expected base never returned).
 const CLUSTER_TRANSCRIPT_SELECTION: &str = "transcript-selection-vs-uta";
+
+/// Cluster id for the predicted-parenthesization improvement (ferro emits the
+/// spec-preferred `p.(…)` predicted form; hgvs-rs emits the bare legacy form).
+const CLUSTER_PREDICTED_PARENTHESIZATION: &str = "predicted-parenthesization";
+
+/// Detect the **predicted-parenthesization** improvement on a `(c., p.)`-pair
+/// axis: for every expected `[c, p]` pair, ferro returned a pair whose coding
+/// matches version-insensitively ([`consequence_matches`]) AND whose protein is
+/// exactly the expected protein with the predicted-consequence parentheses
+/// added ([`is_predicted_parenthesization`]).
+///
+/// When this holds, the only divergence is that ferro emits the spec-preferred
+/// parenthesized predicted form while the corpus carries the bare legacy form —
+/// a tracked `improvement`, not a FAIL. Returns `false` if any expected pair is
+/// unmatched on the coding component or differs by anything other than the
+/// protein parenthesization (so genuine coordinate/selection/form deltas still
+/// route through the normal classifier).
+fn is_predicted_parenthesization_pairs(
+    expected_pairs: &[Vec<String>],
+    returned_pairs: &[(String, String)],
+) -> bool {
+    let applicable: Vec<&Vec<String>> = expected_pairs.iter().filter(|p| p.len() == 2).collect();
+    if applicable.is_empty() {
+        return false;
+    }
+    applicable.iter().all(|pair| {
+        let want_c = &pair[0];
+        let want_p = &pair[1];
+        returned_pairs.iter().any(|(c, p)| {
+            consequence_matches(want_c, c) && is_predicted_parenthesization(want_p, p)
+        })
+    })
+}
 
 /// Version-insensitive set membership on base accession: does any rendered
 /// string in `rendered_set` share the same base accession (version digit and
@@ -754,7 +847,11 @@ fn axis_coding_protein_descriptions() {
 
         // Capture ferro's returned coding accessions for the selection-coverage
         // metric — keyed on the coding (c.) transcript, the projection target.
+        // `returned_pairs` carries the full (coding, protein) set so the
+        // predicted-parenthesization improvement can be detected on the protein
+        // component (which `record_classified` does not inspect).
         let mut returned_coding: Vec<String> = Vec::new();
+        let mut returned_pairs: Vec<(String, String)> = Vec::new();
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let results = vp
@@ -769,6 +866,7 @@ fn axis_coding_protein_descriptions() {
                 })
                 .collect();
             returned_coding = actual_pairs.iter().map(|(c, _)| c.clone()).collect();
+            returned_pairs = actual_pairs.clone();
 
             for pair in pairs {
                 if pair.len() != 2 {
@@ -798,6 +896,22 @@ fn axis_coding_protein_descriptions() {
         {
             t.selection_hits += 1;
         }
+        // Predicted-parenthesization improvement: when the case diverges only
+        // because ferro emits the spec-preferred parenthesized predicted
+        // protein form (`p.(X)`) over the corpus's bare legacy `p.X` — with the
+        // coding component matching — route to `improvement` (cluster
+        // `predicted-parenthesization`) rather than the data-source classifier.
+        // A clean match (or stale-annotation XPASS) still goes through the
+        // normal path so the XPASS guard fires.
+        let is_match = matches!(&actual, Ok(s) if s == &expected_repr);
+        if !is_match && is_predicted_parenthesization_pairs(pairs, &returned_pairs) {
+            t.improvement.push((
+                case.input.clone(),
+                CLUSTER_PREDICTED_PARENTHESIZATION.to_string(),
+            ));
+            continue;
+        }
+
         // Classify on the coding (c.) component against ferro's returned coding
         // set — transcript selection and alignment-source skew manifest on the
         // coding coordinate; the protein is derived downstream.
@@ -1404,6 +1518,129 @@ mod comparator_tests {
         assert_eq!(position_prefix("c.5_7dup"), "5_7");
     }
 
+    // is_predicted_parenthesization: true iff `actual` is `expected` with the
+    // `p.`-token wrapped in `(...)` — same base accession, same inner token.
+    #[test]
+    fn predicted_parenthesization_wraps_bare_protein() {
+        assert!(is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.(Arg268Trp)"
+        ));
+    }
+
+    // Version digit and `(GENE)` suffix differences on the base accession are
+    // forgiven (the corpus is version-insensitive), as long as the inner
+    // protein token is the bare → wrapped pair.
+    #[test]
+    fn predicted_parenthesization_is_version_and_gene_insensitive() {
+        assert!(is_predicted_parenthesization(
+            "NP_000673.2:p.Lys233Ile",
+            "NP_000673.2(ADRA2B):p.(Lys233Ile)"
+        ));
+    }
+
+    // A different inner protein token is NOT a parenthesization-only divergence.
+    #[test]
+    fn predicted_parenthesization_rejects_inner_token_difference() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.(Arg268Cys)"
+        ));
+    }
+
+    // Already-equal (both wrapped) adds no wrap → not a parenthesization
+    // divergence (the harness handles equality as a match/XPASS elsewhere).
+    #[test]
+    fn predicted_parenthesization_rejects_already_equal() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.(Arg268Trp)",
+            "NP_000673.2:p.(Arg268Trp)"
+        ));
+    }
+
+    // A bare→bare pair (no wrap added) is not a parenthesization divergence.
+    #[test]
+    fn predicted_parenthesization_rejects_no_wrap() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000673.2:p.Arg268Trp"
+        ));
+    }
+
+    // A different base accession is never a parenthesization-only divergence,
+    // even if the inner token would wrap.
+    #[test]
+    fn predicted_parenthesization_rejects_different_base() {
+        assert!(!is_predicted_parenthesization(
+            "NP_000673.2:p.Arg268Trp",
+            "NP_000042.3:p.(Arg268Trp)"
+        ));
+    }
+
+    // is_predicted_parenthesization_pairs: the pairs-axis wrapper that drives
+    // the `improvement` routing in `axis_coding_protein_descriptions`. It holds
+    // iff every applicable (c., p.) pair has a returned pair whose coding
+    // matches version-insensitively AND whose protein is the bare→wrapped
+    // predicted form. A single clean matching pair → true.
+    #[test]
+    fn predicted_parenthesization_pairs_holds_for_matching_pair() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        // Coding matches version- and gene-insensitively; protein is bare→wrapped.
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        assert!(is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // A coding-component mismatch (coordinate skew on the c. position) is not a
+    // parenthesization-only divergence, even when the protein wraps cleanly.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_coding_mismatch() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_000673.5(GENE):c.999G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        assert!(!is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // An inner protein-token difference (Trp vs Cys) is a genuine delta, not a
+    // parenthesization-only divergence — false even though the coding matches.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_inner_token_difference() {
+        let expected = vec![vec![
+            "NM_000673.2:c.803G>A".to_string(),
+            "NP_000673.2:p.Arg268Trp".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Cys)".to_string(),
+        )];
+        assert!(!is_predicted_parenthesization_pairs(&expected, &returned));
+    }
+
+    // No applicable (length-2) expected pair → false: the `applicable.is_empty()`
+    // guard must not route a pair-less or malformed case to `improvement`.
+    #[test]
+    fn predicted_parenthesization_pairs_rejects_empty_applicable() {
+        let returned = vec![(
+            "NM_000673.5(GENE):c.803G>A".to_string(),
+            "NP_000673.2:p.(Arg268Trp)".to_string(),
+        )];
+        // A malformed singleton (len != 2) leaves `applicable` empty → false.
+        let malformed = vec![vec!["NM_000673.2:c.803G>A".to_string()]];
+        assert!(!is_predicted_parenthesization_pairs(&malformed, &returned));
+        // No expected pairs at all → also false.
+        assert!(!is_predicted_parenthesization_pairs(&[], &returned));
+    }
+
     // The summary line carries the documented stable format including the new
     // `coding` axis name.
     #[test]
@@ -1416,6 +1653,127 @@ mod comparator_tests {
             t.summary_line(&path),
             "coding: 1 pass / 0 divergence_accepted / 0 known_bug / 0 improvement / 0 spec_overridden / 1 FAIL / 0 skipped \
              (FAIL inputs -> /tmp/example.txt)"
+        );
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Hermetic #615 stop-loss extension regression guards (no manifest, no corpus)
+// ----------------------------------------------------------------------------
+//
+// The 4 ex-`stoploss-xaa` rows in cases.json (now folded into the
+// `extter-vs-legacy-glyph` improvement cluster) exercise the same stop-loss path
+// against the corpus manifest. This module pins the behavior hermetically: a
+// hand-built `MockProvider` transcript (CDS ending in a stop codon + a 3'UTR)
+// plus a single-base indel that disrupts the terminator codon, projected through
+// the real `VariantProjector`. #615 is fixed (PR #621 routes stop-disrupting
+// indels to a C-terminal extension), so these assert ferro now emits the spec
+// `p.(Ter…ext…)` extension — not the old `p.(Xaa…)` placeholder — independent of
+// the manifest.
+#[cfg(test)]
+mod stoploss_615_reproducer {
+    use super::*;
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand};
+
+    /// Build a single-exon plus-strand coding transcript from a literal mRNA
+    /// sequence, CDS bounds (1-based, inclusive), and an explicit protein
+    /// accession so the direct `c.→p.` path can name the predicted consequence.
+    fn stoploss_transcript() -> Transcript {
+        // mRNA:  ATG CGC AAA TAA  GCATAAGGGCCC
+        //        Met Arg Lys Ter  └─── 3'UTR ───┘
+        // CDS = c.1..12 (ATGCGCAAATAA → Met-Arg-Lys-Ter). The terminator codon
+        // `TAA` sits at c.10..12; a deletion inside it is a stop-loss.
+        let seq = "ATGCGCAAATAAGCATAAGGGCCC";
+        let len = seq.len() as u64;
+        Transcript::new(
+            "NM_700000.1".to_string(),
+            Some("STOPLOSS".to_string()),
+            Strand::Plus,
+            seq.to_string(),
+            Some(1),
+            Some(12),
+            vec![Exon::new(1, 1, len)],
+            None,
+            None,
+            None,
+            Default::default(),
+            ManeStatus::Select,
+            None,
+            None,
+        )
+        .with_protein_id("NP_700000.1".to_string())
+    }
+
+    /// A Mock-backed projector seeded with the stop-loss transcript. The cdot
+    /// mapper is empty; the direct bare-`NM_` `c.→p.` path reads the CDS and
+    /// protein straight from the transcript record, so no genome alignment is
+    /// needed.
+    fn stoploss_projector() -> VariantProjector<MockProvider> {
+        let mut provider = MockProvider::new();
+        provider.add_transcript(stoploss_transcript());
+        let projector = Projector::new(CdotMapper::new());
+        VariantProjector::new(projector, provider)
+    }
+
+    fn project_protein(input: &str) -> String {
+        let vp = stoploss_projector();
+        let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse `{input}`: {e}"));
+        let result = vp
+            .project_variant(&v, "NM_700000.1")
+            .unwrap_or_else(|e| panic!("project `{input}`: {e}"));
+        result
+            .protein
+            .as_ref()
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| panic!("no protein predicted for `{input}`"))
+    }
+
+    // #615 FIXED (PR #621): a deletion that disrupts the terminator codon is now
+    // rendered as a C-terminal stop-loss extension (`p.(Ter…ext…)`), not the old
+    // `p.(Xaa…)` placeholder. Regression guard for the fix.
+    #[test]
+    fn stoploss_deletion_in_terminator_emits_extension() {
+        // c.11delA deletes the middle base of the `TAA` terminator (c.10..12),
+        // a stop-loss → spec C-terminal extension.
+        let got = project_protein("NM_700000.1:c.11delA");
+        assert_eq!(
+            got, "NP_700000.1:p.(Ter4extTer0)",
+            "#615 fixed: stop-loss deletion should yield a Ter…ext extension; got {got}"
+        );
+        assert!(
+            got.contains("ext") && !got.contains("Xaa"),
+            "#615 fixed: expected a spec extension, not an Xaa placeholder; got {got}"
+        );
+    }
+
+    // #615 FIXED (PR #621, duplication variant): a single-base duplication that
+    // frameshifts through the terminator is now rendered as the spec C-terminal
+    // extension, not an `Xaa` placeholder. Mirrors the corpus `dup` rows (e.g.
+    // NM_000425.3:c.3772dupT, now an extter-vs-legacy-glyph improvement).
+    #[test]
+    fn stoploss_duplication_through_terminator_emits_extension() {
+        let got = project_protein("NM_700000.1:c.9dupA");
+        assert_eq!(
+            got, "NP_700000.1:p.(Ter4IleextTer?)",
+            "#615 fixed: stop-disrupting dup should yield a Ter…ext extension; got {got}"
+        );
+        assert!(
+            got.contains("ext") && !got.contains("Xaa"),
+            "#615 fixed: expected a spec extension, not an Xaa placeholder; got {got}"
+        );
+    }
+
+    // Control: a duplication that cleanly converts the terminator to a sense
+    // codon DOES produce the spec extension form (`extTer…`), proving the
+    // predictor is capable of the correct output and #615 is a specific
+    // disruption-path bug, not a wholesale failure. This must stay GREEN both
+    // before and after the #615 fix.
+    #[test]
+    fn stoploss_clean_readthrough_emits_extension_not_xaa() {
+        let got = project_protein("NM_700000.1:c.10dupT");
+        assert!(
+            got.contains("ext") && !got.contains("Xaa"),
+            "a clean stop-loss readthrough should yield an extension, not Xaa; got {got}"
         );
     }
 }

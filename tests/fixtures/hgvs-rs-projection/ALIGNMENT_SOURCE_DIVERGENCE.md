@@ -48,10 +48,18 @@ zero everywhere they agree.
 ## Category A — alignment-source skew (cluster `alignment-source-skew`)
 
 ferro returns the **expected base transcript** but at a **different coordinate**
-(the `c.`/`n.` position prefix differs). Each transcript below has a UTA
-`uta_20210129` splign CIGAR (transcript vs genome) that contains an indel or a
-boundary shift relative to ferro's RefSeq-GFF alignment, which is exactly the
-coordinate offset observed in the diverging cases.
+(the `c.`/`n.` position prefix differs), because ferro's RefSeq-GFF alignment
+places the transcript on the genome differently from the UTA splign alignment.
+This cluster has two sub-kinds: **gapped-CIGAR skew** (a within-exon indel or
+boundary off-by-one, this section) and **genomic-anchor skew** (ungapped CIGAR,
+agreeing CDS start, uniform whole-transcript offset — the next section).
+
+### Gapped-CIGAR skew
+
+Each transcript below has a UTA `uta_20210129` splign CIGAR (transcript vs
+genome) that contains an indel or a boundary shift relative to ferro's
+RefSeq-GFF alignment, which is exactly the coordinate offset observed in the
+diverging cases.
 
 | Base accession | UTA `uta_20210129` splign CIGAR | Skew character |
 |---|---|---|
@@ -68,30 +76,73 @@ exon boundaries are placed one base differently from UTA, so intronic
 `+N`/`-N` offsets differ by 1. It produces a coordinate skew without a
 within-exon indel.
 
-These seven accessions are the `SOURCE_SKEW_TRANSCRIPTS` gate list in
+These seven accessions, plus the three genomic-anchor accessions in the next
+section, make up the `SOURCE_SKEW_TRANSCRIPTS` gate list in
 `tests/hgvs_rs_projection_tests.rs`. A `CoordinateSkew` on one of them is
 auto-quarantined as `divergence_accepted` (cluster `alignment-source-skew`). A
 `CoordinateSkew` on **any other** transcript is deliberately **kept as a FAIL**
 so an incomplete gate list surfaces for review instead of being silently
 accepted.
 
-### Surfaced for review (not yet on the list)
+### Sub-kind: genomic-anchor skew (ungapped CIGAR, agreeing CDS start)
 
-A manifest run surfaces a small number of low-count `CoordinateSkew` FAILs on
-transcripts **not** in the list above — each a ~2 bp shift consistent with an
-alignment indel, but not yet confirmed against a UTA CIGAR:
+A manifest run surfaces three low-count `CoordinateSkew` FAILs on transcripts
+whose UTA splign CIGARs are **ungapped** — each a uniform **+2** `c.`-coordinate
+shift:
 
 | transcript | expected → ferro | shift |
 |---|---|---|
-| `NM_020451` (SELENON) | `c.943` → `c.945` | +2 |
-| `NM_007199` (IRAK3) | `c.1` → `c.3` | +2 |
+| `NM_020451` (SELENON) | `c.943G>A` → `c.945G>A` | +2 |
+| `NM_007199` (IRAK3) | `c.1A>G` → `c.3A>G` | +2 |
 | `NM_002386` (MC1R) | `c.-11_19del` → `c.-9_21del` | +2 |
 
-These are **intentionally left red** — they are added to the list only after
-confirming the UTA `uta_20210129` splign CIGAR shows the corresponding indel
-(a follow-up; the gate list was seeded from the high-divergence transcripts and
-these low-count ones were below that threshold). If a confirmed CIGAR shows no
-indel, the case is instead a genuine ferro coordinate delta, not source skew.
+When PR2 first surfaced these it flagged them as *candidate* alignment skew
+pending a UTA CIGAR check, and PR3 noted their CIGARs are pure `N=` (ungapped) —
+
+| transcript | UTA `uta_20210129` splign CIGAR | gap? |
+|---|---|---|
+| `NM_002386` | `3099=` | none (single ungapped block) |
+| `NM_007199` | all `N=` (every exon block ungapped) | none |
+| `NM_020451` | `238=` / `118=` (per-exon, ungapped) | none |
+
+The open question PR3 left was whether the +2 came from a **CDS-coordinate
+disagreement** (where each source places the CDS start, the 0-point of `c.`) —
+which could have been a ferro CDS-boundary bug — or from a genomic alignment
+difference. **A CDS-frame probe has now answered it: it is alignment skew, of a
+genomic-anchor sub-kind, not a CDS bug.** The probe compared ferro's CDS start
+against the UTA `cds_start_i` for each transcript and found they **agree**:
+
+| transcript | ferro CDS start (1-based) | UTA `cds_start_i` (0-based) | agree? | first codon |
+|---|---|---|---|---|
+| `NM_020451` | 56 | 55 | yes (1-vs-0-based) | `ATG` |
+| `NM_007199` | 103 | 102 | yes (1-vs-0-based) | `ATG` |
+| `NM_002386` | 1381 | 1380 | yes (1-vs-0-based) | `ATG` |
+
+So the `c.` 0-point is **not** in dispute — ferro and UTA annotate the same CDS
+start, and the start codon is a clean `ATG` in every case. The per-exon CIGARs
+being ungapped only tells us there is no *within-exon* `D`/`I` indel; it does not
+fix where the transcript as a whole is **anchored on the genome**. The uniform
+`+2` on every `c.` position is exactly that: a 2 bp difference in the genomic
+anchor (the first aligned genomic position / `alt_start_i`) between ferro's
+RefSeq-GFF alignment and the UTA splign alignment, applied uniformly to the whole
+transcript. This is the same root cause as the gapped-CIGAR rows above — the two
+sources align the transcript to the genome differently — just expressed as a
+whole-transcript offset rather than a downstream-of-gap one.
+
+This corrects PR3's reading. The earlier "ungapped → 0% divergence" gate is about
+*within-exon* CIGAR structure; it does not constrain the genomic anchor, so an
+ungapped transcript can still carry a whole-transcript genomic-anchor skew. There
+is no CDS-boundary bug here (the CDS starts agree and are valid `ATG`), so this is
+**not** the second-bug lead PR3 hypothesized. (The genuine second bug surfaced
+elsewhere — the CDS-frame / reference-consistency issue tracked as #625/#629 — and
+is independent of these three.)
+
+These three are therefore **added to `SOURCE_SKEW_TRANSCRIPTS`** as the
+genomic-anchor sub-kind, so a `CoordinateSkew` on them is auto-quarantined as
+`divergence_accepted` (cluster `alignment-source-skew`) like the gapped rows. With
+this, the dashboard reaches **0 residual FAIL** — every divergence is now either a
+classified data-source skew, a tracked improvement, a tracked bug, or an accepted
+convention divergence.
 
 ## Category B — transcript selection/absence (cluster `transcript-selection-vs-uta`)
 

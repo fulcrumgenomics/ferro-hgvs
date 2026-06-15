@@ -244,6 +244,18 @@ pub enum Policy {
     /// Both are spec-defensible. Accepted divergence per #499 (precedent #481).
     #[serde(rename = "ferro-policy-499-shuffle-applied-compound-allele")]
     ShuffleAppliedCompoundAllele499,
+    /// ferro's whole-CDS-deletion protein consequence convention. For a deletion
+    /// spanning the entire coding sequence (including the initiation codon), the
+    /// corpus emits `p.0?` (no protein produced, uncertain) while ferro emits
+    /// `p.(Met1?)` (start-loss, uncertain). Both are spec-allowed predicted forms
+    /// for a variant that removes the start codon
+    /// (`docs/recommendations/protein/`): `p.0?` ("no protein") and `p.(Met1?)`
+    /// ("unknown effect on translation initiation") describe the same
+    /// undetermined outcome. ferro reports the start-loss form it derives from
+    /// the normalized variant; this is a terminal convention difference, not a
+    /// bug. (`p.0?` is arguably preferable as a future refinement.)
+    #[serde(rename = "ferro-policy-whole-cds-del-met1")]
+    WholeCdsDeletionMet1,
 }
 
 impl Policy {
@@ -255,6 +267,7 @@ impl Policy {
             Policy::ShuffleAppliedCompoundAllele499 => {
                 "ferro-policy-499-shuffle-applied-compound-allele"
             }
+            Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
         }
     }
 }
@@ -432,6 +445,15 @@ pub enum SpecSection {
     /// `c.-5059del` extrapolates into the flank, which HGVS forbids.
     #[serde(rename = "HGVS §Transcript flanking (not c.-numberable)")]
     TranscriptFlankNotNumberable,
+    /// HGVS amino-acid glyph preference — three-letter codes (including `Ter`)
+    /// are the preferred canonical form; the single-character `*` is an
+    /// accepted alternative only (`assets/hgvs-nomenclature/docs/background/standards.md`).
+    /// ferro canonicalizes a C-terminal stop-loss extension to the three-letter
+    /// `extTer<n>` form (#224); hgvs-rs carries the legacy `ext*<n>` glyph. Both
+    /// are valid HGVS, but ferro's `extTer` is spec-preferred, so the divergence
+    /// is a tracked `improvement` rather than a bug.
+    #[serde(rename = "HGVS §Standards (three-letter ext Ter preferred over ext*)")]
+    ExtensionTerGlyph,
 }
 
 impl SpecSection {
@@ -447,6 +469,9 @@ impl SpecSection {
             SpecSection::ProteinInitiationCodon => "HGVS protein initiation codon (Met1?)",
             SpecSection::TranscriptFlankNotNumberable => {
                 "HGVS §Transcript flanking (not c.-numberable)"
+            }
+            SpecSection::ExtensionTerGlyph => {
+                "HGVS §Standards (three-letter ext Ter preferred over ext*)"
             }
         }
     }
