@@ -1761,7 +1761,17 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
             });
         }
 
-        let advance = body_start + close_rel? + "</mapping>".len();
+        // Advance past this non-main mapping. If it lacks a `</mapping>` close
+        // tag, skip past its open tag and keep scanning rather than aborting the
+        // whole search with `?` — a valid `main_assembly` mapping may still
+        // follow. `body_start` is strictly past the current `<mapping …>` open
+        // tag, so `search` shrinks every iteration (no infinite loop). Real LRG
+        // records always close their tags, so this only matters for
+        // malformed/truncated input.
+        let advance = match close_rel {
+            Some(c) => body_start + c + "</mapping>".len(),
+            None => body_start,
+        };
         search = &search[advance..];
     }
 }
@@ -2276,6 +2286,27 @@ mod tests {
           </mapping>
         "#;
         assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    }
+
+    #[test]
+    fn main_assembly_found_after_a_malformed_unclosed_mapping() {
+        // A truncated/malformed `other_assembly` mapping with no `</mapping>`
+        // close tag precedes the (also unclosed, EOF-terminated) main_assembly
+        // mapping. The scan must still find the main_assembly placement rather
+        // than aborting at the first mapping that lacks a close tag.
+        let xml = r#"
+          <mapping coord_system="GRCh37" other_id="NC_000017.10" type="other_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="1" other_end="10" strand="1" />
+          <mapping coord_system="GRCh38" other_id="NC_000017.11" other_start="100" other_end="109" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1" />
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml)
+            .expect("main_assembly mapping should parse despite a malformed earlier mapping");
+        assert_eq!(p.nc.to_string(), "NC_000017.11");
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 100);
+        assert_eq!(p.nc_end, 109);
+        assert_eq!(p.strand, crate::reference::transcript::Strand::Plus);
     }
 
     #[test]
