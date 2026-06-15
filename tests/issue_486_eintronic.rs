@@ -23,7 +23,7 @@ fn provider_intronic_nm() -> MockProvider {
     let exon2 = "AAACAACATGGAAAAAAAAAAAAAAAAAAA"; // 30 bp
     let core = format!("{}{}{}", exon1, intron, exon2);
     let tx_seq = format!("{}{}", exon1, exon2);
-    let p_off = PAD_OFFSET;
+    let p_off = PAD_OFFSET + 1;
     let transcript = Transcript::new(
         "NM_INTRON.1".to_string(),
         Some("INTRONGENE".to_string()),

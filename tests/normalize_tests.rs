@@ -4973,13 +4973,15 @@ mod ng_prefix_normalization {
     fn boundary_spanning_del_with_ng_parent_succeeds() {
         let provider = mock_provider_with_intronic_transcript();
         let normalizer = Normalizer::new(provider);
-        // c.10_10+5del: last exonic base of exon 1 (an `A` from "ACGTACGTAC")
-        // + first 5 intronic bases (all `A` in the 50-A run). The deleted
-        // 6-base `A` stretch lives in a homopolymer that extends to the
-        // last intronic A (g.1060). 3'-shifted, the range becomes c.10_11-1
-        // and the edit canonicalizes to a repeat-notation `A[45]` (45 A's
-        // remain after the 6 are removed; the original `c.10` A merges with
-        // the 50 intronic A's into a 51-A stretch).
+        // c.10_10+5del: last exonic base of exon 1 (a `C`, the 10th base of
+        // "ACGTACGTAC" at g.1010) + the first 5 intronic bases (all `A` in the
+        // 50-A run, g.1011-1015). The deleted stretch is `C` followed by five
+        // `A`s. The exonic `C` is NOT part of the intronic A-homopolymer, and a
+        // deletion can 3'-shift only if its first base equals the base
+        // immediately following the deletion (`C` != the following `A`), so the
+        // canonical form does not shift: `c.10_10+5del`. (Before the 1-based
+        // genomic-fetch fix the engine misread g.1010 as the intron's first `A`,
+        // merging it into the run and emitting the spurious `c.10_11-1A[45]`.)
         let variant = parse_hgvs("NG_012772.1(NM_TEST.1):c.10_10+5del")
             .expect("NG-parented boundary-spanning input must parse");
         let normalized = normalizer
@@ -4987,8 +4989,8 @@ mod ng_prefix_normalization {
             .expect("boundary-spanning normalize with NG parent must succeed");
         let rendered = format!("{}", normalized);
         assert_eq!(
-            rendered, "NG_012772.1(NM_TEST.1):c.10_11-1A[45]",
-            "expected 3'-shifted boundary-spanning result c.10_11-1A[45]; got {}",
+            rendered, "NG_012772.1(NM_TEST.1):c.10_10+5del",
+            "expected boundary-spanning result c.10_10+5del (exonic C does not 3'-shift into the intronic A-run); got {}",
             rendered
         );
     }
