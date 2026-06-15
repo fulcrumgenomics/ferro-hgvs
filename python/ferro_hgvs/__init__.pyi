@@ -973,6 +973,8 @@ class ErrorType(IntEnum):
     DupExplicitSeq = 38
     DelExplicitSeq = 39
     NonConformantBracketCardinality = 40
+    UnresolvableCentromere = 41
+    TranscriptFlankNotDescribable = 42
     IntronicOnBareTranscript = 43
 
 class ErrorOverride(IntEnum):
