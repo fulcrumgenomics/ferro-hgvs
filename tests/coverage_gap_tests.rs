@@ -49,13 +49,15 @@ const PAD_OFFSET: u64 = 256;
 
 /// Build a minus-strand, 3-exon transcript with genomic coordinates and introns.
 ///
-/// Transcript layout (in coding / transcript order):
+/// Genomic coordinates are 1-based (matching real cdot data): the core region's
+/// first base is at 1-based position `p = PAD_OFFSET + 1`. Transcript layout (in
+/// coding / transcript order):
 ///
-///   Exon 1: tx 1-30    genomic (PAD+80)–(PAD+109)
-///   Intron 1:           genomic (PAD+70)–(PAD+79)  GGGCCCTTTG
-///   Exon 2: tx 31-60   genomic (PAD+40)–(PAD+69)
-///   Intron 2:           genomic (PAD+30)–(PAD+39)  AAATTTAAAT
-///   Exon 3: tx 61-90   genomic (PAD+0)–(PAD+29)
+///   Exon 1: tx 1-30    genomic (p+80)–(p+109)
+///   Intron 1:           genomic (p+70)–(p+79)  GGGCCCTTTG
+///   Exon 2: tx 31-60   genomic (p+40)–(p+69)
+///   Intron 2:           genomic (p+30)–(p+39)  AAATTTAAAT
+///   Exon 3: tx 61-90   genomic (p+0)–(p+29)
 ///
 /// On minus strand, exon 1 (coding start) maps to rightmost genomic block.
 fn make_minus_strand_transcript() -> (Transcript, String) {
@@ -74,7 +76,7 @@ fn make_minus_strand_transcript() -> (Transcript, String) {
                    GCATGCATGCATGCATGCATGCATGCATGC\
                    TGCATGCATGCATGCATGCATGCATGCATG";
 
-    let p = PAD_OFFSET; // shorthand
+    let p = PAD_OFFSET + 1; // shorthand
     let transcript = Transcript::new(
         "NM_MINUS.1".to_string(),
         Some("MINUSGENE".to_string()),
@@ -101,12 +103,13 @@ fn make_minus_strand_transcript() -> (Transcript, String) {
 
 /// Build a plus-strand, 3-exon transcript with genomic mapping for comparison.
 ///
+/// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
 /// Transcript layout:
-///   Exon 1: tx 1-30   genomic (PAD+0)–(PAD+29)
-///   Intron 1:          genomic (PAD+30)–(PAD+39)  AAACCCAAAT
-///   Exon 2: tx 31-60  genomic (PAD+40)–(PAD+69)
-///   Intron 2:          genomic (PAD+70)–(PAD+79)  GGGTTTTTTG
-///   Exon 3: tx 61-90  genomic (PAD+80)–(PAD+109)
+///   Exon 1: tx 1-30   genomic (p+0)–(p+29)
+///   Intron 1:          genomic (p+30)–(p+39)  AAACCCAAAT
+///   Exon 2: tx 31-60  genomic (p+40)–(p+69)
+///   Intron 2:          genomic (p+70)–(p+79)  GGGTTTTTTG
+///   Exon 3: tx 61-90  genomic (p+80)–(p+109)
 fn make_plus_strand_transcript() -> (Transcript, String) {
     let core = "ATGCATGCATGCATGCATGCATGCATGCAT\
                 AAACCCAAAT\
@@ -119,7 +122,7 @@ fn make_plus_strand_transcript() -> (Transcript, String) {
                    GCATGCATGCATGCATGCATGCATGCATGC\
                    CATGCATGCATGCATGCATGCATGCATGCA";
 
-    let p = PAD_OFFSET;
+    let p = PAD_OFFSET + 1;
     let transcript = Transcript::new(
         "NM_PLUS.1".to_string(),
         Some("PLUSGENE".to_string()),
@@ -146,12 +149,13 @@ fn make_plus_strand_transcript() -> (Transcript, String) {
 
 /// Build a minus-strand transcript with UTR regions and genomic mapping.
 ///
+/// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
 /// Layout (minus strand, genomic left-to-right):
-///   Exon 3: genomic (PAD+0)–(PAD+19)    tx 51-70
-///   Intron 2: genomic (PAD+20)–(PAD+29)  GGGGGGGGGG
-///   Exon 2: genomic (PAD+30)–(PAD+54)   tx 26-50
-///   Intron 1: genomic (PAD+55)–(PAD+64)  TTTTTTTTTT
-///   Exon 1: genomic (PAD+65)–(PAD+89)   tx 1-25
+///   Exon 3: genomic (p+0)–(p+19)    tx 51-70
+///   Intron 2: genomic (p+20)–(p+29)  GGGGGGGGGG
+///   Exon 2: genomic (p+30)–(p+54)   tx 26-50
+///   Intron 1: genomic (p+55)–(p+64)  TTTTTTTTTT
+///   Exon 1: genomic (p+65)–(p+89)   tx 1-25
 ///   CDS: tx 6-65
 fn make_minus_strand_utr_transcript() -> (Transcript, String) {
     let core = "TTTTTGCATGCATGCATGCAT\
@@ -166,7 +170,7 @@ fn make_minus_strand_utr_transcript() -> (Transcript, String) {
                    GCATGCATGCATGCATGCATGCATGC\
                    ATGCATGCATGCATGCAAAAA";
 
-    let p = PAD_OFFSET;
+    let p = PAD_OFFSET + 1;
     let transcript = Transcript::new(
         "NM_MUTR.1".to_string(),
         Some("MUTRGENE".to_string()),

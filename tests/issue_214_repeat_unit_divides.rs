@@ -388,8 +388,9 @@ mod c_utr {
     ///   tx 31..=60  CDS proper
     ///   tx 61..=90  3' UTR
     ///
-    /// Genomic mapping: 1:1 onto the padded genomic sequence starting at
-    /// `PAD_OFFSET`. So tx pos 6 ↔ genomic pos (PAD_OFFSET + 5).
+    /// Genomic mapping: 1:1 onto the padded genomic sequence. Genomic coords are
+    /// 1-based, so tx pos 1 ↔ genomic `PAD_OFFSET + 1` and tx pos 6 ↔ genomic
+    /// `PAD_OFFSET + 6`.
     fn provider_with_utr_g6() -> MockProvider {
         let utr5 = "AAAAA".to_string() + "GGGGGG" + "AAAAAAAAAAAAAAAAAAA"; // 5+6+19 = 30
         let cds = "ATGAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(); // 30 bp, in-frame
@@ -407,10 +408,16 @@ mod c_utr {
             tx_seq,
             Some(31),
             Some(60),
-            vec![Exon::with_genomic(1, 1, 90, PAD_OFFSET, PAD_OFFSET + 89)],
+            vec![Exon::with_genomic(
+                1,
+                1,
+                90,
+                PAD_OFFSET + 1,
+                PAD_OFFSET + 90,
+            )],
             Some("chr_utr".to_string()),
-            Some(PAD_OFFSET),
-            Some(PAD_OFFSET + 89),
+            Some(PAD_OFFSET + 1),
+            Some(PAD_OFFSET + 90),
             GenomeBuild::GRCh38,
             ManeStatus::None,
             None,
@@ -459,10 +466,16 @@ mod c_utr {
             tx_seq,
             Some(31),
             Some(60),
-            vec![Exon::with_genomic(1, 1, 90, PAD_OFFSET, PAD_OFFSET + 89)],
+            vec![Exon::with_genomic(
+                1,
+                1,
+                90,
+                PAD_OFFSET + 1,
+                PAD_OFFSET + 90,
+            )],
             Some("chr_utr".to_string()),
-            Some(PAD_OFFSET),
-            Some(PAD_OFFSET + 89),
+            Some(PAD_OFFSET + 1),
+            Some(PAD_OFFSET + 90),
             GenomeBuild::GRCh38,
             ManeStatus::None,
             None,
@@ -499,11 +512,12 @@ mod c_intronic_plus_strand {
     /// `AT[4]`-shaped tract — `ATATATAT` at intronic positions
     /// c.30+1..=c.30+8.
     ///
-    /// Layout (plus strand, two exons + one intron):
-    ///   Exon 1: tx 1..=30  ↔ genomic (PAD..=PAD+29)
-    ///   Intron 1:           genomic (PAD+30..=PAD+39)   — 10 bp,
+    /// Layout (plus strand, two exons + one intron; genomic coords 1-based,
+    /// so `p = PAD_OFFSET + 1` is the first core base):
+    ///   Exon 1: tx 1..=30  ↔ genomic (p..=p+29)
+    ///   Intron 1:           genomic (p+30..=p+39)   — 10 bp,
     ///                       seeded with `ATATATATGG`
-    ///   Exon 2: tx 31..=60 ↔ genomic (PAD+40..=PAD+69)
+    ///   Exon 2: tx 31..=60 ↔ genomic (p+40..=p+69)
     fn provider_with_intronic_at4() -> MockProvider {
         let exon1 = "ATGCATGCATGCATGCATGCATGCATGCAT"; // 30 bp
         let intron = "ATATATATGG"; // 10 bp, `AT` tract followed by `GG`
@@ -514,7 +528,7 @@ mod c_intronic_plus_strand {
         let tx_seq = format!("{}{}", exon1, exon2);
         assert_eq!(tx_seq.len(), 60);
 
-        let p_off = PAD_OFFSET;
+        let p_off = PAD_OFFSET + 1;
         let transcript = Transcript::new(
             "NM_INTRON.1".to_string(),
             Some("INTRONGENE".to_string()),
@@ -599,7 +613,8 @@ mod c_intronic_plus_strand {
 mod c_intronic_minus_strand {
     use super::*;
 
-    /// Plus-strand intron contains `CCCCATATAT` at genomic (PAD+30..=PAD+39).
+    /// Plus-strand intron contains `CCCCATATAT` at genomic (p+30..=p+39),
+    /// where `p = PAD_OFFSET + 1` (genomic coords are 1-based).
     /// Reverse-complemented to transcript view, the intron looks like
     /// `ATATATGGGG` — so transcript-view AT[3] sits at intronic positions
     /// c.30+1..=c.30+6 (note: minus-strand intronic numbering puts +1 at
@@ -623,7 +638,7 @@ mod c_intronic_minus_strand {
         let tx_seq = format!("{}{}", tx_e1, tx_e2);
         assert_eq!(tx_seq.len(), 60);
 
-        let p_off = PAD_OFFSET;
+        let p_off = PAD_OFFSET + 1;
         let transcript = Transcript::new(
             "NM_MINTRON.1".to_string(),
             Some("MINTRONGENE".to_string()),
@@ -742,7 +757,7 @@ mod n_noncoding {
             .to_string();
         assert_eq!(tx_seq.len(), 60);
 
-        let p_off = PAD_OFFSET;
+        let p_off = PAD_OFFSET + 1;
         let padded_seq = padded(&tx_seq);
 
         let transcript = Transcript::new(
