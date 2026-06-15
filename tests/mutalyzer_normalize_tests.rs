@@ -529,6 +529,96 @@ fn manifest_or_skip() {
     }
 }
 
+/// Issue #506: the direct c.→p. path must extend to bare `n.` (Tx) inputs.
+///
+/// `NM_003002.4:n.206_210del` carries no `genomic_context` parent, so the
+/// genome-pivot path cannot run; before #506 it hard-errored with "input
+/// variant has no parent reference". The direct path converts the 1-based
+/// transcript position to a CDS position via the transcript's `cds_start`,
+/// then predicts protein identically to the coding path. Pinned against a
+/// live manifest so the worked example resolves end-to-end.
+///
+/// The protein *consequence* matches mutalyzer's `p.(Gly58GlnfsTer9)`. The
+/// protein *accession* renders in ferro's spec-correct bare-`NP_` form
+/// (`NP_002993.1:p.…`) rather than the `NM_(NP_)` wrapper the upstream
+/// `protein_description` axis carries — that wrapper-vs-bare-NP difference is
+/// the pre-existing, axis-wide format-only divergence tracked under #498
+/// (#483/#495), out of scope here. This test pins #506's guarantee: a bare
+/// `n.` input now *produces* the correct prediction instead of erroring.
+#[test]
+fn issue_506_bare_n_transcript_predicts_protein() {
+    let Some(vp) = variant_projector() else {
+        eprintln!("issue_506_bare_n_transcript_predicts_protein: skipping — no manifest");
+        return;
+    };
+    let v = ferro_hgvs::parse_hgvs("NM_003002.4:n.206_210del").expect("parse n. input");
+    let proj = vp
+        .project_variant(&v, "NM_003002.4")
+        .expect("bare n. input should project via the direct n.→CDS→p. path");
+    let protein = proj
+        .protein
+        .as_ref()
+        .expect("protein consequence should be predicted for a bare n. input");
+    assert_eq!(
+        protein.to_string(),
+        "NP_002993.1:p.(Gly58GlnfsTer9)",
+        "worked example n.206_210del must predict the spec frameshift consequence"
+    );
+    // The coding axis must reframe n.206_210del to the spec-normalized c. form.
+    let coding = proj
+        .coding
+        .as_ref()
+        .expect("coding (c.) axis should be derived");
+    assert_eq!(
+        coding.to_string(),
+        "NM_003002.4(SDHD):c.171_175del",
+        "n.206_210del should reframe to c.171_175del"
+    );
+    // A bare-NM_ n. input has no genome alignment, so no genomic form.
+    assert!(
+        proj.genomic.is_none(),
+        "bare n. input must report genomic = None, got {:?}",
+        proj.genomic
+    );
+}
+
+/// Issue #506 regression: a 3'-downstream (`*N`) position on a bare `n.` / `r.`
+/// input must NOT be mis-projected through the direct n./r.→CDS→p. path.
+///
+/// The parser stores `n.*5` as `base = 5, downstream = true`, but the exon-aware
+/// `tx_to_cds` mapper the direct path uses classifies purely by `base` vs the CDS
+/// bounds and never reads the `downstream` flag. Without an explicit guard,
+/// `n.*5` (3'UTR / transcript-tail) is silently read as in-transcript position 5,
+/// which for a CDS-at-1 transcript lands inside the CDS — producing a bogus `c.`
+/// form and running protein prediction on it. The direct path has no exon-aware
+/// 3'UTR translation (that lives on the genome-pivot path), so it must decline
+/// with `UnsupportedProjection` rather than emit a wrong answer.
+#[test]
+fn issue_506_bare_downstream_position_is_rejected() {
+    let Some(vp) = variant_projector() else {
+        eprintln!("issue_506_bare_downstream_position_is_rejected: skipping — no manifest");
+        return;
+    };
+
+    // Both a bare `n.*N` and a bare `r.*N` input must be declined, not
+    // mis-projected into a spurious `c.` form / protein consequence.
+    for input in ["NM_003002.4:n.*5del", "NM_003002.4:r.*5del"] {
+        let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input}: {e}"));
+        match vp.project_variant(&v, "NM_003002.4") {
+            Err(FerroError::UnsupportedProjection { .. }) => {} // expected
+            Err(other) => panic!(
+                "{input}: expected UnsupportedProjection for a 3'-downstream bare position, \
+                 got a different error: {other}"
+            ),
+            Ok(proj) => panic!(
+                "{input}: a 3'-downstream bare position must be rejected, but it projected to \
+                 coding={:?} protein={:?}",
+                proj.coding, proj.protein
+            ),
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Axis: normalized
 // ----------------------------------------------------------------------------
