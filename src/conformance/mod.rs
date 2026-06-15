@@ -10,6 +10,7 @@
 //! These types live in the library — rather than the test crates — only so the
 //! `examples/` generator can share them; they are not part of the runtime API.
 
+pub mod accession_inventory;
 pub mod biocommons;
 pub mod hgvs_rs_projection;
 pub mod mutalyzer;
