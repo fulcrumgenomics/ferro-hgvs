@@ -122,6 +122,17 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    // A missing RefSeqGene alignments GFF3 silently disables NG_/LRG_
+    // re-anchoring at load, so surface it like the other optional inputs above.
+    if let Some(ref alignments) = manifest.refseqgene_alignments {
+        if !alignments.exists() {
+            result.warnings.push(format!(
+                "RefSeqGene alignments GFF3 not found: {}",
+                alignments.display()
+            ));
+        }
+    }
+
     result
 }
 
@@ -260,6 +271,54 @@ mod tests {
         assert!(
             result.warnings.is_empty(),
             "Expected no warnings for valid relative paths"
+        );
+    }
+
+    #[test]
+    fn test_check_warns_on_missing_refseqgene_alignments() {
+        let dir = TempDir::new().unwrap();
+
+        // A real transcript FASTA so the manifest is otherwise valid.
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
+
+        // Point refseqgene_alignments at a file that does not exist.
+        let missing_alignments = dir.path().join("missing_refseqgene_alignments.gff3");
+
+        let mut manifest = ReferenceManifest {
+            prepared_at: "2024-01-01T00:00:00Z".to_string(),
+            transcript_fastas: vec![transcript_fasta],
+            protein_fastas: Vec::new(),
+            genome_fasta: None,
+            genome_grch37_fasta: None,
+            refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: Some(missing_alignments.clone()),
+            lrg_fastas: Vec::new(),
+            lrg_xmls: Vec::new(),
+            lrg_refseq_mapping: None,
+            cdot_json: None,
+            cdot_grch37_json: None,
+            supplemental_fasta: None,
+            legacy_transcripts_fasta: None,
+            legacy_transcripts_metadata: None,
+            legacy_genbank_fasta: None,
+            legacy_genbank_metadata: None,
+            canonical_overrides: None,
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: dir.path().to_path_buf(),
+        };
+
+        manifest.save().unwrap();
+
+        let result = check_reference(dir.path());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("RefSeqGene alignments GFF3 not found")),
+            "Expected a warning for the missing alignments file, got {:?}",
+            result.warnings
         );
     }
 }
