@@ -240,6 +240,42 @@ fn strict_rejects_cis_allele_with_intronic_member() {
 }
 
 #[test]
+fn lenient_warns_and_keeps_value_when_intronic_indel_cannot_resolve() {
+    // #682 regression: a substitution never reaches the genomic-sequence-dependent
+    // intronic resolution pass, so warn-only mode has always echoed it with W4007.
+    // An *indel* does reach that pass; with no genomic sequence to anchor it,
+    // `normalize_tx` errored and — because warn-only mode (unlike reject mode) did
+    // NOT short-circuit before normalization — that capability error propagated via
+    // `?`, dropping the W4007 warning entirely. The spec-invalidity of an intronic
+    // offset on a bare transcript is independent of provider capability, so warn-only
+    // mode must still surface W4007 and echo the input, not hard-fail.
+    //
+    // `provider_intronic_nr` has the transcript but no genomic sequence, so the
+    // intronic deletion cannot resolve.
+    let normalizer = Normalizer::with_config(provider_intronic_nr(), NormalizeConfig::lenient());
+    let variant = parse_hgvs("NR_INT.1:n.10+2_10+3del").expect("parse");
+
+    // Warn-only must NOT propagate the capability error.
+    let out = normalizer
+        .normalize(&variant)
+        .expect("warn-only must not fail when an intronic indel cannot resolve (#682)");
+    // The spec-invalid form is echoed unchanged (not normalized/shifted).
+    assert_eq!(out.to_string(), "NR_INT.1:n.10+2_10+3del");
+
+    // And W4007 is surfaced rather than silently dropped.
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("warn-only diagnostics");
+    assert!(
+        diag.warnings
+            .iter()
+            .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+        "expected INTRONIC_ON_BARE_TRANSCRIPT warning, got {:?}",
+        diag.warnings
+    );
+}
+
+#[test]
 fn silent_accepts_bare_nm_intronic_substitution_without_warning() {
     // Silent mode (`warn_accept()` → Accept): the intronic offset on a bare
     // NM_ is accepted without rejection and without emitting W4007.
@@ -261,4 +297,36 @@ fn silent_accepts_bare_nm_intronic_substitution_without_warning() {
         "silent mode must not emit INTRONIC_ON_BARE_TRANSCRIPT, got {:?}",
         diag.warnings
     );
+}
+
+#[test]
+fn silent_propagates_error_when_intronic_indel_cannot_resolve() {
+    // Silent-mode counterpart to `lenient_warns_and_keeps_value_when_intronic_indel_cannot_resolve`.
+    // Silent mode produces no EINTRONIC warning, so the `None => return Err(e)` arm in
+    // `normalize_core` must still propagate the capability error for an intronic *indel* that
+    // reaches the genomic-sequence-dependent resolution pass — no echo, no W4007 (#682).
+    //
+    // `provider_intronic_nr` has the transcript but no genomic sequence, so the intronic
+    // deletion cannot resolve.
+    let normalizer = Normalizer::with_config(provider_intronic_nr(), NormalizeConfig::silent());
+    let variant = parse_hgvs("NR_INT.1:n.10+2_10+3del").expect("parse");
+
+    // Silent mode has no EINTRONIC warning to recover with, so the capability error propagates.
+    assert!(
+        normalizer.normalize(&variant).is_err(),
+        "silent mode must propagate the resolve-failure error for an intronic indel (#682)"
+    );
+
+    // And it must not emit the INTRONIC_ON_BARE_TRANSCRIPT warning (no echo path taken).
+    let diag = normalizer.normalize_with_diagnostics(&variant);
+    if let Ok(diag) = diag {
+        assert!(
+            !diag
+                .warnings
+                .iter()
+                .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+            "silent mode must not emit INTRONIC_ON_BARE_TRANSCRIPT, got {:?}",
+            diag.warnings
+        );
+    }
 }

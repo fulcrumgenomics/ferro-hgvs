@@ -1255,7 +1255,44 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        let (result, mut warnings) = match variant {
+        // Dispatch normalization. On success, warn-only mode attaches W4007 to the
+        // fully normalized output below (3'-shift, W4004, repeat notation are all
+        // preserved). On failure, warn-only mode must NOT propagate the error for
+        // an intronic-on-bare-transcript form: the spec-invalidity of that form is
+        // independent of provider capability, so when the intronic position cannot
+        // resolve (e.g. an indel with no genomic sequence to anchor it) we recover
+        // by echoing the input with W4007 instead of dropping the warning and
+        // surfacing a capability IntronicVariant/ConversionError (#682). A
+        // substitution never reaches the resolution pass, so this only changes the
+        // resolve-failure path. Reject mode already short-circuited above; silent
+        // mode (no eintronic_warning) propagates the error unchanged.
+        let (result, mut warnings) = match self.normalize_dispatch(variant) {
+            Ok(resolved) => resolved,
+            Err(e) => match &eintronic_warning {
+                Some(w) => return Ok((variant.clone(), vec![w.clone()])),
+                None => return Err(e),
+            },
+        };
+
+        // Warn-only: attach the EINTRONIC warning to the resolved output. (Reject
+        // mode already short-circuited above; silent mode has no warning.)
+        if let Some(w) = eintronic_warning {
+            warnings.push(w);
+        }
+
+        Ok((result, warnings))
+    }
+
+    /// Dispatch normalization by variant kind, returning the normalized variant
+    /// plus warnings. Extracted from [`Self::normalize_core`] so the caller can
+    /// recover a warn-only EINTRONIC resolve-failure (#682) without the per-arm
+    /// `?` propagating the error and discarding the W4007 warning; this method
+    /// itself performs no EINTRONIC handling.
+    fn normalize_dispatch(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        Ok(match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
             // must be described with `m.` (#487). Coerce it to an `MtVariant`
             // — same accession/location/edit, only the coordinate system label
@@ -1294,16 +1331,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Null and unknown allele markers pass through unchanged
             HV::NullAllele => (HV::NullAllele, vec![]),
             HV::UnknownAllele => (HV::UnknownAllele, vec![]),
-        };
-
-        // Lenient (warn-only): attach the EINTRONIC warning to the resolved
-        // output. (Reject mode already short-circuited above; if normalization
-        // errored, lenient surfaces that error as before.)
-        if let Some(w) = eintronic_warning {
-            warnings.push(w);
-        }
-
-        Ok((result, warnings))
+        })
     }
 
     /// Normalize an allele (compound) variant
@@ -8162,18 +8190,33 @@ mod tests {
     }
 
     #[test]
-    fn test_boundary_no_genomic_data_returns_error() {
-        // Test that without genomic data, we still get the ExonIntronBoundary error
+    fn test_boundary_bare_intronic_no_genomic_data_warns_w4007() {
+        // #682: `c.11_11+3del` spans the exon/intron boundary on a bare `NM_`
+        // (no NG_(…)/NC_(…) context) — itself a spec-invalid intronic form. With
+        // no genomic data the intronic position cannot resolve. Default (warn)
+        // mode previously propagated that capability error; now the form-level
+        // invalidity (W4007) takes precedence: the input is echoed and the
+        // warning surfaced rather than hard-failing. (Strict mode still rejects
+        // it as EINTRONIC — see tests/issue_486_eintronic.rs.)
         let provider = MockProvider::with_test_data(); // No genomic data
         let normalizer = Normalizer::new(provider);
 
-        // NM_001234.1 doesn't have genomic coordinates
         let variant = parse_hgvs("NM_001234.1:c.11_11+3del").unwrap();
-        let result = normalizer.normalize(&variant);
-
+        // Warn-only must not propagate the capability error.
+        let out = normalizer
+            .normalize(&variant)
+            .expect("bare intronic form must warn, not error, in default mode (#682)");
+        assert_eq!(out.to_string(), "NM_001234.1:c.11_11+3del");
+        // W4007 is surfaced via diagnostics rather than silently dropped.
+        let diag = normalizer
+            .normalize_with_diagnostics(&variant)
+            .expect("diagnostics should succeed in warn-only mode");
         assert!(
-            result.is_err(),
-            "Boundary-spanning without genomic data should return error"
+            diag.warnings
+                .iter()
+                .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+            "expected INTRONIC_ON_BARE_TRANSCRIPT (W4007), got {:?}",
+            diag.warnings
         );
     }
 

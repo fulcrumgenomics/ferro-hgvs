@@ -12,6 +12,16 @@
 //! explicitly check that both intron edges lie within the resolved window and
 //! return a `ConversionError` when they do not.
 //!
+//! #682 interaction: the two `c.` fixtures here use a *bare* `NM_` transcript
+//! (no `NG_(…)`/`NC_(…)` context), which is itself a spec-invalid intronic form
+//! (W4007 / EINTRONIC). In warn-only (default) mode that form-level invalidity
+//! is the actionable signal, so `normalize()` now surfaces W4007 and echoes the
+//! input unchanged rather than propagating the internal shuffle-window
+//! `ConversionError`. The guard's *error* path is still exercised here by the
+//! `n.`-on-`NM_` case (not classified as intronic-on-bare-transcript), which
+//! continues to return the `ConversionError`; the guard also still fires for
+//! genomic-context forms, where preventing silent mis-normalization matters.
+//!
 //! Fixture geometry (minus strand, `c.`/`n.` notation):
 //!
 //! ```text
@@ -96,6 +106,34 @@ fn expect_conversion_error(provider: MockProvider, input: &str) -> FerroError {
     }
 }
 
+/// Assert warn-only (default) mode echoes a bare intronic form unchanged and
+/// surfaces W4007, rather than propagating the internal shuffle-window error
+/// (#682). The #573 guard still fires internally; for a bare (spec-invalid)
+/// form the actionable W4007 takes precedence and nothing is mis-normalized
+/// because the input is echoed.
+fn expect_w4007_warn_echo(provider: MockProvider, input: &str) {
+    let normalizer = Normalizer::new(provider);
+    let variant = parse_hgvs(input).expect("parse should succeed");
+    let out = normalizer.normalize(&variant).unwrap_or_else(|e| {
+        panic!("bare-NM intronic form must warn, not error (#682) for {input:?}, got {e:?}")
+    });
+    assert_eq!(
+        out.to_string(),
+        input,
+        "warn-only mode must echo the bare intronic form unchanged"
+    );
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("diagnostics should succeed in warn-only mode");
+    assert!(
+        diag.warnings
+            .iter()
+            .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+        "expected INTRONIC_ON_BARE_TRANSCRIPT (W4007) for {input:?}, got {:?}",
+        diag.warnings
+    );
+}
+
 /// **Regression — near 5'-donor (`c.20+3`): `intron_g_start` outside the cap
 /// fallback window.**
 ///
@@ -103,19 +141,15 @@ fn expect_conversion_error(provider: MockProvider, input: &str) -> FerroError {
 /// On minus strand, this is at genomic position 69981 - 3 = 69978.
 ///
 /// After the cap fires: `seq_start ≈ 69878`, `seq_end ≈ 70078`.
-/// `intron_g_start = 1021 < seq_start` → guard fires → `ConversionError`.
-///
-/// Before the fix: `saturating_sub(1021, 69878)` = 0, `intron_rel_start` = 1,
-/// the in-window guard in `flip_intronic_for_strand` silently passed,
-/// and minus-strand normalization proceeded with a wrong `boundaries.left`.
+/// `intron_g_start = 1021 < seq_start` → the #573 guard fires internally
+/// (`ConversionError`). Because this is a *bare* `NM_` intronic form, warn-only
+/// (default) mode surfaces W4007 and echoes the input rather than propagating
+/// that error (#682). Before #573 the guard did not exist and minus-strand
+/// normalization silently proceeded with a wrong `boundaries.left`.
 #[test]
-fn near_donor_huge_intron_cds_returns_error() {
+fn near_donor_huge_intron_cds_warns_w4007() {
     let provider = make_huge_intron_fixture();
-    let err = expect_conversion_error(provider, "NM_573TEST.1:c.20+3del");
-    assert!(
-        format!("{err}").contains("intronic shuffle window"),
-        "error should mention 'intronic shuffle window', got: {err}"
-    );
+    expect_w4007_warn_echo(provider, "NM_573TEST.1:c.20+3del");
 }
 
 /// **Regression — near 3'-acceptor (`c.21-3`): `intron_g_end + 1` outside the
@@ -127,25 +161,23 @@ fn near_donor_huge_intron_cds_returns_error() {
 /// After the cap fires: `seq_start ≈ 923`, `seq_end ≈ 1123`.
 /// `intron_g_end + 1 = 69981 > seq_end` → guard fires → `ConversionError`.
 ///
-/// Before the fix: `69980.saturating_sub(923)` = 69057, which produces a
+/// Before #573: `69980.saturating_sub(923)` = 69057, which produces a
 /// relative boundary far past the fetched window length, but the *left*
 /// boundary (`intron_g_start = 1021`) would also be clamped via `saturating_sub`
 /// only if `< seq_start` (here it isn't). The right boundary (69057) is >> seq_len,
 /// so `flip_intronic_for_strand` would have caught it — but the explicit guard
-/// makes the rejection happen earlier with a clearer diagnostic.
+/// makes the rejection happen earlier with a clearer diagnostic. As with the
+/// donor case, warn-only mode now surfaces W4007 + echo for this bare form
+/// instead of the internal `ConversionError` (#682).
 #[test]
-fn near_acceptor_huge_intron_cds_returns_error() {
+fn near_acceptor_huge_intron_cds_warns_w4007() {
     let provider = make_huge_intron_fixture();
-    let err = expect_conversion_error(provider, "NM_573TEST.1:c.21-3del");
-    assert!(
-        format!("{err}").contains("intronic shuffle window"),
-        "error should mention 'intronic shuffle window', got: {err}"
-    );
+    expect_w4007_warn_echo(provider, "NM_573TEST.1:c.21-3del");
 }
 
 /// **`n.` parity — near 5'-donor via `normalize_intronic_tx`.**
 ///
-/// Mirrors `near_donor_huge_intron_cds_returns_error` but uses `n.` notation,
+/// Mirrors `near_donor_huge_intron_cds_warns_w4007` but uses `n.` notation,
 /// which routes through `normalize_intronic_tx` instead of
 /// `normalize_intronic_cds`. Both callers now carry the same guard.
 #[test]
