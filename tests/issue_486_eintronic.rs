@@ -74,6 +74,46 @@ fn strict_rejects_bare_nm_intronic_substitution() {
     );
 }
 
+#[test]
+fn intronic_variant_field_stays_raw_hgvs_clarifier_in_detail() {
+    // The spec-form bare-transcript rejection must keep `variant` the raw HGVS
+    // string (machine-readable — reparseable, comparable) and carry the
+    // human-facing clarifier in `detail` / the rendered message instead (#681).
+    let input = "NM_INTRON.1:c.30+1A>G";
+    let err = normalize(provider_intronic_nm(), NormalizeConfig::strict(), input)
+        .expect_err("strict mode must reject a bare-NM intronic substitution as EINTRONIC");
+
+    let FerroError::IntronicVariant { variant, detail } = &err else {
+        panic!("expected IntronicVariant, got {:?}", err);
+    };
+
+    // `variant` must be machine-readable HGVS: it reparses, and it round-trips
+    // to the raw input (so it carries no prose clarifier).
+    assert!(
+        parse_hgvs(variant).is_ok(),
+        "`variant` must be a reparseable HGVS string, got {variant:?}"
+    );
+    assert_eq!(
+        variant, input,
+        "`variant` must be the raw input HGVS, got {variant:?}"
+    );
+
+    // The clarifier lives in `detail` and still reaches users via Display, in
+    // parentheses after the raw variant.
+    let detail = detail
+        .as_deref()
+        .expect("spec-form rejection should carry a `detail` clarifier");
+    assert!(
+        detail.contains("a genomic reference is required"),
+        "`detail` should explain why, got {detail:?}"
+    );
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("a genomic reference is required") && rendered.contains('('),
+        "rendered error should append the clarifier in parentheses, got {rendered:?}"
+    );
+}
+
 /// 2-exon plus-strand non-coding transcript (NR_, no CDS) with a 20-bp
 /// intron-1; genomic coords only (substitutions never reach the
 /// genomic-sequence-dependent intronic pass, so no genomic sequence needed).

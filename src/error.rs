@@ -355,9 +355,19 @@ pub enum FerroError {
     #[error("Unsupported variant type: {variant_type}")]
     UnsupportedVariant { variant_type: String },
 
-    /// Intronic variant cannot be normalized (no genomic data)
-    #[error("Intronic variant normalization not supported: {variant}")]
-    IntronicVariant { variant: String },
+    /// Intronic variant cannot be normalized.
+    ///
+    /// `variant` holds the raw HGVS string and stays machine-readable — the
+    /// mutalyzer conformance mapping keys off the *variant name*, and
+    /// downstream code may reparse or compare it. `detail` is an optional
+    /// human-facing clarifier (e.g. distinguishing a spec-form bare-transcript
+    /// rejection from the capability-failure "no genomic data" path), rendered
+    /// in parentheses after the variant when present.
+    #[error("Intronic variant normalization not supported: {variant}{}", .detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default())]
+    IntronicVariant {
+        variant: String,
+        detail: Option<String>,
+    },
 
     /// Genomic reference data is not available
     #[error("Genomic reference not available for {contig}:{start}-{end}")]
@@ -836,6 +846,7 @@ mod tests {
 
         let err = FerroError::IntronicVariant {
             variant: "c.100+5del".to_string(),
+            detail: None,
         };
         assert_eq!(err.code(), Some(ErrorCode::IntronicVariant));
 
