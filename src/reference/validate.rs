@@ -773,9 +773,223 @@ pub fn validate_translation_against_protein(
     ))
 }
 
+/// A coding transcript whose CDS starts with **neither `ATG` nor a recognized
+/// alternative initiator** (`CTG`/`GTG`/`TTG`) in the served FASTA (issue #629).
+///
+/// This is the data-side signal that the cdot CDS coordinates and the
+/// transcript FASTA disagree (the cdot annotation release and the mRNA FASTA
+/// release are different sequence revisions): `cds_start` has drifted off the
+/// true start, so the reading frame is wrong and the reference protein
+/// mistranslates. #625 makes the *runtime* projection robust to this (it
+/// declines protein prediction); this scan surfaces the *underlying data*
+/// inconsistency at `ferro check` time so a bad reference set is caught up
+/// front rather than silently losing protein-consequence support.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CdsStartInconsistency {
+    /// The transcript accession (with version), e.g. `NM_000425.3`.
+    pub transcript_id: String,
+    /// The first CDS codon actually observed in the served FASTA, upper-cased,
+    /// e.g. `AGG` — a codon that is not a recognized translation initiator.
+    pub observed_start_codon: String,
+}
+
+/// Summary of a [`scan_cds_start_codons`] pass over a set of transcripts (#629).
+///
+/// Only the **start codon** is examined — deliberately *not* internal stops:
+/// selenoproteins legitimately recode an in-frame `TGA` as selenocysteine, so a
+/// premature-internal-stop scan would false-positive on every selenoprotein.
+///
+/// A non-`ATG` start is **not** automatically an inconsistency. The near-cognate
+/// initiation codons `CTG`/`GTG`/`TTG` are recognized translation start codons
+/// (RefSeq annotates them; the reading frame is correct and the initiator Met is
+/// still installed), so they are counted as [`alternative_start`](Self::alternative_start)
+/// rather than flagged — they do **not** cause the mistranslation #625/#629 are
+/// about. Only a first codon that is neither `ATG` nor a recognized alternative
+/// initiator (e.g. `AGC`, `GAT`, `CAG`) signals that `cds_start` has drifted off
+/// the true start — the data-side root cause behind #625. This mirrors the
+/// canonical-start set already used by the GFF loader's `W-LOAD-201` check.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CdsStartCodonReport {
+    /// Number of coding transcripts whose start codon could be examined
+    /// (CDS present, sequence available, first codon in range and unambiguous).
+    pub coding_examined: usize,
+    /// Coding transcripts whose first CDS codon is neither `ATG` nor a
+    /// recognized alternative initiator, and that are not on the allowlist —
+    /// the genuine `cds_start`-off-the-start signal. Sorted by `transcript_id`.
+    pub inconsistent: Vec<CdsStartInconsistency>,
+    /// Coding transcripts starting with a recognized alternative initiation
+    /// codon (`CTG`/`GTG`/`TTG`). Legitimate; counted for transparency, not
+    /// flagged.
+    pub alternative_start: usize,
+    /// Coding transcripts that *would* have been flagged but were suppressed by
+    /// the user-supplied allowlist (known-legitimate non-initiator starts).
+    pub allowlisted: usize,
+    /// Coding transcripts whose first codon contained an ambiguity code
+    /// (`N`/IUPAC) and so could not be classified.
+    pub ambiguous_skipped: usize,
+    /// Coding transcripts that could not be examined because they carry no
+    /// served sequence, or `cds_start` indexes outside the served bases. These
+    /// are a *different* corruption class (handled by the structural checks in
+    /// [`validate_transcript_record`]) and are only counted here, not flagged.
+    pub unresolved: usize,
+    /// Transcripts that failed to load from the provider for a reason other
+    /// than "not found" (e.g. degenerate coordinates rejected during
+    /// construction). Counted, not dropped — mirroring `validate_transcripts`'
+    /// `LoadError` accounting; an unknown accession (`ReferenceNotFound`) is
+    /// skipped silently as genuinely out of scope.
+    pub load_errors: usize,
+}
+
+impl CdsStartCodonReport {
+    /// Whether the scan found any (non-allowlisted, non-alternative) start-codon
+    /// inconsistency.
+    pub fn has_inconsistencies(&self) -> bool {
+        !self.inconsistent.is_empty()
+    }
+}
+
+/// Strip a trailing `.<version>` from an accession, returning the base
+/// accession (e.g. `NM_000425.3` → `NM_000425`). Returns the input unchanged
+/// when there is no `.`-delimited numeric version suffix.
+fn versionless_accession(accession: &str) -> &str {
+    match accession.rsplit_once('.') {
+        // Only treat a purely-numeric suffix as a version (RefSeq accessions
+        // never embed a `.` other than the version separator, but guard anyway
+        // so e.g. `LRG_199t1` is left intact).
+        Some((base, ver)) if !ver.is_empty() && ver.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => accession,
+    }
+}
+
+/// Scan the named coding transcripts for CDS **start-codon** consistency (#629).
+///
+/// For every accession in `ids` that the provider can serve as a *coding*
+/// transcript (CDS bounds populated), the first CDS codon — `seq[cds_start-1 ..
+/// cds_start+2]` in the served FASTA, where `cds_start` is the 1-based cdot CDS
+/// start — is classified. `ATG` is consistent; the recognized alternative
+/// initiators `CTG`/`GTG`/`TTG` are counted as `alternative_start`; any other
+/// unambiguous codon is reported as a [`CdsStartInconsistency`] unless its
+/// accession (with **or** without the version suffix) appears in `allowlist`.
+///
+/// Accessions the provider does not have, non-coding records, ambiguous first
+/// codons (`N`/IUPAC), and records whose CDS start indexes outside the served
+/// sequence are not flagged — see [`CdsStartCodonReport`] for how each is
+/// accounted. Internal stop codons are intentionally **not** examined (see
+/// [`CdsStartCodonReport`]).
+pub fn scan_cds_start_codons<P, I, S>(
+    provider: &P,
+    ids: I,
+    allowlist: &std::collections::BTreeSet<String>,
+) -> CdsStartCodonReport
+where
+    P: ReferenceProvider,
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let allowlisted =
+        |id: &str| allowlist.contains(id) || allowlist.contains(versionless_accession(id));
+
+    let mut report = CdsStartCodonReport::default();
+    for id in ids {
+        let id = id.as_ref();
+        let tx = match provider.get_transcript(id) {
+            Ok(tx) => tx,
+            // Unknown accession: genuinely not this scan's concern (it is the
+            // file/manifest layer's job to flag a missing transcript).
+            Err(FerroError::ReferenceNotFound { .. }) => continue,
+            // A transcript we expected to serve (callers pass coding accessions
+            // present in the FASTA) failed to construct — count it rather than
+            // dropping it, mirroring `validate_transcripts`' LoadError handling.
+            Err(_) => {
+                report.load_errors += 1;
+                continue;
+            }
+        };
+        // Non-coding records have no CDS to validate.
+        let (Some(cds_start), Some(_)) = (tx.cds_start, tx.cds_end) else {
+            continue;
+        };
+        // `cds_start` is 1-based inclusive. Need the served bases to look at the
+        // actual start codon; a coordinate-only record cannot be examined here.
+        let Some(seq) = tx.sequence.as_deref() else {
+            report.unresolved += 1;
+            continue;
+        };
+        let bytes = seq.as_bytes();
+        let start = cds_start as usize;
+        // Guard: `cds_start >= 1` and the three-base codon must lie within the
+        // served sequence. An out-of-range CDS start is a structural corruption
+        // class handled elsewhere; only count it here.
+        if start == 0 || start + 2 > bytes.len() {
+            report.unresolved += 1;
+            continue;
+        }
+        let codon = bytes[start - 1..start + 2].to_ascii_uppercase();
+        if !is_acgt_codon(&codon) {
+            report.ambiguous_skipped += 1;
+            continue;
+        }
+        report.coding_examined += 1;
+        if is_start_codon(&codon) {
+            continue; // ATG — consistent
+        }
+        if is_alternative_start_codon(&codon) {
+            // CTG/GTG/TTG: recognized near-cognate initiator; frame is intact.
+            report.alternative_start += 1;
+            continue;
+        }
+        if allowlisted(id) {
+            report.allowlisted += 1;
+            continue;
+        }
+        report.inconsistent.push(CdsStartInconsistency {
+            transcript_id: id.to_string(),
+            observed_start_codon: String::from_utf8_lossy(&codon).into_owned(),
+        });
+    }
+    report
+        .inconsistent
+        .sort_by(|a, b| a.transcript_id.cmp(&b.transcript_id));
+    report
+}
+
+/// Load a CDS start-codon allowlist from a newline-delimited text file (#629).
+///
+/// One accession per line; blank lines and `#`-prefixed comment lines are
+/// ignored, and surrounding whitespace is trimmed. Either a versioned
+/// (`NM_000425.3`) or versionless (`NM_000425`) accession is accepted —
+/// [`scan_cds_start_codons`] matches against both forms, so a versionless entry
+/// allows every version of that accession (alternative start codons are stable
+/// across minor revisions).
+pub fn load_cds_allowlist(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<String>, FerroError> {
+    let contents = std::fs::read_to_string(path).map_err(|e| FerroError::Io {
+        msg: format!("failed to read CDS allowlist {}: {e}", path.display()),
+    })?;
+    Ok(contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect())
+}
+
 /// Whether `codon` is the canonical start codon `ATG` (case-insensitive).
 fn is_start_codon(codon: &[u8]) -> bool {
     codon.eq_ignore_ascii_case(b"ATG")
+}
+
+/// Whether `codon` is a recognized **alternative** (near-cognate) translation
+/// initiation codon — `CTG`, `GTG`, or `TTG` (case-insensitive). RefSeq
+/// annotates transcripts with these starts; the reading frame is correct and
+/// the initiator Met is still installed, so they are legitimate non-`ATG`
+/// starts, not the off-the-start drift #629 looks for. This matches the
+/// canonical-start set used by the GFF loader's `W-LOAD-201` check.
+fn is_alternative_start_codon(codon: &[u8]) -> bool {
+    codon.eq_ignore_ascii_case(b"CTG")
+        || codon.eq_ignore_ascii_case(b"GTG")
+        || codon.eq_ignore_ascii_case(b"TTG")
 }
 
 /// Whether `codon` is one of the three standard stop codons.
@@ -1542,5 +1756,219 @@ mod tests {
         tx.cds_start = None;
         tx.cds_end = None;
         assert!(validate_translation_against_protein(&tx, "MW").is_none());
+    }
+
+    // --- CDS start-codon consistency scan (#629) ----------------------------
+
+    use std::collections::BTreeSet;
+
+    fn allowlist(entries: &[&str]) -> BTreeSet<String> {
+        entries.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Provider seeded with three coding transcripts: one ATG-clean, one with a
+    /// non-ATG start (the #629 inconsistency), one non-coding, plus an
+    /// ambiguous-start coding transcript.
+    fn scan_provider() -> crate::reference::mock::MockProvider {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+
+        let mut clean = coding_tx("ATGAAATAA", 1, 9);
+        clean.id = "NM_000001.1".to_string();
+        p.add_transcript(clean);
+
+        // cds_start lands on AGG, not ATG — the L1CAM/TPM3-shaped #629 case.
+        let mut bad = coding_tx("AGGAAATAA", 1, 9);
+        bad.id = "NM_000425.3".to_string();
+        p.add_transcript(bad);
+
+        let mut noncoding = coding_tx("ACGTACGT", 1, 9);
+        noncoding.id = "NR_000002.1".to_string();
+        noncoding.cds_start = None;
+        noncoding.cds_end = None;
+        p.add_transcript(noncoding);
+
+        // First codon contains an ambiguity code → unclassifiable, must skip.
+        let mut ambiguous = coding_tx("ANGAAATAA", 1, 9);
+        ambiguous.id = "NM_000003.1".to_string();
+        p.add_transcript(ambiguous);
+
+        // Recognized alternative initiation codon (CTG) — legitimate, must not
+        // be flagged as an inconsistency.
+        let mut alt_start = coding_tx("CTGAAATAA", 1, 9);
+        alt_start.id = "NM_000004.1".to_string();
+        p.add_transcript(alt_start);
+
+        p
+    }
+
+    #[test]
+    fn scan_flags_only_the_non_initiator_coding_transcript() {
+        let provider = scan_provider();
+        let ids = [
+            "NM_000001.1".to_string(),
+            "NM_000425.3".to_string(),
+            "NR_000002.1".to_string(),
+            "NM_000003.1".to_string(),
+            "NM_000004.1".to_string(),
+            "NM_ABSENT.1".to_string(), // provider doesn't have it → skipped
+        ];
+        let report = scan_cds_start_codons(&provider, &ids, &BTreeSet::new());
+
+        // Examined = the unambiguous coding transcripts (clean ATG + bad AGG +
+        // alt CTG); the non-coding and ambiguous ones do not count.
+        assert_eq!(report.coding_examined, 3);
+        assert_eq!(report.alternative_start, 1); // CTG
+        assert_eq!(report.ambiguous_skipped, 1);
+        assert_eq!(report.allowlisted, 0);
+        assert_eq!(report.inconsistent.len(), 1);
+        assert_eq!(report.inconsistent[0].transcript_id, "NM_000425.3");
+        assert_eq!(report.inconsistent[0].observed_start_codon, "AGG");
+        assert!(report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_recognized_alternative_start_codons_are_not_inconsistent() {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+        for (i, codon) in ["CTG", "GTG", "TTG"].iter().enumerate() {
+            let mut tx = coding_tx(&format!("{codon}AAATAA"), 1, 9);
+            tx.id = format!("NM_00010{i}.1");
+            p.add_transcript(tx);
+        }
+        let ids = ["NM_000100.1", "NM_000101.1", "NM_000102.1"].map(String::from);
+        let report = scan_cds_start_codons(&p, &ids, &BTreeSet::new());
+        assert_eq!(report.coding_examined, 3);
+        assert_eq!(report.alternative_start, 3);
+        assert!(!report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_lowercase_start_codon_is_consistent() {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+        let mut soft_masked = coding_tx("atgaaataa", 1, 9);
+        soft_masked.id = "NM_000009.1".to_string();
+        p.add_transcript(soft_masked);
+        let report = scan_cds_start_codons(&p, ["NM_000009.1".to_string()], &BTreeSet::new());
+        assert_eq!(report.coding_examined, 1);
+        assert!(!report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_allowlist_suppresses_by_exact_and_versionless_accession() {
+        let provider = scan_provider();
+        let ids = ["NM_000425.3".to_string()];
+
+        // Exact, versioned match.
+        let exact = scan_cds_start_codons(&provider, &ids, &allowlist(&["NM_000425.3"]));
+        assert!(!exact.has_inconsistencies());
+        assert_eq!(exact.allowlisted, 1);
+
+        // Versionless match allows every version of the accession.
+        let versionless = scan_cds_start_codons(&provider, &ids, &allowlist(&["NM_000425"]));
+        assert!(!versionless.has_inconsistencies());
+        assert_eq!(versionless.allowlisted, 1);
+
+        // A different accession on the allowlist does not suppress it.
+        let other = scan_cds_start_codons(&provider, &ids, &allowlist(&["NM_999999"]));
+        assert!(other.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_counts_out_of_range_cds_start_as_unresolved_not_inconsistent() {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+        // cds_start past the end of the served sequence: a structural class
+        // handled elsewhere; the start-codon scan only counts it as unresolved.
+        let mut oor = coding_tx("ATGAAATAA", 1, 9);
+        oor.id = "NM_000010.1".to_string();
+        oor.cds_start = Some(99);
+        p.add_transcript(oor);
+        let report = scan_cds_start_codons(&p, ["NM_000010.1".to_string()], &BTreeSet::new());
+        assert_eq!(report.unresolved, 1);
+        assert_eq!(report.coding_examined, 0);
+        assert!(!report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_counts_coordinate_only_coding_record_as_unresolved() {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+        // Coding (CDS bounds set) but no served sequence: cannot examine the
+        // start codon, so it must be counted as unresolved, not flagged.
+        let mut coord_only = coding_tx("ATGAAATAA", 1, 9);
+        coord_only.id = "NM_000011.1".to_string();
+        coord_only.sequence = None;
+        p.add_transcript(coord_only);
+        let report = scan_cds_start_codons(&p, ["NM_000011.1".to_string()], &BTreeSet::new());
+        assert_eq!(report.unresolved, 1);
+        assert_eq!(report.coding_examined, 0);
+        assert!(!report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_counts_non_not_found_load_errors() {
+        // A provider error other than ReferenceNotFound must be counted, not
+        // silently skipped (mirrors `validate_transcripts`' LoadError path).
+        let report = scan_cds_start_codons(
+            &FailingProvider,
+            ["NM_BROKEN.1".to_string()],
+            &BTreeSet::new(),
+        );
+        assert_eq!(report.load_errors, 1);
+        assert_eq!(report.coding_examined, 0);
+        assert!(!report.has_inconsistencies());
+    }
+
+    #[test]
+    fn scan_inconsistent_list_is_sorted_by_accession() {
+        use crate::reference::mock::MockProvider;
+        let mut p = MockProvider::new();
+        for (idx, id) in ["NM_000300.1", "NM_000100.1", "NM_000200.1"]
+            .iter()
+            .enumerate()
+        {
+            let mut tx = coding_tx("AGGAAATAA", 1, 9); // all non-ATG
+            tx.id = id.to_string();
+            // vary nothing else; idx only to avoid unused warnings
+            let _ = idx;
+            p.add_transcript(tx);
+        }
+        let ids = [
+            "NM_000300.1".to_string(),
+            "NM_000100.1".to_string(),
+            "NM_000200.1".to_string(),
+        ];
+        let report = scan_cds_start_codons(&p, &ids, &BTreeSet::new());
+        let got: Vec<&str> = report
+            .inconsistent
+            .iter()
+            .map(|i| i.transcript_id.as_str())
+            .collect();
+        assert_eq!(got, vec!["NM_000100.1", "NM_000200.1", "NM_000300.1"]);
+    }
+
+    #[test]
+    fn versionless_accession_strips_only_numeric_version() {
+        assert_eq!(versionless_accession("NM_000425.3"), "NM_000425");
+        assert_eq!(versionless_accession("NM_000425"), "NM_000425");
+        // A non-numeric suffix (e.g. an LRG transcript tag) is left intact.
+        assert_eq!(versionless_accession("LRG_199t1"), "LRG_199t1");
+    }
+
+    #[test]
+    fn load_cds_allowlist_ignores_comments_and_blanks() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "# legitimate alternative start codons").unwrap();
+        writeln!(f, "NM_000425").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "  NM_152263.2  ").unwrap();
+        f.flush().unwrap();
+        let set = load_cds_allowlist(f.path()).unwrap();
+        assert_eq!(set.len(), 2);
+        assert!(set.contains("NM_000425"));
+        assert!(set.contains("NM_152263.2"));
     }
 }

@@ -913,6 +913,20 @@ impl MultiFastaProvider {
         self.resolve_name(name).is_some()
     }
 
+    /// Whether the FASTA index contains this accession at its **exact**
+    /// version, with no version-flex or `chr`-prefix resolution (unlike
+    /// [`has_sequence`](Self::has_sequence), which resolves aliases and falls
+    /// back to a different version).
+    ///
+    /// Used by the #629 CDS start-codon check so a cdot CDS coordinate is only
+    /// compared against the **matching-version** sequence. A cdot entry whose
+    /// exact version is absent from the FASTA is a version-coverage gap
+    /// (#645/#653), not a CDS-frame inconsistency, and checking its CDS against
+    /// a *different* version's bytes would be a false positive.
+    pub fn contains_exact_sequence(&self, name: &str) -> bool {
+        self.index.contains_key(name)
+    }
+
     /// Get the length of a sequence
     pub fn sequence_length(&self, name: &str) -> Option<u64> {
         self.resolve_name(name)
@@ -2666,6 +2680,31 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
         assert!(provider.has_sequence("NM_000001.1"));
         assert!(provider.has_sequence("NM_000001")); // Without version
         assert_eq!(provider.sequence_length("NM_000001.1"), Some(10));
+    }
+
+    #[test]
+    fn test_contains_exact_sequence_does_not_version_flex() {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("test.fna");
+        let fai_path = dir.path().join("test.fna.fai");
+
+        let mut fasta_file = File::create(&fasta_path).unwrap();
+        writeln!(fasta_file, ">NM_000001.3").unwrap();
+        writeln!(fasta_file, "ATGCATGCAT").unwrap();
+        let mut fai_file = File::create(&fai_path).unwrap();
+        writeln!(fai_file, "NM_000001.3\t10\t13\t10\t11").unwrap();
+
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        // Exact version present → true.
+        assert!(provider.contains_exact_sequence("NM_000001.3"));
+        // `has_sequence` version-flexes to .3, but `contains_exact_sequence`
+        // must NOT: a different version and the versionless base are exact
+        // misses even though the FASTA holds .3.
+        assert!(provider.has_sequence("NM_000001.2"));
+        assert!(!provider.contains_exact_sequence("NM_000001.2"));
+        assert!(provider.has_sequence("NM_000001"));
+        assert!(!provider.contains_exact_sequence("NM_000001"));
     }
 
     #[test]

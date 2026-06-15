@@ -505,6 +505,22 @@ enum Commands {
         /// so it doesn't land inside (and slow down the start of) a real run.
         #[arg(long)]
         build_cache: bool,
+
+        /// Validate that every coding transcript's CDS start codon is a
+        /// recognized translation initiator — `ATG`, or the alternative
+        /// initiators `CTG`/`GTG`/`TTG` — in the served FASTA (issue #629).
+        /// Catches a cdot-release / mRNA-FASTA revision mismatch where
+        /// `cds_start` has drifted off the true start, which silently breaks
+        /// reference-protein translation. Loads the full reference, so it is
+        /// opt-in.
+        #[arg(long)]
+        validate_cds: bool,
+
+        /// Accessions (one per line, `#` comments allowed; versioned or
+        /// versionless) exempt from the `--validate-cds` start-codon check —
+        /// transcripts with a legitimate non-`ATG` start codon.
+        #[arg(long, value_name = "FILE")]
+        cds_allowlist: Option<PathBuf>,
     },
 
     /// Build a transcripts.json from a FASTA + CDS coordinates (single-exon).
@@ -797,7 +813,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Check {
             reference,
             build_cache,
-        } => run_check(&reference, build_cache),
+            validate_cds,
+            cds_allowlist,
+        } => run_check(
+            &reference,
+            build_cache,
+            validate_cds,
+            cds_allowlist.as_deref(),
+        ),
         Commands::BuildTranscript {
             fasta,
             cds_start,
@@ -2842,7 +2865,12 @@ fn run_prepare(
 }
 
 /// Check reference data setup.
-fn run_check(reference: &Path, build_cache: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_check(
+    reference: &Path,
+    build_cache: bool,
+    validate_cds: bool,
+    cds_allowlist: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::check::{check_reference, print_check_summary};
 
     let result = check_reference(reference);
@@ -2850,6 +2878,10 @@ fn run_check(reference: &Path, build_cache: bool) -> Result<(), Box<dyn std::err
 
     if !result.valid {
         return Err("Reference data check failed".into());
+    }
+
+    if validate_cds {
+        run_cds_consistency_check(reference, cds_allowlist)?;
     }
 
     if build_cache {
@@ -2877,6 +2909,124 @@ fn run_check(reference: &Path, build_cache: bool) -> Result<(), Box<dyn std::err
         }
         Ok(None) => {} // No manifest or cdot entry — nothing to report.
         Err(e) => eprintln!("warning: could not determine cdot cache source: {}", e),
+    }
+
+    Ok(())
+}
+
+/// Scan every coding transcript in the prepared reference set for CDS
+/// start-codon consistency (issue #629) and print a summary.
+///
+/// Loads the full reference (FASTA index + cdot metadata), enumerates the
+/// coding transcripts from the cdot mapper, and checks that each one's
+/// `cds_start` lands on an `ATG` in the served FASTA. A non-`ATG` start is the
+/// data-side signal that the cdot annotation release and the mRNA FASTA release
+/// disagree — the root cause behind #625's runtime protein-prediction declines.
+/// Inconsistencies are reported as warnings; this does not (yet) fail the check.
+fn run_cds_consistency_check(
+    reference: &Path,
+    cds_allowlist: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
+    use ferro_hgvs::reference::validate::{load_cds_allowlist, scan_cds_start_codons};
+    use indicatif::ProgressBar;
+
+    let allowlist = match cds_allowlist {
+        Some(path) => load_cds_allowlist(path)?,
+        None => std::collections::BTreeSet::new(),
+    };
+
+    let manifest_path = reference.join("manifest.json");
+    eprintln!();
+    eprintln!("=== CDS start-codon consistency (#629) ===");
+    let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+
+    // Enumerate the coding transcripts from the cdot mapper (CDS bounds
+    // populated). Without cdot metadata there are no CDS coordinates to check.
+    let Some(cdot) = provider.cdot_mapper() else {
+        eprintln!("  cdot metadata not available; nothing to validate.");
+        return Ok(());
+    };
+    // Only check transcripts present in the FASTA at their EXACT version: a
+    // cdot CDS coordinate is only meaningful against the matching-version
+    // sequence. A cdot version absent from the FASTA is a version-coverage gap
+    // (#645/#653), and checking it against a different version's bytes (which
+    // the provider's normal version-flex resolution would do) is a false
+    // positive, not a #629 CDS-frame inconsistency.
+    let coding_ids: Vec<String> = cdot
+        .transcript_ids()
+        .filter(|id| {
+            cdot.get_transcript(id)
+                .is_some_and(|t| t.cds_start.is_some() && t.cds_end.is_some())
+                && provider.contains_exact_sequence(id)
+        })
+        .map(str::to_string)
+        .collect();
+
+    eprintln!("  Scanning {} coding transcripts...", coding_ids.len());
+    let pb = ProgressBar::new(coding_ids.len() as u64);
+    let report = scan_cds_start_codons(
+        &provider,
+        coding_ids.iter().inspect(|_| pb.inc(1)),
+        &allowlist,
+    );
+    pb.finish_and_clear();
+
+    eprintln!("  Examined:      {}", report.coding_examined);
+    eprintln!("  Inconsistent:  {}", report.inconsistent.len());
+    if report.alternative_start > 0 {
+        eprintln!(
+            "  Alt start:     {} (recognized CTG/GTG/TTG initiators — legitimate)",
+            report.alternative_start
+        );
+    }
+    if report.allowlisted > 0 {
+        eprintln!("  Allowlisted:   {}", report.allowlisted);
+    }
+    if report.ambiguous_skipped > 0 {
+        eprintln!(
+            "  Ambiguous:     {} (first codon contained N/IUPAC)",
+            report.ambiguous_skipped
+        );
+    }
+    if report.unresolved > 0 {
+        eprintln!(
+            "  Unresolved:    {} (no served sequence or CDS start out of range)",
+            report.unresolved
+        );
+    }
+    if report.load_errors > 0 {
+        eprintln!(
+            "  Load errors:   {} (transcript failed to load from the provider)",
+            report.load_errors
+        );
+    }
+
+    if report.has_inconsistencies() {
+        // Cap the listed accessions so a badly-mismatched reference set does not
+        // flood the terminal; the count above is the authoritative total.
+        const MAX_LISTED: usize = 50;
+        eprintln!();
+        eprintln!(
+            "  WARNING: {} coding transcript(s) have a non-initiator CDS start codon \
+             (neither ATG nor CTG/GTG/TTG — cdot CDS coordinates inconsistent with \
+             the transcript FASTA):",
+            report.inconsistent.len()
+        );
+        for inc in report.inconsistent.iter().take(MAX_LISTED) {
+            eprintln!(
+                "    {} (starts with {})",
+                inc.transcript_id, inc.observed_start_codon
+            );
+        }
+        if report.inconsistent.len() > MAX_LISTED {
+            eprintln!(
+                "    ... and {} more",
+                report.inconsistent.len() - MAX_LISTED
+            );
+        }
+    } else {
+        eprintln!("  All examined coding transcripts start with a recognized initiator.");
     }
 
     Ok(())
