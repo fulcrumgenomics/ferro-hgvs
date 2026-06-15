@@ -293,13 +293,26 @@ impl<'a> VcfAnnotator<'a> {
 
     /// Annotate a VCF record with INFO fields
     pub fn annotate(&self, vcf: &VcfRecord) -> Result<VcfRecord, FerroError> {
+        let mut annotated = vcf.clone();
+        self.annotate_into(&mut annotated)?;
+        Ok(annotated)
+    }
+
+    /// Annotate a VCF record in place, adding HGVS INFO fields.
+    ///
+    /// Identical in effect to [`annotate`](Self::annotate) but mutates `vcf`
+    /// directly instead of cloning it, so callers that own the record (the CLI,
+    /// which discards it after writing) avoid a per-record clone of the whole
+    /// record — chrom/ref/alt/id strings plus the INFO map. Records with no
+    /// overlapping transcript are left untouched (and pay no allocation).
+    pub fn annotate_into(&self, vcf: &mut VcfRecord) -> Result<(), FerroError> {
         let annotator = MultiIsoformAnnotator::new(self.db);
+        // `result` is owned (does not borrow `vcf`), so we can mutate `vcf`
+        // below without a borrow conflict.
         let result = annotator.annotate(vcf)?;
 
-        let mut annotated = vcf.clone();
-
         if result.annotations.is_empty() {
-            return Ok(annotated);
+            return Ok(());
         }
 
         if self.use_ann_field {
@@ -310,16 +323,16 @@ impl<'a> VcfAnnotator<'a> {
                 .map(|ann| self.build_ann_value(ann))
                 .collect();
 
-            annotated.info.insert(
+            vcf.info.insert(
                 INFO_ANN.to_string(),
                 InfoValue::String(ann_values.join(",")),
             );
         } else {
             // Use separate INFO fields
-            self.add_info_fields(&mut annotated, &result.annotations);
+            self.add_info_fields(vcf, &result.annotations);
         }
 
-        Ok(annotated)
+        Ok(())
     }
 
     /// Add individual INFO fields from annotations

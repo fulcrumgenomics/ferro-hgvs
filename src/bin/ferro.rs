@@ -932,10 +932,10 @@ fn run_annotate_vcf(
                 }
             } else {
                 in_header = false;
-                // Parse and annotate
-                if let Ok(record) = parse_vcf_line(&line) {
-                    let annotated = annotator.annotate(&record)?;
-                    writeln!(writer, "{}", annotated)?;
+                // Parse and annotate in place (we own the parsed record).
+                if let Ok(mut record) = parse_vcf_line(&line) {
+                    annotator.annotate_into(&mut record)?;
+                    writeln!(writer, "{}", record)?;
                 } else {
                     writeln!(writer, "{}", line)?;
                 }
@@ -977,8 +977,8 @@ fn run_annotate_vcf(
                 }
                 let annotated: Vec<Result<String, FerroError>> = pool.install(|| {
                     chunk
-                        .par_iter()
-                        .map(|r| annotator.annotate(r).map(|a| a.to_string()))
+                        .par_iter_mut()
+                        .map(|r| annotator.annotate_into(r).map(|()| r.to_string()))
                         .collect()
                 });
                 for line in annotated {
@@ -987,9 +987,9 @@ fn run_annotate_vcf(
             }
         } else {
             for record in reader.records() {
-                let record = record?;
-                let annotated = annotator.annotate(&record)?;
-                writeln!(writer, "{}", annotated)?;
+                let mut record = record?;
+                annotator.annotate_into(&mut record)?;
+                writeln!(writer, "{}", record)?;
             }
         }
     }
