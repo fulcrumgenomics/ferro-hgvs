@@ -71,14 +71,29 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NM_000088.3:c.-50A>G",
     "NM_000088.3:c.*100A>G",
     "NM_000088.3:c.*1G>A",
-    // --- non-substitution edits (must fall back) ---
+    // --- plain del/dup (now fast-pathed; must agree with the generic parser) ---
     "NM_000088.3:c.459del",
     "NM_000088.3:c.459_460del",
     "NM_000088.3:c.459dup",
+    "NM_000088.3:c.459_460dup",
+    "NC_000001.11:g.12345del",
+    "NC_000001.11:g.12345dup",
+    "NC_000001.11:g.12345_12350del",
+    "NC_000001.11:g.12345_12350dup",
+    "ENST00000357033.8:c.100_200del",
+    "LRG_1:g.5000_5010dup",
+    "GRCh38(chr1):g.12345_12350del",
+    // --- del/dup edges that must defer to (and agree with) the generic parser ---
+    "NC_000001.11:g.200_100del", // inverted range: generic rejects a deletion
+    "NC_000001.11:g.200_100dup", // inverted range: generic accepts a duplication
+    "NC_000001.11:g.100_100del", // degenerate range (start == end)
+    "NC_000001.11:g.12345delA",  // trailing reference sequence
+    "NC_000001.11:g.12345del3",  // trailing explicit length
+    "NM_000088.3:c.459_460dupAC", // trailing sequence on a dup
+    // --- other non-substitution edits (fall back) ---
     "NM_000088.3:c.459_460insACGT",
     "NM_000088.3:c.459_460delinsAC",
     "NM_000088.3:c.459_460inv",
-    "NC_000001.11:g.12345_12350del",
     // --- whitespace / trimming edges ---
     "  NC_000001.11:g.12345A>G  ",
     "\tNM_000088.3:c.459A>G\n",
