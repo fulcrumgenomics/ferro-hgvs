@@ -200,6 +200,19 @@ pub trait ReferenceProvider {
         self.genomic_placement(parent)
     }
 
+    /// Resolve a legacy LOVD gene-model selector (`GENE`, `GENE_v001`) on a
+    /// genomic reference to a transcript accession (#500/#637).
+    ///
+    /// `selector` is the gene-symbol selector verbatim (e.g. `"TIMM8B_v001"`).
+    /// Returns the gene's reference-standard transcript accession (e.g.
+    /// `"NM_012459.4"`) for a bare gene or `_v001`, or `None` to decline (an
+    /// unknown gene, a higher locus version `_v002…`, or a provider with no
+    /// gene-model summary ingested). Declining preserves the input selector
+    /// rather than emitting a guessed transcript.
+    fn resolve_legacy_gene_selector(&self, _selector: &str) -> Option<String> {
+        None
+    }
+
     /// Get a sequence region
     ///
     /// # Arguments

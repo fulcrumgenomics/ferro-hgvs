@@ -3271,6 +3271,40 @@ mod tests {
         );
     }
 
+    /// #637: a legacy gene-model selector on a genomic reference
+    /// (`NG_900.1(GENE1_v001):c.…`) resolves to the gene's transcript via the
+    /// normalize-first step in projection, so it no longer fails with
+    /// "Reference not found: NG_900.1" — it projects onto the resolved `NM_`.
+    #[test]
+    fn legacy_gene_model_selector_projects_via_normalize_rewrite() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        provider.add_legacy_gene_model("GENE1", "NM_TX2.1");
+        let vp = VariantProjector::new(projector, provider);
+
+        let proj = vp
+            .project("NG_900.1(GENE1_v001):c.4C>A", "NM_TX2.1")
+            .expect("legacy gene-model selector must resolve and project, not error on NG_");
+        let coding = proj
+            .coding
+            .as_ref()
+            .expect("coding axis present")
+            .to_string();
+        assert!(
+            coding.contains("NM_TX2.1"),
+            "the GENE1_v001 selector must resolve to the transcript: {coding}"
+        );
+    }
+
     /// #652: a range-reference insertion (`ins<start>_<end>`) on an `NG_`
     /// genomic input must resolve to the literal parent bases — the range-ref
     /// endpoints are in the `NG_` parent frame and, if left unresolved through

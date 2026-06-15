@@ -5,6 +5,7 @@
 pub mod annotation;
 pub mod authoritative;
 pub mod fasta;
+pub mod legacy_selector;
 pub mod loader;
 pub mod mock;
 pub mod multi_fasta;
