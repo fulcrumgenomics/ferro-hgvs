@@ -1818,6 +1818,31 @@ mod normalization_transformations {
         );
     }
 
+    /// A multi-base insertion that duplicates the immediately-preceding
+    /// reference (single copy, no further tandem repeat) must collapse to a
+    /// duplication (#487, HGVS recommendations/DNA/duplication.md). The
+    /// pre-existing ins→dup path only collapsed short/tandem-repeat units.
+    ///
+    /// The single-copy `ACGT` tract sits at 1-based positions 145–148, isolated
+    /// by `GGGG` before and `TTTT` after, embedded in long `C` filler so the
+    /// 100bp normalization window stays in-bounds. Inserting `ACGT` after
+    /// position 148 duplicates 145–148 → `g.145_148dup`. (3' rule does not
+    /// shift: the base after the insertion point is `T`, the insert starts
+    /// with `A`.)
+    #[test]
+    fn test_insertion_becomes_dup_multibase_single_copy_genomic() {
+        let genome = format!("{}GGGGACGTTTTT{}", "C".repeat(140), "C".repeat(140));
+        let mut provider = MockProvider::with_test_data();
+        provider.add_genomic_sequence("NC_000001.11", genome);
+        let normalizer = Normalizer::new(provider);
+        let v = parse_hgvs("NC_000001.11:g.148_149insACGT").expect("parse");
+        let out = format!("{}", normalizer.normalize(&v).expect("normalize"));
+        assert_eq!(
+            out, "NC_000001.11:g.145_148dup",
+            "multi-base single-copy insertion should collapse to dup, got '{out}'"
+        );
+    }
+
     // =========================================================================
     // INSERTION → REPEAT NOTATION TESTS
     // Homopolymer insertions become repeat notation
