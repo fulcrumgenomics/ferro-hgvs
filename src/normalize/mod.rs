@@ -4083,6 +4083,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
+    /// Fetch a genomic window addressed by **1-based inclusive** coordinates.
+    ///
+    /// All genomic coordinates inside the normalizer's intronic / boundary-
+    /// spanning paths are 1-based: `Exon::genomic_start/end` are 1-based, and
+    /// every coordinate derived from them via `CoordinateMapper` (`cds_to_genomic`,
+    /// `cds_to_genomic_with_intron`, `genomic_to_cds_intronic`) is 1-based too.
+    /// `ReferenceProvider::get_genomic_sequence`, by contrast, is **0-based
+    /// half-open** (`seq[start..end]`). Calling it with a 1-based `start` reads
+    /// one base too far in the +forward direction, which silently corrupts the
+    /// homopolymer the shuffle inspects at an exon/intron junction (and only
+    /// there — non-shuffling variants round-trip correctly because
+    /// `new_g = seq_start + rel - 1` cancels the error, which is why this hid
+    /// until minus-strand junction cases like `NM_004992.3:c.378-17del`).
+    ///
+    /// Converting the 1-based inclusive `[start, end]` request to the 0-based
+    /// half-open `[start - 1, end)` the provider expects keeps the callers'
+    /// `rel = g - seq_start + 1` arithmetic correct: the base at 1-based
+    /// `start` lands at index 0 of the returned string.
+    fn get_genomic_sequence_1based(
+        &self,
+        chromosome: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        self.provider
+            .get_genomic_sequence(chromosome, start.saturating_sub(1), end)
+    }
+
     /// Normalize an intronic CDS variant
     ///
     /// This converts the intronic position to genomic coordinates, normalizes
@@ -4181,10 +4209,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (seq_start, seq_end) =
             intronic_window_bounds(g_start, g_end, intron_g_start, intron_g_end, window);
 
-        // Fetch genomic sequence
-        let genomic_seq = self
-            .provider
-            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+        // Fetch genomic sequence (1-based window; see `get_genomic_sequence_1based`)
+        let genomic_seq = self.get_genomic_sequence_1based(chromosome, seq_start, seq_end)?;
 
         // Calculate the variant position relative to the fetched sequence
         let rel_start = (g_start - seq_start) + 1; // 1-based
@@ -4379,10 +4405,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (seq_start, seq_end) =
             intronic_window_bounds(g_start, g_end, intron_g_start, intron_g_end, window);
 
-        // Fetch genomic sequence
-        let genomic_seq = self
-            .provider
-            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+        // Fetch genomic sequence (1-based window; see `get_genomic_sequence_1based`)
+        let genomic_seq = self.get_genomic_sequence_1based(chromosome, seq_start, seq_end)?;
 
         // Calculate the variant position relative to the fetched sequence
         let rel_start = (g_start - seq_start) + 1; // 1-based
@@ -4526,12 +4550,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
 
         // Fetch genomic sequence with window for normalization
+        // (1-based window; see `get_genomic_sequence_1based`).
         let window = self.config.window_size;
         let seq_start = g_start.saturating_sub(window);
         let seq_end = g_end.saturating_add(window);
-        let genomic_seq = self
-            .provider
-            .get_genomic_sequence(chromosome, seq_start, seq_end)?;
+        let genomic_seq = self.get_genomic_sequence_1based(chromosome, seq_start, seq_end)?;
 
         // Calculate relative positions (1-based)
         let rel_start = (g_start - seq_start) + 1;
@@ -7670,30 +7693,23 @@ mod tests {
     /// - Strand: Plus
     /// - Chromosome: chr1
     ///
-    /// Genomic layout (chr1):
-    /// Position: 1000                   1020  1030                   1050  1060                   1080
-    ///           |-------- Exon 1 ------|      |-------- Exon 2 ------|      |-------- Exon 3 ------|
-    ///           ATGCCCAAAGGGTTTAGGCCC       AAAGGGTTTAGGCCCAAAAAA       GGGTTTAGGCCCAAATGA
-    ///                                 ^^^  ^^^                   ^^^  ^^^
-    ///                              intron 1                   intron 2
+    /// Genomic layout (chr1). Genomic coordinates are 1-based (matching real
+    /// cdot data); the gene region begins at g.1001 (after 1000 bp of padding):
     ///
     /// Transcript positions (tx):
-    /// - Exon 1: tx 1-20 = genomic 1000-1019
-    /// - Intron 1: genomic 1020-1029 (10 bp)
-    /// - Exon 2: tx 21-40 = genomic 1030-1049
-    /// - Intron 2: genomic 1050-1059 (10 bp)
-    /// - Exon 3: tx 41-58 = genomic 1060-1077
+    /// - Exon 1: tx 1-20 = genomic 1001-1020
+    /// - Intron 1: genomic 1021-1030 (10 bp)
+    /// - Exon 2: tx 21-40 = genomic 1031-1050
+    /// - Intron 2: genomic 1051-1060 (10 bp)
+    /// - Exon 3: tx 41-58 = genomic 1061-1078
     ///
     /// CDS: starts at tx 1 (no 5' UTR for simplicity)
     /// CDS positions: c.1 = tx 1, c.20 = tx 20 (last of exon 1), c.21 = tx 21 (first of exon 2)
     ///
-    /// Intron 1 sequence (g.1020-1029): "GTAAGCTAGG" (10 bp)
-    ///   - c.20+1 = g.1020 (G)
-    ///   - c.20+10 = g.1029 (G)
-    ///   - c.21-10 = g.1020 (G)
-    ///   - c.21-1 = g.1029 (G)
+    /// Intron 1 (g.1021-1030): "GTAAGCTAAA" (10 bp)
+    ///   - c.20+1 = g.1021, c.20+10 = c.21-1 = g.1030
     ///
-    /// Intron 2 sequence (g.1050-1059): "GTAAGTAAGG" (10 bp)
+    /// Intron 2 (g.1051-1060): "AAAGTAAGGG" (10 bp)
     fn make_boundary_test_provider() -> MockProvider {
         use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
         use std::sync::OnceLock;
@@ -7712,29 +7728,32 @@ mod tests {
         // Gene region: exon1 + intron1 + exon2 + intron2 + exon3
         // = 20 + 10 + 20 + 10 + 18 = 78bp
         //
-        // Genomic: 900-999 (padding) + 1000-1019 (exon1) + 1020-1029 (intron1) +
-        //          1030-1049 (exon2) + 1050-1059 (intron2) + 1060-1077 (exon3) + 1078+ (padding)
+        // Genomic coordinates are 1-based (matching real cdot data). The 1000-byte
+        // padding occupies 1-based positions 1-1000 (0-based string indices 0-999),
+        // so the gene region begins at 1-based g.1001 (string index 1000):
+        //   exon1 g.1001-1020, intron1 g.1021-1030, exon2 g.1031-1050,
+        //   intron2 g.1051-1060, exon3 g.1061-1078, then trailing padding.
         let mut genomic_seq = String::new();
 
-        // Padding before (positions 0-999, 1000 bytes at 0-based)
+        // Padding before (1-based g.1-1000, 1000 bytes at 0-based indices 0-999)
         for _ in 0..1000 {
             genomic_seq.push('N');
         }
 
-        // Exon 1 (positions 1000-1019, 0-based 1000-1019)
+        // Exon 1 (g.1001-1020)
         genomic_seq.push_str("ATGCCCAAAGGGTTTAGGCC");
 
-        // Intron 1 (positions 1020-1029) - with splice consensus
-        // Note: The intron has AAA at the end (1027-1029) to test shifting
+        // Intron 1 (g.1021-1030) - with splice consensus
+        // Note: The intron has AAA at the end (g.1028-1030) to test shifting
         genomic_seq.push_str("GTAAGCTAAA");
 
-        // Exon 2 (positions 1030-1049)
+        // Exon 2 (g.1031-1050)
         genomic_seq.push_str("AAAGGGTTTAGGCCCAAAAA");
 
-        // Intron 2 (positions 1050-1059) - with AAA at start for testing
+        // Intron 2 (g.1051-1060) - with AAA at start for testing
         genomic_seq.push_str("AAAGTAAGGG");
 
-        // Exon 3 (positions 1060-1077)
+        // Exon 3 (g.1061-1078)
         genomic_seq.push_str("GGGTTTAGGCCCAAATGA");
 
         // Padding after (100 bytes)
@@ -7745,7 +7764,7 @@ mod tests {
         // Add genomic sequence to provider
         provider.add_genomic_sequence("chr1", genomic_seq);
 
-        // Create transcript with exons that have genomic coordinates
+        // Create transcript with exons that have genomic coordinates (1-based)
         provider.add_transcript(Transcript {
             id: "NM_BOUNDARY.1".to_string(),
             gene_symbol: Some("BOUNDARY".to_string()),
@@ -7754,13 +7773,13 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(58),
             exons: vec![
-                Exon::with_genomic(1, 1, 20, 1000, 1019),
-                Exon::with_genomic(2, 21, 40, 1030, 1049),
-                Exon::with_genomic(3, 41, 58, 1060, 1077),
+                Exon::with_genomic(1, 1, 20, 1001, 1020),
+                Exon::with_genomic(2, 21, 40, 1031, 1050),
+                Exon::with_genomic(3, 41, 58, 1061, 1078),
             ],
             chromosome: Some("chr1".to_string()),
-            genomic_start: Some(1000),
-            genomic_end: Some(1077),
+            genomic_start: Some(1001),
+            genomic_end: Some(1078),
             genome_build: Default::default(),
             mane_status: ManeStatus::None,
             refseq_match: None,
@@ -7780,7 +7799,8 @@ mod tests {
     /// content at the gene region is the reverse complement of each exon
     /// (so RC of the genomic plus strand recovers `tx_seq`), and the
     /// exon-to-genomic mapping is reversed: tx 1 maps to the high genomic
-    /// end (g.1077) and tx 58 to the low end (g.1000). Intron 2 is laid
+    /// end (g.1078) and tx 58 to the low end (g.1001). Genomic coordinates are
+    /// 1-based (the 1000-byte padding occupies g.1-1000). Intron 2 is laid
     /// out so that c.40+1..c.40+4 read as `A` in transcript view, putting
     /// the boundary-spanning dup inside the same 5-A tract that the plus
     /// fixture exercises.
@@ -7796,17 +7816,17 @@ mod tests {
         for _ in 0..1000 {
             genomic_seq.push('N');
         }
-        // Exon 3 region (g.1000-1017): RC of tx[41..58] ("GGGTTTAGGCCCAAATGA").
+        // Exon 3 region (g.1001-1018): RC of tx[41..58] ("GGGTTTAGGCCCAAATGA").
         genomic_seq.push_str("TCATTTGGGCCTAAACCC");
-        // Intron 2 (g.1018-1027): the last four bases (g.1024-1027) are 'T',
+        // Intron 2 (g.1019-1028): the last four bases (g.1025-1028) are 'T',
         // so c.40+1..c.40+4 read as 'A' in transcript view, extending the
         // exonic poly-A across the boundary.
         genomic_seq.push_str("AAAGTATTTT");
-        // Exon 2 region (g.1028-1047): RC of tx[21..40] ("AAAGGGTTTAGGCCCAAAAA").
+        // Exon 2 region (g.1029-1048): RC of tx[21..40] ("AAAGGGTTTAGGCCCAAAAA").
         genomic_seq.push_str("TTTTTGGGCCTAAACCCTTT");
-        // Intron 1 (g.1048-1057): mirrors the plus fixture's intron 1 content.
+        // Intron 1 (g.1049-1058): mirrors the plus fixture's intron 1 content.
         genomic_seq.push_str("GTAAGCTAAA");
-        // Exon 1 region (g.1058-1077): RC of tx[1..20] ("ATGCCCAAAGGGTTTAGGCC").
+        // Exon 1 region (g.1059-1078): RC of tx[1..20] ("ATGCCCAAAGGGTTTAGGCC").
         genomic_seq.push_str("GGCCTAAACCCTTTGGGCAT");
         for _ in 0..100 {
             genomic_seq.push('N');
@@ -7822,13 +7842,13 @@ mod tests {
             cds_start: Some(1),
             cds_end: Some(58),
             exons: vec![
-                Exon::with_genomic(1, 1, 20, 1058, 1077),
-                Exon::with_genomic(2, 21, 40, 1028, 1047),
-                Exon::with_genomic(3, 41, 58, 1000, 1017),
+                Exon::with_genomic(1, 1, 20, 1059, 1078),
+                Exon::with_genomic(2, 21, 40, 1029, 1048),
+                Exon::with_genomic(3, 41, 58, 1001, 1018),
             ],
             chromosome: Some("chr1".to_string()),
-            genomic_start: Some(1000),
-            genomic_end: Some(1077),
+            genomic_start: Some(1001),
+            genomic_end: Some(1078),
             genome_build: Default::default(),
             mane_status: ManeStatus::None,
             refseq_match: None,
@@ -7842,10 +7862,53 @@ mod tests {
     }
 
     #[test]
+    fn test_get_genomic_sequence_1based_addresses_one_based_inclusive() {
+        // Regression guard for the intronic/boundary-spanning off-by-one:
+        // `get_genomic_sequence_1based` must treat its `[start, end]` as 1-based
+        // inclusive, mapping the base at 1-based position `p` to 0-based index
+        // `p - 1` of the underlying 0-based-half-open provider. Dropping the
+        // `-1` conversion (the original bug) silently reads one base too far in
+        // the +forward direction, corrupting the homopolymer the shuffle
+        // inspects at an exon/intron junction (e.g. NM_004992.3:c.378-17del).
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("chrX", "ACGTACGTTT");
+        let normalizer = Normalizer::new(provider);
+
+        // 1-based position 1 is the first base.
+        assert_eq!(
+            normalizer
+                .get_genomic_sequence_1based("chrX", 1, 1)
+                .unwrap(),
+            "A"
+        );
+        // 1-based inclusive [1, 4] spans the first four bases.
+        assert_eq!(
+            normalizer
+                .get_genomic_sequence_1based("chrX", 1, 4)
+                .unwrap(),
+            "ACGT"
+        );
+        // An interior window: 1-based inclusive [5, 7].
+        assert_eq!(
+            normalizer
+                .get_genomic_sequence_1based("chrX", 5, 7)
+                .unwrap(),
+            "ACG"
+        );
+        // A single interior base: 1-based position 4 is 'T'.
+        assert_eq!(
+            normalizer
+                .get_genomic_sequence_1based("chrX", 4, 4)
+                .unwrap(),
+            "T"
+        );
+    }
+
+    #[test]
     fn test_boundary_spanning_exonic_to_intronic_del() {
         // Test: c.20_20+3del - deletion from last exon base into intron
-        // c.20 = last base of exon 1 (C at g.1019)
-        // c.20+3 = 3rd intronic base (A at g.1022)
+        // c.20 = last base of exon 1 (C at g.1020)
+        // c.20+3 = 3rd intronic base (A at g.1023)
         // Deletes: C (exonic) + GTA (intronic) = 4 bases
         //
         // This should normalize without error (using genomic space)
@@ -7872,11 +7935,11 @@ mod tests {
     #[test]
     fn test_boundary_spanning_intronic_to_exonic_del() {
         // Test: c.21-3_23del - deletion from intron into exon
-        // c.21-3 = 3rd base before exon 2 (A at g.1027)
-        // c.23 = 3rd base of exon 2 (A at g.1032)
+        // c.21-3 = 3rd base before exon 2 (A at g.1028)
+        // c.23 = 3rd base of exon 2 (A at g.1033)
         // Deletes: AAA (intronic) + AAA (exonic) = 6 bases
         //
-        // The intron ends with AAA (g.1027-1029) and exon starts with AAA (g.1030-1032)
+        // The intron ends with AAA (g.1028-1030) and exon starts with AAA (g.1031-1033)
         // This is a repeat, so normalization might shift
         let provider = make_boundary_test_provider();
         let normalizer = Normalizer::new(provider);
@@ -7935,8 +7998,8 @@ mod tests {
     #[test]
     fn test_boundary_splice_site_minus1() {
         // Test: c.21-1_22del - deletion of splice acceptor + first exon bases
-        // c.21-1 = last intronic base before exon 2 (A at g.1029)
-        // c.22 = 2nd base of exon 2 (A at g.1031)
+        // c.21-1 = last intronic base before exon 2 (A at g.1030)
+        // c.22 = 2nd base of exon 2 (A at g.1032)
         let provider = make_boundary_test_provider();
         let normalizer = Normalizer::new(provider);
 
@@ -8463,11 +8526,11 @@ mod tests {
 
         let mut provider = MockProvider::new();
 
-        // Create transcript: 2 exons with an intron in between
-        // Exon 1: tx 1-100, genomic 1000-1099
-        // Intron: genomic 1100-1199
-        // Exon 2: tx 101-200, genomic 1200-1299
-        // Sequence in the intron around position 1100+: AAAA... (for shifting test)
+        // Create transcript: 2 exons with an intron in between (1-based genomic)
+        // Exon 1: tx 1-100, genomic 1001-1100
+        // Intron: genomic 1101-1200
+        // Exon 2: tx 101-200, genomic 1201-1300
+        // Sequence in the intron around position 1101+: AAAA... (for shifting test)
         let tx_sequence = "A".repeat(200);
 
         provider.add_transcript(Transcript {
@@ -8478,12 +8541,12 @@ mod tests {
             cds_start: None,
             cds_end: None,
             exons: vec![
-                Exon::with_genomic(1, 1, 100, 1000, 1099),
-                Exon::with_genomic(2, 101, 200, 1200, 1299),
+                Exon::with_genomic(1, 1, 100, 1001, 1100),
+                Exon::with_genomic(2, 101, 200, 1201, 1300),
             ],
             chromosome: Some("chr1".to_string()),
-            genomic_start: Some(1000),
-            genomic_end: Some(1299),
+            genomic_start: Some(1001),
+            genomic_end: Some(1300),
             genome_build: GenomeBuild::GRCh38,
             mane_status: ManeStatus::None,
             refseq_match: None,
@@ -8493,8 +8556,8 @@ mod tests {
             cached_introns: std::sync::OnceLock::new(),
         });
 
-        // Add genomic sequence for chr1 around positions 1000-1299
-        // Make the intron region (1100-1199) be "AGCT" repeated to test shifting
+        // Add genomic sequence for chr1 around 1-based positions 1001-1300
+        // Make the intron region (g.1101-1200) be "AGCT" repeated to test shifting
         let mut genomic = String::new();
         for _ in 0..325 {
             genomic.push_str("AGCT");

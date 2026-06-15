@@ -107,11 +107,11 @@ fn rc(seq: &str) -> String {
 mod intronic_plus_strand {
     use super::*;
 
-    /// 2-exon plus-strand transcript layout (`p = PAD_OFFSET`; coordinates
-    /// follow ferro's 0-indexed genomic convention, i.e. `Exon::with_genomic`
-    /// takes the same numbering as the slice indices in
-    /// `MockProvider::get_genomic_sequence` — exon 1 spans bytes `[p, p+30)`
-    /// of the genomic sequence):
+    /// 2-exon plus-strand transcript layout (`p = PAD_OFFSET + 1`; genomic
+    /// coordinates are 1-based, matching real cdot data — `Exon::with_genomic`
+    /// genomic positions are 1-based HGVS positions, so the first core base
+    /// (0-based slice index `PAD_OFFSET`) is at 1-based genomic position
+    /// `p = PAD_OFFSET + 1`; exon 1 spans 1-based `[p, p+29]`):
     /// ```text
     ///   Exon 1: tx 1-30   genomic p    .. p+29
     ///   Intron 1 (30 bp): genomic p+30 .. p+59
@@ -129,7 +129,7 @@ mod intronic_plus_strand {
         let core = format!("{}{}{}", exon1, intron_content, exon2);
         let genomic = format!("{}{}{}", PAD, core, PAD);
 
-        let p = PAD_OFFSET;
+        let p = PAD_OFFSET + 1;
         let tx_seq = format!("{}{}", exon1, exon2);
         let transcript = Transcript::new(
             "NM_INTRON.1".to_string(),
@@ -286,7 +286,7 @@ mod intronic_minus_strand {
         let core = format!("{}{}{}", exon2_genomic, intron_genomic, exon1_genomic);
         let genomic = format!("{}{}{}", PAD, core, PAD);
 
-        let p = PAD_OFFSET;
+        let p = PAD_OFFSET + 1;
         let tx_seq = format!("{}{}", exon1_tx_view, exon2_tx_view);
         let transcript = Transcript::new(
             "NM_MINTRON.1".to_string(),
@@ -297,7 +297,7 @@ mod intronic_minus_strand {
             Some(60),
             vec![
                 // Exon 1 (coding start) maps to the rightmost genomic block.
-                // 0-indexed genomic ranges, following ferro's convention.
+                // 1-based genomic ranges (matching real cdot data).
                 Exon::with_genomic(1, 1, 30, p + 60, p + 89),
                 Exon::with_genomic(2, 31, 60, p, p + 29),
             ],
@@ -367,7 +367,7 @@ mod utr_5prime {
         let core = format!("{}{}", utr5, cds);
         let genomic = format!("{}{}{}", PAD, core, PAD);
 
-        let p = PAD_OFFSET;
+        let p = PAD_OFFSET + 1;
         let tx_seq = format!("{}{}", utr5, cds);
         let transcript = Transcript::new(
             "NM_UTR5.1".to_string(),
@@ -376,7 +376,7 @@ mod utr_5prime {
             tx_seq,
             Some(31), // CDS starts at tx 31 → c.1
             Some(60), // CDS ends at tx 60 → c.30
-            // 0-indexed genomic range: 60 bases at [p, p+60).
+            // 1-based genomic range: 60 bases at [p, p+60).
             vec![Exon::with_genomic(1, 1, 60, p, p + 59)],
             Some("chr_utr5".to_string()),
             Some(p),
@@ -430,7 +430,7 @@ mod utr_3prime {
         let core = format!("{}{}", cds, utr3);
         let genomic = format!("{}{}{}", PAD, core, PAD);
 
-        let p = PAD_OFFSET;
+        let p = PAD_OFFSET + 1;
         let tx_seq = format!("{}{}", cds, utr3);
         let transcript = Transcript::new(
             "NM_UTR3.1".to_string(),
@@ -439,7 +439,7 @@ mod utr_3prime {
             tx_seq,
             Some(1),
             Some(30),
-            // 0-indexed genomic range: 60 bases at [p, p+60).
+            // 1-based genomic range: 60 bases at [p, p+60).
             vec![Exon::with_genomic(1, 1, 60, p, p + 59)],
             Some("chr_utr3".to_string()),
             Some(p),
@@ -485,7 +485,7 @@ mod cds_proper_still_gates {
     fn make_provider() -> MockProvider {
         let tx = "GCCAAAAACCGGTACCGGTACCGGTACCGT"; // 30 bp; A[5] at tx 4..8
         let genomic = format!("{}{}{}", PAD, tx, PAD);
-        let p = PAD_OFFSET;
+        let p = PAD_OFFSET + 1;
         let transcript = Transcript::new(
             "NM_CDSP.1".to_string(),
             Some("CDSPGENE".to_string()),
@@ -493,7 +493,7 @@ mod cds_proper_still_gates {
             tx.to_string(),
             Some(1),
             Some(30),
-            // 0-indexed genomic range: 30 bases at [p, p+30).
+            // 1-based genomic range: 30 bases at [p, p+30).
             vec![Exon::with_genomic(1, 1, 30, p, p + 29)],
             Some("chr_cdsp".to_string()),
             Some(p),

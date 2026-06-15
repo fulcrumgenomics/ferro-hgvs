@@ -29,7 +29,7 @@ fn make_minus_strand_utr_fixture() -> MockProvider {
 
     let tx_seq = "AAAAATGCATGCATGCATGCAAAAA";
 
-    let p = PAD_OFFSET;
+    let p = PAD_OFFSET + 1;
     let transcript = Transcript::new(
         "NM_MUTR.1".to_string(),
         Some("MUTRGENE".to_string()),
