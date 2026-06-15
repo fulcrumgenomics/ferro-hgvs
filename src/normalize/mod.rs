@@ -2097,11 +2097,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // gets the build-correct chromosome. If the accession-aware lookup
             // fails, fall back to the plain transcript we already fetched.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
-            // Check if both positions are intronic and in the same intron
-            if start_pos.is_intronic() && end_pos.is_intronic() {
+            // Both intronic *in the same intron* → the dedicated intronic
+            // shuffle (which assumes a single enclosing intron). Both intronic
+            // in DIFFERENT introns (#670: a deletion spanning intron→exon→intron)
+            // falls through to the genomic boundary path, which sizes its window
+            // to the full span — `normalize_intronic_cds` would bound the shuffle
+            // to only `start`'s intron and so never shift such a span.
+            if start_pos.is_intronic()
+                && end_pos.is_intronic()
+                && self.same_intron(&transcript, start_pos, end_pos)
+            {
                 return self.normalize_intronic_cds(variant, &transcript, start_pos, end_pos, edit);
             }
-            // Variant spans exon-intron boundary - normalize in genomic space
+            // One endpoint exon/intron boundary, or a multi-intron span: genomic space.
             return self.normalize_boundary_spanning_cds(
                 variant,
                 &transcript,
@@ -2214,6 +2222,64 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
+
+        // #670: apply the 3' rule across the exon/intron junction. The
+        // exon-confined shuffle above only sees spliced (exon) bases, so a
+        // purely-exonic indel that comes to rest at an exon's 3' edge is never
+        // given the chance to continue into the following intron — even though
+        // the spec's "exception 3' rule" (numbering.md NOTE; deletion.md
+        // exon/intron border) requires it. When the shuffle lands exactly at
+        // the exon boundary, a downstream intron exists, and we have genomic
+        // context, re-run the shuffle in genomic space (which spans the
+        // junction naturally) and adopt the result only if it actually crossed
+        // into the intron. The trigger is a rare edge landing, so the hot path
+        // is untouched; it is 3'-only (5'/VCF shuffles stay exon-confined).
+        // Perf note: an edge-landing variant whose genomic re-shuffle does NOT
+        // cross still pays one `transcript_for_intronic()` lookup + one
+        // `normalize_boundary_spanning_cds` fetch, then discards them. That cost
+        // is confined to variants ending exactly at an exon's 3' base; if a bulk
+        // 3'-direction `c.` workload regresses, this is the place to memoize.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && new_tx_end == exon_only.right
+            && self.provider.has_genomic_data()
+        {
+            // Prefer the accession-aware transcript so an NG/NC-parented input
+            // resolves the build-correct chromosome; fall back to the plain
+            // transcript. Clone keeps `transcript` available for the fall-through.
+            let boundary_transcript =
+                transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
+            if boundary_transcript.chromosome.is_some() {
+                // Engine errors (no following intron — e.g. last exon — no
+                // genomic alignment, …) fall through to the exon-confined
+                // result, the safe pre-#670 behavior. The exon/EXON suppression
+                // rule is preserved structurally: the genomic shuffle boundary
+                // is capped at the adjacent intron's far edge (never the next
+                // exon), so a homopolymer spanning an exon/exon junction can
+                // shift into the intron but never bridge into the downstream
+                // exon.
+                if let Ok((boundary_variant, boundary_warnings)) = self
+                    .normalize_boundary_spanning_cds(
+                        variant,
+                        &boundary_transcript,
+                        start_pos,
+                        end_pos,
+                        edit,
+                    )
+                {
+                    let crossed_into_intron = matches!(
+                        &boundary_variant,
+                        HV::Cds(cv)
+                            if cv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
+                                || cv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
+                    );
+                    if crossed_into_intron {
+                        let mut combined = warnings;
+                        combined.extend(boundary_warnings);
+                        return Ok((boundary_variant, combined));
+                    }
+                }
+            }
+        }
 
         // #349: detect whether the axis clamp was operative for this
         // shuffle. For 5'-direction shuffles the clamp fires when the
@@ -2692,11 +2758,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Switch to the accession-aware lookup so an NG/NC-parented input
             // gets the build-correct chromosome.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
-            // Route intronic tx variants to the intronic normalization path
+            // Route intronic tx variants to the intronic normalization path.
+            // NOTE (#704): unlike `normalize_cds`, the `n.` path does not yet
+            // apply the #670 exon/intron 3' rule — no `same_intron` split for
+            // multi-intron spans and no purely-exonic→intron routing — and
+            // boundary-spanning `n.` below is still unimplemented. `n.`/`r.`
+            // parity with `c.` is tracked in #704.
             if start_pos.is_intronic() && end_pos.is_intronic() {
                 return self.normalize_intronic_tx(variant, &transcript, start_pos, end_pos, edit);
             }
-            // Variant spans exon-intron boundary - not yet supported for n. coords
+            // Variant spans exon-intron boundary - not yet supported for n. coords (#704)
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
                 detail: None,
@@ -3731,6 +3802,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
+        // NOTE (#704): the `r.` path does not normalize intronic variants at all
+        // (it errors), so the #670 exon/intron 3' rule does not apply here. `r.`
+        // parity with `c.` is tracked in #704.
         if start_pos.is_intronic() || end_pos.is_intronic() {
             return Err(FerroError::IntronicVariant {
                 variant: format!("{}", variant),
@@ -4676,24 +4750,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
             (g_start, g_end)
         };
 
-        // Fetch genomic sequence with window for normalization
-        // (1-based window; see `get_genomic_sequence_1based`).
-        // Clamp to the 1-based minimum: near a contig start `saturating_sub`
-        // can reach 0, which has no valid 1-based coordinate and would shift
-        // the `rel = g - seq_start + 1` arithmetic below.
+        // The shuffle boundary is the genomic union of the relevant exon and
+        // intron; size the fetch window to cover it (not just the variant ±
+        // window), so a long adjacent intron does not push the boundary past
+        // the fetched sequence. Mirrors the intronic path's `intronic_window_bounds`.
+        let (bound_g_start, bound_g_end) =
+            self.get_boundary_spanning_genomic_extent(transcript, &mapper, start_pos, end_pos)?;
+
+        // Fetch genomic sequence (1-based window; see `get_genomic_sequence_1based`).
         let window = self.config.window_size;
-        let seq_start = g_start.saturating_sub(window).max(1);
-        let seq_end = g_end.saturating_add(window);
+        let (seq_start, seq_end) =
+            intronic_window_bounds(g_start, g_end, bound_g_start, bound_g_end, window);
         let genomic_seq = self.get_genomic_sequence_1based(chromosome, seq_start, seq_end)?;
 
         // Calculate relative positions (1-based)
         let rel_start = (g_start - seq_start) + 1;
         let rel_end = (g_end - seq_start) + 1;
 
-        // Determine normalization boundaries
-        // For boundary-spanning variants, use the union of exon and intron boundaries
-        let boundaries =
-            self.get_boundary_spanning_limits(transcript, &mapper, start_pos, end_pos, seq_start)?;
+        // Boundaries within the fetched window. If the huge-intron cap in
+        // `intronic_window_bounds` fired, the boundary may lie outside the
+        // window; clamp into range so the shuffle simply can't reach that far
+        // (the homopolymer it follows ends well before any realistic cap).
+        let seq_len = genomic_seq.len() as u64;
+        let boundaries = Boundaries::new(
+            bound_g_start.saturating_sub(seq_start) + 1,
+            (bound_g_end.saturating_sub(seq_start) + 1).min(seq_len),
+        );
 
         // On minus-strand transcripts the genomic-strand window is the
         // reverse complement of the transcript view, but the variant's edit
@@ -4781,61 +4863,144 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
-    /// Calculate normalization boundaries for boundary-spanning variants
+    /// True iff two intronic CDS positions lie in the **same** intron. Used by
+    /// the dispatch to tell a normal intronic variant (one intron → the
+    /// dedicated intronic shuffle) from a deletion spanning multiple introns
+    /// (→ the genomic boundary path, #670). If the intron can't be resolved for
+    /// either endpoint, defaults to `true` so the conservative single-intron
+    /// path is kept (no behavior change for those).
+    fn same_intron(
+        &self,
+        transcript: &crate::reference::transcript::Transcript,
+        a: &CdsPos,
+        b: &CdsPos,
+    ) -> bool {
+        use crate::convert::CoordinateMapper;
+        let mapper = CoordinateMapper::new(transcript);
+        let intron_number = |p: &CdsPos| -> Option<u32> {
+            let tx = mapper.cds_to_tx(p).ok()?;
+            let base = u64::try_from(tx.base).ok()?;
+            transcript
+                .find_intron_at_tx_boundary(base, p.offset.unwrap_or(0))
+                .map(|i| i.number)
+        };
+        match (intron_number(a), intron_number(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
+    }
+
+    /// Genomic extent within which a boundary-spanning variant may shift: the
+    /// union (in genomic coordinates) of the relevant exon and intron.
     ///
-    /// Returns the genomic region within which we can shift the variant,
-    /// which is the union of the exon and intron containing the variant ends.
-    fn get_boundary_spanning_limits(
+    /// Three cases:
+    /// - **One endpoint intronic** (classic boundary-spanning): union the exon
+    ///   of the exonic endpoint with the intron of the intronic endpoint.
+    /// - **Both endpoints exonic** (#670): a purely-exonic indel resting at an
+    ///   exon's 3' edge that must be free to shift across the exon/intron
+    ///   junction under the 3' rule. Union the exon containing the 3' endpoint
+    ///   with the intron *immediately following* it (in transcript order).
+    ///   Capping at that single intron — never the next exon — preserves the
+    ///   exon/exon suppression rule (numbering.md NOTE; deletion.md).
+    /// - **Both endpoints intronic in different introns** (#670): a deletion
+    ///   spanning intron→exon→intron. Union the two endpoints' introns; the
+    ///   exon(s) between them fall inside the min/max span.
+    ///
+    /// Returns `(combined_g_start, combined_g_end)` (inclusive, 1-based). The
+    /// caller sizes the fetch window to cover this so the shuffle boundary is
+    /// always in-window (a long adjacent intron must not push the boundary past
+    /// the fetched sequence — issue #573 / bug surfaced by #670).
+    fn get_boundary_spanning_genomic_extent(
         &self,
         transcript: &crate::reference::transcript::Transcript,
         mapper: &crate::convert::CoordinateMapper,
         start_pos: &CdsPos,
         end_pos: &CdsPos,
-        seq_start: u64,
-    ) -> Result<Boundaries, FerroError> {
-        // Find the genomic extent of the region we can shift within
-        // This is the union of:
-        // - The exon containing the exonic position
-        // - The intron containing the intronic position
+    ) -> Result<(u64, u64), FerroError> {
+        let exon_at_pos =
+            |pos: &CdsPos| -> Result<&crate::reference::transcript::Exon, FerroError> {
+                let tx_pos = mapper.cds_to_tx(pos)?;
+                let tx_pos_base =
+                    u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
+                        msg: format!(
+                            "Negative transcript position {} during boundary normalization",
+                            tx_pos.base
+                        ),
+                    })?;
+                transcript
+                    .exon_at(tx_pos_base)
+                    .ok_or_else(|| FerroError::ConversionError {
+                        msg: "Could not find exon for boundary normalization".to_string(),
+                    })
+            };
 
-        // Identify which position is exonic and which is intronic
-        let (exonic_pos, intronic_pos) = if start_pos.is_intronic() {
-            (end_pos, start_pos)
+        // #670: both endpoints intronic in DIFFERENT introns (a deletion
+        // spanning intron→exon→intron). Union the two introns' genomic coords;
+        // the exon(s) between them are covered by the min/max span. Bounding at
+        // the two outer intron edges keeps the shuffle from sliding out of the
+        // spanned region into a flanking exon.
+        if start_pos.is_intronic() && end_pos.is_intronic() {
+            let intron_genomic = |pos: &CdsPos| -> Result<(u64, u64), FerroError> {
+                let tx = mapper.cds_to_tx(pos)?;
+                let base = u64::try_from(tx.base).map_err(|_| FerroError::ConversionError {
+                    msg: format!(
+                        "Negative transcript position {} during boundary normalization",
+                        tx.base
+                    ),
+                })?;
+                let intron = transcript
+                    .find_intron_at_tx_boundary(base, pos.offset.unwrap_or(0))
+                    .ok_or_else(|| FerroError::ConversionError {
+                        msg: "Could not find intron for boundary normalization".to_string(),
+                    })?;
+                match (intron.genomic_start, intron.genomic_end) {
+                    (Some(s), Some(e)) => Ok((s, e)),
+                    _ => Err(FerroError::ConversionError {
+                        msg: "Intron has no genomic coordinates".to_string(),
+                    }),
+                }
+            };
+            let (a_start, a_end) = intron_genomic(start_pos)?;
+            let (b_start, b_end) = intron_genomic(end_pos)?;
+            return Ok((a_start.min(b_start), a_end.max(b_end)));
+        }
+
+        let (exon, intron) = if start_pos.is_intronic() || end_pos.is_intronic() {
+            // Classic boundary-spanning: one endpoint exonic, one intronic.
+            let (exonic_pos, intronic_pos) = if start_pos.is_intronic() {
+                (end_pos, start_pos)
+            } else {
+                (start_pos, end_pos)
+            };
+            let exon = exon_at_pos(exonic_pos)?;
+            let tx_boundary = mapper.cds_to_tx(intronic_pos)?;
+            let tx_boundary_base =
+                u64::try_from(tx_boundary.base).map_err(|_| FerroError::ConversionError {
+                    msg: format!(
+                        "Negative transcript position {} during boundary normalization",
+                        tx_boundary.base
+                    ),
+                })?;
+            let offset = intronic_pos.offset.unwrap_or(0);
+            let intron = transcript
+                .find_intron_at_tx_boundary(tx_boundary_base, offset)
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Could not find intron for boundary normalization".to_string(),
+                })?;
+            (exon, intron)
         } else {
-            (start_pos, end_pos)
+            // #670: purely-exonic edge variant. Union the exon containing the 3'
+            // endpoint with the intron immediately downstream of it (its 5' tx
+            // boundary is the exon's 3' end, `c.{exon.end}+1`).
+            let exon = exon_at_pos(end_pos)?;
+            let intron = transcript
+                .find_intron_at_tx_boundary(exon.end, 1)
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Could not find following intron for boundary normalization".to_string(),
+                })?;
+            (exon, intron)
         };
 
-        // Get exon boundaries in genomic coords
-        let tx_pos = mapper.cds_to_tx(exonic_pos)?;
-        let tx_pos_base = u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
-            msg: format!(
-                "Negative transcript position {} during boundary normalization",
-                tx_pos.base
-            ),
-        })?;
-        let exon = transcript
-            .exon_at(tx_pos_base)
-            .ok_or_else(|| FerroError::ConversionError {
-                msg: "Could not find exon for boundary normalization".to_string(),
-            })?;
-
-        // Get intron boundaries in genomic coords
-        let tx_boundary = mapper.cds_to_tx(intronic_pos)?;
-        let tx_boundary_base =
-            u64::try_from(tx_boundary.base).map_err(|_| FerroError::ConversionError {
-                msg: format!(
-                    "Negative transcript position {} during boundary normalization",
-                    tx_boundary.base
-                ),
-            })?;
-        let offset = intronic_pos.offset.unwrap_or(0);
-        let intron = transcript
-            .find_intron_at_tx_boundary(tx_boundary_base, offset)
-            .ok_or_else(|| FerroError::ConversionError {
-                msg: "Could not find intron for boundary normalization".to_string(),
-            })?;
-
-        // Get genomic coordinates from exon and intron
         let (exon_g_start, exon_g_end): (u64, u64) = match (exon.genomic_start, exon.genomic_end) {
             (Some(s), Some(e)) => (s, e),
             _ => {
@@ -4844,7 +5009,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 })
             }
         };
-
         let (intron_g_start, intron_g_end): (u64, u64) =
             match (intron.genomic_start, intron.genomic_end) {
                 (Some(s), Some(e)) => (s, e),
@@ -4855,15 +5019,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 }
             };
 
-        // Union of exon and intron genomic coordinates
-        let combined_start = exon_g_start.min(intron_g_start);
-        let combined_end = exon_g_end.max(intron_g_end);
-
-        // Convert to relative positions (1-based within our fetched sequence)
-        let rel_start = combined_start.saturating_sub(seq_start) + 1;
-        let rel_end = combined_end.saturating_sub(seq_start) + 1;
-
-        Ok(Boundaries::new(rel_start, rel_end))
+        Ok((
+            exon_g_start.min(intron_g_start),
+            exon_g_end.max(intron_g_end),
+        ))
     }
 
     /// Core normalization for nucleic acid edits
@@ -8231,6 +8390,230 @@ mod tests {
         );
     }
 
+    /// #670 exon/EXON-suppression fixture (plus strand, 1-based genomic).
+    ///
+    /// A poly-A spans the exon1/exon2 junction in the spliced transcript
+    /// (c.9,c.10 in exon 1; c.11,c.12 in exon 2 = `AAAA`), but the intron
+    /// between them starts with a non-A base, so the genomic-space run is
+    /// broken at the junction. A `c.10del` must therefore stay at `c.10`
+    /// (the upstream exon's last base): it may not shift into the non-matching
+    /// intron, and it may not bridge across the exon/exon junction into exon 2.
+    fn make_exon_exon_homopolymer_provider() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        let mut provider = MockProvider::new();
+
+        // tx (spliced): exon1 "ATGCACGTAA" (c.10=A, c.9=A) + exon2 "AACCGGTTAC"
+        let tx_seq = "ATGCACGTAAAACCGGTTAC"; // 20 bp
+        let mut genomic_seq = String::new();
+        for _ in 0..1000 {
+            genomic_seq.push('N'); // padding g.1-1000
+        }
+        genomic_seq.push_str("ATGCACGTAA"); // exon 1, g.1001-1010
+        genomic_seq.push_str("GTAAGTACAG"); // intron 1, g.1011-1020 (starts non-A)
+        genomic_seq.push_str("AACCGGTTAC"); // exon 2, g.1021-1030
+        for _ in 0..100 {
+            genomic_seq.push('N');
+        }
+        provider.add_genomic_sequence("chr1", genomic_seq);
+
+        provider.add_transcript(Transcript {
+            id: "NM_EXEX.1".to_string(),
+            gene_symbol: Some("EXEX".to_string()),
+            strand: Strand::Plus,
+            sequence: Some(tx_seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(20),
+            exons: vec![
+                Exon::with_genomic(1, 1, 10, 1001, 1010),
+                Exon::with_genomic(2, 11, 20, 1021, 1030),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1001),
+            genomic_end: Some(1030),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        provider
+    }
+
+    #[test]
+    fn test_purely_exonic_dup_shifts_across_exon_intron_boundary() {
+        // #670 edit-type coverage: a purely-exonic dup at the exon's 3' edge
+        // must also apply the 3' rule across the junction (same poly-A run as
+        // the del test: exon 2 ends AAAAA, intron 2 starts AAA).
+        let provider = make_boundary_test_provider();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_BOUNDARY.1:c.40dup").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert!(
+            output.contains(":c.40+") && (output.contains("dup") || output.contains("A[")),
+            "purely-exonic dup must shift across the exon/intron junction into the intron, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_purely_exonic_ins_canonicalizes_and_crosses_boundary() {
+        // #670 edit-type coverage: an insertion of `A` into the exon-2 poly-A
+        // (c.38_39insA) canonicalizes to a dup; in the junction-spanning A-run
+        // the 3'-most dup lands intronic. Exercises the ins→dup path through the
+        // genomic re-shuffle.
+        let provider = make_boundary_test_provider();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_BOUNDARY.1:c.38_39insA").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert_eq!(
+            output, "NM_BOUNDARY.1:c.40+3dup",
+            "purely-exonic insertion into the junction-spanning A-run must \
+             canonicalize to a dup that shifts into the intron, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_minus_strand_purely_exonic_del_shifts_across_boundary() {
+        // #670 minus-strand mirror: c.40del on NM_BOUNDARYM.1. The poly-A run is
+        // c.36-40 (exon 2, AAAAA) continuing into the intron (c.40+1.. read as A
+        // in transcript view), so the 3'-most deletion lands intronic.
+        let provider = make_boundary_test_provider_minus();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_BOUNDARYM.1:c.40del").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert!(
+            output.contains(":c.40+") && output.contains("del"),
+            "minus-strand purely-exonic del must shift across the exon/intron \
+             junction into the intron, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_purely_exonic_del_5prime_direction_stays_exon_confined() {
+        // #670 is 3'-only. Under 5' (VCF) shuffle direction, a purely-exonic del
+        // must NOT cross into the intron — it shifts toward the 5' end within
+        // the exon, never emitting an intronic offset.
+        let provider = make_boundary_test_provider();
+        let normalizer = Normalizer::with_config(
+            provider,
+            NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+        );
+        let variant = parse_hgvs("NM_BOUNDARY.1:c.40del").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert!(
+            !output.contains('+') && !output.contains('-'),
+            "5'-direction exonic del must stay exon-confined (no intronic offset), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_exon_exon_junction_homopolymer_del_not_bridged() {
+        // #670 exon/EXON suppression: a poly-A spanning the exon1/exon2 junction
+        // (AAAA across c.9..c.12 in the spliced transcript), but the intron
+        // between the exons starts with a non-A base. `c.10del` must stay at
+        // `c.10` — not shift into the non-matching intron, and not bridge across
+        // the exon/exon junction into exon 2 (which would give `c.11del`).
+        let provider = make_exon_exon_homopolymer_provider();
+        let normalizer = Normalizer::new(provider);
+        let variant = parse_hgvs("NM_EXEX.1:c.10del").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert_eq!(
+            output, "NM_EXEX.1:c.10del",
+            "exon/exon-junction-spanning homopolymer must not bridge into the \
+             next exon or shift into a non-matching intron, got: {}",
+            output
+        );
+    }
+
+    /// #670 sub-problem B fixture (plus strand, 1-based genomic): a poly-A run
+    /// spans intron 1 + exon 2 + intron 2 — `g.1017-1034` (= c.11-4 .. c.20+4),
+    /// 18 A's. A deletion with BOTH endpoints intronic but in DIFFERENT introns
+    /// exercises the multi-intron-span path (`normalize_intronic_cds` assumes a
+    /// single intron and would not shift it).
+    fn make_multi_intron_homopolymer_provider() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        let mut provider = MockProvider::new();
+        let tx_seq = "ATGCACGTACAAAAAAAAAACGTACGTACG"; // exon1 + 10·A (exon2) + exon3
+        let mut g = String::new();
+        for _ in 0..1000 {
+            g.push('N'); // padding g.1-1000
+        }
+        g.push_str("ATGCACGTAC"); // exon 1   g.1001-1010
+        g.push_str("GTAAGCAAAA"); // intron 1 g.1011-1020 (last 4 = A)
+        g.push_str("AAAAAAAAAA"); // exon 2   g.1021-1030 (10 A)
+        g.push_str("AAAAGTACGT"); // intron 2 g.1031-1040 (first 4 = A)
+        g.push_str("CGTACGTACG"); // exon 3   g.1041-1050
+        for _ in 0..100 {
+            g.push('N');
+        }
+        provider.add_genomic_sequence("chr1", g);
+        provider.add_transcript(Transcript {
+            id: "NM_MI.1".to_string(),
+            gene_symbol: Some("MI".to_string()),
+            strand: Strand::Plus,
+            sequence: Some(tx_seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(30),
+            exons: vec![
+                Exon::with_genomic(1, 1, 10, 1001, 1010),
+                Exon::with_genomic(2, 11, 20, 1021, 1030),
+                Exon::with_genomic(3, 21, 30, 1041, 1050),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1001),
+            genomic_end: Some(1050),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        provider
+    }
+
+    #[test]
+    fn test_multi_intron_spanning_del_normalizes_across_span() {
+        // #670 sub-problem B: a deletion whose endpoints are intronic but in
+        // DIFFERENT introns (c.11-2 in intron 1, c.20+2 in intron 2, spanning
+        // all of exon 2). Dispatch must route it to the genomic boundary path
+        // (not `normalize_intronic_cds`, which assumes one intron and would
+        // leave it unshifted). 14 A's removed from the 18-A run (c.11-4..c.20+4)
+        // canonicalizes to repeat notation `A[4]` over the full run extent.
+        let normalizer = Normalizer::new(make_multi_intron_homopolymer_provider());
+        let variant = parse_hgvs("NM_MI.1:c.11-2_20+2del").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert_eq!(
+            output, "NM_MI.1:c.11-4_20+4A[4]",
+            "multi-intron-spanning deletion in a homopolymer must normalize \
+             across the full span, got: {}",
+            output
+        );
+
+        // Idempotent.
+        let reparsed = parse_hgvs(&output).unwrap();
+        let again = format!(
+            "{}",
+            Normalizer::new(make_multi_intron_homopolymer_provider())
+                .normalize(&reparsed)
+                .unwrap()
+        );
+        assert_eq!(
+            again, output,
+            "multi-intron-span normalization must be idempotent"
+        );
+    }
+
     #[test]
     fn test_boundary_spanning_del_emits_repeat_notation() {
         // Test: `c.40_40+3del` — deletion spanning exon-intron boundary
@@ -8283,6 +8666,53 @@ mod tests {
         assert!(
             output.contains("delins") || output.contains(">"),
             "Should remain a delins or become substitution, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_purely_exonic_del_shifts_across_exon_intron_boundary() {
+        // #670: a purely-exonic deletion at the last base of an exon must apply
+        // the 3' rule ACROSS the exon/intron junction (numbering.md:22-26 NOTE;
+        // deletion.md exon/intron border). In the boundary fixture (1-based
+        // genomic), exon 2 ends with AAAAA (c.36-40, g.1046-1050) and intron 2
+        // starts with AAA (c.40+1..+3, g.1051-1053): an 8-A run straddling the
+        // c.40 junction. Deleting one A (c.40del) is 3'-most at the last A of
+        // the run, which is intronic: c.40+3del. ferro previously kept it
+        // exon-confined (c.40del).
+        let provider = make_boundary_test_provider();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_BOUNDARY.1:c.40del").unwrap();
+        let output = format!("{}", normalizer.normalize(&variant).unwrap());
+        assert_eq!(
+            output, "NM_BOUNDARY.1:c.40+3del",
+            "exonic deletion in a junction-spanning homopolymer must shift into the intron"
+        );
+    }
+
+    #[test]
+    fn test_purely_exonic_del_stays_exon_confined_without_genomic_context() {
+        // #670 guard: with NO genomic context (bare NM_, no chromosome), there is
+        // no intron to shift into, so a purely-exonic deletion must remain
+        // exon-confined. MockProvider::with_test_data's NM_001234.1 has no
+        // genomic coordinates.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        // A plain exonic deletion resolves and normalizes within the transcript;
+        // it must not attempt (or error on) a genomic-space boundary shift.
+        let variant = parse_hgvs("NM_001234.1:c.5del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "bare-NM exonic del should normalize exon-confined, got: {:?}",
+            result.err()
+        );
+        let output = format!("{}", result.unwrap());
+        assert!(
+            !output.contains('+') && !output.contains('-'),
+            "bare-NM exonic del must stay exon-confined (no intronic offset), got: {}",
             output
         );
     }
