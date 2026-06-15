@@ -121,17 +121,36 @@ On a coding DNA reference (c.), repeat notation unit[N] is permitted only for re
 | `NG_012337.1(NM_012459.2):c.6C[4]` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.6delinsCCCC` | normalized | spec_citation | — | — |
 
+### 3' rule across exon/intron boundaries (#670)
+
+Spec: `background/numbering.md#DNAc (exception 3' rule NOTE); recommendations/DNA/deletion.md L51-64`
+
+ferro shuffles genomic-context c./n. variants in spliced transcript space (cross_boundaries hardcoded false), which has no intronic bases, so it under-applies the 3' rule at exon/intron and intron/exon junctions. The spec applies the 3' rule across these junctions (suppressing it only at exon/exon junctions). The fix requires 3'-shifting in genomic coordinate space, which depends on the c↔g projection keystone (#642/#647/#616). Tracked in #670.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_007107.2(NM_004992.3):c.378-17delT` | normalized | known_bug | — | #670 |
+| `NG_008835.1(NM_022153.2):c.677-21_704+62del` | normalized | known_bug | — | #670 |
+| `NG_008835.1(NM_022153.2):c.82del` | normalized | known_bug | — | #670 |
+| `NG_009497.1(NM_206933.2):c.8682-19dupT` | normalized | known_bug | — | #670 |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
+| `ENSG00000184937.16(ENST00000452863.10):c.9del` | normalized | known_bug | — | #671 |
+| `ENSG00000204370.13(ENST00000375549.8):c.100del` | normalized | known_bug | — | #671 |
+| `ENST00000375549.8:c.100del` | normalized | known_bug | — | #671 |
+| `ENST00000375549:c.100del` | normalized | known_bug | — | #671 |
+| `ENST00000452863.10:c.9del` | normalized | known_bug | — | #671 |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
+| `NM_003002.2:c.273del` | normalized | known_bug | — | #672 |
 
 ## Disposition tallies
 
 | axis | accepted_divergence | known_bug | improvement | spec_citation |
 |---|---:|---:|---:|---:|
 | infos | 4 | 0 | 0 | 0 |
-| normalized | 1 | 0 | 24 | 6 |
+| normalized | 1 | 10 | 24 | 6 |
 | protein_description | 0 | 0 | 0 | 19 |
