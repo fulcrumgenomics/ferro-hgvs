@@ -2175,30 +2175,50 @@ impl PyBatchProcessor {
         })
     }
 
-    /// Parse multiple HGVS strings
+    /// Parse multiple HGVS strings.
+    ///
+    /// The batch is processed across a thread pool with the GIL released, so it
+    /// scales across cores and does not block other Python threads. Results are
+    /// returned in input order.
     ///
     /// Args:
     ///     variants: List of HGVS strings to parse
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
     ///
     /// Returns:
     ///     BatchResult with parsed variants and errors
-    fn parse(&self, variants: Vec<String>) -> PyBatchResult {
-        PyBatchResult {
-            inner: self.processor.parse(&variants),
-        }
+    #[pyo3(signature = (variants, workers=0))]
+    fn parse(&self, py: Python<'_>, variants: Vec<String>, workers: usize) -> PyBatchResult {
+        let inner = py.detach(|| self.processor.parse_parallel(&variants, workers));
+        PyBatchResult { inner }
     }
 
-    /// Parse and normalize multiple HGVS strings
+    /// Parse and normalize multiple HGVS strings.
+    ///
+    /// The batch is processed across a thread pool with the GIL released, so it
+    /// scales across cores and does not block other Python threads. Results are
+    /// returned in input order.
     ///
     /// Args:
     ///     variants: List of HGVS strings to parse and normalize
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
     ///
     /// Returns:
     ///     BatchResult with normalized variants and errors
-    fn parse_and_normalize(&self, variants: Vec<String>) -> PyBatchResult {
-        PyBatchResult {
-            inner: self.processor.parse_and_normalize(&variants),
-        }
+    #[pyo3(signature = (variants, workers=0))]
+    fn parse_and_normalize(
+        &self,
+        py: Python<'_>,
+        variants: Vec<String>,
+        workers: usize,
+    ) -> PyBatchResult {
+        let inner = py.detach(|| {
+            self.processor
+                .parse_and_normalize_parallel(&variants, workers)
+        });
+        PyBatchResult { inner }
     }
 
     /// Parse multiple HGVS strings with progress callback
