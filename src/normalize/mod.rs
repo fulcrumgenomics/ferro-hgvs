@@ -5073,11 +5073,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // Get the repeat unit as bytes
                 let repeat_unit: Vec<u8> = seq.bases().iter().map(|b| b.to_u8()).collect();
                 let pos_idx = hgvs_pos_to_index(start); // Convert 1-based to 0-based
+                let end_idx = hgvs_pos_to_index(end); // 0-based inclusive end of input range
 
                 // Normalize the repeat
                 match rules::normalize_repeat(
                     ref_seq,
                     pos_idx,
+                    end_idx,
                     &repeat_unit,
                     *specified_count,
                     is_coding,

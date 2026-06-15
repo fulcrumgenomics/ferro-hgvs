@@ -850,6 +850,98 @@ mod mutalyzer_verified {
         );
     }
 
+    /// 3'-rule unit rotation for repeats (HGVS DNA/repeated.md L44: "applying
+    /// the 3'rule, the repeat has to be described as an AGC repeat"). The
+    /// reference `CAACAACAAC` tract (c.3-12, CDS context, unit length 3 so the
+    /// coding codon exception does not apply) can be tiled as `CAA[3]` at
+    /// c.3-11 or, shifted one base 3', as `AAC[3]` at c.4-12. The 3' rule
+    /// mandates the 3'-most placement, so an expansion must be reported in the
+    /// rotated `AAC` phase, not the input's `CAA` phase.
+    #[test]
+    fn test_repeat_rotates_to_3prime_canonical_unit() {
+        let seq = "GGCAACAACAACGG";
+        let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
+        let out = normalize_to_string(provider, "NM_TEST.1:c.3CAA[6]");
+        assert_eq!(
+            out, "NM_TEST.1:c.4_12AAC[6]",
+            "expansion must adopt the 3'-most repeat unit phase (AAC), got '{out}'"
+        );
+    }
+
+    /// Counterpart to the rotation test: a tract bounded by a non-matching base
+    /// must NOT rotate. The `CAT` tract (c.3-11) is flanked by `G` on both
+    /// sides, so the base after the tract (`G`) never equals the unit's first
+    /// base (`C`) — the 3'-shift loop does not fire and the input `CAT` phase is
+    /// preserved. Pins the common no-rotation path against future edits.
+    #[test]
+    fn test_repeat_does_not_rotate_when_tract_is_boundary_blocked() {
+        let seq = "GGCATCATCATGG";
+        let provider = provider_with_transcript("NM_TEST.1", seq, 1, seq.len() as u64);
+        let out = normalize_to_string(provider, "NM_TEST.1:c.3CAT[6]");
+        assert_eq!(
+            out, "NM_TEST.1:c.3_11CAT[6]",
+            "boundary-blocked tract must keep its input unit phase (CAT), got '{out}'"
+        );
+    }
+
+    /// Real-world (mutalyzer-verified) evidence that an under-specified repeat
+    /// range absorbs flanking reference copies. The sequence is the actual
+    /// LRG_303 genomic prefix (g.1-110, extracted from the LRG record): a `GT`
+    /// tract at g.1-4 (`GTGT`, 2 copies) bounded by `C` at g.5.
+    ///
+    /// Mutalyzer corpus: `LRG_303:g.3_4GT[5]` -> `LRG_303:g.1_4GT[6]`. The input
+    /// states only the 3' copy (g.3_4); the 5' reference copy (g.1_2) is not
+    /// touched by the edit, so the canonical count over the re-anchored full
+    /// tract is 5 + 1 = 6. (`[N]` is the count for the stated units; reference
+    /// repeat copies flanking the stated range are absorbed on re-anchoring.)
+    #[test]
+    fn test_repeat_underspecified_range_absorbs_flank_real_lrg303() {
+        let seq = "GTGTCTGCCAAGGGTGCCAGCACAGCCGCCCCACTCCAGGGGAAGAGGAGTGCCAGCCC\
+                   TTACCCACCTGAGTGGGCACAGTGTAGCATTTATTCATTAGCCCCCACACT";
+        let mut provider = MockProvider::with_test_data();
+        provider.add_genomic_sequence("LRG_303", seq);
+        let normalizer = Normalizer::new(provider);
+        let v = parse_hgvs("LRG_303:g.3_4GT[5]").expect("parse");
+        let out = format!("{}", normalizer.normalize(&v).expect("normalize"));
+        assert_eq!(
+            out, "LRG_303:g.1_4GT[6]",
+            "under-specified range must absorb the 5' reference copy (5+1=6), got '{out}'"
+        );
+    }
+
+    /// Counterpart to `..._absorbs_flank_real_lrg303`, which exercises the 5'
+    /// (`five_prime_bases`) absorption path. This pins the 3'
+    /// (`three_prime_bases`) branch of the flank-absorption arithmetic in
+    /// `normalize_repeat` (src/normalize/rules.rs): when the stated range begins
+    /// at the true 5' edge of the tract but stops short of its 3' end, the
+    /// trailing (3') reference repeat copies are not touched by the edit and so
+    /// are absorbed on re-anchoring to the full tract.
+    ///
+    /// This is the shape of the doc-cited mutalyzer case `c.*16_*18T[8]` ->
+    /// `c.*16_*19T[9]` (one trailing reference copy absorbed). Here a `GT` tract
+    /// at g.2-7 (`GTGTGT`, 3 copies) is bounded by `C` on both sides; the input
+    /// states only the 5'-most copy (g.2_3) and expands it to 5, so the two
+    /// untouched trailing reference copies (g.4-7) are absorbed: 5 + 2 = 7.
+    #[test]
+    fn test_repeat_underspecified_range_absorbs_3prime_flank() {
+        // Reuses the LRG_303 setup of the 5' test (same provider/accession path),
+        // but with a constructed sequence whose `GT` tract sits at g.1-6
+        // (`GTGTGT`, 3 copies) bounded by `C` at g.7. The input states only the
+        // 5'-most copy (g.1_2) and expands it to 5; the two untouched trailing
+        // (3') reference copies (g.3-6) are absorbed on re-anchoring: 5 + 2 = 7.
+        let seq = "GTGTGTCAAGGGTGCCAGCACAGCCGCCCCACTCCAGGGGAAGAGGAGTGCCAGCCC\
+                   TTACCCACCTGAGTGGGCACAGTGTAGCATTTATTCATTAGCCCCCACACT";
+        let mut provider = MockProvider::with_test_data();
+        provider.add_genomic_sequence("LRG_303", seq);
+        let normalizer = Normalizer::new(provider);
+        let v = parse_hgvs("LRG_303:g.1_2GT[5]").expect("parse");
+        let out = format!("{}", normalizer.normalize(&v).expect("normalize"));
+        assert_eq!(
+            out, "LRG_303:g.1_6GT[7]",
+            "under-specified range must absorb the trailing 3' reference copies (5+2=7), got '{out}'"
+        );
+    }
+
     #[test]
     fn test_repeat_stays_repeat() {
         // When repeat count > reference count + 1, should stay as repeat
@@ -2300,7 +2392,7 @@ mod benchmark_comparison_tests {
 
     #[test]
     fn test_repeat_expansion_vs_duplication() {
-        // Pattern: c.351_352AG[2]
+        // Pattern: c.351_356AG[2]
         // ferro: c.355_356del (if ref has 3 copies)
         // mutalyzer: c.355_356dup (different interpretation)
         //
@@ -2312,7 +2404,7 @@ mod benchmark_comparison_tests {
 
         let provider = provider_with_utr_transcript("NM_TEST.1", &seq, 1, seq.len() as u64);
 
-        let result = normalize_to_string(provider, "NM_TEST.1:c.351_352AG[2]");
+        let result = normalize_to_string(provider, "NM_TEST.1:c.351_356AG[2]");
 
         // With 3 copies, AG[2] should be a deletion
         assert!(
@@ -2687,7 +2779,7 @@ mod repeat_position_tests {
         );
 
         // Test normalize_repeat - should return Unchanged
-        let result = normalize_repeat(ref_seq, 6, b"CA", 1, false);
+        let result = normalize_repeat(ref_seq, 6, 6, b"CA", 1, false);
         assert!(
             matches!(result, RepeatNormResult::Unchanged),
             "Should return Unchanged when repeat unit not found at position. Got {:?}",
@@ -2711,7 +2803,7 @@ mod repeat_position_tests {
         );
 
         // normalize_repeat with count=1 should produce deletion
-        let result = normalize_repeat(ref_seq, 0, b"CA", 1, false);
+        let result = normalize_repeat(ref_seq, 0, 0, b"CA", 1, false);
         match result {
             RepeatNormResult::Deletion { start, end } => {
                 // Should delete one copy (2 bases) from the 3' end
@@ -3495,7 +3587,7 @@ mod comprehensive_normalization_tests {
             // CAG[2] when ref has 3 = delete one CAG
             let seq = "NNCAGCAGCAGNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5CAG[2]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_11CAG[2]");
             // Should become deletion (removing 3 bases)
             assert!(
                 result.contains("del"),
@@ -3521,7 +3613,7 @@ mod comprehensive_normalization_tests {
             // forbids CT[N], routes to plain del.
             let seq = "AACTCTCTAA"; // 3 CTs at positions 3-8
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_4CT[1]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_8CT[1]");
             assert_eq!(result, "NM_TEST.1:c.5_8del");
         }
 
@@ -3531,7 +3623,7 @@ mod comprehensive_normalization_tests {
             // CAG[3] = reference, should be unchanged or become identity
             let seq = "NNCAGCAGCAGNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5CAG[3]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_11CAG[3]");
             // Should be identity (c.=) or unchanged
             assert!(
                 result.contains("=") || result.contains("CAG[3]"),
@@ -3556,7 +3648,7 @@ mod comprehensive_normalization_tests {
             // CAG[4] = one more than ref = dup
             let seq = "NNCAGCAGCAGNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5CAG[4]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_11CAG[4]");
             assert!(
                 result.contains("dup"),
                 "CAG[4] with 3 copies should become dup, got: {}",
@@ -3585,7 +3677,7 @@ mod comprehensive_normalization_tests {
             // GT[3] = one more than ref = dup one GT
             let seq = "NNGTGTNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_4GT[3]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_6GT[3]");
             assert!(
                 result.contains("dup"),
                 "GT[3] with 2 copies should become dup, got: {}",
@@ -3609,7 +3701,7 @@ mod comprehensive_normalization_tests {
             // CAG[10] = large expansion, stays as repeat
             let seq = "NNCAGCAGCAGNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5CAG[10]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_11CAG[10]");
             assert!(
                 result.contains("CAG[10]"),
                 "Large expansion should stay as repeat, got: {}",
@@ -3639,7 +3731,7 @@ mod comprehensive_normalization_tests {
             // CAG[6] = 3 more than ref, stays as repeat
             let seq = "NNCAGCAGCAGNN";
             let provider = provider_with_transcript("NM_TEST.1", seq);
-            let result = normalize_to_string(provider, "NM_TEST.1:c.3_5CAG[6]");
+            let result = normalize_to_string(provider, "NM_TEST.1:c.3_11CAG[6]");
             assert!(
                 result.contains("CAG[6]"),
                 "Moderate expansion should stay as repeat, got: {}",
