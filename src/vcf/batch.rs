@@ -5,8 +5,6 @@
 
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use crate::error::FerroError;
 use crate::reference::loader::TranscriptDb;
@@ -253,88 +251,6 @@ impl<'a> BatchProcessor<'a> {
     }
 }
 
-/// Parallel batch processor (requires rayon feature)
-#[cfg(feature = "parallel")]
-#[allow(dead_code)]
-pub struct ParallelBatchProcessor<'a> {
-    /// Transcript database
-    db: &'a TranscriptDb,
-    /// Configuration
-    config: BatchConfig,
-}
-
-#[cfg(feature = "parallel")]
-#[allow(dead_code)]
-impl<'a> ParallelBatchProcessor<'a> {
-    /// Create a new parallel batch processor
-    pub fn new(db: &'a TranscriptDb) -> Self {
-        Self {
-            db,
-            config: BatchConfig::new(),
-        }
-    }
-
-    /// Process records in parallel
-    pub fn process_parallel(&self, records: &[VcfRecord]) -> Vec<Result<VcfRecord, FerroError>> {
-        use rayon::prelude::*;
-
-        let annotator = VcfAnnotator::new(self.db);
-
-        records.par_iter().map(|r| annotator.annotate(r)).collect()
-    }
-}
-
-/// Simple iterator-based streaming processor
-#[allow(dead_code)]
-pub struct StreamingProcessor<'a, R: BufRead> {
-    /// Reader
-    reader: R,
-    /// Transcript database
-    db: &'a TranscriptDb,
-    /// Header lines
-    header: Vec<String>,
-    /// Whether header has been consumed
-    header_consumed: bool,
-}
-
-#[allow(dead_code)]
-impl<'a, R: BufRead> StreamingProcessor<'a, R> {
-    /// Create a new streaming processor
-    pub fn new(reader: R, db: &'a TranscriptDb) -> Self {
-        Self {
-            reader,
-            db,
-            header: Vec::new(),
-            header_consumed: false,
-        }
-    }
-
-    /// Get the VCF header lines
-    pub fn header(&mut self) -> Result<&[String], FerroError> {
-        if !self.header_consumed {
-            self.consume_header()?;
-        }
-        Ok(&self.header)
-    }
-
-    /// Consume header lines from the reader
-    fn consume_header(&mut self) -> Result<(), FerroError> {
-        let mut line = String::new();
-        while self.reader.read_line(&mut line)? > 0 {
-            if line.starts_with('#') {
-                self.header.push(line.trim_end().to_string());
-                line.clear();
-            } else {
-                // Put back the first data line by keeping it in a buffer
-                // Note: This is a simplified implementation
-                break;
-            }
-        }
-        self.header_consumed = true;
-        Ok(())
-    }
-}
-
 /// Parse a single VCF line into a record
 fn parse_vcf_line(line: &str) -> Result<VcfRecord, FerroError> {
     use crate::reference::transcript::GenomeBuild;
@@ -375,15 +291,6 @@ fn parse_vcf_line(line: &str) -> Result<VcfRecord, FerroError> {
         samples: Vec::new(),
         genome_build: GenomeBuild::GRCh38,
     })
-}
-
-/// Count-based progress reporter
-#[allow(dead_code)]
-pub fn count_progress(count: &Arc<AtomicUsize>) -> impl Fn(usize, usize) + Send + Sync + Clone {
-    let count = Arc::clone(count);
-    move |current, _total| {
-        count.store(current, Ordering::SeqCst);
-    }
 }
 
 #[cfg(test)]
@@ -713,46 +620,5 @@ mod tests {
 
         let result = processor.process_stream(&input[..], output);
         assert!(result.is_ok());
-    }
-
-    // ===== count_progress Tests =====
-
-    #[test]
-    fn test_count_progress() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let progress = count_progress(&count);
-
-        progress(100, 1000);
-        assert_eq!(count.load(Ordering::SeqCst), 100);
-
-        progress(200, 1000);
-        assert_eq!(count.load(Ordering::SeqCst), 200);
-    }
-
-    // ===== StreamingProcessor Tests =====
-
-    #[test]
-    fn test_streaming_processor_new() {
-        let db = create_test_db();
-        let input = b"##header\n#CHROM\tPOS\tID\tREF\tALT\nchr1\t1050\t.\tA\tG";
-        let reader = BufReader::new(&input[..]);
-
-        let processor = StreamingProcessor::new(reader, &db);
-        assert!(!processor.header_consumed);
-        assert!(processor.header.is_empty());
-    }
-
-    #[test]
-    fn test_streaming_processor_header() {
-        let db = create_test_db();
-        let input = b"##fileformat=VCFv4.2\n##INFO=<ID=DP,Number=1>\n#CHROM\tPOS\tID\tREF\tALT\nchr1\t1050\t.\tA\tG";
-        let reader = BufReader::new(&input[..]);
-
-        let mut processor = StreamingProcessor::new(reader, &db);
-        let header = processor.header().unwrap();
-
-        assert_eq!(header.len(), 3);
-        assert!(header[0].starts_with("##fileformat"));
-        assert!(header[2].starts_with("#CHROM"));
     }
 }
