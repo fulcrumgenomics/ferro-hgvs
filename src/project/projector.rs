@@ -488,7 +488,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // 0. An NG_/LRG_ genomic *input* carries parent-relative coordinates that
         //    cdot cannot map; rewrite it into the chromosome (NC_) frame so the
         //    fan-out below can enumerate and project onto the overlapping
-        //    transcripts (#480 inverse).
+        //    transcripts (#480 inverse). Capture the build the *original* input
+        //    carries before `deanchor` shadows `variant` — the de-anchored form is
+        //    on an `NC_` accession whose build would be circular to read back
+        //    (#653/#713); the parent placement must be selected by the input's
+        //    build, matching what `deanchor` itself used.
+        let input_build = Self::build_hint_for_variant(variant);
         let (variant, parent) = self.deanchor_genomic_parent_input(variant);
         // 1. Normalize once in the genome frame, then fan out across the
         //    overlapping transcripts.
@@ -503,7 +508,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    two bases off from the HGVS-correct, transcript-frame-normalized
         //    position. Re-project each transcript from its own coding form (which
         //    normalizes in the transcript frame), then re-frame under the parent.
-        let placement = self.provider.genomic_placement(&parent);
+        let placement = self
+            .provider
+            .genomic_placement_on_build(&parent, input_build);
         let mut framed = Vec::with_capacity(results.len());
         for r in results {
             let r = match r.coding.as_ref() {
@@ -679,7 +686,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
 
         match self.project_to_genomic_nc(variant)? {
-            HgvsVariant::Genome(gv) => self.reanchor_genome_output(gv),
+            HgvsVariant::Genome(gv) => {
+                self.reanchor_genome_output(gv, Self::build_hint_for_variant(variant))
+            }
             other => Ok(other),
         }
     }
@@ -692,7 +701,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// [`Self::project_to_genomic_nc`]). An `NC_` chromosome parent is already in
     /// the genome frame and is returned unchanged; an `NG_`/`LRG_` parent is
     /// re-anchored into its own frame via
-    /// [`ReferenceProvider::genomic_placement`].
+    /// [`ReferenceProvider::genomic_placement_on_build`].
+    ///
+    /// `build` is the genome build the *original input* carries (from
+    /// [`Self::build_hint_for_variant`]); it selects the parent's build-appropriate
+    /// placement (#653/#713). `None` (a bare `NG_` with no build signal) keeps the
+    /// GRCh38-preferred behavior.
     ///
     /// Shared by the public [`Self::project_to_genomic`] (which propagates the
     /// decline as an error) and the multi-axis single-transcript path in
@@ -709,8 +723,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     fn reanchor_genome_output(
         &self,
         gv: crate::hgvs::variant::GenomeVariant,
+        build: Option<&str>,
     ) -> Result<HgvsVariant, FerroError> {
-        let reanchored = match self.provider.genomic_placement(&gv.accession) {
+        let reanchored = match self
+            .provider
+            .genomic_placement_on_build(&gv.accession, build)
+        {
             Some(placement) => Self::reanchor_genome_to_parent(gv, &placement)?,
             // No placement: an `NC_` chromosome parent is already in the genome
             // frame and passes through unchanged, but an `NG_`/`LRG_` parent
@@ -932,10 +950,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // placement — and the downstream re-anchor / de-anchor steps that stamp
         // `placement.nc` — assume (#646). Fall back to the parent's own build tag
         // (e.g. an explicit `NC_*` parent) when there is no placement.
-        let build_hint = self
-            .provider
-            .genomic_placement(&parent)
-            .and_then(|p| crate::liftover::aliases::infer_genome_build_from_accession(&p.nc))
+        // Prefer the build the *input variant* carries (an explicit `NC_*.10`/`.11`
+        // accession or `genomic_context`, or a `GRCh37(...)` assembly tag) — the
+        // authoritative signal of intended build (#653/#713). Only when the input
+        // is build-agnostic (e.g. a bare `NG_` parent) fall back to the build
+        // implied by the GRCh38-preferred placement, then to the parent's own
+        // version. Deriving the build from the variant first (rather than from the
+        // chosen placement) lets the placement *selection* below honor it, instead
+        // of being circularly fixed to GRCh38.
+        let build_hint = Self::build_hint_for_variant(variant)
+            .or_else(|| {
+                self.provider.genomic_placement(&parent).and_then(|p| {
+                    crate::liftover::aliases::infer_genome_build_from_accession(&p.nc)
+                })
+            })
             .or_else(|| crate::liftover::aliases::infer_genome_build_from_accession(&parent));
         let cdot_mapper = self.projector.mapper();
         let cdot_tx = match build_hint {
@@ -1151,6 +1179,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         use crate::hgvs::interval::GenomeInterval;
         use crate::hgvs::variant::GenomeVariant;
 
+        // The parent placement is selected by the build the input variant carries
+        // (an explicit `NC_*.10`/`.11` or `GRCh37(...)` tag; `None` for a bare
+        // `NG_`, which defaults to GRCh38). `None` keeps the prior GRCh38-preferred
+        // behavior, so this is inert until an explicit build is present (#653/#713).
+        let build = Self::build_hint_for_variant(variant);
+
         // Transcript-coordinate inputs (c./n./r.) carrying an NG_/LRG_
         // genomic_context are taken into the chromosome (NC_) frame here too, so
         // the fan-out below enumerates the OTHER overlapping transcripts
@@ -1165,7 +1199,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if let Some(acc) = cnr_accession {
             if let Some(ctx) = acc.genomic_context.as_deref() {
                 if let Some(placement) = (ctx.prefix.as_ref() == "NG" || ctx.is_lrg())
-                    .then(|| self.provider.genomic_placement(ctx))
+                    .then(|| self.provider.genomic_placement_on_build(ctx, build))
                     .flatten()
                 {
                     if let Ok(HgvsVariant::Genome(nc_gv)) = self.project_to_genomic_nc(variant) {
@@ -1192,7 +1226,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let HgvsVariant::Genome(gv) = variant else {
             return (variant.clone(), None);
         };
-        let Some(placement) = self.provider.genomic_placement(&gv.accession) else {
+        let Some(placement) = self
+            .provider
+            .genomic_placement_on_build(&gv.accession, build)
+        else {
             return (variant.clone(), None);
         };
         let bounds = match (
@@ -2573,7 +2610,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let genomic = match normalized {
             HgvsVariant::Genome(_) => Some(projected_genome),
             _ => match projected_genome {
-                HgvsVariant::Genome(gv) => self.reanchor_genome_output(gv).ok(),
+                HgvsVariant::Genome(gv) => self
+                    .reanchor_genome_output(gv, Self::build_hint_for_variant(normalized))
+                    .ok(),
                 other => Some(other),
             },
         };
