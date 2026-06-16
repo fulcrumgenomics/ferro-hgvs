@@ -222,14 +222,18 @@ impl Inventory {
 }
 
 /// The corpus text fields that may carry reference accessions, for one case:
-/// the input plus the per-axis expected outputs. Error/info/noncoding code
-/// lists carry mutalyzer codes, not accessions, so they are excluded.
+/// the input plus the per-axis expected outputs (including `noncoding`, which
+/// holds full `NG_(NR_):n.` descriptions, not bare codes). `errors`/`infos`
+/// carry mutalyzer codes, not accessions, so they are excluded.
 fn case_reference_texts(case: &super::mutalyzer::Case) -> Vec<String> {
     let mut texts = vec![case.input.clone()];
     texts.extend(case.normalized.clone());
     texts.extend(case.genomic.clone());
     texts.extend(case.protein_description.clone());
     texts.extend(case.rna_description.clone());
+    if let Some(noncoding) = &case.noncoding {
+        texts.extend(noncoding.iter().cloned());
+    }
     if let Some(pairs) = &case.coding_protein_descriptions {
         for pair in pairs {
             texts.extend(pair.iter().cloned());
@@ -402,6 +406,36 @@ mod tests {
             v2.referencing_inputs.iter().cloned().collect::<Vec<_>>(),
             vec!["NM_003002.2:c.273del".to_string()]
         );
+    }
+
+    #[test]
+    fn inventory_scans_noncoding_axis() {
+        // Corpus `noncoding` rows are accession-bearing `NG_(NR_):n.`
+        // descriptions, not bare codes, so both accessions must be captured and
+        // linked to the case input.
+        let fixture = fixture_from_cases(
+            r#"
+            {"input":"NG_007485.1(NM_000077.4):c.151_153del","noncoding":["NG_007485.1(NR_024274.1):n.616+3443_616+3444insGAT"]}
+            "#,
+        );
+        let inv = Inventory::from_fixture(&fixture);
+
+        let ng = inv
+            .entries()
+            .find(|e| e.acc_ref.versioned() == "NG_007485.1")
+            .expect("NG_ from noncoding axis is captured");
+        assert!(ng
+            .referencing_inputs
+            .contains("NG_007485.1(NM_000077.4):c.151_153del"));
+
+        let nr = inv
+            .entries()
+            .find(|e| e.acc_ref.versioned() == "NR_024274.1")
+            .expect("NR_ from noncoding axis is captured");
+        assert_eq!(nr.acc_ref.class, AccessionClass::RefSeqTranscript);
+        assert!(nr
+            .referencing_inputs
+            .contains("NG_007485.1(NM_000077.4):c.151_153del"));
     }
 
     #[test]
