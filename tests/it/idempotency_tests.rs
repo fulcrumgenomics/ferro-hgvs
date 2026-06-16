@@ -14,8 +14,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 
-mod common;
-
 // =============================================================================
 // Fixture Loading
 // =============================================================================
@@ -101,7 +99,7 @@ fn load_edge_cases() -> Vec<String> {
 }
 
 fn load_spec_examples() -> Vec<String> {
-    common::spec_fixture::ensure_spec_fixture();
+    crate::common::spec_fixture::ensure_spec_fixture();
     let content = fs::read_to_string("tests/fixtures/grammar/hgvs_spec_normalization.json")
         .expect("failed to read hgvs_spec_normalization.json");
     let fixture: HgvsSpecFixture =

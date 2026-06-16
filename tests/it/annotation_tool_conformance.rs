@@ -14,7 +14,7 @@ use ferro_hgvs::parse_hgvs;
 /// Some use chromosome notation (21:g.) which is not standard HGVS
 #[test]
 fn test_vep_parser_patterns() {
-    let patterns = include_str!("fixtures/external/vep_parser_hgvs.txt");
+    let patterns = include_str!("../fixtures/external/vep_parser_hgvs.txt");
 
     let mut passed = 0;
     let mut failed = 0;
@@ -44,7 +44,7 @@ fn test_vep_parser_patterns() {
 /// They cannot be parsed as complete HGVS expressions
 #[test]
 fn test_snpeff_patterns() {
-    let patterns = include_str!("fixtures/external/snpeff_hgvs.txt");
+    let patterns = include_str!("../fixtures/external/snpeff_hgvs.txt");
 
     let mut total = 0;
     let mut needs_accession = 0;

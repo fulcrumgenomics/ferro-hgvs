@@ -23,9 +23,7 @@
 //! delins?" question is tracked separately, gated on what SVD-WG010
 //! settles — see the pushback comment on issue #182 for rationale.
 
-mod common;
-
-use common::synthetic::{normalize_to_string, SyntheticBuilder};
+use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
 
 const SEQID: &str = "NC_TEST.1";
 

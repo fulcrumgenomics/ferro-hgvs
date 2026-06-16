@@ -27,9 +27,7 @@
 //! sharing a gap). It covers both the genomic (`g.`) and mitochondrial
 //! (`m.`) single-axis coordinate systems.
 
-mod common;
-
-use common::synthetic::{normalize_to_string, SyntheticBuilder};
+use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
 
 const SEQID: &str = "NC_TEST.1";
 

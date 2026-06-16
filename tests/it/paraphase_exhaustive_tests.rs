@@ -16,8 +16,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-mod common;
-use common::failure_expectations::{enforce, FixtureCheck};
+use crate::common::failure_expectations::{enforce, FixtureCheck};
 
 const FAILURE_EXPECTATIONS_PATH: &str =
     "tests/fixtures/validation/paraphase_genes_failure_expectations.json";

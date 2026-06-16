@@ -11,9 +11,7 @@
 //! `get_transcript` fixes, the genomic-coordinate cases here would
 //! collapse the merged delins to a single residual SNV.
 
-mod common;
-
-use common::synthetic::{normalize_to_string, AdversarialNamespaceBuilder};
+use crate::common::synthetic::{normalize_to_string, AdversarialNamespaceBuilder};
 
 /// Realistic prefix-collision: a transcript whose id was synthesized
 /// from chromosome + gene name (e.g. `chr1-gene.1` from a GFF dump).
