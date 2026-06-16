@@ -229,7 +229,10 @@ pub struct MultiFastaProvider {
     /// `GCF_*_refseqgene_alignments.gff3` named by the manifest's
     /// `refseqgene_alignments`, keyed by NG accession.version (#480). Empty when
     /// the manifest carries no alignments file.
-    refseqgene_placements: FxHashMap<String, GenomicPlacement>,
+    /// Per-NG-version placements, one entry per genome build (GRCh37/GRCh38)
+    /// the parsed RefSeqGene alignments cover (#653). Selection by the input's
+    /// resolved build happens in `genomic_placement_on_build`.
+    refseqgene_placements: FxHashMap<String, Vec<GenomicPlacement>>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -1919,8 +1922,8 @@ fn gff_attr<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
 /// `NM_`→`NC_` step is computed. GRCh37 placements, alt-loci/patches, and gapped
 /// alignments (which a single affine span cannot represent) are skipped, so the
 /// projector keeps prior behavior rather than emit a wrong `NG_` coordinate.
-fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, GenomicPlacement> {
-    let mut out = FxHashMap::default();
+fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlacement>> {
+    let mut out: FxHashMap<String, Vec<GenomicPlacement>> = FxHashMap::default();
     for line in gff3.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
@@ -1963,24 +1966,34 @@ fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, GenomicPlacement
         } else {
             crate::reference::transcript::Strand::Plus
         };
-        // Keep only GRCh38 primary-chromosome placements (cdot's build).
+        // Keep placements on a GRCh37 or GRCh38 PRIMARY chromosome (the build is
+        // derivable from the NC_ version). Alt-loci / fix-patch contigs return
+        // `None` and are skipped (a single affine span cannot anchor them).
+        // Both builds are retained and stored per-build; selection by the input's
+        // resolved build happens at lookup (#653).
         let Ok((_, nc)) = crate::hgvs::parser::accession::parse_accession(cols[0]) else {
             continue;
         };
-        if crate::liftover::aliases::infer_genome_build_from_accession(&nc) != Some("GRCh38") {
+        let Some(build) = crate::liftover::aliases::infer_genome_build_from_accession(&nc) else {
             continue;
-        }
+        };
         let (nc_start, nc_end) = if a <= b { (a, b) } else { (b, a) };
-        out.insert(
-            ng.to_string(),
-            GenomicPlacement {
-                nc,
-                parent_start,
-                nc_start,
-                nc_end,
-                strand,
-            },
-        );
+        let placement = GenomicPlacement {
+            nc,
+            parent_start,
+            nc_start,
+            nc_end,
+            strand,
+        };
+        // Keep at most one placement per (NG version, build): first wins if a
+        // release lists the same alignment twice.
+        let entry = out.entry(ng.to_string()).or_default();
+        let has_build = entry.iter().any(|p| {
+            crate::liftover::aliases::infer_genome_build_from_accession(&p.nc) == Some(build)
+        });
+        if !has_build {
+            entry.push(placement);
+        }
     }
     out
 }
@@ -1990,15 +2003,29 @@ impl ReferenceProvider for MultiFastaProvider {
         &self,
         parent: &crate::hgvs::variant::Accession,
     ) -> Option<GenomicPlacement> {
+        // Build-agnostic entry: prefer GRCh38 (cdot's primary / mutalyzer policy).
+        self.genomic_placement_on_build(parent, None)
+    }
+
+    fn genomic_placement_on_build(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
         // NG_ RefSeqGene placement comes from the NCBI RefSeqGene→genome
         // alignments (`GCF_*_refseqgene_alignments.gff3`), parsed once at load
-        // and keyed by NG accession.version. Absent (no alignments file, or no
-        // GRCh38 primary placement) → None, and the projector keeps prior
-        // behavior rather than emit a wrong NG_ coordinate.
+        // and stored per genome build (#653). `select_placement_for_build`
+        // picks the entry matching the input's resolved build; with no build
+        // hint it prefers GRCh38, and with an explicit build it returns `None`
+        // (decline) rather than mis-anchor onto a different build's placement.
         if parent.prefix.as_ref() == "NG" {
-            return self.refseqgene_placements.get(&parent.full()).cloned();
+            let list = self.refseqgene_placements.get(&parent.full())?;
+            return crate::reference::provider::select_placement_for_build(list, build);
         }
-        // LRG placement comes from the on-hand LRG XMLs (parsed on demand).
+        // LRG placement comes from the on-hand LRG XMLs (parsed on demand). LRG
+        // carries a single main-assembly placement, so the build hint is not
+        // used here — a build mismatch is caught downstream by the re-anchor's
+        // endpoint-outside-span guard (#655).
         if !parent.is_lrg() {
             return None;
         }
@@ -2519,11 +2546,15 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
     fn parses_refseqgene_alignments_plus_and_minus() {
         let m = parse_refseqgene_alignments(RSG_GFF3_SAMPLE);
 
-        // GRCh37 placement and gapped alignment are excluded.
-        assert_eq!(m.len(), 2, "only GRCh38 ungapped placements kept: {m:?}");
+        // GRCh37 is now KEPT (#653); only the gapped and non-`match` rows drop.
+        assert_eq!(
+            m.len(),
+            3,
+            "GRCh37 + both GRCh38 ungapped placements kept: {m:?}"
+        );
         assert!(
-            !m.contains_key("NG_003000.1"),
-            "GRCh37 placement must be dropped"
+            m.contains_key("NG_003000.1"),
+            "GRCh37 placement must be kept (#653)"
         );
         assert!(
             !m.contains_key("NG_004000.1"),
@@ -2534,8 +2565,13 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
             "non-`match` record (cDNA_match) must be dropped even when it carries Target=NG_*"
         );
 
-        let plus = &m["NG_001000.1"];
+        // Each NG_ maps to a per-build list; these samples have one build each.
+        let plus = &m["NG_001000.1"][0];
         assert_eq!(plus.nc.to_string(), "NC_000001.11");
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&plus.nc),
+            Some("GRCh38")
+        );
         assert_eq!(plus.parent_start, 1);
         assert_eq!(plus.nc_start, 1000);
         assert_eq!(plus.nc_end, 1099);
@@ -2543,11 +2579,19 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
         assert_eq!(plus.nc_to_parent(1000), Some(1));
         assert_eq!(plus.nc_to_parent(1099), Some(100));
 
-        let minus = &m["NG_002000.1"];
+        let minus = &m["NG_002000.1"][0];
         assert_eq!(minus.strand, crate::reference::transcript::Strand::Minus);
         // Minus: NG base 1 sits at the high chromosome coordinate.
         assert_eq!(minus.nc_to_parent(2099), Some(1));
         assert_eq!(minus.nc_to_parent(2000), Some(100));
+
+        // The GRCh37 placement is on the GRCh37 chromosome accession (NC_*.10).
+        let grch37 = &m["NG_003000.1"][0];
+        assert_eq!(grch37.nc.to_string(), "NC_000001.10");
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&grch37.nc),
+            Some("GRCh37")
+        );
     }
 
     /// An unknown-orientation placement has no defined parent frame, so

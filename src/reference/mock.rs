@@ -25,7 +25,9 @@ pub struct MockProvider {
     /// keyed by the parent's full versioned accession (e.g. `"NG_007485.1"`).
     /// Lets tests exercise the #480 NC→parent-frame re-anchoring without a real
     /// RefSeqGene/LRG placement source.
-    genomic_placements: HashMap<String, GenomicPlacement>,
+    /// One entry per genome build (the build is encoded in each placement's
+    /// `nc` accession), so tests can exercise per-build selection (#653).
+    genomic_placements: HashMap<String, Vec<GenomicPlacement>>,
 }
 
 impl MockProvider {
@@ -41,14 +43,18 @@ impl MockProvider {
     }
 
     /// Register the chromosomal placement of a genomic parent reference
-    /// (`NG_`/`LRG_`), keyed by its full versioned accession (#480).
+    /// (`NG_`/`LRG_`), keyed by its full versioned accession (#480). May be
+    /// called more than once per accession to register a per-build placement
+    /// (e.g. a GRCh37 and a GRCh38 placement), for #653 build-selection tests.
     pub fn add_genomic_placement(
         &mut self,
         parent_accession: impl Into<String>,
         placement: GenomicPlacement,
     ) {
         self.genomic_placements
-            .insert(parent_accession.into(), placement);
+            .entry(parent_accession.into())
+            .or_default()
+            .push(placement);
     }
 
     /// Mark `id` as not available at its exact requested version, so
@@ -319,7 +325,16 @@ impl Default for MockProvider {
 
 impl ReferenceProvider for MockProvider {
     fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
-        self.genomic_placements.get(&parent.full()).cloned()
+        self.genomic_placement_on_build(parent, None)
+    }
+
+    fn genomic_placement_on_build(
+        &self,
+        parent: &Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        let list = self.genomic_placements.get(&parent.full())?;
+        crate::reference::provider::select_placement_for_build(list, build)
     }
 
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
@@ -515,6 +530,61 @@ mod tests {
         let provider = MockProvider::with_test_data();
         assert!(!provider.is_empty());
         assert!(provider.len() >= 2);
+    }
+
+    /// #653: an NG_ parent with both a GRCh37 and a GRCh38 RefSeqGene placement
+    /// resolves per build — GRCh38 by default, GRCh37 on request — and an
+    /// explicit build with no matching placement declines (build-match guard).
+    #[test]
+    fn genomic_placement_selects_per_build() {
+        use crate::reference::provider::GenomicPlacement;
+        use crate::reference::transcript::Strand;
+        let mk = |chrom_version: u32| GenomicPlacement {
+            nc: Accession::new("NC", "000001", Some(chrom_version)),
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end: 1008,
+            strand: Strand::Plus,
+        };
+        let mut provider = MockProvider::new();
+        provider.add_genomic_placement("NG_900.1", mk(11)); // GRCh38
+        provider.add_genomic_placement("NG_900.1", mk(10)); // GRCh37
+        let ng = Accession::new("NG", "900", Some(1));
+
+        // Default prefers GRCh38; explicit builds select their own placement.
+        assert_eq!(
+            provider.genomic_placement(&ng).unwrap().nc.to_string(),
+            "NC_000001.11"
+        );
+        assert_eq!(
+            provider
+                .genomic_placement_on_build(&ng, Some("GRCh37"))
+                .unwrap()
+                .nc
+                .to_string(),
+            "NC_000001.10"
+        );
+        assert_eq!(
+            provider
+                .genomic_placement_on_build(&ng, Some("GRCh38"))
+                .unwrap()
+                .nc
+                .to_string(),
+            "NC_000001.11"
+        );
+
+        // An NG_ with only a GRCh37 placement declines a GRCh38 request (guard).
+        let mut grch37_only = MockProvider::new();
+        grch37_only.add_genomic_placement("NG_901.1", mk(10));
+        let ng2 = Accession::new("NG", "901", Some(1));
+        assert!(grch37_only
+            .genomic_placement_on_build(&ng2, Some("GRCh38"))
+            .is_none());
+        // ...but resolves under GRCh37 and as the default-when-sole-coverage.
+        assert!(grch37_only
+            .genomic_placement_on_build(&ng2, Some("GRCh37"))
+            .is_some());
+        assert!(grch37_only.genomic_placement(&ng2).is_some());
     }
 
     #[test]

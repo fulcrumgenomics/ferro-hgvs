@@ -43,6 +43,29 @@ pub struct GenomicPlacement {
     pub strand: Strand,
 }
 
+/// Select the placement matching a resolved genome build from a parent's
+/// per-build placement list (#653).
+///
+/// - `Some(build)` → the placement whose `nc` is on that build, or `None`
+///   (decline) when absent — never substitute another build's placement.
+/// - `None` (no preference) → prefer the GRCh38 placement (cdot's primary build
+///   / mutalyzer policy), else the first available.
+pub(crate) fn select_placement_for_build(
+    placements: &[GenomicPlacement],
+    build: Option<&str>,
+) -> Option<GenomicPlacement> {
+    let build_of =
+        |p: &GenomicPlacement| crate::liftover::aliases::infer_genome_build_from_accession(&p.nc);
+    match build {
+        Some(b) => placements.iter().find(|p| build_of(p) == Some(b)).cloned(),
+        None => placements
+            .iter()
+            .find(|p| build_of(p) == Some("GRCh38"))
+            .or_else(|| placements.first())
+            .cloned(),
+    }
+}
+
 impl GenomicPlacement {
     /// Map a 1-based chromosome (`NC_`) coordinate into the parent's own frame.
     ///
@@ -159,6 +182,22 @@ pub trait ReferenceProvider {
     /// projector keeps the chromosome coordinates as-is.
     fn genomic_placement(&self, _parent: &Accession) -> Option<GenomicPlacement> {
         None
+    }
+
+    /// Return the chromosomal placement of a genomic *parent* reference for a
+    /// specific genome build (#653). `build` is `"GRCh37"`/`"GRCh38"` (or `None`
+    /// for "no preference", which prefers GRCh38). When an explicit build is
+    /// requested but no placement on that build exists, returns `None` (decline)
+    /// rather than mis-anchor onto a different build's placement.
+    ///
+    /// The default ignores the build hint and delegates to [`genomic_placement`]
+    /// (build-agnostic); providers that store per-build placements override this.
+    fn genomic_placement_on_build(
+        &self,
+        parent: &Accession,
+        _build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        self.genomic_placement(parent)
     }
 
     /// Get a sequence region
@@ -385,6 +424,17 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).genomic_placement(parent)
     }
 
+    fn genomic_placement_on_build(
+        &self,
+        parent: &Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        // Forward the build hint to the wrapped provider so build-aware lookup
+        // survives an Arc/Box wrapper (the default would drop it to the
+        // build-agnostic path).
+        (**self).genomic_placement_on_build(parent, build)
+    }
+
     fn get_protein_sequence(
         &self,
         accession: &str,
@@ -460,6 +510,17 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
         (**self).genomic_placement(parent)
     }
 
+    fn genomic_placement_on_build(
+        &self,
+        parent: &Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        // Forward the build hint to the wrapped provider so build-aware lookup
+        // survives an Arc/Box wrapper (the default would drop it to the
+        // build-agnostic path).
+        (**self).genomic_placement_on_build(parent, build)
+    }
+
     fn get_protein_sequence(
         &self,
         accession: &str,
@@ -514,6 +575,45 @@ mod placement_tests {
             nc_end: 1008,
             strand,
         }
+    }
+
+    fn placement_on(chrom_version: u32) -> GenomicPlacement {
+        GenomicPlacement {
+            nc: Accession::new("NC", "000001", Some(chrom_version)),
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end: 1008,
+            strand: Strand::Plus,
+        }
+    }
+
+    #[test]
+    fn select_placement_for_build_picks_by_build_and_declines_mismatch() {
+        let grch38 = placement_on(11); // NC_000001.11 → GRCh38
+        let grch37 = placement_on(10); // NC_000001.10 → GRCh37
+        let both = vec![grch38.clone(), grch37.clone()];
+
+        // Explicit build selects that build's placement.
+        assert_eq!(
+            select_placement_for_build(&both, Some("GRCh38")),
+            Some(grch38.clone())
+        );
+        assert_eq!(
+            select_placement_for_build(&both, Some("GRCh37")),
+            Some(grch37.clone())
+        );
+        // No preference → GRCh38 even when listed second.
+        assert_eq!(
+            select_placement_for_build(&[grch37.clone(), grch38.clone()], None),
+            Some(grch38.clone())
+        );
+        // Build-match guard: an explicit build with no matching placement declines
+        // rather than substitute the other build (would mis-anchor).
+        let only37 = vec![grch37.clone()];
+        assert_eq!(select_placement_for_build(&only37, Some("GRCh38")), None);
+        // No preference with only GRCh37 present → return it (never empty if data exists).
+        assert_eq!(select_placement_for_build(&only37, None), Some(grch37));
+        assert_eq!(select_placement_for_build(&[], Some("GRCh38")), None);
     }
 
     #[test]
