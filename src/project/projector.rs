@@ -555,7 +555,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // 1. Normalize once in the genome frame, then fan out across the
         //    overlapping transcripts.
         let normalized = self.normalizer.normalize(&variant)?;
-        let results = self.project_normalized_all(&normalized)?;
+        let results = self.project_normalized_all_inner(&normalized)?;
         // 2. The plain (non-parent) path returns the genome-frame result directly.
         let Some(parent) = parent else {
             return Ok(results);
@@ -1368,6 +1368,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Callers that pre-normalize once and then fan-out across transcripts
     /// should use this method.
     pub fn project_normalized_all(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Vec<VariantProjection>, FerroError> {
+        // Surface a contradictory `--assembly` override like every other public
+        // entry point (#715). The internal caller `project_variant_all` already
+        // warns before delegating, so it routes through the non-warning
+        // `project_normalized_all_inner` to avoid double-warning.
+        self.warn_assembly_conflict(variant);
+        self.project_normalized_all_inner(variant)
+    }
+
+    /// Fan-out projection without the `--assembly`-conflict warning, for callers
+    /// (e.g. [`project_variant_all`]) that have already emitted it.
+    fn project_normalized_all_inner(
         &self,
         variant: &HgvsVariant,
     ) -> Result<Vec<VariantProjection>, FerroError> {

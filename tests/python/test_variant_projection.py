@@ -630,7 +630,7 @@ class TestProjectVariant:
 
 
 class TestAssemblyOverride:
-    """The ``assembly`` constructor kwarg (#715): a build-build override for
+    """The ``assembly`` constructor kwarg (#715): a genome-build override for
     build-agnostic inputs, validated/normalized at the boundary."""
 
     def test_accepts_canonical_and_alias_assembly(self) -> None:
