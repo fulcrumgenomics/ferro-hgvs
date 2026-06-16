@@ -777,23 +777,35 @@ impl PyVariantProjector {
     ///         built-in test data (limited; not for production).
     ///     direction: Shuffle direction passed to the internal normalizer
     ///         ("3prime" or "5prime").
+    ///     assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
+    ///         aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
+    ///         input carries no build; this fills one in. An input whose
+    ///         accession already encodes a build (NC_*.10/.11) keeps it.
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime"))]
-    fn new(reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None))]
+    fn new(
+        reference_json: Option<&str>,
+        direction: &str,
+        assembly: Option<&str>,
+    ) -> PyResult<Self> {
         let provider = match reference_json {
             Some(path) => PyProvider::from_json(Path::new(path))?,
             None => PyProvider::test_data(),
         };
-        Self::from_provider(provider, direction)
+        Self::from_provider(provider, direction, assembly)
     }
 
     /// Create a projector from a ferro-prepare manifest (preferred for
     /// production — uses MultiFastaProvider with cdot data).
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime"))]
-    fn from_manifest(manifest_path: &str, direction: &str) -> PyResult<Self> {
+    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None))]
+    fn from_manifest(
+        manifest_path: &str,
+        direction: &str,
+        assembly: Option<&str>,
+    ) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Self::from_provider(provider, direction)
+        Self::from_provider(provider, direction, assembly)
     }
 
     /// Project a g. HGVS string onto a target transcript.
@@ -1095,13 +1107,31 @@ impl PyVariantProjector {
 }
 
 impl PyVariantProjector {
-    fn from_provider(provider: PyProvider, direction: &str) -> PyResult<Self> {
+    fn from_provider(
+        provider: PyProvider,
+        direction: &str,
+        assembly: Option<&str>,
+    ) -> PyResult<Self> {
         let cdot = provider.cdot_mapper();
         let projector = crate::data::projection::Projector::new(cdot);
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
+        // Validate/normalize the assembly name at the boundary so the core only
+        // ever sees a canonical "GRCh37"/"GRCh38" (#715).
+        let assembly_build = match assembly {
+            Some(name) => Some(
+                crate::liftover::aliases::normalize_assembly_name(name).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "unrecognized assembly {name:?}; expected GRCh37 or GRCh38 \
+                         (aliases hg19/hg38 accepted)"
+                    ))
+                })?,
+            ),
+            None => None,
+        };
         Ok(Self {
             inner: crate::project::VariantProjector::new(projector, provider)
-                .with_normalize_config(config),
+                .with_normalize_config(config)
+                .with_assembly(assembly_build),
         })
     }
 }

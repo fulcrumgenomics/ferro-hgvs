@@ -62,6 +62,15 @@ pub struct VariantProjector<P: ReferenceProvider + Clone> {
     /// `transcript_id` alone would let the first resolved build poison indel
     /// protein predictions for projections on the other build.
     ref_protein_cache: RwLock<HashMap<TranscriptCacheKey, Arc<RefProteinBundle>>>,
+    /// Explicit genome-build override for build-agnostic inputs (#715).
+    ///
+    /// A bare `NG_`/`LRG_` input carries no build, so by default it resolves to
+    /// the GRCh38-preferred placement. When set (via [`Self::with_assembly`]),
+    /// this build (`"GRCh37"` / `"GRCh38"`) *fills in* for such inputs — it does
+    /// **not** override a build the input accession already encodes
+    /// (`NC_*.10`/`.11`, `GRCh37(...)`); the accession's build stays
+    /// authoritative (see [`Self::build_hint_for_variant`]).
+    assembly_override: Option<&'static str>,
 }
 
 impl<P: ReferenceProvider + Clone> VariantProjector<P> {
@@ -73,6 +82,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             normalizer,
             transcript_cache: RwLock::new(HashMap::new()),
             ref_protein_cache: RwLock::new(HashMap::new()),
+            assembly_override: None,
         }
     }
 
@@ -157,16 +167,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(())
     }
 
-    /// Infer the genome build to consult cdot under for `variant`.
+    /// Infer the genome build the *input variant itself* encodes.
     ///
     /// Examines the variant's own accession first: a g. variant on
     /// `NC_*.10` carries GRCh37, on `NC_*.11` carries GRCh38, and an
     /// assembly-style `GRCh37(chr1):g.…` carries GRCh37 directly. If the
     /// variant has no inherent build (e.g. a c. variant on a bare NM)
     /// but does have a `genomic_context` (NG/NC parent), the parent is
-    /// consulted. Anything else returns `None` so the caller falls back
-    /// to the build-agnostic primary-cdot path (issue #389).
-    fn build_hint_for_variant(variant: &HgvsVariant) -> Option<&'static str> {
+    /// consulted. Anything else returns `None` (e.g. a bare `NG_`/`LRG_`,
+    /// which carries no build), so the caller falls back to the
+    /// build-agnostic primary-cdot path (issue #389).
+    fn infer_input_build(variant: &HgvsVariant) -> Option<&'static str> {
         use crate::liftover::aliases::infer_genome_build_from_accession;
         let acc = variant.accession()?;
         if let Some(b) = infer_genome_build_from_accession(acc) {
@@ -176,6 +187,35 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return infer_genome_build_from_accession(parent);
         }
         None
+    }
+
+    /// The genome build to project `variant` under, honoring the
+    /// [`Self::with_assembly`] override (#715).
+    ///
+    /// The build the input *encodes* is authoritative; the `--assembly` override
+    /// only *fills in* when the input is build-agnostic (a bare `NG_`/`LRG_`).
+    /// A contradictory override is warned and ignored at the public entry points
+    /// (see [`Self::warn_assembly_conflict`]) — it never reinterprets an explicit
+    /// `NC_*.10`/`.11` accession, which would emit wrong coordinates under a
+    /// right-looking accession (the #655/#702 failure class).
+    fn build_hint_for_variant(&self, variant: &HgvsVariant) -> Option<&'static str> {
+        Self::infer_input_build(variant).or(self.assembly_override)
+    }
+
+    /// Emit a warning when an explicit `--assembly` override contradicts the
+    /// build the input accession already encodes (#715). The input wins; this
+    /// only flags the ignored override. Called once per public projection entry.
+    fn warn_assembly_conflict(&self, variant: &HgvsVariant) {
+        if let (Some(override_build), Some(input_build)) =
+            (self.assembly_override, Self::infer_input_build(variant))
+        {
+            if override_build != input_build {
+                log::warn!(
+                    "ignoring --assembly {override_build}: input accession already \
+                     specifies {input_build}"
+                );
+            }
+        }
     }
 
     /// Build-aware cdot transcript lookup shared by every projection
@@ -269,7 +309,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Cds(c) => {
                 Self::require_parent_for_fanout(&c.accession, "c.")?;
                 let transcript_id = c.accession.transcript_accession();
-                let build_hint = Self::build_hint_for_variant(effective);
+                let build_hint = self.build_hint_for_variant(effective);
                 let cdot_tx = self.cdot_tx_with_build_hint(&transcript_id, build_hint)?;
                 let start_cds = c.loc_edit.location.start.inner().cloned().ok_or_else(|| {
                     FerroError::InvalidCoordinates {
@@ -287,7 +327,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Tx(t) => {
                 Self::require_parent_for_fanout(&t.accession, "n.")?;
                 let transcript_id = t.accession.transcript_accession();
-                let build_hint = Self::build_hint_for_variant(effective);
+                let build_hint = self.build_hint_for_variant(effective);
                 let cdot_tx = self.cdot_tx_with_build_hint(&transcript_id, build_hint)?;
                 let start_tx = *t.loc_edit.location.start.inner().ok_or_else(|| {
                     FerroError::InvalidCoordinates {
@@ -301,7 +341,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Rna(r) => {
                 Self::require_parent_for_fanout(&r.accession, "r.")?;
                 let transcript_id = r.accession.transcript_accession();
-                let build_hint = Self::build_hint_for_variant(effective);
+                let build_hint = self.build_hint_for_variant(effective);
                 let cdot_tx = self.cdot_tx_with_build_hint(&transcript_id, build_hint)?;
                 let start_rna = *r.loc_edit.location.start.inner().ok_or_else(|| {
                     FerroError::InvalidCoordinates {
@@ -423,6 +463,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self
     }
 
+    /// Set an explicit genome-build override for build-agnostic inputs (#715).
+    ///
+    /// `build` must be a canonical ferro build string (`"GRCh37"` / `"GRCh38"`);
+    /// validate/normalize user-supplied names at the boundary with
+    /// [`crate::liftover::aliases::normalize_assembly_name`]. The override only
+    /// *fills in* a build for inputs that don't encode one (a bare `NG_`/`LRG_`);
+    /// an input whose accession already specifies a build keeps it, and a
+    /// contradictory override is warned and ignored (see
+    /// [`Self::build_hint_for_variant`]). `None` clears the override.
+    pub fn with_assembly(mut self, build: Option<&'static str>) -> Self {
+        self.assembly_override = build;
+        self
+    }
+
     /// Parse, normalize, and project an HGVS string onto a transcript.
     pub fn project(
         &self,
@@ -442,6 +496,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
+        self.warn_assembly_conflict(variant);
         // 1. Normalize the genomic variant. The normalizer is built once at
         // construction time so we don't clone the (potentially heavy) provider
         // on every call.
@@ -462,6 +517,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
+        self.warn_assembly_conflict(variant);
         self.project_variant_inner(variant, transcript_id)
     }
 
@@ -485,6 +541,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<Vec<VariantProjection>, FerroError> {
+        self.warn_assembly_conflict(variant);
         // 0. An NG_/LRG_ genomic *input* carries parent-relative coordinates that
         //    cdot cannot map; rewrite it into the chromosome (NC_) frame so the
         //    fan-out below can enumerate and project onto the overlapping
@@ -493,12 +550,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    on an `NC_` accession whose build would be circular to read back
         //    (#653/#713); the parent placement must be selected by the input's
         //    build, matching what `deanchor` itself used.
-        let input_build = Self::build_hint_for_variant(variant);
+        let input_build = self.build_hint_for_variant(variant);
         let (variant, parent) = self.deanchor_genomic_parent_input(variant);
         // 1. Normalize once in the genome frame, then fan out across the
         //    overlapping transcripts.
         let normalized = self.normalizer.normalize(&variant)?;
-        let results = self.project_normalized_all(&normalized)?;
+        let results = self.project_normalized_all_inner(&normalized)?;
         // 2. The plain (non-parent) path returns the genome-frame result directly.
         let Some(parent) = parent else {
             return Ok(results);
@@ -674,6 +731,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// [`Self::project_to_genomic_nc`] for the rest of the error contract
     /// (`UnsupportedProjection` / `InvalidCoordinates` / `ReferenceNotFound`).
     pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+        self.warn_assembly_conflict(variant);
         // A `Genome` input is already in its parent frame: an `NC_` chromosome
         // variant or an `NG_`/`LRG_` genomic variant in its own coordinates.
         // `reanchor_genome_output` assumes an `NC_`-frame pivot produced by
@@ -687,7 +745,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         match self.project_to_genomic_nc(variant)? {
             HgvsVariant::Genome(gv) => {
-                self.reanchor_genome_output(gv, Self::build_hint_for_variant(variant))
+                self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))
             }
             other => Ok(other),
         }
@@ -958,7 +1016,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // version. Deriving the build from the variant first (rather than from the
         // chosen placement) lets the placement *selection* below honor it, instead
         // of being circularly fixed to GRCh38.
-        let build_hint = Self::build_hint_for_variant(variant)
+        let build_hint = self
+            .build_hint_for_variant(variant)
             .or_else(|| {
                 self.provider.genomic_placement(&parent).and_then(|p| {
                     crate::liftover::aliases::infer_genome_build_from_accession(&p.nc)
@@ -1183,7 +1242,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // (an explicit `NC_*.10`/`.11` or `GRCh37(...)` tag; `None` for a bare
         // `NG_`, which defaults to GRCh38). `None` keeps the prior GRCh38-preferred
         // behavior, so this is inert until an explicit build is present (#653/#713).
-        let build = Self::build_hint_for_variant(variant);
+        let build = self.build_hint_for_variant(variant);
 
         // Transcript-coordinate inputs (c./n./r.) carrying an NG_/LRG_
         // genomic_context are taken into the chromosome (NC_) frame here too, so
@@ -1312,6 +1371,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<Vec<VariantProjection>, FerroError> {
+        // Surface a contradictory `--assembly` override like every other public
+        // entry point (#715). The internal caller `project_variant_all` already
+        // warns before delegating, so it routes through the non-warning
+        // `project_normalized_all_inner` to avoid double-warning.
+        self.warn_assembly_conflict(variant);
+        self.project_normalized_all_inner(variant)
+    }
+
+    /// Fan-out projection without the `--assembly`-conflict warning, for callers
+    /// (e.g. [`project_variant_all`]) that have already emitted it.
+    fn project_normalized_all_inner(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Vec<VariantProjection>, FerroError> {
         // 2. Extract contig + first-base position from the normalized variant.
         //    For Allele variants we use the first inner variant's accession.
         //    c./n./r. inputs are resolved via cdot (contig from the
@@ -1381,7 +1454,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // resolving the gene_name from cdot, so an NG/NC-parented
             // allele on a multi-build cdot picks the correct build's
             // transcript record (issue #389).
-            let build_hint = Self::build_hint_for_variant(original);
+            let build_hint = self.build_hint_for_variant(original);
             let gene_symbol = match build_hint {
                 Some(b) => self
                     .projector
@@ -2611,7 +2684,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Genome(_) => Some(projected_genome),
             _ => match projected_genome {
                 HgvsVariant::Genome(gv) => self
-                    .reanchor_genome_output(gv, Self::build_hint_for_variant(normalized))
+                    .reanchor_genome_output(gv, self.build_hint_for_variant(normalized))
                     .ok(),
                 other => Some(other),
             },
@@ -6421,6 +6494,165 @@ mod tests {
                 s.contains(":c.5A>T"),
                 "expected c.5A>T from the GRCh38-discovered projection, got: {}",
                 s
+            );
+        }
+
+        // ---------------------------------------------------------------------
+        // `--assembly` override for build-agnostic NG_ inputs (#715)
+        //
+        // Builds on the two-build cdot fixture above by giving NM_MB_TEST.1's
+        // NG_ parent (NG_000999.1) per-build chromosomal placements with
+        // *different* parent offsets, so the re-anchored NG_ coordinate reveals
+        // which build's placement was selected: GRCh38 → g.104, GRCh37 → g.204.
+        // This is the end-to-end GRCh37 NG_ path #713 deferred (only reachable
+        // once the override supplies a build for a bare NG_).
+        // ---------------------------------------------------------------------
+
+        const NG_PARENT: &str = "NG_000999.1";
+
+        /// Two-build projector whose NG_000999.1 has a GRCh38 placement
+        /// (NC_000001.11, parent_start 100) and — when `with_grch37` — a GRCh37
+        /// placement (NC_000001.10, parent_start 200).
+        fn make_ng_assembly_projector(with_grch37: bool) -> VariantProjector<MockProvider> {
+            use crate::reference::transcript::{
+                Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
+                Transcript as RefTranscript,
+            };
+            use std::sync::OnceLock;
+
+            let cdot =
+                CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh38")
+                    .expect("multi-build cdot JSON should parse");
+            let projector = Projector::new(cdot);
+            let mut provider = MockProvider::new();
+            provider.add_transcript(RefTranscript {
+                id: "NM_MB_TEST.1".to_string(),
+                gene_symbol: Some("MBTEST".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAATC".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(10),
+                exons: vec![Exon::new(1, 1, 10)],
+                chromosome: Some("NC_000001.11".to_string()),
+                genomic_start: Some(20000),
+                genomic_end: Some(20009),
+                genome_build: RefGenomeBuild::GRCh38,
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+            provider.add_genomic_placement(
+                NG_PARENT,
+                crate::reference::provider::GenomicPlacement {
+                    nc: parse_accession("NC_000001.11"),
+                    parent_start: 100,
+                    nc_start: 20000,
+                    nc_end: 20010,
+                    strand: crate::reference::transcript::Strand::Plus,
+                },
+            );
+            if with_grch37 {
+                provider.add_genomic_placement(
+                    NG_PARENT,
+                    crate::reference::provider::GenomicPlacement {
+                        nc: parse_accession("NC_000001.10"),
+                        parent_start: 200,
+                        nc_start: 10000,
+                        nc_end: 10010,
+                        strand: crate::reference::transcript::Strand::Plus,
+                    },
+                );
+            }
+            VariantProjector::new(projector, provider)
+        }
+
+        /// c.5A>T on NM_MB_TEST.1 with a *bare* NG_000999.1 parent (no build).
+        fn ng_cds_input() -> HgvsVariant {
+            HgvsVariant::Cds(CdsVariant {
+                accession: parse_accession("NM_MB_TEST.1")
+                    .with_genomic_context(parse_accession(NG_PARENT)),
+                gene_symbol: Some("MBTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            })
+        }
+
+        /// `--assembly GRCh37` makes a bare NG_ select its GRCh37 placement and
+        /// re-anchor against the GRCh37 chromosome view (g.204, not g.104).
+        #[test]
+        fn assembly_override_selects_grch37_placement_for_bare_ng() {
+            let vp = make_ng_assembly_projector(true).with_assembly(Some("GRCh37"));
+            let out = vp
+                .project_to_genomic(&ng_cds_input())
+                .expect("GRCh37 override should re-anchor via the GRCh37 placement");
+            let s = out.to_string();
+            assert!(
+                s.contains(":g.204A>T"),
+                "expected the GRCh37 placement (parent_start 200 -> g.204), got: {s}"
+            );
+        }
+
+        /// Without the override a bare NG_ keeps the GRCh38-preferred placement
+        /// (g.104) — adding a GRCh37 placement must not shift the default (#713).
+        #[test]
+        fn no_assembly_override_keeps_grch38_placement_for_bare_ng() {
+            let vp = make_ng_assembly_projector(true);
+            let out = vp
+                .project_to_genomic(&ng_cds_input())
+                .expect("default should re-anchor via the GRCh38 placement");
+            let s = out.to_string();
+            assert!(
+                s.contains(":g.104A>T"),
+                "expected the GRCh38 placement (parent_start 100 -> g.104), got: {s}"
+            );
+        }
+
+        /// `--assembly GRCh37` with no GRCh37 placement present declines rather
+        /// than mis-anchoring onto the GRCh38 placement (#655/#702 guard).
+        #[test]
+        fn assembly_override_declines_when_grch37_placement_absent() {
+            let vp = make_ng_assembly_projector(false).with_assembly(Some("GRCh37"));
+            let err = vp
+                .project_to_genomic(&ng_cds_input())
+                .expect_err("must decline when the requested build has no placement");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected an UnsupportedProjection decline, got: {err:?}"
+            );
+        }
+
+        /// A build the input accession already encodes (NC_000001.11) wins over a
+        /// contradictory `--assembly GRCh37`: the override only fills in for
+        /// build-agnostic inputs, never reinterprets an explicit accession (#715).
+        #[test]
+        fn input_encoded_build_wins_over_assembly_override() {
+            let vp = make_ng_assembly_projector(true).with_assembly(Some("GRCh37"));
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MB_TEST.1").with_genomic_context(nc_chr1(11)),
+                gene_symbol: Some("MBTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("explicit NC_*.11 parent projects on GRCh38 despite the override");
+            let s = out.to_string();
+            assert!(
+                s.starts_with("NC_000001.11") && s.contains(":g.20004A>T"),
+                "input-encoded GRCh38 (g.20004) must win over --assembly GRCh37 (g.10004), got: {s}"
             );
         }
     }

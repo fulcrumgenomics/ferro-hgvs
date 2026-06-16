@@ -182,6 +182,15 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    if let Some(ref alignments) = manifest.refseqgene_alignments_grch37 {
+        if !alignments.exists() {
+            result.warnings.push(format!(
+                "RefSeqGene GRCh37 alignments GFF3 not found: {}",
+                alignments.display()
+            ));
+        }
+    }
+
     result
 }
 

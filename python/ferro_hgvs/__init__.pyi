@@ -1543,6 +1543,7 @@ class VariantProjector:
         self,
         reference_json: str | None = None,
         direction: str = "3prime",
+        assembly: str | None = None,
     ) -> None:
         """Create a variant projector.
 
@@ -1551,16 +1552,26 @@ class VariantProjector:
                 built-in test data (limited; not for production).
             direction: Shuffle direction passed to the internal normalizer
                 ("3prime" or "5prime").
+            assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
+                aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
+                input carries no build; this fills one in. An input whose
+                accession already encodes a build (NC_*.10/.11) keeps it.
         """
         ...
 
     @staticmethod
-    def from_manifest(manifest_path: str, direction: str = "3prime") -> "VariantProjector":
+    def from_manifest(
+        manifest_path: str,
+        direction: str = "3prime",
+        assembly: str | None = None,
+    ) -> "VariantProjector":
         """Create a projector from a ferro-prepare manifest.
 
         Args:
             manifest_path: Path to manifest.json produced by `ferro prepare`.
             direction: Shuffle direction ("3prime" or "5prime").
+            assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
+                aliases "hg19"/"hg38") for build-agnostic inputs.
 
         Returns:
             A VariantProjector backed by MultiFastaProvider with cdot data.
