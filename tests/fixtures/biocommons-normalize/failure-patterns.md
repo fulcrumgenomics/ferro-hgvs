@@ -28,6 +28,6 @@ Per #404, an insertion spanning the CDS-start boundary canonicalizes to a spanni
 
 ## Disposition tallies
 
-| axis | accepted_divergence | known_bug | improvement | spec_citation |
-|---|---:|---:|---:|---:|
-| normalized | 2 | 0 | 0 | 0 |
+| axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
+|---|---:|---:|---:|---:|---:|
+| normalized | 2 | 0 | 0 | 0 | 0 |

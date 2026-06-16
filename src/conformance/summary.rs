@@ -15,21 +15,26 @@ use super::schema::Cluster;
 pub const GENERATED_HEADER: &str = "<!-- GENERATED — do not edit; regenerate via \
      `cargo run --features dev --example generate_conformance_summary` -->";
 
-/// The four divergence dispositions, in tally column order.
+/// The divergence dispositions, in tally column order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispositionKind {
     AcceptedDivergence,
     KnownBug,
     Improvement,
+    /// A reference-availability artifact (the prepared manifest lacks the
+    /// reference, so ferro no-ops) — explicitly NOT a ferro defect, distinct
+    /// from `KnownBug`.
+    ReferenceUnavailable,
     SpecCitation,
 }
 
 impl DispositionKind {
     /// Every kind, in the order they appear as tally columns.
-    pub const ALL: [DispositionKind; 4] = [
+    pub const ALL: [DispositionKind; 5] = [
         DispositionKind::AcceptedDivergence,
         DispositionKind::KnownBug,
         DispositionKind::Improvement,
+        DispositionKind::ReferenceUnavailable,
         DispositionKind::SpecCitation,
     ];
 
@@ -39,6 +44,7 @@ impl DispositionKind {
             DispositionKind::AcceptedDivergence => "accepted_divergence",
             DispositionKind::KnownBug => "known_bug",
             DispositionKind::Improvement => "improvement",
+            DispositionKind::ReferenceUnavailable => "reference_unavailable",
             DispositionKind::SpecCitation => "spec_citation",
         }
     }
@@ -124,7 +130,7 @@ pub fn render(model: &SummaryModel) -> String {
     }
 
     // --- Per-axis disposition tallies (hermetic; no live divergence count) ---
-    let mut tally: BTreeMap<&str, [usize; 4]> = BTreeMap::new();
+    let mut tally: BTreeMap<&str, [usize; DispositionKind::ALL.len()]> = BTreeMap::new();
     for row in &model.rows {
         let counts = tally.entry(row.axis.as_str()).or_default();
         let col = DispositionKind::ALL
@@ -140,13 +146,12 @@ pub fn render(model: &SummaryModel) -> String {
         .collect::<Vec<_>>()
         .join(" | ");
     let _ = writeln!(out, "| axis | {header_cols} |");
-    let _ = writeln!(out, "|---|---:|---:|---:|---:|");
+    // One right-aligned separator cell per disposition column, plus the axis.
+    let sep: String = DispositionKind::ALL.iter().map(|_| "---:|").collect();
+    let _ = writeln!(out, "|---|{sep}");
     for (axis, counts) in &tally {
-        let _ = writeln!(
-            out,
-            "| {axis} | {} | {} | {} | {} |",
-            counts[0], counts[1], counts[2], counts[3]
-        );
+        let cells: String = counts.iter().map(|n| format!(" {n} |")).collect();
+        let _ = writeln!(out, "| {axis} |{cells}");
     }
 
     out

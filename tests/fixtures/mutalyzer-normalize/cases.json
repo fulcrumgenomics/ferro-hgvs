@@ -273,8 +273,9 @@
         "M2: Just a variant where we should roll."
       ],
       "input": "NM_003002.2:c.273del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "accession-version-absent",
         "tracking_issue": 672,
         "note": "Not a normalize bug — reference-version-absent: NM_003002.2 is not in the prepared manifest (only .4 present), so ferro no-ops. The .2 and .4 CDS are byte-identical and ferro rolls NM_003002.4:c.273del -> c.274del correctly (the GG at c.273-274). Resolves (XPASS) once the exact version is provisioned (#672)."
       },
@@ -3096,8 +3097,9 @@
         "plus strand"
       ],
       "input": "ENST00000375549:c.100del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "ensembl-absent-from-refseq-manifest",
         "tracking_issue": 671,
         "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
       },
@@ -3110,8 +3112,9 @@
         "plus strand"
       ],
       "input": "ENST00000375549.8:c.100del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "ensembl-absent-from-refseq-manifest",
         "tracking_issue": 671,
         "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
       },
@@ -3124,8 +3127,9 @@
         "plus strand"
       ],
       "input": "ENSG00000204370.13(ENST00000375549.8):c.100del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "ensembl-absent-from-refseq-manifest",
         "tracking_issue": 671,
         "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
       },
@@ -3148,8 +3152,9 @@
         "minus strand"
       ],
       "input": "ENST00000452863.10:c.9del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "ensembl-absent-from-refseq-manifest",
         "tracking_issue": 671,
         "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
       },
@@ -3162,8 +3167,9 @@
         "minus strand"
       ],
       "input": "ENSG00000184937.16(ENST00000452863.10):c.9del",
-      "known_bug": {
+      "reference_unavailable": {
         "axis": "normalized",
+        "reason": "ensembl-absent-from-refseq-manifest",
         "tracking_issue": 671,
         "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
       },

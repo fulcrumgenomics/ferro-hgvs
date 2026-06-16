@@ -44,6 +44,9 @@ impl Fixture {
                     .and_then(|d| d.cluster.as_deref()),
                 case.known_bug.as_ref().and_then(|d| d.cluster.as_deref()),
                 case.improvement.as_ref().and_then(|d| d.cluster.as_deref()),
+                case.reference_unavailable
+                    .as_ref()
+                    .and_then(|d| d.cluster.as_deref()),
                 case.spec_citation
                     .as_ref()
                     .and_then(|d| d.cluster.as_deref()),
@@ -95,6 +98,16 @@ impl Fixture {
                     input: input.to_string(),
                     axis: d.axis.as_str().to_string(),
                     kind: DispositionKind::Improvement,
+                    ferro_output: None,
+                    tracking_issue: Some(d.tracking_issue),
+                });
+            }
+            if let Some(d) = &case.reference_unavailable {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::ReferenceUnavailable,
                     ferro_output: None,
                     tracking_issue: Some(d.tracking_issue),
                 });
@@ -168,6 +181,14 @@ pub struct Case {
     /// XPASS-guarded like `known_bug`.
     #[serde(default)]
     pub improvement: Option<Improvement>,
+    /// Marks a mismatch on a specific axis as a reference-availability artifact
+    /// (the prepared manifest lacks the reference this row needs, so ferro
+    /// no-ops), NOT a ferro bug. Tallied into `AxisTally::reference_unavailable`
+    /// instead of `fail`. XPASS-guarded: if ferro starts matching, the reference
+    /// became available and the annotation must be removed. Distinct from
+    /// `known_bug` (ferro is *wrong* on a reference it *can* resolve).
+    #[serde(default)]
+    pub reference_unavailable: Option<ReferenceUnavailable>,
     /// Documentary annotation for cases where mutalyzer's expected output
     /// has been corrected in `cases.json` to ferro's spec-correct value.
     /// Has NO effect on tally bucketing — the corrected expected string
@@ -278,6 +299,47 @@ impl std::fmt::Display for Policy {
     }
 }
 
+/// Closed enum of reasons a corpus row's reference cannot be resolved by the
+/// prepared manifest. Like [`Policy`] and [`SpecSection`], adding a variant
+/// requires a code change here, which forces deliberate review of every claim
+/// that a divergence is a reference-availability artifact rather than a ferro
+/// defect. The `#[serde(rename)]` strings are the stable `cases.json` wire
+/// format.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum ReferenceUnavailableReason {
+    /// The exact pinned `accession.version` the row references is not carried by
+    /// the prepared manifest (a vanilla `ferro prepare` ships only current
+    /// RefSeq versions), so ferro cannot resolve the reference and no-ops
+    /// (echoes the input). Provisioning the exact version resolves it.
+    #[serde(rename = "accession-version-absent")]
+    AccessionVersionAbsent,
+    /// The row references an Ensembl accession (`ENST`/`ENSG`), which is absent
+    /// from the RefSeq-only prepared manifest, so the reference cannot be
+    /// resolved and ferro no-ops. Preparing an Ensembl reference resolves it.
+    #[serde(rename = "ensembl-absent-from-refseq-manifest")]
+    EnsemblAbsentFromRefseqManifest,
+}
+
+impl ReferenceUnavailableReason {
+    /// Stable identifier used in summary lines so reviewers can grep across
+    /// runs. Matches the `#[serde(rename)]` strings byte-for-byte.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReferenceUnavailableReason::AccessionVersionAbsent => "accession-version-absent",
+            ReferenceUnavailableReason::EnsemblAbsentFromRefseqManifest => {
+                "ensembl-absent-from-refseq-manifest"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ReferenceUnavailableReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Accepted-divergence annotation. When attached to a `Case`, the
 /// corpus runner treats a mismatch on `axis` as a tracked-but-non-failing
 /// divergence (counted in `divergence_accepted`) rather than a hard FAIL.
@@ -324,6 +386,41 @@ pub struct KnownBug {
     /// Issue tracking the fix.
     pub tracking_issue: u64,
     /// Optional human-readable note.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry), grouping this
+    /// divergence under a cross-case pattern in the generated summary.
+    #[serde(default)]
+    pub cluster: Option<String>,
+}
+
+/// Reference-unavailable annotation. When attached to a `Case`, the corpus
+/// runner treats a mismatch on `axis` as a **reference-availability artifact**,
+/// NOT a ferro defect: the prepared manifest lacks the reference this row needs,
+/// so ferro no-ops (echoes the input) and cannot match mutalyzer. Tallied into
+/// `AxisTally::reference_unavailable`, distinct from `known_bug`.
+///
+/// This disposition exists to stop conflating "the oracle has no reference for
+/// this input" with "ferro produced the wrong answer." The former is a
+/// provisioning gap (tracked by `tracking_issue` — the issue that will make the
+/// reference available, e.g. exact-version provisioning or an Ensembl
+/// reference), not a normalization bug. Contrast with [`KnownBug`], which
+/// asserts ferro is *wrong* on a reference it *can* resolve.
+///
+/// XPASS-guarded like [`KnownBug`]: if ferro *starts* matching mutalyzer on this
+/// axis, the reference became available (the provisioning landed), so the
+/// harness FAILs loudly to demote the row and remove the annotation.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct ReferenceUnavailable {
+    /// Axis this annotation applies to.
+    pub axis: Axis,
+    /// Closed reason identifier explaining why the reference is unavailable.
+    /// Surfaced in the per-axis tally summary so reviewers can grep for it.
+    pub reason: ReferenceUnavailableReason,
+    /// Issue tracking the provisioning that will make the reference available.
+    pub tracking_issue: u64,
+    /// Optional human-readable note expanding on the reason.
     #[serde(default)]
     pub note: Option<String>,
     /// Root-cause cluster id (see the corpus `clusters` registry), grouping this

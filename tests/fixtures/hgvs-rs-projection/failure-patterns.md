@@ -57,6 +57,6 @@ For a deletion spanning the entire coding sequence (including the initiation cod
 
 ## Disposition tallies
 
-| axis | accepted_divergence | known_bug | improvement | spec_citation |
-|---|---:|---:|---:|---:|
-| protein_description | 1 | 0 | 6 | 0 |
+| axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
+|---|---:|---:|---:|---:|---:|
+| protein_description | 1 | 0 | 6 | 0 | 0 |
