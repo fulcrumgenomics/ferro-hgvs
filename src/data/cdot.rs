@@ -2503,6 +2503,71 @@ impl CdotMapper {
         None
     }
 
+    /// Version-**exact** transcript lookup: like [`get_transcript`](Self::get_transcript)
+    /// but **without** the version-fallback that substitutes a sibling version
+    /// (`NM_000088.2 → NM_000088.3`).
+    ///
+    /// Use this where the caller has already committed to a specific version's
+    /// *sequence* and must not pair it with a *different* version's CDS/exon
+    /// frame. Per HGVS, a `c.`/`r.` description is defined only against its
+    /// named `accession.version` — `c.1` is the `A` of that version's start
+    /// codon (`background/numbering.md`), and a versioned identifier is required
+    /// precisely because versions differ in length/CDS offset
+    /// (`background/refseq.md`). Substituting a sibling version's frame onto
+    /// another version's sequence yields a spec-invalid description whose stated
+    /// reference and coordinate frame disagree (#714).
+    ///
+    /// The LRG → RefSeq mapping is honored exactly (it is an alias to a specific
+    /// `accession.version`, not a version fuzz).
+    pub fn get_transcript_exact(&self, accession: &str) -> Option<&CdotTranscript> {
+        if let Some(tx) = self.transcripts.get(accession) {
+            return Some(tx);
+        }
+        if accession.starts_with("LRG_") {
+            if let Some(refseq) = self.lrg_to_refseq.get(accession) {
+                return self.transcripts.get(refseq);
+            }
+        }
+        None
+    }
+
+    /// Build-aware version-**exact** lookup: the
+    /// [`get_transcript_on_build`](Self::get_transcript_on_build) analogue of
+    /// [`get_transcript_exact`](Self::get_transcript_exact). Consults the
+    /// primary build, eagerly-captured alt views, and any deferred secondary
+    /// build, but **never** falls back to a different version of the same base
+    /// accession (#714).
+    pub fn get_transcript_on_build_exact(
+        &self,
+        accession: &str,
+        build: &str,
+    ) -> Option<&CdotTranscript> {
+        let primary_matches = match self.primary_build.as_deref() {
+            Some(pb) => pb == build,
+            None => true,
+        };
+        if primary_matches {
+            return self.get_transcript_exact(accession);
+        }
+        let resolved: &str = if accession.starts_with("LRG_") {
+            self.lrg_to_refseq
+                .get(accession)
+                .map(String::as_str)
+                .unwrap_or(accession)
+        } else {
+            accession
+        };
+        if let Some(alt) = self.alt_build_transcripts.get(build) {
+            if let Some(tx) = alt.get(resolved) {
+                return Some(tx);
+            }
+            // NO version fallback here (exact only) — unlike
+            // `get_transcript_on_build`.
+        }
+        self.deferred_alt_mapper(build)?
+            .get_transcript_on_build_exact(accession, build)
+    }
+
     /// Get a transcript by accession, restricted to a specific genome build.
     ///
     /// When `build` matches the mapper's primary load build, delegates to
@@ -4978,6 +5043,87 @@ mod tests {
             Some(20),
             "primary-build base->version fallback must deterministically pick \
              the highest version (.4 over .3)"
+        );
+    }
+
+    /// JSON with only `NM_000088.3` and `.4` present (no `.2`), used to contrast
+    /// fuzzy vs. exact resolution.
+    fn version_skew_mapper() -> CdotMapper {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": { "GRCh38": {
+                        "contig": "NC_000017.11", "strand": "+",
+                        "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                    }},
+                    "start_codon": 10, "stop_codon": 60
+                },
+                "NM_000088.4": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": { "GRCh38": {
+                        "contig": "NC_000017.11", "strand": "+",
+                        "exons": [[50184096, 50184269, 1, 0, 173, "M173"]]
+                    }},
+                    "start_codon": 20, "stop_codon": 160
+                }
+            }
+        }
+        "#;
+        CdotMapper::from_reader(json.as_bytes()).unwrap()
+    }
+
+    // #714: `get_transcript_exact` must NOT substitute a sibling version. An
+    // absent exact version returns `None`, where the fuzzy `get_transcript`
+    // returns a different version — pairing that frame with the requested
+    // version's sequence is what silently mis-normalizes `c.` variants.
+    #[test]
+    fn test_get_transcript_exact_does_not_version_fuzz() {
+        let mapper = version_skew_mapper();
+        // Absent exact version: fuzzy finds a sibling, exact returns None.
+        assert!(
+            mapper.get_transcript("NM_000088.2").is_some(),
+            "fuzzy get_transcript still resolves an absent version to a sibling"
+        );
+        assert!(
+            mapper.get_transcript_exact("NM_000088.2").is_none(),
+            "exact lookup must NOT substitute a sibling version (#714)"
+        );
+        // Present exact versions resolve to their OWN frame.
+        assert_eq!(
+            mapper
+                .get_transcript_exact("NM_000088.3")
+                .map(|t| t.cds_start),
+            Some(Some(10)),
+            "exact .3 must return .3's own CDS frame"
+        );
+        assert_eq!(
+            mapper
+                .get_transcript_exact("NM_000088.4")
+                .map(|t| t.cds_start),
+            Some(Some(20)),
+            "exact .4 must return .4's own CDS frame"
+        );
+    }
+
+    // #714: the build-aware exact lookup is also version-exact on the primary
+    // build (the path the normalize transcript resolution uses with no hint).
+    #[test]
+    fn test_get_transcript_on_build_exact_no_version_fuzz_primary() {
+        let mapper = version_skew_mapper();
+        assert!(
+            mapper
+                .get_transcript_on_build_exact("NM_000088.2", "GRCh38")
+                .is_none(),
+            "build-exact lookup must not substitute a sibling on the primary build (#714)"
+        );
+        assert_eq!(
+            mapper
+                .get_transcript_on_build_exact("NM_000088.4", "GRCh38")
+                .map(|t| t.cds_start),
+            Some(Some(20)),
+            "build-exact lookup resolves the exact version when present"
         );
     }
 
