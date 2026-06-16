@@ -37,6 +37,11 @@ pub struct ReferenceManifest {
     /// the same way `genome_grch37_fasta`/`cdot_grch37_json` pair their GRCh38 fields.
     #[serde(default)]
     pub refseqgene_alignments_grch37: Option<PathBuf>,
+    /// NCBI `LRG_RefSeqGene` association table, mapping each gene to its
+    /// reference-standard transcript. Consumed to resolve legacy gene-model
+    /// selectors (`NG_(GENE_v001):c.…`) to the transcript accession (#500/#637).
+    #[serde(default)]
+    pub refseqgene_summary: Option<PathBuf>,
     /// LRG FASTA files (LRG_* accessions)
     #[serde(default)]
     pub lrg_fastas: Vec<PathBuf>,
@@ -104,6 +109,7 @@ impl Default for ReferenceManifest {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: None,
+            refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
@@ -248,6 +254,7 @@ impl ReferenceManifest {
             &self.genome_grch37_fasta,
             &self.refseqgene_alignments,
             &self.refseqgene_alignments_grch37,
+            &self.refseqgene_summary,
             &self.lrg_refseq_mapping,
             &self.cdot_json,
             &self.cdot_grch37_json,
@@ -286,6 +293,7 @@ impl ReferenceManifest {
             &mut self.genome_grch37_fasta,
             &mut self.refseqgene_alignments,
             &mut self.refseqgene_alignments_grch37,
+            &mut self.refseqgene_summary,
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
             &mut self.cdot_grch37_json,
@@ -513,6 +521,7 @@ mod tests {
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],
             refseqgene_alignments: Some(ref_dir.join("refseqgene_alignments.gff3")),
             refseqgene_alignments_grch37: Some(ref_dir.join("refseqgene_alignments_grch37.gff3")),
+            refseqgene_summary: Some(ref_dir.join("LRG_RefSeqGene")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
             lrg_xmls: vec![ref_dir.join("lrg.xml")],
             lrg_refseq_mapping: Some(ref_dir.join("lrg_mapping.txt")),

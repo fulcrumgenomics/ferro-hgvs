@@ -233,6 +233,11 @@ pub struct MultiFastaProvider {
     /// the parsed RefSeqGene alignments cover (#653). Selection by the input's
     /// resolved build happens in `genomic_placement_on_build`.
     refseqgene_placements: FxHashMap<String, Vec<GenomicPlacement>>,
+    /// Legacy gene-model selector resolution: gene Symbol (upper-case) →
+    /// reference-standard transcript accession, parsed once from NCBI's
+    /// `LRG_RefSeqGene` table named by the manifest's `refseqgene_summary`
+    /// (#500/#637). Empty when the manifest carries no summary file.
+    legacy_gene_models: FxHashMap<String, String>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -332,6 +337,7 @@ impl MultiFastaProvider {
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
+            legacy_gene_models: FxHashMap::default(),
         })
     }
 
@@ -369,6 +375,7 @@ impl MultiFastaProvider {
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
+            legacy_gene_models: FxHashMap::default(),
         })
     }
 
@@ -606,6 +613,29 @@ impl MultiFastaProvider {
             }
         }
 
+        // Parse the NCBI `LRG_RefSeqGene` summary into a gene → reference-standard
+        // transcript map for legacy gene-model selector resolution (#500/#637).
+        // A read failure is warned (not silently swallowed); an absent field is
+        // fine (legacy selectors stay un-resolved).
+        let legacy_gene_models = match manifest.get("refseqgene_summary").and_then(|v| v.as_str()) {
+            None => FxHashMap::default(),
+            Some(rel) => {
+                let path = resolve_path(rel);
+                match std::fs::read_to_string(&path) {
+                    Ok(tsv) => crate::reference::legacy_selector::parse_refseqgene_summary(&tsv),
+                    Err(e) => {
+                        warn!(
+                            "Failed to read RefSeqGene summary {}: {}; \
+                             legacy gene-model selector resolution disabled",
+                            path.display(),
+                            e
+                        );
+                        FxHashMap::default()
+                    }
+                }
+            }
+        };
+
         // Get supplemental directory (missing ClinVar transcripts)
         if let Some(supplemental) = manifest.get("supplemental_fasta").and_then(|v| v.as_str()) {
             let path = resolve_path(supplemental);
@@ -627,6 +657,7 @@ impl MultiFastaProvider {
         // be re-anchored (#480); `from_directories` cannot know about them.
         provider.lrg_xml_dir = lrg_xml_dir;
         provider.refseqgene_placements = refseqgene_placements;
+        provider.legacy_gene_models = legacy_gene_models;
 
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
@@ -851,6 +882,7 @@ impl MultiFastaProvider {
             lrg_xml_dir: None,
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
+            legacy_gene_models: FxHashMap::default(),
         })
     }
 
@@ -2115,6 +2147,12 @@ impl ReferenceProvider for MultiFastaProvider {
             .expect("lrg placement cache poisoned")
             .insert(key, placement.clone());
         placement
+    }
+
+    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+        crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
+            self.legacy_gene_models.get(g).cloned()
+        })
     }
 
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {

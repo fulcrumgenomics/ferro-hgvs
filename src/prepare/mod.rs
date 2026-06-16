@@ -135,6 +135,14 @@ pub mod urls {
     pub const REFSEQGENE_ALIGNMENTS_GRCH37_URL: &str =
         "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/alignments/ARCHIVE/all/GCF_000001405.25_105.20201022_refseqgene_alignments.gff3";
 
+    /// NCBI `LRG_RefSeqGene` association table — maps each gene to its
+    /// reference-standard transcript, used to resolve legacy gene-model
+    /// selectors (`NG_(GENE_v001):c.…`) to the transcript accession (#500/#637).
+    /// A small plain (un-gzipped) TSV alongside the RefSeqGene FASTAs.
+    pub const REFSEQGENE_SUMMARY_FILE: &str = "LRG_RefSeqGene";
+    pub const REFSEQGENE_SUMMARY_URL: &str =
+        "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/RefSeqGene/LRG_RefSeqGene";
+
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
@@ -476,6 +484,21 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                     Ok(_) => record(&mut manifest, aln_path),
                     Err(e) => eprintln!("  Warning: Failed to download {}: {}", name, e),
                 }
+            }
+        }
+
+        // `LRG_RefSeqGene` association table — gene → reference-standard
+        // transcript, used to resolve legacy gene-model selectors (#500/#637).
+        let summary_name = urls::REFSEQGENE_SUMMARY_FILE;
+        let summary_path = refseqgene_dir.join(summary_name);
+        if config.skip_existing && summary_path.exists() {
+            eprintln!("  Skipping {} (exists)", summary_name);
+            manifest.refseqgene_summary = Some(summary_path);
+        } else {
+            eprintln!("  Downloading {}...", summary_name);
+            match download_file(urls::REFSEQGENE_SUMMARY_URL, &summary_path) {
+                Ok(_) => manifest.refseqgene_summary = Some(summary_path),
+                Err(e) => eprintln!("  Warning: Failed to download {}: {}", summary_name, e),
             }
         }
     }

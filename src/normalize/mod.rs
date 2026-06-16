@@ -1231,6 +1231,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // Rewrite a legacy gene-model selector (`NG_(GENE_v001):c.…`) to the
+        // spec-preferred transcript form (`NG_(NM_):c.…`) up front, so the rest
+        // of normalization — and projection, which normalizes first (#637) —
+        // operates on the resolved transcript. Unresolvable selectors are left
+        // unchanged (#500).
+        let rewritten = self.rewrite_legacy_gene_selector(variant);
+        let variant = rewritten.as_ref().unwrap_or(variant);
+
         // EINTRONIC (#486): an intronic offset on a bare transcript reference
         // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
         // description form. Detect it up front — before any per-axis
@@ -3081,6 +3089,57 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return None;
         }
         Some(protein_accession.with_genomic_context((**context).clone()))
+    }
+
+    /// Rewrite a legacy LOVD gene-model selector on a genomic reference —
+    /// `NG_/NC_/LRG(GENE[_v001]):c.…` — to the spec-preferred transcript-accession
+    /// form `NG_/NC_/LRG(NM_):c.…`, when the provider resolves the gene's
+    /// reference-standard transcript (#500/#637). `_v001` and the bare gene name
+    /// both resolve to that transcript; the `c.` coordinates are unchanged (the
+    /// gene-model selector *is* that transcript).
+    ///
+    /// Returns `None` (preserve the input selector unchanged) when there is no
+    /// gene-symbol selector, the reference is not genomic (`NM_(GENE)` keeps the
+    /// #121 behavior), the selector already names a transcript context, or the
+    /// gene is unresolvable (unknown, higher locus version, or no summary
+    /// ingested) — mirroring the #121 "preserve when present, don't synthesize"
+    /// policy. Never an error.
+    fn rewrite_legacy_gene_selector(
+        &self,
+        variant: &crate::hgvs::variant::HgvsVariant,
+    ) -> Option<crate::hgvs::variant::HgvsVariant> {
+        use crate::hgvs::parser::accession::parse_accession;
+        use crate::hgvs::variant::{CdsVariant, HgvsVariant};
+
+        // Only the coding axis carries the corpus's legacy selectors; the
+        // reference-standard map resolves to `NM_`, which suits `c.` coordinates.
+        let HgvsVariant::Cds(c) = variant else {
+            return None;
+        };
+        let gene_symbol = c.gene_symbol.as_deref()?;
+        let accession = &c.accession;
+        // Only a genomic-reference selector slot (`NG_`/`NC_`/`LRG_`) is in scope.
+        let is_genomic_ref = matches!(accession.prefix.as_ref(), "NG" | "NC") || accession.is_lrg();
+        // A selector that already names a transcript context is not a bare
+        // gene-model selector — leave it.
+        if !is_genomic_ref || accession.genomic_context.is_some() {
+            return None;
+        }
+        let nm = self.provider.resolve_legacy_gene_selector(gene_symbol)?;
+        let (rest, nm_accession) = parse_accession(&nm).ok()?;
+        // The resolver yields a reference-standard `NM_` coding transcript
+        // (`parse_refseqgene_summary` keeps only `NM_` rows); reject anything else
+        // rather than emit a malformed or non-coding selector for a `c.` variant.
+        if !rest.is_empty() || nm_accession.prefix.as_ref() != "NM" {
+            return None;
+        }
+        // The genomic reference becomes the context wrapper; the resolved
+        // transcript becomes the selector; the now-redundant gene symbol is dropped.
+        Some(HgvsVariant::Cds(CdsVariant {
+            accession: nm_accession.with_genomic_context(accession.clone()),
+            gene_symbol: None,
+            loc_edit: c.loc_edit.clone(),
+        }))
     }
 
     /// Apply the HGVS 3' rule to a protein deletion or duplication.

@@ -28,6 +28,11 @@ pub struct MockProvider {
     /// One entry per genome build (the build is encoded in each placement's
     /// `nc` accession), so tests can exercise per-build selection (#653).
     genomic_placements: HashMap<String, Vec<GenomicPlacement>>,
+    /// Legacy gene-model selector resolution: gene Symbol (upper-case) →
+    /// reference-standard transcript accession (e.g. `"TIMM8B"` →
+    /// `"NM_012459.4"`). Lets tests exercise the #500/#637 selector rewrite
+    /// without ingesting NCBI's `LRG_RefSeqGene` table.
+    legacy_gene_models: HashMap<String, String>,
 }
 
 impl MockProvider {
@@ -39,7 +44,20 @@ impl MockProvider {
             genomic_sequences: HashMap::new(),
             non_version_exact: HashSet::new(),
             genomic_placements: HashMap::new(),
+            legacy_gene_models: HashMap::new(),
         }
+    }
+
+    /// Register a legacy gene-model → reference-standard transcript mapping
+    /// (e.g. `"TIMM8B"` → `"NM_012459.4"`), keyed case-insensitively by gene
+    /// Symbol, for the #500/#637 selector rewrite.
+    pub fn add_legacy_gene_model(
+        &mut self,
+        gene_symbol: impl AsRef<str>,
+        transcript: impl Into<String>,
+    ) {
+        self.legacy_gene_models
+            .insert(gene_symbol.as_ref().to_ascii_uppercase(), transcript.into());
     }
 
     /// Register the chromosomal placement of a genomic parent reference
@@ -119,6 +137,7 @@ impl MockProvider {
             genomic_sequences,
             non_version_exact: HashSet::new(),
             genomic_placements: HashMap::new(),
+            legacy_gene_models: HashMap::new(),
         })
     }
 
@@ -335,6 +354,12 @@ impl ReferenceProvider for MockProvider {
     ) -> Option<GenomicPlacement> {
         let list = self.genomic_placements.get(&parent.full())?;
         crate::reference::provider::select_placement_for_build(list, build)
+    }
+
+    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+        crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
+            self.legacy_gene_models.get(g).cloned()
+        })
     }
 
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
