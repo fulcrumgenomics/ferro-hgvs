@@ -2568,6 +2568,53 @@ impl CdotMapper {
             .get_transcript_on_build_exact(accession, build)
     }
 
+    /// Version-**exact** lookup across **all** loaded builds: the primary build,
+    /// eagerly-captured alt views, and deferred secondary builds (e.g. a
+    /// manifest's GRCh37 cdot).
+    ///
+    /// CDS bounds in *transcript* coordinates are genome-build-independent, so a
+    /// transcript present only in a secondary build still yields the correct
+    /// `c.` reading frame for normalization (#718) — the right answer when the
+    /// requested version is absent from the active build's cdot but present in
+    /// another. Like the other `*_exact` lookups, it **never** substitutes a
+    /// different version of the same base.
+    ///
+    /// CAUTION: genomic/exon **alignment** coordinates ARE build-specific.
+    /// Callers must use only the returned CDS (transcript-space) when the hit
+    /// comes from a non-primary build, never its genomic placement.
+    pub fn get_transcript_exact_any_build(&self, accession: &str) -> Option<&CdotTranscript> {
+        if let Some(tx) = self.get_transcript_exact(accession) {
+            return Some(tx);
+        }
+        let resolved: &str = if accession.starts_with("LRG_") {
+            self.lrg_to_refseq
+                .get(accession)
+                .map(String::as_str)
+                .unwrap_or(accession)
+        } else {
+            accession
+        };
+        // Eagerly-captured alt-build views (exact only — no sibling fallback).
+        for alt in self.alt_build_transcripts.values() {
+            if let Some(tx) = alt.get(resolved) {
+                return Some(tx);
+            }
+        }
+        // Deferred secondary builds, loaded lazily on first access. The deferred
+        // mapper is loaded with its own (default) primary build, so the build's
+        // transcripts may live in its alt view — query it build-aware-exact,
+        // mirroring `get_transcript_on_build`'s deferred path.
+        for build in self.deferred_alt_sources.keys() {
+            if let Some(tx) = self
+                .deferred_alt_mapper(build)
+                .and_then(|m| m.get_transcript_on_build_exact(accession, build))
+            {
+                return Some(tx);
+            }
+        }
+        None
+    }
+
     /// Get a transcript by accession, restricted to a specific genome build.
     ///
     /// When `build` matches the mapper's primary load build, delegates to
@@ -5124,6 +5171,58 @@ mod tests {
                 .map(|t| t.cds_start),
             Some(Some(20)),
             "build-exact lookup resolves the exact version when present"
+        );
+    }
+
+    // #718: cross-build version-exact lookup finds a version present only in a
+    // secondary build (its build-independent CDS frame), without fuzzing to a
+    // sibling in the primary build.
+    #[test]
+    fn test_get_transcript_exact_any_build_finds_secondary_build_version() {
+        // .3 is in the primary (GRCh38) build; .2 is ONLY in the alt (GRCh37)
+        // build. .2 must be found with its OWN CDS (start_codon 5), never .3's.
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": { "GRCh38": {
+                        "contig": "NC_000017.11", "strand": "+",
+                        "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                    }},
+                    "start_codon": 20, "stop_codon": 60
+                },
+                "NM_000088.2": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": { "GRCh37": {
+                        "contig": "NC_000017.10", "strand": "+",
+                        "exons": [[48263025, 48263098, 1, 0, 73, "M73"]]
+                    }},
+                    "start_codon": 5, "stop_codon": 60
+                }
+            }
+        }
+        "#;
+        let mapper = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        // Primary (GRCh38) exact lookup does not see .2 (it lives only in GRCh37).
+        assert!(
+            mapper.get_transcript_exact("NM_000088.2").is_none(),
+            "primary-build exact lookup must not see a secondary-build-only version"
+        );
+        // Cross-build exact lookup finds .2's OWN frame (start_codon 5), not .3's (20).
+        assert_eq!(
+            mapper
+                .get_transcript_exact_any_build("NM_000088.2")
+                .map(|t| t.cds_start),
+            Some(Some(5)),
+            "must return .2's own CDS from the secondary build, never a sibling's (#718)"
+        );
+        // A version present in NO build is still not invented.
+        assert!(
+            mapper
+                .get_transcript_exact_any_build("NM_000088.9")
+                .is_none(),
+            "must not resolve a version absent from every build"
         );
     }
 
