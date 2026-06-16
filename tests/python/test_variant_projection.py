@@ -627,3 +627,21 @@ class TestProjectVariant:
         canonical = projector.project_variant(variant, "NM_TEST.1")
         skip_norm = projector.project_normalized(variant, "NM_TEST.1")
         assert canonical.c_name == skip_norm.c_name
+
+
+class TestAssemblyOverride:
+    """The ``assembly`` constructor kwarg (#715): a build-build override for
+    build-agnostic inputs, validated/normalized at the boundary."""
+
+    def test_accepts_canonical_and_alias_assembly(self) -> None:
+        # Canonical names and common aliases construct without error.
+        for name in ("GRCh37", "GRCh38", "hg19", "hg38"):
+            ferro_hgvs.VariantProjector(assembly=name)
+
+    def test_invalid_assembly_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="assembly"):
+            ferro_hgvs.VariantProjector(assembly="hg20")
+
+    def test_default_assembly_is_none(self) -> None:
+        # Omitting the kwarg is unchanged behavior (no override).
+        ferro_hgvs.VariantProjector()
