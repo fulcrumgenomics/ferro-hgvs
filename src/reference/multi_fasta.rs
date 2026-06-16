@@ -1479,9 +1479,20 @@ impl MultiFastaProvider {
 
                 // Try to get metadata from cdot
                 let meta = if let Some(ref cdot) = self.cdot_mapper {
+                    // Version-EXACT cdot lookup (#714): `resolved` is the
+                    // concrete accession.version whose *sequence* we just read
+                    // from the index. cdot's fuzzy version-fallback would pair
+                    // that sequence with a *sibling* version's CDS/exon frame
+                    // (e.g. NM_003002.2's bases with .3's CDS, start_codon 84 vs
+                    // 61), producing a spec-invalid `c.` description: HGVS numbers
+                    // `c.1` from the named version's start codon and requires the
+                    // exact version precisely because versions differ in
+                    // length/CDS offset (background/numbering.md, refseq.md). On
+                    // an exact miss, fall through to the supplemental-CDS path
+                    // below rather than adopt a foreign frame.
                     let cdot_tx_opt = match build_hint {
-                        Some(b) => cdot.get_transcript_on_build(&resolved, b),
-                        None => cdot.get_transcript(&resolved),
+                        Some(b) => cdot.get_transcript_on_build_exact(&resolved, b),
+                        None => cdot.get_transcript_exact(&resolved),
                     };
                     if let Some(tx) = cdot_tx_opt {
                         // Convert cdot exons to transcript exons
