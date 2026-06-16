@@ -278,9 +278,41 @@ pub fn infer_genome_build_from_accession(
     None
 }
 
+/// Normalize a user-supplied assembly name to ferro's canonical build string
+/// (`"GRCh37"` / `"GRCh38"`), or `None` if unrecognized (#715).
+///
+/// Accepts the common aliases (`hg19`/`b37`/`37` → `GRCh37`,
+/// `hg38`/`b38`/`38` → `GRCh38`), case-insensitively. The canonical strings
+/// returned here are the exact `&'static str` values
+/// [`infer_genome_build_from_accession`] yields and that
+/// `select_placement_for_build` / cdot's `get_transcript_on_build` compare
+/// against, so callers should validate at the boundary (CLI flag, Python kwarg)
+/// and only ever hand the canonical value to
+/// [`crate::project::VariantProjector::with_assembly`].
+pub fn normalize_assembly_name(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "grch37" | "hg19" | "b37" | "37" => Some("GRCh37"),
+        "grch38" | "hg38" | "b38" | "38" => Some("GRCh38"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_assembly_name() {
+        for name in ["GRCh37", "grch37", "hg19", "HG19", "b37", "37", " grch37 "] {
+            assert_eq!(normalize_assembly_name(name), Some("GRCh37"), "{name:?}");
+        }
+        for name in ["GRCh38", "grch38", "hg38", "b38", "38"] {
+            assert_eq!(normalize_assembly_name(name), Some("GRCh38"), "{name:?}");
+        }
+        for name in ["", "hg20", "GRCh39", "chm13", "t2t"] {
+            assert_eq!(normalize_assembly_name(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn test_default_human_autosomes() {
