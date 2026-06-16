@@ -104,7 +104,7 @@ pre-commit run --all-files           # Run manually
 
 ### CLI Binaries (`src/bin/`)
 
-- `ferro.rs` - Main CLI (`ferro parse`, `ferro normalize`, `ferro prepare`, etc.)
+- `ferro.rs` - Main CLI (`ferro parse`, `ferro normalize`, `ferro project`, `ferro prepare`, etc.)
 - `benchmark.rs` - Tool comparison benchmark (requires `--features benchmark`)
 - `ferro-web.rs` - Web service (requires `--features web-service`)
 
