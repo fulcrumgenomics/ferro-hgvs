@@ -521,9 +521,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_variant_inner(variant, transcript_id)
     }
 
-    /// Parse, normalize, and project an HGVS string onto ALL overlapping
-    /// transcripts, returning results in clinical priority order (MANE Select
-    /// first, then Plus Clinical, then canonical, then longest CDS).
+    /// Parse, normalize, and project an HGVS string onto the *curated* set of
+    /// overlapping transcripts (#656), returning results in clinical priority
+    /// order (MANE Select first, then Plus Clinical, then canonical, then
+    /// longest CDS).
+    ///
+    /// The result is the curated enumerated set rather than every
+    /// cdot-overlapping record: superseded transcript versions are collapsed
+    /// (only the highest version per base accession is kept) and predicted
+    /// `XM_`/`XR_` models are dropped when a curated `NM_`/`NR_` transcript
+    /// covers the same locus; predicted models are kept only when they are the
+    /// sole coverage. See [`select_enumerated_transcript_ids`] for the policy.
     ///
     /// Returns an empty `Vec` when the variant overlaps no known transcripts.
     /// Individual transcript errors are logged at trace level and silently
@@ -533,10 +541,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_variant_all(&variant)
     }
 
-    /// Normalize and project an already-parsed g. variant onto ALL overlapping
-    /// transcripts.
+    /// Normalize and project an already-parsed g. variant onto the *curated*
+    /// set of overlapping transcripts (#656).
     ///
-    /// See [`project_all`] for ordering and error-handling semantics.
+    /// See [`project_all`] for the curated enumeration policy, ordering, and
+    /// error-handling semantics.
     pub fn project_variant_all(
         &self,
         variant: &HgvsVariant,
@@ -1362,8 +1371,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         (nc_variant, Some(parent))
     }
 
-    /// Project an already-normalized g. variant onto ALL overlapping
-    /// transcripts, skipping re-normalization.
+    /// Project an already-normalized g. variant onto the *curated* set of
+    /// overlapping transcripts (#656), skipping re-normalization.
+    ///
+    /// The result is the curated enumerated set rather than every
+    /// cdot-overlapping record: superseded transcript versions are collapsed
+    /// (only the highest version per base accession is kept) and predicted
+    /// `XM_`/`XR_` models are dropped when a curated `NM_`/`NR_` transcript
+    /// covers the same locus; predicted models are kept only when they are the
+    /// sole coverage. See [`select_enumerated_transcript_ids`] for the policy.
     ///
     /// Callers that pre-normalize once and then fan-out across transcripts
     /// should use this method.
@@ -1396,9 +1412,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // 3. Find overlapping transcripts via the Projector (sorted by priority).
         let projection_result = self.projector.project(&contig, pos)?;
 
-        // 4. Project against each overlapping transcript.
-        let mut results = Vec::with_capacity(projection_result.projections.len());
+        // 3a. Apply the enumeration policy (#656): collapse superseded versions
+        //     and prefer curated transcripts over predicted models, so the
+        //     enumerated set matches mutalyzer's curated set rather than every
+        //     cdot-overlapping record.
+        let all_ids: Vec<&str> = projection_result
+            .projections
+            .iter()
+            .map(|p| p.transcript_id.as_str())
+            .collect();
+        let keep: std::collections::HashSet<&str> = select_enumerated_transcript_ids(&all_ids)
+            .into_iter()
+            .collect();
+
+        // 4. Project against each kept overlapping transcript (priority order preserved).
+        let mut results = Vec::with_capacity(keep.len());
         for tx_proj in &projection_result.projections {
+            if !keep.contains(tx_proj.transcript_id.as_str()) {
+                continue;
+            }
             match self.project_variant_inner(variant, &tx_proj.transcript_id) {
                 Ok(vp) => results.push(vp),
                 Err(e) => {
@@ -2781,6 +2813,123 @@ fn resolve_uncertain_boundary<T: Copy>(
     }
 }
 
+/// Split a transcript accession into its version-stripped base and version:
+/// `"NM_000532.5" → ("NM_000532", Some(5))`, `"NM_000532" → ("NM_000532", None)`.
+fn split_accession_version(id: &str) -> (&str, Option<u32>) {
+    match id.rsplit_once('.') {
+        Some((base, ver)) if !ver.is_empty() && ver.bytes().all(|b| b.is_ascii_digit()) => {
+            (base, ver.parse::<u32>().ok())
+        }
+        _ => (id, None),
+    }
+}
+
+/// Whether a transcript id is a *predicted* RefSeq model (`XM_`/`XR_`), as
+/// opposed to a curated `NM_`/`NR_` transcript.
+fn is_predicted_model(id: &str) -> bool {
+    id.starts_with("XM_") || id.starts_with("XR_")
+}
+
+/// Apply the `project_*_all` enumeration policy (#656) to a priority-ordered
+/// list of overlapping transcript ids:
+///
+/// 1. **Collapse superseded versions** — keep only the highest version per base
+///    accession (drop `NM_000532.4` when `NM_000532.5` overlaps the same locus).
+/// 2. **Prefer curated transcripts** — drop predicted `XM_`/`XR_` models when a
+///    curated `NM_`/`NR_` transcript also covers the locus (matching mutalyzer's
+///    curated set), but keep predicted models when they are the *sole* coverage,
+///    so a locus a predicted model would have covered never returns empty.
+///
+/// Input order (clinical priority) is preserved among the kept ids.
+pub(crate) fn select_enumerated_transcript_ids<'a>(ids: &[&'a str]) -> Vec<&'a str> {
+    use std::collections::HashMap;
+    // 1. Highest version seen per base accession.
+    let mut max_ver: HashMap<&str, u32> = HashMap::new();
+    for id in ids {
+        let (base, ver) = split_accession_version(id);
+        if let Some(v) = ver {
+            max_ver
+                .entry(base)
+                .and_modify(|m| *m = (*m).max(v))
+                .or_insert(v);
+        }
+    }
+    let highest: Vec<&str> = ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            let (base, ver) = split_accession_version(id);
+            match ver {
+                Some(v) => max_ver.get(base) == Some(&v),
+                // A bare (unversioned) accession is superseded by any versioned
+                // form of the same base; keep it only when no versioned id for
+                // that base was seen.
+                None => !max_ver.contains_key(base),
+            }
+        })
+        .collect();
+    // 2. Curated-preferred, never-empty.
+    if highest.iter().any(|id| !is_predicted_model(id)) {
+        highest
+            .into_iter()
+            .filter(|id| !is_predicted_model(id))
+            .collect()
+    } else {
+        highest
+    }
+}
+
+#[cfg(test)]
+mod enumeration_policy_tests {
+    use super::select_enumerated_transcript_ids;
+
+    #[test]
+    fn collapses_superseded_versions() {
+        // The #656 example: both versions of two transcripts → keep the highest.
+        let ids = [
+            "NM_000532.4",
+            "NM_000532.5",
+            "NM_001178014.1",
+            "NM_001178014.2",
+        ];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids),
+            vec!["NM_000532.5", "NM_001178014.2"]
+        );
+    }
+
+    #[test]
+    fn drops_predicted_models_when_curated_present() {
+        let ids = ["NM_000532.5", "XM_011512873.2", "XM_005247508.1"];
+        assert_eq!(select_enumerated_transcript_ids(&ids), vec!["NM_000532.5"]);
+    }
+
+    #[test]
+    fn keeps_predicted_models_when_sole_coverage() {
+        // No curated transcript overlaps → keep predicted models (never empty).
+        let ids = ["XM_005247508.1", "XM_011512873.2"];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids),
+            vec!["XM_005247508.1", "XM_011512873.2"]
+        );
+    }
+
+    #[test]
+    fn collapses_predicted_versions_then_drops_when_curated_present() {
+        let ids = ["NM_000532.5", "XM_011512873.1", "XM_011512873.2"];
+        assert_eq!(select_enumerated_transcript_ids(&ids), vec!["NM_000532.5"]);
+    }
+
+    #[test]
+    fn preserves_priority_order_among_kept() {
+        let ids = ["NM_B.1", "NM_A.2", "NM_A.1"];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids),
+            vec!["NM_B.1", "NM_A.2"]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2942,6 +3091,65 @@ mod tests {
 
         let mut provider = MockProvider::new();
         for id in ["NM_TX1.1", "NM_TX2.1"] {
+            provider.add_transcript(Transcript {
+                id: id.to_string(),
+                gene_symbol: Some("GENE1".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAA".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exons: vec![Exon::new(1, 1, 9)],
+                chromosome: Some("chr1".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1008),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+        }
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
+        (projector, provider)
+    }
+
+    /// Like [`make_two_transcript_setup`] but seeds three transcripts on the
+    /// *same* locus to exercise the #656 enumeration policy end-to-end through
+    /// the `project_*_all` fan-out:
+    /// - `NM_TX1.1` and `NM_TX1.2` — superseded/current versions of one curated
+    ///   base accession (only `.2` should survive the version collapse);
+    /// - `XM_TX9.1` — a predicted model that should be dropped because a curated
+    ///   transcript covers the same locus.
+    ///
+    /// So a curated set of exactly `{NM_TX1.2}` is expected, versus the three
+    /// overlapping records cdot reports.
+    #[cfg(test)]
+    fn make_curated_enumeration_setup() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        for id in ["NM_TX1.1", "NM_TX1.2", "XM_TX9.1"] {
+            cdot.add_transcript(
+                id.to_string(),
+                CdotTranscript {
+                    gene_name: Some("GENE1".to_string()),
+                    contig: "chr1".to_string(),
+                    strand: ProvStrand::Plus,
+                    exons: vec![[1000, 1009, 0, 9]],
+                    cds_start: Some(0),
+                    cds_end: Some(9),
+                    gene_id: None,
+                    protein: None,
+                    exon_cigars: Vec::new(),
+                },
+            );
+        }
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        for id in ["NM_TX1.1", "NM_TX1.2", "XM_TX9.1"] {
             provider.add_transcript(Transcript {
                 id: id.to_string(),
                 gene_symbol: Some("GENE1".to_string()),
@@ -4398,6 +4606,48 @@ mod tests {
         assert_eq!(
             results[0].transcript_id, "NM_TX2.1",
             "MANE Select should be first"
+        );
+    }
+
+    #[test]
+    fn project_all_applies_curated_enumeration_policy() {
+        // End-to-end: the #656 curation must be wired into the fan-out loop, not
+        // just unit-tested on `select_enumerated_transcript_ids`. cdot reports
+        // three overlapping records (NM_TX1.1, NM_TX1.2, XM_TX9.1) but the
+        // curated set is exactly {NM_TX1.2}: the superseded .1 is collapsed and
+        // the predicted XM_ model is dropped in favor of the curated transcript.
+        let (projector, provider) = make_curated_enumeration_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        let results = vp
+            .project_all("chr1:g.1003C>A")
+            .expect("project_all should succeed");
+        let ids: Vec<&str> = results.iter().map(|p| p.transcript_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["NM_TX1.2"],
+            "expected only the curated, current-version transcript, got {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn project_normalized_all_applies_curated_enumeration_policy() {
+        // Same curation, driven through the pre-normalized fan-out entrypoint.
+        let (projector, provider) = make_curated_enumeration_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        let variant = crate::parse_hgvs("chr1:g.1003C>A").expect("parse should succeed");
+        let normalized = vp.normalizer.normalize(&variant).expect("normalize failed");
+        let results = vp
+            .project_normalized_all(&normalized)
+            .expect("project_normalized_all should succeed");
+        let ids: Vec<&str> = results.iter().map(|p| p.transcript_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["NM_TX1.2"],
+            "expected only the curated, current-version transcript, got {:?}",
+            ids
         );
     }
 

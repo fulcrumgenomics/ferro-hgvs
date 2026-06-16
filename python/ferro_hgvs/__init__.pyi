@@ -1594,7 +1594,12 @@ class VariantProjector:
         ...
 
     def project_all(self, hgvs_string: str) -> list[VariantProjection]:
-        """Parse, normalize, and project a g. HGVS string onto ALL overlapping transcripts.
+        """Parse, normalize, and project a g. HGVS string onto the curated set of overlapping transcripts.
+
+        Returns the curated enumerated set (#656) rather than every overlapping record: superseded
+        transcript versions are collapsed (only the highest version per base accession is kept) and
+        predicted XM_/XR_ models are dropped when a curated NM_/NR_ transcript covers the same locus;
+        predicted models are kept only when they are the sole coverage.
 
         Returns projections in clinical priority order (MANE Select first, then Plus Clinical,
         then canonical, then longest CDS). Individual transcript failures are silently skipped.
@@ -1603,7 +1608,7 @@ class VariantProjector:
             hgvs_string: A g. HGVS variant string.
 
         Returns:
-            List of VariantProjection objects, one per overlapping transcript.
+            List of VariantProjection objects, one per curated overlapping transcript.
             Empty list when no transcripts overlap the variant.
 
         Raises:
@@ -1632,9 +1637,10 @@ class VariantProjector:
         ...
 
     def project_variant_all(self, variant: HgvsVariant) -> list[VariantProjection]:
-        """Normalize and project an already-parsed g. variant onto ALL overlapping transcripts.
+        """Normalize and project an already-parsed g. variant onto the curated set of overlapping transcripts.
 
-        Equivalent to ``project_all(str(variant))`` but skips the re-parse.
+        Equivalent to ``project_all(str(variant))`` but skips the re-parse; see ``project_all`` for the
+        curated enumeration policy (#656).
 
         Args:
             variant: An HgvsVariant (g.). Will be normalized before projection.
@@ -1670,7 +1676,12 @@ class VariantProjector:
         ...
 
     def project_normalized_all(self, variant: HgvsVariant) -> list[VariantProjection]:
-        """Project an already-normalized g. variant onto ALL overlapping transcripts, skipping re-normalization.
+        """Project an already-normalized g. variant onto the curated set of overlapping transcripts, skipping re-normalization.
+
+        Returns the curated enumerated set (#656) rather than every overlapping record: superseded
+        transcript versions are collapsed (only the highest version per base accession is kept) and
+        predicted XM_/XR_ models are dropped when a curated NM_/NR_ transcript covers the same locus;
+        predicted models are kept only when they are the sole coverage.
 
         Callers that pre-normalize once and then fan-out across transcripts should use this method
         to avoid repeated normalization overhead.
