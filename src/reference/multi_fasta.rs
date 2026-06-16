@@ -1551,6 +1551,37 @@ impl MultiFastaProvider {
                                 exon_cigars: tx.exon_cigars.clone(),
                             }
                         }
+                    } else if let Some(tx) = (build_hint.is_none())
+                        .then(|| cdot.get_transcript_exact_any_build(&resolved))
+                        .flatten()
+                    {
+                        // #718: the exact version is absent from the active cdot
+                        // build but present in another loaded build. CDS in
+                        // transcript coordinates is build-independent, so adopt
+                        // that version's OWN CDS (the correct `c.` frame) rather
+                        // than fall to a no-op — and never a fuzzy sibling
+                        // (spec-invalid, #714). Synthetic single exon with NO
+                        // genomic coordinates: those are build-specific and must
+                        // not be borrowed for projection (so the genomic axis
+                        // declines rather than emit wrong coordinates).
+                        TranscriptMetadata {
+                            gene_symbol: tx.gene_name.clone(),
+                            strand: tx.strand,
+                            cds_start: tx.cds_start.map(|s| s + 1), // 0-based → 1-based
+                            cds_end: tx.cds_end,
+                            chromosome: None,
+                            exons: vec![TxExon {
+                                number: 1,
+                                start: 1,
+                                end: entry.length,
+                                genomic_start: None,
+                                genomic_end: None,
+                            }],
+                            genomic_start: None,
+                            genomic_end: None,
+                            protein_id: None,
+                            exon_cigars: Vec::new(),
+                        }
                     } else {
                         // Check supplemental CDS for old/superseded transcripts
                         if self.supplemental_cds.transcripts.contains_key(&resolved) {
