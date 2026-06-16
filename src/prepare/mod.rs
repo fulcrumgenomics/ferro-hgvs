@@ -122,6 +122,19 @@ pub mod urls {
     pub const REFSEQGENE_ALIGNMENTS_URL: &str =
         "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/alignments/ARCHIVE/all/GCF_000001405.39_109.20211119_refseqgene_alignments.gff3";
 
+    /// GRCh37 RefSeqGene→genome alignment GFF3 (#653/#713).
+    ///
+    /// The final **GRCh37** RefSeqGene alignment is the archived RefSeq
+    /// annotation-release-105 snapshot (assembly `GCF_000001405.25` = GRCh37.p13,
+    /// dated 2020-10-22) under `alignments/ARCHIVE/all/`. NCBI froze the GRCh37
+    /// feed, so this is the latest; `NG_` records curated later are simply absent
+    /// (they decline — never a wrong coordinate). Merged with the GRCh38 file
+    /// (above) so an `NG_` resolves to its build-appropriate placement.
+    pub const REFSEQGENE_ALIGNMENTS_GRCH37_FILE: &str =
+        "GCF_000001405.25_105.20201022_refseqgene_alignments.gff3";
+    pub const REFSEQGENE_ALIGNMENTS_GRCH37_URL: &str =
+        "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/alignments/ARCHIVE/all/GCF_000001405.25_105.20201022_refseqgene_alignments.gff3";
+
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
@@ -427,19 +440,42 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             manifest.refseqgene_fastas.len()
         );
 
-        // RefSeqGene→genome alignment GFF3 — each NG_ record's chromosomal
+        // RefSeqGene→genome alignment GFF3s — each NG_ record's chromosomal
         // placement, used to project transcript coordinates into an NG_ parent's
-        // own frame (#480). Plain (un-gzipped) GFF3.
-        let aln_name = urls::REFSEQGENE_ALIGNMENTS_FILE;
-        let aln_path = refseqgene_dir.join(aln_name);
-        if config.skip_existing && aln_path.exists() {
-            eprintln!("  Skipping {} (exists)", aln_name);
-            manifest.refseqgene_alignments = Some(aln_path);
-        } else {
-            eprintln!("  Downloading {}...", aln_name);
-            match download_file(urls::REFSEQGENE_ALIGNMENTS_URL, &aln_path) {
-                Ok(_) => manifest.refseqgene_alignments = Some(aln_path),
-                Err(e) => eprintln!("  Warning: Failed to download {}: {}", aln_name, e),
+        // own frame (#480). Plain (un-gzipped) GFF3. Two single-build snapshots
+        // are fetched and merged downstream so an NG_ resolves to its
+        // build-appropriate placement: GRCh38 (release 109) and GRCh37 (release
+        // 105, #653/#713). A failed/absent file is non-fatal — that build's
+        // placements are simply unavailable (NG_ inputs on it decline).
+        for (name, url, is_grch37) in [
+            (
+                urls::REFSEQGENE_ALIGNMENTS_FILE,
+                urls::REFSEQGENE_ALIGNMENTS_URL,
+                false,
+            ),
+            (
+                urls::REFSEQGENE_ALIGNMENTS_GRCH37_FILE,
+                urls::REFSEQGENE_ALIGNMENTS_GRCH37_URL,
+                true,
+            ),
+        ] {
+            let aln_path = refseqgene_dir.join(name);
+            let record = |manifest: &mut ReferenceManifest, path: PathBuf| {
+                if is_grch37 {
+                    manifest.refseqgene_alignments_grch37 = Some(path);
+                } else {
+                    manifest.refseqgene_alignments = Some(path);
+                }
+            };
+            if config.skip_existing && aln_path.exists() {
+                eprintln!("  Skipping {} (exists)", name);
+                record(&mut manifest, aln_path);
+            } else {
+                eprintln!("  Downloading {}...", name);
+                match download_file(url, &aln_path) {
+                    Ok(_) => record(&mut manifest, aln_path),
+                    Err(e) => eprintln!("  Warning: Failed to download {}: {}", name, e),
+                }
             }
         }
     }

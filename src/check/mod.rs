@@ -173,6 +173,14 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
             ));
         }
     }
+    if let Some(ref alignments) = manifest.refseqgene_alignments_grch37 {
+        if !alignments.exists() {
+            result.warnings.push(format!(
+                "GRCh37 RefSeqGene alignments GFF3 not found: {}",
+                alignments.display()
+            ));
+        }
+    }
 
     result
 }
@@ -303,6 +311,7 @@ mod tests {
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
+            refseqgene_alignments_grch37: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
@@ -352,6 +361,7 @@ mod tests {
             genome_grch37_fasta: None,
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: Some(missing_alignments.clone()),
+            refseqgene_alignments_grch37: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
             lrg_refseq_mapping: None,
@@ -380,6 +390,58 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("RefSeqGene alignments GFF3 not found")),
             "Expected a warning for the missing alignments file, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_check_warns_on_missing_refseqgene_alignments_grch37() {
+        let dir = TempDir::new().unwrap();
+
+        // A real transcript FASTA so the manifest is otherwise valid.
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
+
+        // Point refseqgene_alignments_grch37 at a file that does not exist.
+        let missing_alignments = dir.path().join("missing_refseqgene_alignments_grch37.gff3");
+
+        let mut manifest = ReferenceManifest {
+            prepared_at: "2024-01-01T00:00:00Z".to_string(),
+            transcript_fastas: vec![transcript_fasta],
+            protein_fastas: Vec::new(),
+            genome_fasta: None,
+            genome_grch37_fasta: None,
+            refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: None,
+            refseqgene_alignments_grch37: Some(missing_alignments.clone()),
+            lrg_fastas: Vec::new(),
+            lrg_xmls: Vec::new(),
+            lrg_refseq_mapping: None,
+            cdot_json: None,
+            cdot_grch37_json: None,
+            ensembl_cdot_json: None,
+            ensembl_cdot_grch37_json: None,
+            ensembl_transcript_fastas: Vec::new(),
+            supplemental_fasta: None,
+            legacy_transcripts_fasta: None,
+            legacy_transcripts_metadata: None,
+            legacy_genbank_fasta: None,
+            legacy_genbank_metadata: None,
+            canonical_overrides: None,
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: dir.path().to_path_buf(),
+        };
+
+        manifest.save().unwrap();
+
+        let result = check_reference(dir.path());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("GRCh37 RefSeqGene alignments GFF3 not found")),
+            "Expected a warning for the missing GRCh37 alignments file, got {:?}",
             result.warnings
         );
     }

@@ -569,41 +569,42 @@ impl MultiFastaProvider {
             .and_then(|p| p.parent().map(Path::to_path_buf));
 
         // Parse NG_ RefSeqGene→chromosome placements from the NCBI alignment
-        // GFF3, if the manifest names one (#480). Read/parse failures are warned
+        // GFF3(s) the manifest names (#480). Two single-build snapshots are
+        // merged so an NG_ resolves to its build-appropriate placement: the
+        // GRCh38 file (`refseqgene_alignments`) and the GRCh37 file
+        // (`refseqgene_alignments_grch37`, #713). Read/parse failures are warned
         // (not silently swallowed): a named-but-unreadable file would otherwise
-        // disable NG_ re-anchoring invisibly. An absent field is fine (NG_
-        // parents keep prior behavior).
-        let refseqgene_placements = match manifest
-            .get("refseqgene_alignments")
-            .and_then(|v| v.as_str())
-        {
-            None => FxHashMap::default(),
-            Some(rel) => {
-                let path = resolve_path(rel);
-                match std::fs::read_to_string(&path) {
-                    Ok(gff3) => {
-                        let placements = parse_refseqgene_alignments(&gff3);
-                        if placements.is_empty() {
-                            warn!(
-                                "RefSeqGene alignments {} parsed to 0 placements; \
-                                 NG_ projection disabled",
-                                path.display()
-                            );
-                        }
-                        placements
-                    }
-                    Err(e) => {
+        // disable NG_ re-anchoring invisibly. An absent field is fine (that build
+        // simply has no placements).
+        let mut refseqgene_placements: FxHashMap<String, Vec<GenomicPlacement>> =
+            FxHashMap::default();
+        for field in ["refseqgene_alignments", "refseqgene_alignments_grch37"] {
+            let Some(rel) = manifest.get(field).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let path = resolve_path(rel);
+            match std::fs::read_to_string(&path) {
+                Ok(gff3) => {
+                    let placements = parse_refseqgene_alignments(&gff3);
+                    if placements.is_empty() {
                         warn!(
-                            "Failed to read RefSeqGene alignments {}: {}; \
-                             NG_ projection disabled",
-                            path.display(),
-                            e
+                            "RefSeqGene alignments {} parsed to 0 placements \
+                             (this source contributes none)",
+                            path.display()
                         );
-                        FxHashMap::default()
                     }
+                    merge_refseqgene_placements(&mut refseqgene_placements, placements);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to read RefSeqGene alignments {}: {}; \
+                         NG_ projection disabled for this source",
+                        path.display(),
+                        e
+                    );
                 }
             }
-        };
+        }
 
         // Get supplemental directory (missing ClinVar transcripts)
         if let Some(supplemental) = manifest.get("supplemental_fasta").and_then(|v| v.as_str()) {
@@ -1917,11 +1918,14 @@ fn gff_attr<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
 /// (The GFF `match` strand in col 7 is always `+`; the real orientation is the
 /// Target strand.)
 ///
-/// Only **ungapped** (`gap_count=0`) alignments to a **GRCh38 primary
-/// chromosome** are kept — matching cdot's primary build, against which the
-/// `NM_`→`NC_` step is computed. GRCh37 placements, alt-loci/patches, and gapped
-/// alignments (which a single affine span cannot represent) are skipped, so the
-/// projector keeps prior behavior rather than emit a wrong `NG_` coordinate.
+/// Only **ungapped** (`gap_count=0`) alignments to a **GRCh37 or GRCh38 primary
+/// chromosome** are kept (the build is derivable from the `NC_` version), stored
+/// per build so the input's resolved build selects the right placement at lookup
+/// (#653). Alt-loci/patch contigs and gapped alignments — which a single affine
+/// span cannot represent — are skipped, so the projector declines rather than
+/// emit a wrong `NG_` coordinate. At most one placement is kept per (NG version,
+/// build); see [`merge_refseqgene_placements`] for combining multiple alignment
+/// files (e.g. the separate GRCh38 and GRCh37 RefSeqGene snapshots, #713).
 fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlacement>> {
     let mut out: FxHashMap<String, Vec<GenomicPlacement>> = FxHashMap::default();
     for line in gff3.lines() {
@@ -1996,6 +2000,37 @@ fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlace
         }
     }
     out
+}
+
+/// Merge the per-`NG_` placement lists parsed from an additional RefSeqGene
+/// alignment file into an accumulator, keeping **at most one placement per
+/// (NG version, genome build)** — first source wins (#713).
+///
+/// `ferro prepare` downloads two RefSeqGene→genome alignment snapshots: the
+/// GRCh38 release-109 file and the GRCh37 release-105 file. Each is single-build
+/// (GRCh38 rows are on `NC_*.11`, GRCh37 on `NC_*.10`-era accessions), so merging
+/// them gives each `NG_` both builds, and [`select_placement_for_build`] picks
+/// the one matching the input's resolved build. The build is read back from each
+/// placement's `NC_` accession, mirroring `parse_refseqgene_alignments`'
+/// per-build de-duplication so a build already present from an earlier file is
+/// never overwritten.
+fn merge_refseqgene_placements(
+    acc: &mut FxHashMap<String, Vec<GenomicPlacement>>,
+    addition: FxHashMap<String, Vec<GenomicPlacement>>,
+) {
+    use crate::liftover::aliases::infer_genome_build_from_accession;
+    for (ng, placements) in addition {
+        let entry = acc.entry(ng).or_default();
+        for placement in placements {
+            let build = infer_genome_build_from_accession(&placement.nc);
+            let has_build = entry
+                .iter()
+                .any(|p| infer_genome_build_from_accession(&p.nc) == build);
+            if !has_build {
+                entry.push(placement);
+            }
+        }
+    }
 }
 
 impl ReferenceProvider for MultiFastaProvider {
@@ -2592,6 +2627,63 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
             crate::liftover::aliases::infer_genome_build_from_accession(&grch37.nc),
             Some("GRCh37")
         );
+    }
+
+    /// `ferro prepare` writes two single-build RefSeqGene alignment files; the
+    /// provider merges them so each NG_ carries both builds and
+    /// `genomic_placement_on_build` selects the right one (#713). The GRCh38
+    /// snapshot lists `NC_*.11` placements; the GRCh37 snapshot `NC_*.10`.
+    #[test]
+    fn merges_grch38_and_grch37_alignment_files_per_ng() {
+        const GRCH38_FILE: &str = "\
+##gff-version 3
+NC_000001.11\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=a0;Target=NG_007000.1 1 100 +;gap_count=0\n";
+        const GRCH37_FILE: &str = "\
+##gff-version 3
+NC_000001.10\tRefSeq\tmatch\t5000\t5099\t100\t+\t.\tID=a1;Target=NG_007000.1 1 100 +;gap_count=0\n";
+
+        // Merge in prepare's order: GRCh38 first, then GRCh37.
+        let mut merged = parse_refseqgene_alignments(GRCH38_FILE);
+        merge_refseqgene_placements(&mut merged, parse_refseqgene_alignments(GRCH37_FILE));
+
+        let list = merged.get("NG_007000.1").expect("NG_ present after merge");
+        assert_eq!(list.len(), 2, "both builds retained: {list:?}");
+
+        let g38 = crate::reference::provider::select_placement_for_build(list, Some("GRCh38"))
+            .expect("GRCh38 placement selectable");
+        let g37 = crate::reference::provider::select_placement_for_build(list, Some("GRCh37"))
+            .expect("GRCh37 placement selectable");
+        assert_eq!(g38.nc.to_string(), "NC_000001.11");
+        assert_eq!(g38.nc_start, 1000);
+        assert_eq!(g37.nc.to_string(), "NC_000001.10");
+        assert_eq!(g37.nc_start, 5000);
+
+        // Regression: adding the GRCh37 placement must NOT shift the
+        // build-agnostic default away from GRCh38 (cdot primary / mutalyzer).
+        let default = crate::reference::provider::select_placement_for_build(list, None)
+            .expect("default placement selectable");
+        assert_eq!(default.nc.to_string(), "NC_000001.11");
+    }
+
+    /// `merge_refseqgene_placements` keeps the first source's placement for a
+    /// build that is already present (first-source-wins), mirroring the
+    /// per-build de-duplication inside `parse_refseqgene_alignments`.
+    #[test]
+    fn merge_keeps_first_source_per_build() {
+        const FIRST: &str = "\
+##gff-version 3
+NC_000001.11\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=a0;Target=NG_008000.1 1 100 +;gap_count=0\n";
+        // A second GRCh38 placement for the same NG_ at a different span.
+        const SECOND: &str = "\
+##gff-version 3
+NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 100 +;gap_count=0\n";
+
+        let mut merged = parse_refseqgene_alignments(FIRST);
+        merge_refseqgene_placements(&mut merged, parse_refseqgene_alignments(SECOND));
+
+        let list = &merged["NG_008000.1"];
+        assert_eq!(list.len(), 1, "only one placement per build is kept");
+        assert_eq!(list[0].nc_start, 1000, "first source wins");
     }
 
     /// An unknown-orientation placement has no defined parent frame, so
