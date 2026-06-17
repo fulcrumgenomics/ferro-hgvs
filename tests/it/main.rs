@@ -183,6 +183,7 @@ mod issue_486_position_out_of_bounds;
 mod issue_487_allele_collapse;
 mod issue_487_mito_g_to_m;
 mod issue_502_np_protein_selector;
+mod issue_537_pter_qter_genomic;
 mod issue_573_intronic_shuffle_window;
 mod issue_736_rna_uracil_normalize;
 mod issue_91_protein_three_prime_shift;
