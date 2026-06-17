@@ -2766,20 +2766,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Switch to the accession-aware lookup so an NG/NC-parented input
             // gets the build-correct chromosome.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
-            // Route intronic tx variants to the intronic normalization path.
-            // NOTE (#704): unlike `normalize_cds`, the `n.` path does not yet
-            // apply the #670 exon/intron 3' rule — no `same_intron` split for
-            // multi-intron spans and no purely-exonic→intron routing — and
-            // boundary-spanning `n.` below is still unimplemented. `n.`/`r.`
-            // parity with `c.` is tracked in #704.
-            if start_pos.is_intronic() && end_pos.is_intronic() {
+            // Mirror of the `c.` dispatch (#670/#704): both intronic *in the
+            // same intron* → the dedicated single-intron shuffle; one endpoint
+            // on an exon/intron boundary, or a multi-intron span → genomic
+            // boundary-spanning space (`normalize_intronic_tx` would bound the
+            // shuffle to only `start`'s intron and never shift such a span).
+            if start_pos.is_intronic()
+                && end_pos.is_intronic()
+                && self.same_intron_tx(&transcript, start_pos, end_pos)
+            {
                 return self.normalize_intronic_tx(variant, &transcript, start_pos, end_pos, edit);
             }
-            // Variant spans exon-intron boundary - not yet supported for n. coords (#704)
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-                detail: None,
-            });
+            return self.normalize_boundary_spanning_tx(
+                variant,
+                &transcript,
+                start_pos,
+                end_pos,
+                edit,
+            );
         }
 
         // Downstream `n.*N` positions encode a post-stop distance, not a
@@ -2838,6 +2842,57 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         let (new_start, new_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+
+        // #704 sub-problem A (mirror of the `normalize_cds` block, #670): apply
+        // the 3' rule across the exon/intron junction for `n.`. The exon-confined
+        // shuffle above only sees spliced (exon) bases, so a purely-exonic del/dup
+        // that comes to rest at an exon's 3' edge is never given the chance to
+        // continue into the following intron — even though the spec's exception
+        // 3' rule requires it. When the shuffle lands exactly at the exon
+        // boundary (`boundaries.right`, the del/dup exon bound), a downstream
+        // intron exists, and we have genomic context, re-run the shuffle in
+        // genomic space (which spans the junction naturally) and adopt the result
+        // only if it actually crossed into the intron. The trigger is a rare edge
+        // landing, so the hot path is untouched; it is 3'-only (5'/VCF shuffles
+        // stay exon-confined), exactly as the `c.` path.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && new_end == boundaries.right
+            && self.provider.has_genomic_data()
+        {
+            // Prefer the accession-aware transcript so an NG/NC-parented input
+            // resolves the build-correct chromosome; fall back to the plain
+            // transcript. Clone keeps `transcript` available for the fall-through.
+            let boundary_transcript =
+                transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
+            if boundary_transcript.chromosome.is_some() {
+                // Engine errors (no following intron — e.g. last exon — no genomic
+                // alignment, …) fall through to the exon-confined result, the safe
+                // pre-#704 behavior. The exon/EXON suppression rule is preserved
+                // structurally: the genomic shuffle window is capped at the
+                // adjacent intron's far edge (never the next exon).
+                if let Ok((boundary_variant, boundary_warnings)) = self
+                    .normalize_boundary_spanning_tx(
+                        variant,
+                        &boundary_transcript,
+                        start_pos,
+                        end_pos,
+                        edit,
+                    )
+                {
+                    let crossed_into_intron = matches!(
+                        &boundary_variant,
+                        HV::Tx(tv)
+                            if tv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
+                                || tv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
+                    );
+                    if crossed_into_intron {
+                        let mut combined = warnings;
+                        combined.extend(boundary_warnings);
+                        return Ok((boundary_variant, combined));
+                    }
+                }
+            }
+        }
 
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
@@ -3861,14 +3916,82 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // NOTE (#704): the `r.` path does not normalize intronic variants at all
-        // (it errors), so the #670 exon/intron 3' rule does not apply here. `r.`
-        // parity with `c.` is tracked in #704.
+        // #704: route intronic / boundary-spanning `r.` through the same
+        // genomic-space machinery the `n.` path uses. On a coding transcript
+        // `r.` shares `c.`/`n.` numbering for the exonic anchor and the intron
+        // offset is identical across all three axes, so convert the `r.`
+        // endpoints to `TxPos`, delegate to the tx intronic dispatch (the
+        // `same_intron_tx` split → `normalize_intronic_tx`, else
+        // `normalize_boundary_spanning_tx`), then convert the result back to
+        // `r.`. Pre-#704 this errored for any intronic `r.`.
         if start_pos.is_intronic() || end_pos.is_intronic() {
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-                detail: None,
-            });
+            use crate::hgvs::variant::{LocEdit, TxVariant};
+            // Accession-aware lookup so an NG/NC-parented input resolves the
+            // build-correct chromosome; fall back to the plain transcript. A
+            // missing transcript preserves the historical "can't normalize
+            // intronic r." signal.
+            let plain_accession = variant.accession.transcript_accession();
+            let transcript = self
+                .provider
+                .get_transcript_for_accession(&variant.accession)
+                .or_else(|_| self.provider.get_transcript(&plain_accession))
+                .map_err(|_| FerroError::IntronicVariant {
+                    variant: format!("{}", variant),
+                    detail: None,
+                })?;
+            let cds_info = transcript.cds_start.zip(transcript.cds_end);
+
+            let (tx_start, tx_end) = match (
+                self.rna_pos_to_txpos(start_pos, cds_info),
+                self.rna_pos_to_txpos(end_pos, cds_info),
+            ) {
+                (Some(s), Some(e)) => (s, e),
+                _ => {
+                    return Err(FerroError::IntronicVariant {
+                        variant: format!("{}", variant),
+                        detail: None,
+                    })
+                }
+            };
+
+            let tx_variant = TxVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::new(Interval::new(tx_start, tx_end), edit.clone()),
+            };
+
+            // Mirror of the `normalize_tx` intronic dispatch (both intronic in the
+            // same intron → single-intron shuffle; one endpoint exonic or a
+            // multi-intron span → genomic boundary-spanning).
+            let (tx_result, tx_warnings) = if tx_start.is_intronic()
+                && tx_end.is_intronic()
+                && self.same_intron_tx(&transcript, &tx_start, &tx_end)
+            {
+                self.normalize_intronic_tx(&tx_variant, &transcript, &tx_start, &tx_end, edit)?
+            } else {
+                self.normalize_boundary_spanning_tx(
+                    &tx_variant,
+                    &transcript,
+                    &tx_start,
+                    &tx_end,
+                    edit,
+                )?
+            };
+
+            // The tx engines always return a bare `HV::Tx`; convert it back to
+            // `r.` and finish through the same canonical-split tail as the exonic
+            // path (T/U-equivalent rev-comp scan).
+            let HV::Tx(tv) = tx_result else {
+                return Err(FerroError::IntronicVariant {
+                    variant: format!("{}", variant),
+                    detail: None,
+                });
+            };
+            let rna_variant = self.txvariant_to_rnavariant(&tv, cds_info)?;
+            let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(rna_variant));
+            let mut warnings = tx_warnings;
+            warnings.append(&mut split_warnings);
+            return Ok((wrap_allele_if_split(split), warnings));
         }
 
         // Try to get transcript (RNA uses the same accession as mRNA transcripts)
@@ -3952,6 +4075,69 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
+        // #704 sub-problem A (mirror of the `normalize_cds`/`normalize_tx`
+        // post-check, #670): apply the 3' rule across the exon/intron junction
+        // for a purely-exonic `r.` del/dup that comes to rest at an exon's 3'
+        // edge. The exon-confined shuffle above only sees spliced bases; when it
+        // lands exactly at the exon boundary (`boundaries.right`, the del/dup
+        // exon bound), a downstream intron exists, and we have genomic context,
+        // re-run the shuffle in genomic space (which spans the junction) and
+        // adopt the result only if it actually crossed into the intron. The
+        // original endpoints are purely exonic here, so they map to plain
+        // (offset-less) `TxPos`. 3'-only; the hot path is untouched.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && new_tx_end == boundaries.right
+            && self.provider.has_genomic_data()
+        {
+            use crate::hgvs::variant::{LocEdit, TxVariant};
+            let boundary_transcript = self
+                .provider
+                .get_transcript_for_accession(&variant.accession)
+                .unwrap_or_else(|_| transcript.clone());
+            if boundary_transcript.chromosome.is_some() {
+                let bs_start = TxPos::new(tx_start as i64);
+                let bs_end = TxPos::new(tx_end as i64);
+                let bs_variant = TxVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: LocEdit::new(Interval::new(bs_start, bs_end), edit.clone()),
+                };
+                // Engine errors (no following intron — last exon — no genomic
+                // alignment, …) fall through to the exon-confined result, the
+                // safe pre-#704 behavior.
+                if let Ok((HV::Tx(tv), boundary_warnings)) = self.normalize_boundary_spanning_tx(
+                    &bs_variant,
+                    &boundary_transcript,
+                    &bs_start,
+                    &bs_end,
+                    edit,
+                ) {
+                    let crossed_into_intron = tv
+                        .loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .is_some_and(|p| p.is_intronic())
+                        || tv
+                            .loc_edit
+                            .location
+                            .end
+                            .inner()
+                            .is_some_and(|p| p.is_intronic());
+                    if crossed_into_intron {
+                        if let Ok(rna_variant) = self.txvariant_to_rnavariant(&tv, cds_info) {
+                            let (split, mut split_warnings) =
+                                self.apply_canonical_split(HV::Rna(rna_variant));
+                            let mut combined = warnings;
+                            combined.extend(boundary_warnings);
+                            combined.append(&mut split_warnings);
+                            return Ok((wrap_allele_if_split(split), combined));
+                        }
+                    }
+                }
+            }
+        }
+
         // Convert each normalized tx position back to a CDS-relative `r.`
         // position via `tx_to_rna_pos`, which restores the correct region for
         // every tx index: `r.-N` (5'UTR, `pos < cds_start`), `r.N` (CDS,
@@ -3980,6 +4166,96 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(new_variant));
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
+    }
+
+    /// Convert an `r.` position to a transcript-numbered [`TxPos`], carrying the
+    /// intron offset verbatim (#704). On a coding transcript the exonic anchor
+    /// maps through CDS-relative numbering (`rna_to_tx_pos`); without a CDS
+    /// (coordinate-only / mock providers) positive non-UTR bases fall back to
+    /// transcript-1 indices and UTR / non-positive bases are unresolvable
+    /// (`None`), mirroring the exonic `map_in` in `normalize_rna`.
+    ///
+    /// The intron offset is identical across the `c.`/`n.`/`r.` axes — it is
+    /// measured from the nearest exon boundary regardless of how the anchor base
+    /// is numbered — so it is copied through unchanged.
+    fn rna_pos_to_txpos(&self, pos: &RnaPos, cds_info: Option<(u64, u64)>) -> Option<TxPos> {
+        let base = match cds_info {
+            Some((cds_start, cds_end)) => self.rna_to_tx_pos(pos, cds_start, Some(cds_end)).ok()?,
+            None => {
+                if pos.utr3 || pos.base < 1 {
+                    return None;
+                }
+                pos.base as u64
+            }
+        };
+        Some(TxPos {
+            base: base as i64,
+            offset: pos.offset,
+            downstream: false,
+        })
+    }
+
+    /// Convert a transcript-numbered [`TxPos`] back to an `r.` position,
+    /// restoring the CDS-relative region and carrying the intron offset (#704).
+    /// Inverse of [`Self::rna_pos_to_txpos`].
+    fn txpos_to_rnapos(
+        &self,
+        pos: &TxPos,
+        cds_info: Option<(u64, u64)>,
+    ) -> Result<RnaPos, FerroError> {
+        let mut rna = match cds_info {
+            Some((cds_start, cds_end)) => {
+                self.tx_to_rna_pos(pos.base as u64, cds_start, Some(cds_end))?
+            }
+            None => RnaPos::new(pos.base),
+        };
+        rna.offset = pos.offset;
+        Ok(rna)
+    }
+
+    /// Re-express a normalized `n.`-axis [`TxVariant`] (the result of the tx
+    /// intronic / boundary-spanning engines) as an `r.` [`RnaVariant`] (#704),
+    /// mapping both endpoints back to CDS-relative `r.` positions. The U/T
+    /// rendering is left to `RnaVariant`'s Display (`to_rna_string`), so the
+    /// DNA-base edit produced by the tx engine needs no translation.
+    fn txvariant_to_rnavariant(
+        &self,
+        tv: &crate::hgvs::variant::TxVariant,
+        cds_info: Option<(u64, u64)>,
+    ) -> Result<crate::hgvs::variant::RnaVariant, FerroError> {
+        use crate::hgvs::interval::RnaInterval;
+        use crate::hgvs::variant::{LocEdit, RnaVariant};
+        let start_tp =
+            tv.loc_edit
+                .location
+                .start
+                .inner()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no start position".to_string(),
+                })?;
+        let end_tp =
+            tv.loc_edit
+                .location
+                .end
+                .inner()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no end position".to_string(),
+                })?;
+        let new_start = self.txpos_to_rnapos(start_tp, cds_info)?;
+        let new_end = self.txpos_to_rnapos(end_tp, cds_info)?;
+        let new_edit =
+            tv.loc_edit
+                .edit
+                .inner()
+                .cloned()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no edit".to_string(),
+                })?;
+        Ok(RnaVariant {
+            accession: tv.accession.clone(),
+            gene_symbol: tv.gene_symbol.clone(),
+            loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
+        })
     }
 
     /// Convert an RNA position to a transcript-1 position.
@@ -5082,6 +5358,261 @@ impl<P: ReferenceProvider> Normalizer<P> {
             exon_g_start.min(intron_g_start),
             exon_g_end.max(intron_g_end),
         ))
+    }
+
+    // ------------------------------------------------------------------
+    // `n.` (transcript-coordinate) mirrors of the `c.` exon/intron 3'-rule
+    // machinery (#704). These mirror `cds_pos_to_genomic`, `same_intron`,
+    // `get_boundary_spanning_genomic_extent`, and `normalize_boundary_spanning_cds`
+    // but key off the transcript position directly — a `TxPos.base` IS the
+    // 1-based transcript index, so no `cds_to_tx` step is needed. The `c.`
+    // path is untouched. (`n.` has no CDS frame, so reuse-via-conversion isn't
+    // possible; the codebase already keeps `normalize_intronic_cds`/`_tx` as
+    // separate mirrors for the same reason.)
+    // ------------------------------------------------------------------
+
+    /// Convert a transcript position (exonic or intronic) to genomic coordinate.
+    /// Mirror of [`Self::cds_pos_to_genomic`] for `n.` coordinates.
+    fn tx_pos_to_genomic(
+        &self,
+        mapper: &crate::convert::CoordinateMapper,
+        pos: &TxPos,
+    ) -> Result<u64, FerroError> {
+        if pos.is_intronic() {
+            mapper.tx_to_genomic_with_intron(pos)
+        } else {
+            mapper
+                .tx_to_genomic(pos)?
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: format!("transcript position {} not in exons", pos.base),
+                })
+        }
+    }
+
+    /// True iff two intronic transcript positions lie in the **same** intron.
+    /// Mirror of [`Self::same_intron`] for `n.` coordinates.
+    fn same_intron_tx(
+        &self,
+        transcript: &crate::reference::transcript::Transcript,
+        a: &TxPos,
+        b: &TxPos,
+    ) -> bool {
+        let intron_number = |p: &TxPos| -> Option<u32> {
+            let base = u64::try_from(p.base).ok()?;
+            transcript
+                .find_intron_at_tx_boundary(base, p.offset.unwrap_or(0))
+                .map(|i| i.number)
+        };
+        match (intron_number(a), intron_number(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
+    }
+
+    /// Genomic extent within which a boundary-spanning `n.` variant may shift.
+    /// Mirror of [`Self::get_boundary_spanning_genomic_extent`] for `n.` coords.
+    fn get_boundary_spanning_genomic_extent_tx(
+        &self,
+        transcript: &crate::reference::transcript::Transcript,
+        start_pos: &TxPos,
+        end_pos: &TxPos,
+    ) -> Result<(u64, u64), FerroError> {
+        let exon_at_pos = |pos: &TxPos| -> Result<&crate::reference::transcript::Exon, FerroError> {
+            let base = u64::try_from(pos.base).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "Negative transcript position {} during boundary normalization",
+                    pos.base
+                ),
+            })?;
+            transcript
+                .exon_at(base)
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Could not find exon for boundary normalization".to_string(),
+                })
+        };
+        let intron_at = |pos: &TxPos| -> Result<&crate::reference::transcript::Intron, FerroError> {
+            let base = u64::try_from(pos.base).map_err(|_| FerroError::ConversionError {
+                msg: format!(
+                    "Negative transcript position {} during boundary normalization",
+                    pos.base
+                ),
+            })?;
+            transcript
+                .find_intron_at_tx_boundary(base, pos.offset.unwrap_or(0))
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Could not find intron for boundary normalization".to_string(),
+                })
+        };
+        let intron_genomic =
+            |intron: &crate::reference::transcript::Intron| -> Result<(u64, u64), FerroError> {
+                match (intron.genomic_start, intron.genomic_end) {
+                    (Some(s), Some(e)) => Ok((s, e)),
+                    _ => Err(FerroError::ConversionError {
+                        msg: "Intron has no genomic coordinates".to_string(),
+                    }),
+                }
+            };
+
+        // Both intronic in DIFFERENT introns: union the two introns' genomic span.
+        if start_pos.is_intronic() && end_pos.is_intronic() {
+            let (a_start, a_end) = intron_genomic(intron_at(start_pos)?)?;
+            let (b_start, b_end) = intron_genomic(intron_at(end_pos)?)?;
+            return Ok((a_start.min(b_start), a_end.max(b_end)));
+        }
+
+        let (exon, intron) = if start_pos.is_intronic() || end_pos.is_intronic() {
+            // Classic boundary-spanning: one endpoint exonic, one intronic.
+            let (exonic_pos, intronic_pos) = if start_pos.is_intronic() {
+                (end_pos, start_pos)
+            } else {
+                (start_pos, end_pos)
+            };
+            (exon_at_pos(exonic_pos)?, intron_at(intronic_pos)?)
+        } else {
+            // Purely-exonic edge variant (#670 sub-problem A): union the exon
+            // containing the 3' endpoint with the intron immediately downstream.
+            let exon = exon_at_pos(end_pos)?;
+            let intron = transcript
+                .find_intron_at_tx_boundary(exon.end, 1)
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "Could not find following intron for boundary normalization".to_string(),
+                })?;
+            (exon, intron)
+        };
+
+        let (exon_g_start, exon_g_end): (u64, u64) = match (exon.genomic_start, exon.genomic_end) {
+            (Some(s), Some(e)) => (s, e),
+            _ => {
+                return Err(FerroError::ConversionError {
+                    msg: "Exon has no genomic coordinates".to_string(),
+                })
+            }
+        };
+        let (intron_g_start, intron_g_end) = intron_genomic(intron)?;
+
+        Ok((
+            exon_g_start.min(intron_g_start),
+            exon_g_end.max(intron_g_end),
+        ))
+    }
+
+    /// Normalize a transcript (`n.`) variant that spans an exon-intron boundary
+    /// (or multiple introns). Mirror of [`Self::normalize_boundary_spanning_cds`]:
+    /// convert to genomic, 3'-shuffle there over the exon∪intron extent, convert
+    /// the result back to transcript notation.
+    fn normalize_boundary_spanning_tx(
+        &self,
+        variant: &TxVariant,
+        transcript: &crate::reference::transcript::Transcript,
+        start_pos: &TxPos,
+        end_pos: &TxPos,
+        edit: &NaEdit,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        use crate::convert::CoordinateMapper;
+
+        if !self.provider.has_genomic_data() {
+            return Err(FerroError::ExonIntronBoundary {
+                exon: 0,
+                variant: format!("{}", variant),
+            });
+        }
+
+        let chromosome =
+            transcript
+                .chromosome
+                .as_ref()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: format!(
+                        "Transcript {} has no chromosome for boundary \
+                         normalization (parent={}, variant={}); the cdot data \
+                         has no genomic alignment for this transcript on any \
+                         known genome build",
+                        transcript.id,
+                        variant
+                            .accession
+                            .genomic_context
+                            .as_deref()
+                            .map(|a| a.full())
+                            .unwrap_or_else(|| "<none>".to_string()),
+                        variant,
+                    ),
+                })?;
+
+        let mapper = CoordinateMapper::new(transcript);
+
+        let g_start = self.tx_pos_to_genomic(&mapper, start_pos)?;
+        let g_end = self.tx_pos_to_genomic(&mapper, end_pos)?;
+
+        // On minus strand, genomic coords may be reversed relative to tx order.
+        let swapped = g_start > g_end;
+        let (g_start, g_end) = if swapped {
+            (g_end, g_start)
+        } else {
+            (g_start, g_end)
+        };
+
+        let (bound_g_start, bound_g_end) =
+            self.get_boundary_spanning_genomic_extent_tx(transcript, start_pos, end_pos)?;
+
+        let window = self.config.window_size;
+        let (seq_start, seq_end) =
+            intronic_window_bounds(g_start, g_end, bound_g_start, bound_g_end, window);
+        let genomic_seq = self.get_genomic_sequence_1based(chromosome, seq_start, seq_end)?;
+
+        let rel_start = (g_start - seq_start) + 1;
+        let rel_end = (g_end - seq_start) + 1;
+
+        let seq_len = genomic_seq.len() as u64;
+        let boundaries = Boundaries::new(
+            bound_g_start.saturating_sub(seq_start) + 1,
+            (bound_g_end.saturating_sub(seq_start) + 1).min(seq_len),
+        );
+
+        // Flip to transcript view before normalization (see the cds mirror).
+        let (work_seq, work_rel_start, work_rel_end, work_boundaries) = flip_intronic_for_strand(
+            transcript.strand,
+            &genomic_seq,
+            rel_start,
+            rel_end,
+            &boundaries,
+        )?;
+
+        let seq_bytes = work_seq.as_bytes();
+        let (work_new_rel_start, work_new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            seq_bytes,
+            edit,
+            work_rel_start,
+            work_rel_end,
+            &work_boundaries,
+            false,
+        )?;
+
+        let (new_rel_start, new_rel_end) = unflip_intronic_positions(
+            transcript.strand,
+            work_seq.len() as u64,
+            work_new_rel_start,
+            work_new_rel_end,
+        );
+
+        let new_g_start = seq_start + new_rel_start - 1;
+        let new_g_end = seq_start + new_rel_end - 1;
+
+        let new_start = mapper.genomic_to_tx_with_intron(new_g_start)?;
+        let new_end = mapper.genomic_to_tx_with_intron(new_g_end)?;
+
+        let (new_start, new_end) = if swapped {
+            (new_end, new_start)
+        } else {
+            (new_start, new_end)
+        };
+
+        let new_variant = TxVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+        };
+
+        Ok((HV::Tx(new_variant), warnings))
     }
 
     /// Core normalization for nucleic acid edits

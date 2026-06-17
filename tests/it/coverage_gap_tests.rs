@@ -147,6 +147,73 @@ fn make_plus_strand_transcript() -> (Transcript, String) {
     (transcript, genomic_seq)
 }
 
+/// Build a plus-strand, 3-exon transcript whose exon1 3' tail and intron1 5'
+/// form a single homopolymer run that straddles the junction — the fixture for
+/// #704 sub-problem A (purely-exonic indel that, under the 3' rule, must shift
+/// out of the exon and into the following intron).
+///
+/// `cds_start == 1` so `c.N == n.N`; the same `n.30del` / `c.30del` exercise
+/// both the `n.` and `c.` post-checks against one genomic layout.
+///
+/// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
+/// Layout:
+///   Exon 1: tx 1-30   genomic (p+0)–(p+29)   ends `...AAAA` (tx 27-30)
+///   Intron 1:          genomic (p+30)–(p+39)  `AAAGCGCGCG` (starts `AAA`)
+///   Exon 2: tx 31-60  genomic (p+40)–(p+69)
+///   Intron 2:          genomic (p+70)–(p+79)  `CTCTCTCTCT`
+///   Exon 3: tx 61-90  genomic (p+80)–(p+109)
+///
+/// The junction run is genomic (p+26)–(p+32) = `AAAAAAA` (4 exonic + 3 intronic
+/// A's). A single-base deletion/duplication at the exon's 3' edge (`n.30`) is
+/// part of that run, so the 3' rule shifts it to the run's 3'-most base at
+/// genomic p+32 = `n.30+3` (intron position 3).
+fn make_edge_homopolymer_transcript() -> (Transcript, String) {
+    // Exon 1 (30) ends in AAAA; intron 1 (10) starts AAA → 7-A junction run.
+    let core = "GCGCGCGCGCGCGCGCGCGCGCGCGCAAAA\
+                AAAGCGCGCG\
+                TGTGTGTGTGTGTGTGTGTGTGTGTGTGTG\
+                CTCTCTCTCT\
+                ACACACACACACACACACACACACACACAC";
+    let genomic_seq = padded_genomic(core);
+
+    // Plus strand: transcript sequence is the spliced exons in order.
+    let tx_seq = "GCGCGCGCGCGCGCGCGCGCGCGCGCAAAA\
+                   TGTGTGTGTGTGTGTGTGTGTGTGTGTGTG\
+                   ACACACACACACACACACACACACACACAC";
+
+    let p = PAD_OFFSET + 1;
+    let transcript = Transcript::new(
+        "NM_EDGE.1".to_string(),
+        Some("EDGEGENE".to_string()),
+        Strand::Plus,
+        tx_seq.to_string(),
+        Some(1),
+        Some(90),
+        vec![
+            Exon::with_genomic(1, 1, 30, p, p + 29),
+            Exon::with_genomic(2, 31, 60, p + 40, p + 69),
+            Exon::with_genomic(3, 61, 90, p + 80, p + 109),
+        ],
+        Some("chr_edge".to_string()),
+        Some(p),
+        Some(p + 109),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+
+    (transcript, genomic_seq)
+}
+
+fn make_provider_with_edge() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let (tx, genomic) = make_edge_homopolymer_transcript();
+    provider.add_genomic_sequence("chr_edge", genomic);
+    provider.add_transcript(tx);
+    provider
+}
+
 /// Build a minus-strand transcript with UTR regions and genomic mapping.
 ///
 /// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
@@ -760,6 +827,200 @@ mod issue_11 {
             !result.contains("1837+3_1837+2"),
             "Positions must NOT be in genomic order (c.1837+3_1837+2), got: {}",
             result
+        );
+    }
+}
+
+// =============================================================================
+// #704: exon/intron 3' rule parity for n. (and r.) — boundary-spanning n.
+//
+// `NM_PLUS.1` has cds_start=1, so c.N == n.N: a boundary-spanning n. variant
+// (one exonic + one intronic endpoint) must normalize through genomic space
+// exactly as the c. analog does (#670), rather than erroring "not supported
+// for n. coords". The c. analogs (c.30_30+1del, c.31-1_31insA) already
+// normalize to themselves; the n. forms must too (not Err).
+// =============================================================================
+
+mod issue_704_nr_boundary {
+    use super::*;
+
+    #[test]
+    fn n_boundary_spanning_deletion_normalizes() {
+        // Exonic last base (n.30) + first intronic base (n.30+1): no equivalent
+        // shifted position, so it normalizes to itself — but it must NOT error.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30_30+1del");
+        assert_eq!(result, Ok("NM_PLUS.1:n.30_30+1del".to_string()));
+    }
+
+    #[test]
+    fn n_intron_exon_junction_insertion_normalizes() {
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.31-1_31insA");
+        assert_eq!(result, Ok("NM_PLUS.1:n.31-1_31insA".to_string()));
+    }
+
+    #[test]
+    fn n_both_intronic_same_intron_still_shifts() {
+        // Regression guard: the already-working both-intronic same-intron path
+        // (routed to normalize_intronic_tx) must keep shifting (#670 sub-problem
+        // B must not break it). c.30+1del -> c.30+3del; n. mirrors it.
+        let result = normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30+1del");
+        assert_eq!(result, "NM_PLUS.1:n.30+3del");
+    }
+
+    #[test]
+    fn n_multi_intron_span_routes_to_boundary_spanning() {
+        // Both endpoints intronic but in DIFFERENT introns (intron1 -> intron2,
+        // spanning exon2). The old `n.` path sent both-intronic variants to the
+        // single-intron `normalize_intronic_tx` (no `same_intron` split); after
+        // #704 the `same_intron_tx` split routes this to boundary-spanning. No
+        // equivalent shift exists, so it normalizes to itself — matching the c.
+        // analog — but must be handled, not mis-bounded to intron1.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30+2_60+2del");
+        assert_eq!(result, Ok("NM_PLUS.1:n.30+2_60+2del".to_string()));
+    }
+}
+
+// =============================================================================
+// #704 sub-problem A: purely-exonic exon→intron edge post-check for n. (and c.)
+//
+// On `NM_EDGE.1`, exon1's 3' tail (`...AAAA`) and intron1's 5' (`AAA...`) form a
+// 7-A run spanning the junction. A purely-exonic single-base del/dup at the
+// exon's 3' edge (`n.30` / `c.30`) is part of that run, so the 3' rule must
+// shift it OUT of the exon and into the intron — landing at the run's 3'-most
+// base, intron position 3 (`n.30+3` / `c.30+3`). The exon-confined shuffle only
+// sees spliced bases and stops at the exon edge; the genomic-space post-check
+// (mirror of #670's `normalize_cds` block) is what carries it across.
+// =============================================================================
+
+mod issue_704_nr_exon_to_intron {
+    use super::*;
+
+    #[test]
+    fn c_exonic_edge_deletion_shifts_into_intron() {
+        // Validates the genomic fixture against the already-shipped `c.`
+        // post-check (#670): the c. analog must already cross into the intron.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:c.30del");
+        assert_eq!(result, "NM_EDGE.1:c.30+3del");
+    }
+
+    #[test]
+    fn n_exonic_edge_deletion_shifts_into_intron() {
+        // The `n.` parity case (#704 sub-problem A). Before the post-check is
+        // ported to `normalize_tx` this stays exon-confined as `n.30del`.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:n.30del");
+        assert_eq!(result, "NM_EDGE.1:n.30+3del");
+    }
+
+    #[test]
+    fn c_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:c.30dup");
+        assert_eq!(result, "NM_EDGE.1:c.30+3dup");
+    }
+
+    #[test]
+    fn n_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:n.30dup");
+        assert_eq!(result, "NM_EDGE.1:n.30+3dup");
+    }
+}
+
+// =============================================================================
+// #704 increment r.: route intronic / boundary-spanning `r.` through the tx
+// machinery, plus the sub-problem-A exon→intron edge post-check.
+//
+// `NM_PLUS.1` has cds_start=1 so `r.N == c.N == n.N`; each `r.` case mirrors the
+// already-passing `n.` case. Pre-#704 every intronic/boundary `r.` returned
+// `Err(IntronicVariant)`. The display carries the `r.` prefix and U/T rendering.
+// =============================================================================
+
+mod issue_704_r_intronic {
+    use super::*;
+
+    #[test]
+    fn r_boundary_spanning_deletion_normalizes() {
+        // One exonic + one intronic endpoint: no equivalent shift, normalizes to
+        // itself — but must NOT error (was Err pre-#704). Mirror of the `n.` case.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30_30+1del");
+        assert_eq!(result, Ok("NM_PLUS.1:r.30_30+1del".to_string()));
+    }
+
+    #[test]
+    fn r_intron_exon_junction_insertion_normalizes() {
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.31-1_31insa");
+        assert_eq!(result, Ok("NM_PLUS.1:r.31-1_31insa".to_string()));
+    }
+
+    #[test]
+    fn r_both_intronic_same_intron_shifts() {
+        // Both intronic in the same intron → normalize_intronic_tx; the homopolymer
+        // shifts. Mirror of `n.30+1del -> n.30+3del`.
+        let result = normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30+1del");
+        assert_eq!(result, "NM_PLUS.1:r.30+3del");
+    }
+
+    #[test]
+    fn r_multi_intron_span_routes_to_boundary_spanning() {
+        // Both intronic but in DIFFERENT introns → boundary-spanning (the
+        // same_intron_tx split). No equivalent shift; normalizes to itself.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30+2_60+2del");
+        assert_eq!(result, Ok("NM_PLUS.1:r.30+2_60+2del".to_string()));
+    }
+
+    #[test]
+    fn r_exonic_edge_deletion_shifts_into_intron() {
+        // Sub-problem A for `r.`: a purely-exonic edge del must cross into the
+        // intron. Mirror of `c./n.30del -> 30+3del` on the homopolymer fixture.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:r.30del");
+        assert_eq!(result, "NM_EDGE.1:r.30+3del");
+    }
+
+    #[test]
+    fn r_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:r.30dup");
+        assert_eq!(result, "NM_EDGE.1:r.30+3dup");
+    }
+
+    #[test]
+    fn r_minus_strand_cds_relative_intronic_shifts() {
+        // The shipped cases above all use NM_PLUS.1/NM_EDGE.1 with cds_start=1,
+        // where r.N == n.N — so they never exercise the CDS-relative arm of
+        // `rna_pos_to_txpos`/`txpos_to_rnapos`. NM_MUTR.1 is minus-strand with
+        // cds_start=6, so r.N != n.N (r.20 == n.25, r.21 == n.26) and the anchor
+        // base must be remapped through the CDS offset on the way to tx and back.
+        //
+        // Each `r.` result is the trusted part-1 `n.` result (same genomic
+        // position) re-expressed in CDS-relative numbering with lowercase U/T
+        // rendering: n.26-3 -> r.21-3, n.24_26-3A[8] -> r.19_21-3a[8]. This also
+        // covers boundary-spanning (`r.20_20+1`), the genomic-space repeat
+        // notation, and the minus-strand intronic orientation in one place.
+        let p = make_provider_with_minus_utr;
+
+        // same-intron shuffle (both intronic) on a minus strand, cds-relative
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20+1del"),
+            Ok("NM_MUTR.1:r.21-3del".to_string())
+        );
+        // boundary-spanning (one exonic + one intronic endpoint)
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20_20+1del"),
+            Ok("NM_MUTR.1:r.19_21-3a[8]".to_string())
+        );
+        // multi-base intronic span in the same intron
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20+1_20+2del"),
+            Ok("NM_MUTR.1:r.19_21-3a[8]".to_string())
+        );
+
+        // Cross-check the r.<->n. correspondence the assertions above encode:
+        // r.20 == n.25 and r.21 == n.26, so the r. outputs must be the n. outputs
+        // shifted by the same cds offset (5) — proving the CDS-relative round trip.
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:n.25+1del"),
+            Ok("NM_MUTR.1:n.26-3del".to_string())
+        );
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:n.25_25+1del"),
+            Ok("NM_MUTR.1:n.24_26-3A[8]".to_string())
         );
     }
 }
