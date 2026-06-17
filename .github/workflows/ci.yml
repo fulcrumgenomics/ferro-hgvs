@@ -190,24 +190,19 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     env:
-      # The Test job builds and LINKS ~179 separate integration-test
+      # The Test job builds and LINKS ~230 separate integration-test
       # binaries (tests/*.rs). With full debuginfo (dev/test profile
       # default `debug = true`) the linked `target/` exhausts the stock
       # runner's ~14 GB free disk, and the linker dies with
       # `ld terminated with signal 7 (Bus error)` — a write past a full
       # disk. Stripping test-binary debuginfo in CI removes the bulk of
-      # each binary's size. CI-only (not in Cargo.toml), so local dev
+      # each binary's size and is now the sole guard against that crash
+      # (the old `rm -rf` preinstalled-toolchain step was dropped: it
+      # cost ~90s on the critical path for headroom the debuginfo strip
+      # already provides). CI-only (not in Cargo.toml), so local dev
       # keeps full debuginfo for backtraces.
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
-      - name: Free up runner disk space
-        # Reclaim large preinstalled toolchains ferro's build never uses
-        # (~25-30 GB), as a second guard against the disk-exhaustion link
-        # crash above. Inline removal avoids adding a third-party action.
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-            /usr/local/lib/android /opt/hostedtoolcache/CodeQL
-          df -h /
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           lfs: true
