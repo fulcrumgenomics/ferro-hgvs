@@ -51,7 +51,7 @@ use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
 use rules::{
     canonicalize_conversion_to_delins, canonicalize_edit, canonicalize_insertion_expand,
-    needs_normalization, should_canonicalize, DelinsSubedit, InsCoordKind,
+    needs_normalization, rna_uracil_to_thymine, should_canonicalize, DelinsSubedit, InsCoordKind,
 };
 use shuffle::shuffle;
 
@@ -3883,6 +3883,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(e) => e,
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
+
+        // #736: re-express any RNA base `u` in the edit as `T` before
+        // normalization. The transcript reference is stored as DNA, and the
+        // parser keeps `u` as a distinct `Base::U` (separate from `Base::T`), so
+        // a literal `u` in an insertion / delins would never match the reference
+        // and the edit would silently fail to canonicalize or 3'-shift. Re-run
+        // on the DNA-rewritten variant; `RnaVariant`'s Display renders `T`→`u`
+        // again on output, so this is display-neutral.
+        if let Some(dna_edit) = rna_uracil_to_thymine(edit) {
+            let new_variant = RnaVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    variant.loc_edit.location.clone(),
+                    variant.loc_edit.edit.map_ref(|_| dna_edit.clone()),
+                ),
+            };
+            return self.normalize_rna(&new_variant);
+        }
 
         // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
         // variant so downstream passes (3' shift, ins→dup, canonical
