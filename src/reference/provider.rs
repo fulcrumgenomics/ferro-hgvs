@@ -113,6 +113,12 @@ impl GenomicPlacement {
 /// - MockProvider for testing
 /// - SeqRepoProvider for local sequence databases
 /// - NCBIProvider for remote NCBI E-utilities
+///
+/// **Maintainers:** any method added here with a default implementation must
+/// also be forwarded in the `Arc<T>` and `Box<T>` blanket impls below. Rust
+/// gives no compile-time guarantee of this, so an un-forwarded method silently
+/// falls through to its default when a provider is wrapped (the bug fixed for
+/// `resolve_legacy_gene_selector` and `get_transcript_for_accession`).
 pub trait ReferenceProvider {
     /// Get a transcript by its accession.
     ///
@@ -408,6 +414,16 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).get_transcript_for_variant(variant)
     }
 
+    fn get_transcript_for_accession(
+        &self,
+        accession: &Accession,
+    ) -> Result<std::sync::Arc<Transcript>, FerroError> {
+        // Forward so the wrapped provider's parent-context probe survives an
+        // Arc wrapper. The default routes through `get_transcript` and would
+        // drop the `genomic_context`-aware build resolution.
+        (**self).get_transcript_for_accession(accession)
+    }
+
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
         (**self).get_sequence(id, start, end)
     }
@@ -446,6 +462,12 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         // survives an Arc/Box wrapper (the default would drop it to the
         // build-agnostic path).
         (**self).genomic_placement_on_build(parent, build)
+    }
+
+    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+        // Forward so legacy gene-model resolution survives an Arc wrapper; the
+        // default declines (`None`) and would bypass the wrapped provider.
+        (**self).resolve_legacy_gene_selector(selector)
     }
 
     fn get_protein_sequence(
@@ -532,6 +554,12 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
         // survives an Arc/Box wrapper (the default would drop it to the
         // build-agnostic path).
         (**self).genomic_placement_on_build(parent, build)
+    }
+
+    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+        // Forward so legacy gene-model resolution survives a Box wrapper; the
+        // default declines (`None`) and would bypass the wrapped provider.
+        (**self).resolve_legacy_gene_selector(selector)
     }
 
     fn get_protein_sequence(
@@ -661,5 +689,85 @@ mod placement_tests {
         // Parent span is 1..=9; 0 and 10 fall outside.
         assert_eq!(p.parent_to_nc(0), None);
         assert_eq!(p.parent_to_nc(10), None);
+    }
+}
+
+#[cfg(test)]
+mod wrapper_forwarding_tests {
+    use super::*;
+
+    /// Minimal provider that overrides the methods the `Arc<T>`/`Box<T>`
+    /// blanket impls must forward, returning sentinels distinct from each
+    /// method's trait default so a test can tell forwarding apart from
+    /// fall-through to the default.
+    struct OverrideProvider;
+
+    impl ReferenceProvider for OverrideProvider {
+        fn get_transcript(&self, _id: &str) -> Result<Arc<Transcript>, FerroError> {
+            // The trait default for `get_transcript_for_accession` routes here;
+            // a distinct marker lets the test detect that fall-through path.
+            Err(FerroError::ReferenceNotFound {
+                id: "default-marker".to_string(),
+            })
+        }
+
+        fn get_sequence(&self, _id: &str, _start: u64, _end: u64) -> Result<String, FerroError> {
+            Err(FerroError::ReferenceNotFound {
+                id: "unused".to_string(),
+            })
+        }
+
+        fn get_transcript_for_accession(
+            &self,
+            _accession: &Accession,
+        ) -> Result<Arc<Transcript>, FerroError> {
+            Err(FerroError::ReferenceNotFound {
+                id: "override-marker".to_string(),
+            })
+        }
+
+        fn resolve_legacy_gene_selector(&self, _selector: &str) -> Option<String> {
+            Some("NM_999999.9".to_string())
+        }
+    }
+
+    /// Extract the `ReferenceNotFound` id, which carries the sentinel marking
+    /// which code path produced the error.
+    fn marker(result: Result<Arc<Transcript>, FerroError>) -> String {
+        match result {
+            Err(FerroError::ReferenceNotFound { id }) => id,
+            other => panic!("expected ReferenceNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arc_forwards_overridden_methods() {
+        let arc: Arc<dyn ReferenceProvider> = Arc::new(OverrideProvider);
+        let accession = Accession::new("NM", "012345", Some(4));
+        // Without the forward, the Arc impl falls to the default, which routes
+        // through `get_transcript` → "default-marker".
+        assert_eq!(
+            marker(arc.get_transcript_for_accession(&accession)),
+            "override-marker"
+        );
+        // Without the forward, this drops to the trait default (`None`).
+        assert_eq!(
+            arc.resolve_legacy_gene_selector("GENE"),
+            Some("NM_999999.9".to_string())
+        );
+    }
+
+    #[test]
+    fn box_forwards_overridden_methods() {
+        let boxed: Box<dyn ReferenceProvider> = Box::new(OverrideProvider);
+        let accession = Accession::new("NM", "012345", Some(4));
+        assert_eq!(
+            marker(boxed.get_transcript_for_accession(&accession)),
+            "override-marker"
+        );
+        assert_eq!(
+            boxed.resolve_legacy_gene_selector("GENE"),
+            Some("NM_999999.9".to_string())
+        );
     }
 }
