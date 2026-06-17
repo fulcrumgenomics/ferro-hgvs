@@ -754,7 +754,23 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         match self.project_to_genomic_nc(variant)? {
             HgvsVariant::Genome(gv) => {
-                self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))
+                let reanchored =
+                    self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))?;
+                // #737: re-normalize the genomic output in its own frame — the
+                // transcript-space normalization is genome-5' on a minus-strand
+                // transcript, so a shiftable variant must be re-shuffled to its
+                // genomic-3' position here. Falls back to the un-normalized form
+                // if normalization fails (e.g. no reference bases); the dropped
+                // error is `trace!`-logged so a regression is observable rather
+                // than silently masked (the fallback swallows *any* normalize
+                // error, not only missing bases).
+                Ok(self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
+                    log::trace!(
+                        "genomic-frame renormalization failed for {reanchored}; \
+                             emitting un-normalized re-anchored form: {e}"
+                    );
+                    reanchored
+                }))
             }
             other => Ok(other),
         }
@@ -2717,7 +2733,28 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             _ => match projected_genome {
                 HgvsVariant::Genome(gv) => self
                     .reanchor_genome_output(gv, self.build_hint_for_variant(normalized))
-                    .ok(),
+                    .ok()
+                    // #737: re-normalize the genomic *output* in its own
+                    // (parent/`NC_`) frame. The pivot was 3'-normalized in
+                    // transcript space; for a minus-strand transcript that is the
+                    // genome's 5' end, so without a genomic-frame renormalization
+                    // a shiftable del/dup/ins lands at the wrong (5') end on the
+                    // genome. Normalizing the re-anchored variant against the
+                    // output accession's own sequence yields the spec-canonical
+                    // genomic-3' form. Falls back to the un-normalized re-anchored
+                    // form if normalization fails (e.g. no reference bases); the
+                    // dropped error is `trace!`-logged so a regression is
+                    // observable rather than silently masked (the fallback
+                    // swallows *any* normalize error, not only missing bases).
+                    .map(|reanchored| {
+                        self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
+                            log::trace!(
+                                "genomic-frame renormalization failed for {reanchored}; \
+                                 emitting un-normalized re-anchored form: {e}"
+                            );
+                            reanchored
+                        })
+                    }),
                 other => Some(other),
             },
         };
@@ -5336,6 +5373,161 @@ mod tests {
                 s.contains("GAT"),
                 "expected revcomp(ATC) = GAT in g., got: {}",
                 s
+            );
+        }
+
+        // -- 3b: minus-strand deletion is re-normalized in genomic space (#737) -
+
+        /// A minus-strand transcript on `NC_000001.11` whose CDS reads
+        /// `GTAAAAAAA` (cdna 1..9), so the genome (its reverse complement) carries
+        /// a `T` homopolymer. cdot exon `[1000, 1009)` minus-strand maps c.N →
+        /// genome `1009 - N`, so the transcript's poly-A run (cdna 3..9) is the
+        /// genome poly-T run at g.1000..1006. A single-base deletion anywhere in
+        /// that run is the *same* variant; its spec-canonical genomic form is the
+        /// 3'-most (highest-coordinate) position, g.1006del.
+        ///
+        /// Keyed under `NC_000001.11` (not `chr1`) so `normalize` can fetch the
+        /// genomic bases back through the same accession the re-anchored output
+        /// carries — exercising the #737 genomic-frame renormalization end to end.
+        fn make_minus_homopolymer_provider_and_projector() -> (Projector, MockProvider) {
+            let mut cdot = CdotMapper::new();
+            cdot.add_transcript(
+                "NM_HOMO_MINUS.1".to_string(),
+                CdotTranscript {
+                    gene_name: Some("HOMOGENE".to_string()),
+                    contig: "NC_000001.11".to_string(),
+                    strand: ProvStrand::Minus,
+                    exons: vec![[1000, 1009, 0, 9]],
+                    cds_start: Some(0),
+                    cds_end: Some(9),
+                    gene_id: None,
+                    protein: Some("NP_HOMO_MINUS.1".to_string()),
+                    exon_cigars: Vec::new(),
+                },
+            );
+            let projector = Projector::new(cdot);
+
+            let mut provider = MockProvider::new();
+            provider.add_transcript(Transcript {
+                id: "NM_HOMO_MINUS.1".to_string(),
+                gene_symbol: Some("HOMOGENE".to_string()),
+                strand: TxStrand::Minus,
+                sequence: Some("GTAAAAAAA".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exons: vec![Exon::new(1, 1, 9)],
+                chromosome: Some("NC_000001.11".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1008),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+            // Genome forward: prefix + "TTTTTTTAC" (g.1000..1008) + suffix, so the
+            // poly-T run is g.1000..1006 (revcomp of the transcript poly-A run).
+            let prefix = "N".repeat(999);
+            let suffix = "N".repeat(100);
+            provider.add_genomic_sequence("NC_000001.11", format!("{}TTTTTTTAC{}", prefix, suffix));
+            (projector, provider)
+        }
+
+        #[test]
+        fn project_to_genomic_minus_strand_deletion_renormalizes_to_genomic_3prime() {
+            let (projector, provider) = make_minus_homopolymer_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // c.9del is the transcript-3'-most representation of the deletion in
+            // the poly-A run. On the minus strand that maps to g.1000 — the
+            // genome-5' end of the poly-T run. The spec-canonical genomic output
+            // is the genome-3'-most position, g.1006del. Before #737 the projector
+            // emitted the un-renormalized coordinate image (g.1000del); the
+            // re-anchored output is now normalized in its own frame.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_HOMO_MINUS.1"),
+                gene_symbol: Some("HOMOGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(9)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let input = HgvsVariant::Cds(cds);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("minus-strand c.9del should project to g.");
+            let g = match out {
+                HgvsVariant::Genome(ref g) => g,
+                _ => panic!("expected Genome variant, got: {}", out),
+            };
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
+            let start = g
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .expect("start should be concrete");
+            assert_eq!(
+                start.base, 1006,
+                "minus-strand c.9del must re-normalize to the genome-3' end of the \
+                 poly-T run (g.1006del), got g.{}del (#737)",
+                start.base
+            );
+        }
+
+        /// Companion to the g.-only test above, exercising the *other* #737
+        /// re-anchor site: the multi-axis `.genomic` field built in
+        /// `project_single_inner` (via `project_variant`). The two sites apply
+        /// the identical genomic-frame renormalization and could drift silently,
+        /// so assert the same minus-strand deletion lands at the genome-3' end of
+        /// the poly-T run (g.1006del) through a `VariantProjection.genomic`, not
+        /// just through the g.-only `project_to_genomic`.
+        #[test]
+        fn project_variant_minus_strand_deletion_renormalizes_genomic_axis_to_3prime() {
+            let (projector, provider) = make_minus_homopolymer_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // c.9del — the transcript-3'-most representation of the deletion in
+            // the poly-A run — maps to the genome-5' end of the poly-T run. The
+            // spec-canonical genomic output is the genome-3'-most position,
+            // g.1006del; #737 renormalizes the re-anchored `.genomic` axis here.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_HOMO_MINUS.1"),
+                gene_symbol: Some("HOMOGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(9)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let proj = vp
+                .project_variant(&HgvsVariant::Cds(cds), "NM_HOMO_MINUS.1")
+                .expect("minus-strand c.9del should project (multi-axis)");
+            let g = match proj.genomic {
+                Some(HgvsVariant::Genome(ref g)) => g,
+                other => panic!("expected a Genome `.genomic` axis, got: {:?}", other),
+            };
+            assert_eq!(g.accession.to_string(), "NC_000001.11");
+            let start = g
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .expect("start should be concrete");
+            assert_eq!(
+                start.base, 1006,
+                "the multi-axis `.genomic` field must re-normalize to the genome-3' \
+                 end of the poly-T run (g.1006del), got g.{}del (#737)",
+                start.base
             );
         }
 

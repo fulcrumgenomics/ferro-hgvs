@@ -1134,6 +1134,78 @@ impl MultiFastaProvider {
         }
     }
 
+    /// Synthesize the parent-frame (`NG_`/`LRG_`) reference bases for a parent
+    /// that has a genomic placement but no FASTA record of its own — e.g. a
+    /// #728 *derived* `NG_` whose exact version is absent from the local
+    /// RefSeqGene FASTA. The parent sequence is, by construction of the
+    /// placement, exactly the placed chromosome (`NC_`) slice (reverse-
+    /// complemented for a minus-strand placement), so we serve it by mapping the
+    /// requested parent-frame window through the placement and fetching those
+    /// `NC_` bases.
+    ///
+    /// `start`/`end` are a 0-based half-open window in the parent's own frame,
+    /// matching [`ReferenceProvider::get_sequence`]. Returns an error when the
+    /// window falls outside the placed span.
+    fn synthesize_parent_sequence(
+        &self,
+        placement: &GenomicPlacement,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        if end < start {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!("parent sequence window end {end} < start {start}"),
+            });
+        }
+        if start == end {
+            return Ok(String::new());
+        }
+        // The `[start, end)` window is 0-based into the parent *sequence*, so
+        // offset 0 is the parent's first base — parent coordinate
+        // `parent_start`. The mapping below assumes `parent_start == 1` (it maps
+        // the 0-based offset `start` to 1-based parent coordinate `start + 1`).
+        // The only reachable caller today is the FASTA-less #728 derived `NG_`,
+        // which always has `parent_start == 1` (`derived_placement.rs`); an
+        // LRG/RefSeqGene placement with `parent_start > 1` is never routed here.
+        // Guard the assumption in debug builds — a `parent_start > 1` placement
+        // would otherwise read the wrong window (or fail loud via `parent_to_nc`
+        // returning `None`) rather than corrupt bases.
+        debug_assert_eq!(
+            placement.parent_start, 1,
+            "synthesize_parent_sequence assumes parent_start == 1; offset the window \
+             by parent_start before mapping to support placement-only parents"
+        );
+        // 0-based half-open [start, end) → 1-based inclusive parent positions
+        // [start+1, end]. Map both endpoints onto the chromosome; on a minus-
+        // strand placement the parent runs antiparallel, so the low parent
+        // position maps to the *higher* `NC_` coordinate.
+        let (nc_a, nc_b) = match (
+            placement.parent_to_nc(start + 1),
+            placement.parent_to_nc(end),
+        ) {
+            (Some(a), Some(b)) => (a, b),
+            _ => {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "parent window [{start}, {end}) falls outside the placed span on {}",
+                        placement.nc.full()
+                    ),
+                });
+            }
+        };
+        let (nc_lo, nc_hi) = if nc_a <= nc_b {
+            (nc_a, nc_b)
+        } else {
+            (nc_b, nc_a)
+        };
+        // 1-based inclusive [nc_lo, nc_hi] → 0-based half-open for the fetch.
+        let bases = self.get_genomic_sequence(&placement.nc.full(), nc_lo - 1, nc_hi)?;
+        Ok(match placement.strand {
+            crate::reference::Strand::Minus => crate::sequence::reverse_complement(&bases),
+            _ => bases,
+        })
+    }
+
     /// Build a `Transcript` for `id` whose bases are synthesized from the genome
     /// FASTA by walking the cdot exon alignment. Used as a fallback when the
     /// transcript FASTA does not carry the requested versioned accession but
@@ -2283,6 +2355,20 @@ impl ReferenceProvider for MultiFastaProvider {
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        // A parent (`NG_`/`LRG_`) that has a genomic placement but no FASTA
+        // record of its own — e.g. a #728 derived `NG_` — is served by
+        // synthesizing its bases from the chromosome via the placement. Checked
+        // before the version-fuzzy `resolve_name` fallback below so an absent
+        // *exact* version is reconstructed rather than silently served a sibling
+        // version's bases.
+        if !self.index.contains_key(id) {
+            if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
+                if let Some(placement) = self.genomic_placement(&acc) {
+                    return self.synthesize_parent_sequence(&placement, start, end);
+                }
+            }
+        }
+
         let resolved = self
             .resolve_name(id)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })?;
@@ -2331,6 +2417,16 @@ impl ReferenceProvider for MultiFastaProvider {
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        // Mirror `get_sequence`: a placement-only parent (#728 derived `NG_`)
+        // has no FASTA record, so its length is the placed span on the
+        // chromosome. Checked before the version-fuzzy `sequence_length`.
+        if !self.index.contains_key(id) {
+            if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
+                if let Some(placement) = self.genomic_placement(&acc) {
+                    return Ok(placement.nc_end - placement.nc_start + 1);
+                }
+            }
+        }
         self.sequence_length(id)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
     }
@@ -3145,6 +3241,85 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert_eq!(placement.nc_start, 112081847);
         assert_eq!(placement.nc_end, 112097794);
         assert_eq!(placement.strand, Strand::Plus);
+    }
+
+    #[test]
+    fn get_sequence_synthesizes_derived_ng_bases_from_placement() {
+        // #737: a parent (`NG_`) with a derived placement but no FASTA record of
+        // its own is served by synthesizing its bases from the chromosome via the
+        // placement — plus strand verbatim, minus strand reverse-complemented —
+        // and that *exact-version* synthesis takes precedence over the
+        // version-fuzzy `resolve_name` fallback to a sibling version's FASTA.
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // Chromosome FASTA. The placed span (1-based [5, 10]) is "AACGGT".
+        fs::write(d.join("genome.fna"), ">NC_000099.9\nNNNNAACGGTNNNN\n").unwrap();
+        fs::write(d.join("genome.fna.fai"), "NC_000099.9\t14\t13\t14\t15\n").unwrap();
+
+        // A *sibling* version of the plus-strand NG_ that IS present as a FASTA,
+        // with deliberately different bases. Version-fuzzy resolution would serve
+        // these for a request on NG_999999.1; exact-version synthesis must win.
+        fs::write(d.join("sibling.fna"), ">NG_999999.2\nTTTTTT\n").unwrap();
+        fs::write(d.join("sibling.fna.fai"), "NG_999999.2\t6\t13\t6\t7\n").unwrap();
+
+        // Derived placements: a plus- and a minus-strand NG_ over the same span.
+        fs::write(
+            d.join("derived.json"),
+            r#"{"description":"test","placements":[
+                {"parent":"NG_999999.1","nc":"NC_000099.9","nc_start":5,"nc_end":10,"strand":"+","anchored_by":"","mismatch_fraction":0.0},
+                {"parent":"NG_888888.1","nc":"NC_000099.9","nc_start":5,"nc_end":10,"strand":"-","anchored_by":"","mismatch_fraction":0.0}
+            ]}"#,
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["genome.fna", "sibling.fna"],
+                "derived_refseqgene_placements": "derived.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        // Length is the placed span (no own FASTA record).
+        assert_eq!(provider.get_sequence_length("NG_999999.1").unwrap(), 6);
+        assert_eq!(provider.get_sequence_length("NG_888888.1").unwrap(), 6);
+
+        // Plus strand: verbatim chromosome slice.
+        assert_eq!(
+            provider.get_sequence("NG_999999.1", 0, 6).unwrap(),
+            "AACGGT"
+        );
+        // Sub-window (0-based half-open) maps through the placement.
+        assert_eq!(provider.get_sequence("NG_999999.1", 0, 3).unwrap(), "AAC");
+        assert_eq!(provider.get_sequence("NG_999999.1", 3, 6).unwrap(), "GGT");
+
+        // Minus strand: reverse complement of the same chromosome slice.
+        assert_eq!(
+            provider.get_sequence("NG_888888.1", 0, 6).unwrap(),
+            "ACCGTT"
+        );
+
+        // Exact-version synthesis wins over the sibling NG_999999.2 FASTA — a
+        // version-fuzzy result would (wrongly) return "TTTTTT".
+        assert_ne!(
+            provider.get_sequence("NG_999999.1", 0, 6).unwrap(),
+            "TTTTTT"
+        );
+
+        // The sibling version that DOES have a FASTA is still served from it.
+        assert_eq!(
+            provider.get_sequence("NG_999999.2", 0, 6).unwrap(),
+            "TTTTTT"
+        );
     }
 
     #[test]
