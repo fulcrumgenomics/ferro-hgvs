@@ -23,9 +23,15 @@
 //! All derivation runs at `ferro prepare` time; the derived placements are baked
 //! into the manifest and served by the unchanged version-exact runtime path.
 
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::hgvs::parser::accession::parse_accession;
 use crate::hgvs::variant::Accession;
 use crate::reference::provider::GenomicPlacement;
 use crate::reference::Strand;
+use crate::FerroError;
 
 /// Minimum exon count required to trust a derived affine. A single exon
 /// under-constrains it (one length match + one trivial offset is the weakest
@@ -386,6 +392,100 @@ pub fn derive_ng_placement(
     Some(placement_from_candidate(nc, &cand))
 }
 
+// ----------------------------------------------------------------------------
+// On-disk artifact (produced at prepare time, consumed at load)
+// ----------------------------------------------------------------------------
+
+/// The committed/manifest artifact of derived `NG_`/`LRG_` placements: the
+/// output of the prepare-time derivation, loaded by `MultiFastaProvider` and
+/// merged into its `refseqgene_placements` map. Self-describing (strand as
+/// `"+"`/`"-"`, per-entry provenance) so it is auditable independent of the
+/// runtime [`GenomicPlacement`] (which is not serializable).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DerivedPlacements {
+    /// Human-facing provenance note (generator command, source manifest).
+    #[serde(default)]
+    pub description: String,
+    /// One entry per derived placement.
+    pub placements: Vec<DerivedPlacement>,
+}
+
+/// One derived placement entry, keyed to its versioned parent accession.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DerivedPlacement {
+    /// Versioned `NG_`/`LRG_` accession this places (e.g. `"NG_012337.1"`).
+    pub parent: String,
+    /// Chromosome (`NC_`) accession (e.g. `"NC_000011.10"`).
+    pub nc: String,
+    /// Inclusive 1-based chromosome span.
+    pub nc_start: u64,
+    pub nc_end: u64,
+    /// Parent orientation relative to the chromosome: `"+"` or `"-"`.
+    pub strand: String,
+    /// The transcript whose exons anchored the affine (provenance). Optional:
+    /// empty when the producer does not surface it (the `dev` example producer
+    /// currently records `""`); not consumed at load.
+    pub anchored_by: String,
+    /// The full-sequence validation mismatch fraction (provenance; ~0 for a
+    /// clean placement). Optional: the `dev` example producer derives placements
+    /// only after validation passes and records `0.0` rather than the exact
+    /// fraction; not consumed at load.
+    pub mismatch_fraction: f64,
+}
+
+impl DerivedPlacements {
+    /// Load from a JSON file.
+    pub fn from_json_path<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        let content = std::fs::read_to_string(path.as_ref())?;
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    /// Serialize to pretty JSON with a trailing newline (stable for `--check`).
+    pub fn to_json(&self) -> Result<String, FerroError> {
+        let mut s = serde_json::to_string_pretty(self)?;
+        s.push('\n');
+        Ok(s)
+    }
+
+    /// Convert to `(parent_key, GenomicPlacement)` entries for merging into the
+    /// `refseqgene_placements` map. An entry with an unparseable `nc` accession
+    /// or a strand other than `"+"`/`"-"` is **skipped** (never silently
+    /// mis-placed). `parent_start` is always 1.
+    pub fn to_placements(&self) -> Vec<(String, GenomicPlacement)> {
+        self.placements
+            .iter()
+            .filter_map(|p| {
+                let strand = match p.strand.as_str() {
+                    "+" => Strand::Plus,
+                    "-" => Strand::Minus,
+                    _ => return None,
+                };
+                if p.nc_start > p.nc_end {
+                    return None;
+                }
+                // Decline on an unparseable / trailing-garbage NC accession
+                // rather than place against a malformed one.
+                let nc = match parse_accession(&p.nc) {
+                    Ok(("", acc)) => acc, // fully consumed — no trailing garbage
+                    _ => return None,
+                };
+                Some((
+                    p.parent.clone(),
+                    GenomicPlacement {
+                        nc,
+                        parent_start: 1,
+                        nc_start: p.nc_start,
+                        nc_end: p.nc_end,
+                        strand,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,6 +763,39 @@ mod tests {
     }
 
     #[test]
+    fn derive_ng_placement_minus_success() {
+        // Minus-strand end-to-end: NG ascending exons align with NC *descending*
+        // exons, and the NG sequence is the reverse complement of the genome slice.
+        //
+        // NG exons (3,6) len 4 and (11,16) len 6 -> ng_lens [4, 6].
+        // NC exons (1001,1006) len 6 and (1011,1014) len 4 -> nc_asc_lens [6, 4];
+        // reversed nc_desc_lens [4, 6] == ng_lens, so only the minus orientation
+        // matches (the plus branch declines on the [4,6] != [6,4] length check).
+        // The minus affine then yields nc_end = nc1_e + (ng_s - 1) = 1006 + 10 = 1016
+        // and nc_start = nc_end - (ng_len - 1) = 1016 - 19 = 997.
+        let ng_seq = b"AAAACCCCGGGGTTTTACGT"; // len 20, not revcomp-palindromic
+        let gb = ng_record("NM_X.1", &[(3, 6), (11, 16)]);
+        let nc = acc("NC", "000001", 11);
+        let src = MockNc {
+            tid: "NM_X.1",
+            exons: vec![(1001, 1006), (1011, 1014)],
+            nc: nc.clone(),
+        };
+        // Genome slice [997, 1016] is the reverse complement of ng_seq.
+        let genome = MockGenome {
+            nc: nc.clone(),
+            start: 997,
+            bases: b"ACGTAAAACCCCGGGGTTTT".to_vec(),
+        };
+        let p = derive_ng_placement(gb.as_str(), ng_seq, &src, &genome).expect("derives");
+        assert_eq!(p.nc, nc);
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 997);
+        assert_eq!(p.nc_end, 1016);
+        assert_eq!(p.strand, Strand::Minus);
+    }
+
+    #[test]
     fn derive_ng_placement_declines_on_sequence_mismatch() {
         // Genome slice is frame-shifted relative to the NG -> validation fails.
         let ng_seq = b"ACGTACGTACGTACGTACGT";
@@ -731,5 +864,80 @@ mod tests {
             bases: ng_seq.to_vec(),
         };
         assert!(derive_ng_placement(&gb, ng_seq, &TwoNc { nc }, &genome).is_none());
+    }
+
+    // ---- DerivedPlacements artifact ----
+
+    fn sample_entry() -> DerivedPlacement {
+        DerivedPlacement {
+            parent: "NG_012337.1".to_string(),
+            nc: "NC_000011.10".to_string(),
+            nc_start: 112081847,
+            nc_end: 112097794,
+            strand: "+".to_string(),
+            anchored_by: "NM_003002.2".to_string(),
+            mismatch_fraction: 0.0,
+        }
+    }
+
+    #[test]
+    fn derived_placements_json_round_trips() {
+        let dp = DerivedPlacements {
+            description: "test".to_string(),
+            placements: vec![sample_entry()],
+        };
+        let json = dp.to_json().expect("serializes");
+        assert!(json.ends_with('\n'));
+        let parsed: DerivedPlacements = serde_json::from_str(&json).expect("round-trips");
+        assert_eq!(parsed, dp);
+    }
+
+    #[test]
+    fn derived_placements_rejects_unknown_field() {
+        let json = r#"{"placements":[],"bogus":1}"#;
+        assert!(serde_json::from_str::<DerivedPlacements>(json).is_err());
+    }
+
+    #[test]
+    fn to_placements_builds_genomic_placement() {
+        let dp = DerivedPlacements {
+            description: String::new(),
+            placements: vec![sample_entry()],
+        };
+        let out = dp.to_placements();
+        assert_eq!(out.len(), 1);
+        let (key, p) = &out[0];
+        assert_eq!(key, "NG_012337.1");
+        assert_eq!(p.nc.full(), "NC_000011.10");
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 112081847);
+        assert_eq!(p.nc_end, 112097794);
+        assert_eq!(p.strand, Strand::Plus);
+    }
+
+    #[test]
+    fn to_placements_minus_strand() {
+        let mut e = sample_entry();
+        e.strand = "-".to_string();
+        let dp = DerivedPlacements {
+            description: String::new(),
+            placements: vec![e],
+        };
+        assert_eq!(dp.to_placements()[0].1.strand, Strand::Minus);
+    }
+
+    #[test]
+    fn to_placements_skips_bad_strand_and_inverted_range() {
+        let mut bad_strand = sample_entry();
+        bad_strand.strand = "?".to_string();
+        let mut inverted = sample_entry();
+        inverted.nc_start = 200;
+        inverted.nc_end = 100;
+        let dp = DerivedPlacements {
+            description: String::new(),
+            placements: vec![bad_strand, inverted],
+        };
+        // Both invalid entries are skipped rather than mis-placed.
+        assert!(dp.to_placements().is_empty());
     }
 }

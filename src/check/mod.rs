@@ -182,6 +182,17 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    // A missing derived-placements JSON silently disables version-gap NG_/LRG_
+    // projection at load, so surface it like the other optional inputs above.
+    if let Some(ref placements) = manifest.derived_refseqgene_placements {
+        if !placements.exists() {
+            result.warnings.push(format!(
+                "Derived RefSeqGene placements not found: {}",
+                placements.display()
+            ));
+        }
+    }
+
     // A missing RefSeqGene summary (LRG_RefSeqGene) silently disables legacy
     // gene-model selector resolution at load, so surface it like the other
     // optional inputs above.
@@ -324,6 +335,7 @@ mod tests {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: None,
+            derived_refseqgene_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -375,6 +387,7 @@ mod tests {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: Some(missing_alignments.clone()),
             refseqgene_alignments_grch37: None,
+            derived_refseqgene_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -428,6 +441,7 @@ mod tests {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: Some(missing_alignments.clone()),
+            derived_refseqgene_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -481,6 +495,7 @@ mod tests {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: None,
+            derived_refseqgene_placements: None,
             refseqgene_summary: Some(missing_summary.clone()),
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -510,6 +525,60 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("RefSeqGene summary (LRG_RefSeqGene) not found")),
             "Expected a warning for the missing summary file, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_check_warns_on_missing_derived_refseqgene_placements() {
+        let dir = TempDir::new().unwrap();
+
+        // A real transcript FASTA so the manifest is otherwise valid.
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
+
+        // Point derived_refseqgene_placements at a file that does not exist.
+        let missing_placements = dir.path().join("missing_derived_placements.json");
+
+        let mut manifest = ReferenceManifest {
+            prepared_at: "2024-01-01T00:00:00Z".to_string(),
+            transcript_fastas: vec![transcript_fasta],
+            protein_fastas: Vec::new(),
+            genome_fasta: None,
+            genome_grch37_fasta: None,
+            refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: None,
+            refseqgene_alignments_grch37: None,
+            derived_refseqgene_placements: Some(missing_placements.clone()),
+            refseqgene_summary: None,
+            lrg_fastas: Vec::new(),
+            lrg_xmls: Vec::new(),
+            lrg_refseq_mapping: None,
+            cdot_json: None,
+            cdot_grch37_json: None,
+            ensembl_cdot_json: None,
+            ensembl_cdot_grch37_json: None,
+            ensembl_transcript_fastas: Vec::new(),
+            supplemental_fasta: None,
+            legacy_transcripts_fasta: None,
+            legacy_transcripts_metadata: None,
+            legacy_genbank_fasta: None,
+            legacy_genbank_metadata: None,
+            canonical_overrides: None,
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: dir.path().to_path_buf(),
+        };
+
+        manifest.save().unwrap();
+
+        let result = check_reference(dir.path());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("Derived RefSeqGene placements not found")),
+            "Expected a warning for the missing derived placements file, got {:?}",
             result.warnings
         );
     }

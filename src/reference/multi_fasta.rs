@@ -613,6 +613,35 @@ impl MultiFastaProvider {
             }
         }
 
+        // Derived NG_/LRG_ placements (#728): fill version gaps the authoritative
+        // GFF3 snapshots above do not cover (versions absent from NCBI's archived
+        // alignments). Merged AFTER the GFF3 sources with first-source-wins, so a
+        // GFF3 entry is never overridden — derived placements only add keys/builds
+        // the snapshots lack. A read/parse failure is warned, not fatal.
+        if let Some(rel) = manifest
+            .get("derived_refseqgene_placements")
+            .and_then(|v| v.as_str())
+        {
+            let path = resolve_path(rel);
+            match crate::reference::derived_placement::DerivedPlacements::from_json_path(&path) {
+                Ok(derived) => {
+                    let mut map: FxHashMap<String, Vec<GenomicPlacement>> = FxHashMap::default();
+                    for (key, placement) in derived.to_placements() {
+                        map.entry(key).or_default().push(placement);
+                    }
+                    merge_refseqgene_placements(&mut refseqgene_placements, map);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to read derived NG_ placements {}: {}; \
+                         version-gap NG_ projection disabled",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         // Parse the NCBI `LRG_RefSeqGene` summary into a gene → reference-standard
         // transcript map for legacy gene-model selector resolution (#500/#637).
         // A read failure is warned (not silently swallowed); an absent field is
@@ -3071,6 +3100,51 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             cdot.get_transcript("NM_000088.3").is_some(),
             "RefSeq transcript still resolves in cdot"
         );
+    }
+
+    #[test]
+    fn test_from_manifest_loads_derived_ng_placement() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::Strand;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A FASTA dir is required by from_manifest; a minimal transcript FASTA.
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        // A derived-placements artifact (no GFF3 alignment present → this is the
+        // only source of the NG_ placement).
+        fs::write(
+            d.join("derived.json"),
+            r#"{"description":"test","placements":[{"parent":"NG_012337.1","nc":"NC_000011.10","nc_start":112081847,"nc_end":112097794,"strand":"+","anchored_by":"NM_003002.2","mismatch_fraction":0.0}]}"#,
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "derived_refseqgene_placements": "derived.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+        let ng = Accession::new("NG", "012337", Some(1));
+        let placement = provider
+            .genomic_placement(&ng)
+            .expect("derived NG_012337.1 placement is served from the manifest");
+        assert_eq!(placement.nc.full(), "NC_000011.10");
+        assert_eq!(placement.parent_start, 1);
+        assert_eq!(placement.nc_start, 112081847);
+        assert_eq!(placement.nc_end, 112097794);
+        assert_eq!(placement.strand, Strand::Plus);
     }
 
     #[test]
