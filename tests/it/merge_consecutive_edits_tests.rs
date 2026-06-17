@@ -810,25 +810,32 @@ fn test_merge_3utr_consecutive_subs_cds() {
 
 #[test]
 fn test_merge_5utr_consecutive_subs_rna() {
-    // r. mirrors c. for 5'UTR; lowercase nucleotides preserved in the
-    // merged delins per the existing case-handling rule.
+    // r. mirrors c. for 5'UTR. The merged edit deletes the 5'UTR reference
+    // `ac` and inserts `gu`, which is its reverse complement — so the
+    // canonical form is an inversion, exactly as the DNA-axis analog
+    // (`c.-2_-1delinsGT` -> `c.-2_-1inv`). Before #736 the RNA path kept this
+    // as `delinsgu` because the inserted `u` (`Base::U`) was compared against
+    // the DNA reference `T` and never matched the reverse complement; with the
+    // U->T normalization the inversion is now recognized on r. too.
     assert_eq!(
         normalize_with_provider(
             provider_with_utr_transcript(),
             "NM_TESTUTR.1:r.[-2a>g;-1c>u]",
         ),
-        "NM_TESTUTR.1:r.-2_-1delinsgu",
+        "NM_TESTUTR.1:r.-2_-1inv",
     );
 }
 
 #[test]
 fn test_merge_3utr_consecutive_subs_rna() {
+    // 3'UTR analog of the above: ref `ac` -> `gu` (its reverse complement) is
+    // canonicalized to `inv`, matching the DNA axes (#736).
     assert_eq!(
         normalize_with_provider(
             provider_with_utr_transcript(),
             "NM_TESTUTR.1:r.[*1a>g;*2c>u]",
         ),
-        "NM_TESTUTR.1:r.*1_*2delinsgu",
+        "NM_TESTUTR.1:r.*1_*2inv",
     );
 }
 

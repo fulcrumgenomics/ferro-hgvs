@@ -1023,4 +1023,38 @@ mod issue_704_r_intronic {
             Ok("NM_MUTR.1:n.24_26-3A[8]".to_string())
         );
     }
+
+    #[test]
+    fn r_intronic_edit_with_uracil_base() {
+        // Cross-cut of #704 (intronic `r.` routing) and #736 (the `u`->`T`
+        // normalization): an intronic `r.` delins whose inserted bases are
+        // written with the RNA base `u`. The genomic-space engine must see DNA,
+        // so without the #736 mapping the reverse-complement inversion would be
+        // missed and this would stay `delinsuu`. `r.30+1_30+2` is the intron-1
+        // `aa`; `uu` is its reverse complement, so the canonical form is `inv`,
+        // matching the `n.`-with-`T` analog.
+        assert_eq!(
+            normalize(
+                make_provider_with_plus_strand(),
+                "NM_PLUS.1:r.30+1_30+2delinsuu"
+            ),
+            "NM_PLUS.1:r.30+1_30+2inv",
+        );
+        assert_eq!(
+            normalize(
+                make_provider_with_plus_strand(),
+                "NM_PLUS.1:n.30+1_30+2delinsTT"
+            ),
+            "NM_PLUS.1:n.30+1_30+2inv",
+        );
+        // A plain intronic `r.` insertion carrying `u` must also normalize
+        // (not error) and match its `n.`-with-`T` analog.
+        assert_eq!(
+            try_normalize(
+                make_provider_with_plus_strand(),
+                "NM_PLUS.1:r.30+1_30+2insu"
+            ),
+            Ok("NM_PLUS.1:r.30+1_30+2insu".to_string()),
+        );
+    }
 }

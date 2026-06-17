@@ -1658,6 +1658,146 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
     })
 }
 
+/// Map the RNA base `U`/`u` to thymine (`T`) throughout an `r.` edit's literal
+/// base sequences, so the edit can be compared against the DNA-stored reference
+/// during normalization (#736).
+///
+/// The parser keeps `u` as a distinct [`Base::U`] (`b'U'`), separate from
+/// [`Base::T`] (`b'T'`). `normalize_rna` compares the edit's inserted / delins
+/// bases against the transcript reference, which is stored as DNA (`T`), so a
+/// `Base::U` never matches and insertions / delins silently fail to canonicalize
+/// or 3'-shift. Re-expressing the edit in DNA before normalization fixes this;
+/// `RnaVariant`'s `Display` (`to_rna_string`) renders `T`→`u` again on output,
+/// so the rewrite is display-neutral.
+///
+/// Returns `Some` with the rewritten edit iff at least one `U` was present, and
+/// `None` for an already-DNA edit — mirroring
+/// [`canonicalize_conversion_to_delins`]'s `None`-means-no-op convention so
+/// callers can use it as an early-return probe. The walked shapes are a superset
+/// of the literal-base carriers checked by the parser's `validate_no_u_in_dna`
+/// (substitution, substitution-no-ref, deletion, duplication, insertion, delins,
+/// repeat, multi-repeat), additionally covering the inversion, breakpoint-insertion,
+/// and dupins shapes that `validate_no_u_in_dna` deliberately skips; every other
+/// shape carries no literal base alphabet and is returned unchanged.
+pub fn rna_uracil_to_thymine(edit: &NaEdit) -> Option<NaEdit> {
+    use crate::hgvs::edit::{Base, RepeatUnit};
+
+    fn map_base(b: Base) -> Base {
+        if matches!(b, Base::U) {
+            Base::T
+        } else {
+            b
+        }
+    }
+    fn map_seq(s: &Sequence) -> Sequence {
+        Sequence::new(s.bases().iter().copied().map(map_base).collect())
+    }
+    fn map_opt_seq(s: &Option<Sequence>) -> Option<Sequence> {
+        s.as_ref().map(map_seq)
+    }
+    fn map_part(p: &InsertedPart) -> InsertedPart {
+        match p {
+            InsertedPart::Literal(s) => InsertedPart::Literal(map_seq(s)),
+            InsertedPart::Repeat { base, count } => InsertedPart::Repeat {
+                base: map_base(*base),
+                count: count.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+    fn map_ins(ins: &InsertedSequence) -> InsertedSequence {
+        match ins {
+            InsertedSequence::Literal(s) => InsertedSequence::Literal(map_seq(s)),
+            InsertedSequence::Repeat { base, count } => InsertedSequence::Repeat {
+                base: map_base(*base),
+                count: count.clone(),
+            },
+            InsertedSequence::SequenceRepeat { sequence, count } => {
+                InsertedSequence::SequenceRepeat {
+                    sequence: map_seq(sequence),
+                    count: count.clone(),
+                }
+            }
+            InsertedSequence::Complex(parts) => {
+                InsertedSequence::Complex(parts.iter().map(map_part).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    let mapped = match edit {
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => NaEdit::Substitution {
+            reference: map_base(*reference),
+            alternative: map_base(*alternative),
+        },
+        NaEdit::SubstitutionNoRef { alternative } => NaEdit::SubstitutionNoRef {
+            alternative: map_base(*alternative),
+        },
+        NaEdit::Deletion { sequence, length } => NaEdit::Deletion {
+            sequence: map_opt_seq(sequence),
+            length: *length,
+        },
+        NaEdit::Duplication {
+            sequence,
+            length,
+            uncertain_extent,
+        } => NaEdit::Duplication {
+            sequence: map_opt_seq(sequence),
+            length: *length,
+            uncertain_extent: uncertain_extent.clone(),
+        },
+        NaEdit::Insertion { sequence } => NaEdit::Insertion {
+            sequence: map_ins(sequence),
+        },
+        NaEdit::BreakpointInsertion { sequence } => NaEdit::BreakpointInsertion {
+            sequence: map_ins(sequence),
+        },
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => NaEdit::Delins {
+            sequence: map_ins(sequence),
+            deleted: map_opt_seq(deleted),
+            deleted_length: *deleted_length,
+        },
+        NaEdit::DupIns { sequence } => NaEdit::DupIns {
+            sequence: map_ins(sequence),
+        },
+        NaEdit::Inversion { sequence, length } => NaEdit::Inversion {
+            sequence: map_opt_seq(sequence),
+            length: *length,
+        },
+        NaEdit::Repeat {
+            sequence,
+            count,
+            additional_counts,
+            trailing,
+        } => NaEdit::Repeat {
+            sequence: map_opt_seq(sequence),
+            count: count.clone(),
+            additional_counts: additional_counts.clone(),
+            trailing: map_opt_seq(trailing),
+        },
+        NaEdit::MultiRepeat { units } => NaEdit::MultiRepeat {
+            units: units
+                .iter()
+                .map(|u| RepeatUnit {
+                    sequence: map_seq(&u.sequence),
+                    count: u.count.clone(),
+                })
+                .collect(),
+        },
+        // Every other shape carries no literal base alphabet.
+        other => other.clone(),
+    };
+
+    (mapped != *edit).then_some(mapped)
+}
+
 /// If `s` is wrapped in a single matching outer `[...]` pair — i.e.
 /// the leading `[` at index 0 closes at the trailing `]` at
 /// `s.len() - 1` under standard bracket-depth bookkeeping — return the
@@ -3945,5 +4085,55 @@ mod tests {
             }
             other => panic!("expected NaEdit::Delins, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rna_uracil_to_thymine_rewrites_literal_u_in_insertion() {
+        use crate::hgvs::edit::InsertedSequence;
+        let edit = NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::from_str("UU").unwrap()),
+        };
+        let mapped = rna_uracil_to_thymine(&edit).expect("expected Some for a u-bearing edit");
+        assert_eq!(
+            mapped,
+            NaEdit::Insertion {
+                sequence: InsertedSequence::Literal(Sequence::from_str("TT").unwrap()),
+            }
+        );
+    }
+
+    #[test]
+    fn rna_uracil_to_thymine_rewrites_delins_deleted_and_inserted() {
+        use crate::hgvs::edit::InsertedSequence;
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("AU").unwrap()),
+            deleted: Some(Sequence::from_str("UG").unwrap()),
+            deleted_length: None,
+        };
+        let mapped = rna_uracil_to_thymine(&edit).expect("expected Some");
+        assert_eq!(
+            mapped,
+            NaEdit::Delins {
+                sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
+                deleted: Some(Sequence::from_str("TG").unwrap()),
+                deleted_length: None,
+            }
+        );
+    }
+
+    #[test]
+    fn rna_uracil_to_thymine_is_noop_without_u() {
+        use crate::hgvs::edit::{Base, InsertedSequence};
+        // A DNA-only insertion (no U anywhere) must return None.
+        assert!(rna_uracil_to_thymine(&NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::from_str("ACGT").unwrap()),
+        })
+        .is_none());
+        // A non-literal-base shape returns None too.
+        assert!(rna_uracil_to_thymine(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        })
+        .is_none());
     }
 }
