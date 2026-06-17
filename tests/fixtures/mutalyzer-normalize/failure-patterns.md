@@ -141,6 +141,8 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 | `ENST00000375549.8:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000375549:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000452863.10:c.9del` | normalized | reference_unavailable | — | #671 |
+| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | known_bug | — | #745 |
+| `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | known_bug | — | #745 |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
 
@@ -148,6 +150,7 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
+| genomic | 0 | 2 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 0 | 4 | 24 | 5 | 6 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |
