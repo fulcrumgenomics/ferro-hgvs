@@ -763,3 +763,52 @@ mod issue_11 {
         );
     }
 }
+
+// =============================================================================
+// #704: exon/intron 3' rule parity for n. (and r.) — boundary-spanning n.
+//
+// `NM_PLUS.1` has cds_start=1, so c.N == n.N: a boundary-spanning n. variant
+// (one exonic + one intronic endpoint) must normalize through genomic space
+// exactly as the c. analog does (#670), rather than erroring "not supported
+// for n. coords". The c. analogs (c.30_30+1del, c.31-1_31insA) already
+// normalize to themselves; the n. forms must too (not Err).
+// =============================================================================
+
+mod issue_704_nr_boundary {
+    use super::*;
+
+    #[test]
+    fn n_boundary_spanning_deletion_normalizes() {
+        // Exonic last base (n.30) + first intronic base (n.30+1): no equivalent
+        // shifted position, so it normalizes to itself — but it must NOT error.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30_30+1del");
+        assert_eq!(result, Ok("NM_PLUS.1:n.30_30+1del".to_string()));
+    }
+
+    #[test]
+    fn n_intron_exon_junction_insertion_normalizes() {
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.31-1_31insA");
+        assert_eq!(result, Ok("NM_PLUS.1:n.31-1_31insA".to_string()));
+    }
+
+    #[test]
+    fn n_both_intronic_same_intron_still_shifts() {
+        // Regression guard: the already-working both-intronic same-intron path
+        // (routed to normalize_intronic_tx) must keep shifting (#670 sub-problem
+        // B must not break it). c.30+1del -> c.30+3del; n. mirrors it.
+        let result = normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30+1del");
+        assert_eq!(result, "NM_PLUS.1:n.30+3del");
+    }
+
+    #[test]
+    fn n_multi_intron_span_routes_to_boundary_spanning() {
+        // Both endpoints intronic but in DIFFERENT introns (intron1 -> intron2,
+        // spanning exon2). The old `n.` path sent both-intronic variants to the
+        // single-intron `normalize_intronic_tx` (no `same_intron` split); after
+        // #704 the `same_intron_tx` split routes this to boundary-spanning. No
+        // equivalent shift exists, so it normalizes to itself — matching the c.
+        // analog — but must be handled, not mis-bounded to intron1.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30+2_60+2del");
+        assert_eq!(result, Ok("NM_PLUS.1:n.30+2_60+2del".to_string()));
+    }
+}
