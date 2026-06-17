@@ -147,6 +147,73 @@ fn make_plus_strand_transcript() -> (Transcript, String) {
     (transcript, genomic_seq)
 }
 
+/// Build a plus-strand, 3-exon transcript whose exon1 3' tail and intron1 5'
+/// form a single homopolymer run that straddles the junction — the fixture for
+/// #704 sub-problem A (purely-exonic indel that, under the 3' rule, must shift
+/// out of the exon and into the following intron).
+///
+/// `cds_start == 1` so `c.N == n.N`; the same `n.30del` / `c.30del` exercise
+/// both the `n.` and `c.` post-checks against one genomic layout.
+///
+/// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
+/// Layout:
+///   Exon 1: tx 1-30   genomic (p+0)–(p+29)   ends `...AAAA` (tx 27-30)
+///   Intron 1:          genomic (p+30)–(p+39)  `AAAGCGCGCG` (starts `AAA`)
+///   Exon 2: tx 31-60  genomic (p+40)–(p+69)
+///   Intron 2:          genomic (p+70)–(p+79)  `CTCTCTCTCT`
+///   Exon 3: tx 61-90  genomic (p+80)–(p+109)
+///
+/// The junction run is genomic (p+26)–(p+32) = `AAAAAAA` (4 exonic + 3 intronic
+/// A's). A single-base deletion/duplication at the exon's 3' edge (`n.30`) is
+/// part of that run, so the 3' rule shifts it to the run's 3'-most base at
+/// genomic p+32 = `n.30+3` (intron position 3).
+fn make_edge_homopolymer_transcript() -> (Transcript, String) {
+    // Exon 1 (30) ends in AAAA; intron 1 (10) starts AAA → 7-A junction run.
+    let core = "GCGCGCGCGCGCGCGCGCGCGCGCGCAAAA\
+                AAAGCGCGCG\
+                TGTGTGTGTGTGTGTGTGTGTGTGTGTGTG\
+                CTCTCTCTCT\
+                ACACACACACACACACACACACACACACAC";
+    let genomic_seq = padded_genomic(core);
+
+    // Plus strand: transcript sequence is the spliced exons in order.
+    let tx_seq = "GCGCGCGCGCGCGCGCGCGCGCGCGCAAAA\
+                   TGTGTGTGTGTGTGTGTGTGTGTGTGTGTG\
+                   ACACACACACACACACACACACACACACAC";
+
+    let p = PAD_OFFSET + 1;
+    let transcript = Transcript::new(
+        "NM_EDGE.1".to_string(),
+        Some("EDGEGENE".to_string()),
+        Strand::Plus,
+        tx_seq.to_string(),
+        Some(1),
+        Some(90),
+        vec![
+            Exon::with_genomic(1, 1, 30, p, p + 29),
+            Exon::with_genomic(2, 31, 60, p + 40, p + 69),
+            Exon::with_genomic(3, 61, 90, p + 80, p + 109),
+        ],
+        Some("chr_edge".to_string()),
+        Some(p),
+        Some(p + 109),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+
+    (transcript, genomic_seq)
+}
+
+fn make_provider_with_edge() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let (tx, genomic) = make_edge_homopolymer_transcript();
+    provider.add_genomic_sequence("chr_edge", genomic);
+    provider.add_transcript(tx);
+    provider
+}
+
 /// Build a minus-strand transcript with UTR regions and genomic mapping.
 ///
 /// Genomic coordinates are 1-based; the core's first base is at `p = PAD_OFFSET + 1`.
@@ -810,5 +877,49 @@ mod issue_704_nr_boundary {
         // analog — but must be handled, not mis-bounded to intron1.
         let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:n.30+2_60+2del");
         assert_eq!(result, Ok("NM_PLUS.1:n.30+2_60+2del".to_string()));
+    }
+}
+
+// =============================================================================
+// #704 sub-problem A: purely-exonic exon→intron edge post-check for n. (and c.)
+//
+// On `NM_EDGE.1`, exon1's 3' tail (`...AAAA`) and intron1's 5' (`AAA...`) form a
+// 7-A run spanning the junction. A purely-exonic single-base del/dup at the
+// exon's 3' edge (`n.30` / `c.30`) is part of that run, so the 3' rule must
+// shift it OUT of the exon and into the intron — landing at the run's 3'-most
+// base, intron position 3 (`n.30+3` / `c.30+3`). The exon-confined shuffle only
+// sees spliced bases and stops at the exon edge; the genomic-space post-check
+// (mirror of #670's `normalize_cds` block) is what carries it across.
+// =============================================================================
+
+mod issue_704_nr_exon_to_intron {
+    use super::*;
+
+    #[test]
+    fn c_exonic_edge_deletion_shifts_into_intron() {
+        // Validates the genomic fixture against the already-shipped `c.`
+        // post-check (#670): the c. analog must already cross into the intron.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:c.30del");
+        assert_eq!(result, "NM_EDGE.1:c.30+3del");
+    }
+
+    #[test]
+    fn n_exonic_edge_deletion_shifts_into_intron() {
+        // The `n.` parity case (#704 sub-problem A). Before the post-check is
+        // ported to `normalize_tx` this stays exon-confined as `n.30del`.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:n.30del");
+        assert_eq!(result, "NM_EDGE.1:n.30+3del");
+    }
+
+    #[test]
+    fn c_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:c.30dup");
+        assert_eq!(result, "NM_EDGE.1:c.30+3dup");
+    }
+
+    #[test]
+    fn n_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:n.30dup");
+        assert_eq!(result, "NM_EDGE.1:n.30+3dup");
     }
 }

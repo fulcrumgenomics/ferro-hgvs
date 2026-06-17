@@ -2843,6 +2843,57 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (new_start, new_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
+        // #704 sub-problem A (mirror of the `normalize_cds` block, #670): apply
+        // the 3' rule across the exon/intron junction for `n.`. The exon-confined
+        // shuffle above only sees spliced (exon) bases, so a purely-exonic del/dup
+        // that comes to rest at an exon's 3' edge is never given the chance to
+        // continue into the following intron — even though the spec's exception
+        // 3' rule requires it. When the shuffle lands exactly at the exon
+        // boundary (`boundaries.right`, the del/dup exon bound), a downstream
+        // intron exists, and we have genomic context, re-run the shuffle in
+        // genomic space (which spans the junction naturally) and adopt the result
+        // only if it actually crossed into the intron. The trigger is a rare edge
+        // landing, so the hot path is untouched; it is 3'-only (5'/VCF shuffles
+        // stay exon-confined), exactly as the `c.` path.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && new_end == boundaries.right
+            && self.provider.has_genomic_data()
+        {
+            // Prefer the accession-aware transcript so an NG/NC-parented input
+            // resolves the build-correct chromosome; fall back to the plain
+            // transcript. Clone keeps `transcript` available for the fall-through.
+            let boundary_transcript =
+                transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
+            if boundary_transcript.chromosome.is_some() {
+                // Engine errors (no following intron — e.g. last exon — no genomic
+                // alignment, …) fall through to the exon-confined result, the safe
+                // pre-#704 behavior. The exon/EXON suppression rule is preserved
+                // structurally: the genomic shuffle window is capped at the
+                // adjacent intron's far edge (never the next exon).
+                if let Ok((boundary_variant, boundary_warnings)) = self
+                    .normalize_boundary_spanning_tx(
+                        variant,
+                        &boundary_transcript,
+                        start_pos,
+                        end_pos,
+                        edit,
+                    )
+                {
+                    let crossed_into_intron = matches!(
+                        &boundary_variant,
+                        HV::Tx(tv)
+                            if tv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
+                                || tv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
+                    );
+                    if crossed_into_intron {
+                        let mut combined = warnings;
+                        combined.extend(boundary_warnings);
+                        return Ok((boundary_variant, combined));
+                    }
+                }
+            }
+        }
+
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
