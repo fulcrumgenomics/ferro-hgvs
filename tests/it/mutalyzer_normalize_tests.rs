@@ -1312,6 +1312,164 @@ fn regression_under_mock_normalized() {
 }
 
 // ----------------------------------------------------------------------------
+// Hermetic gate: snapshot-backed `normalized` axis (CI-always)
+// ----------------------------------------------------------------------------
+//
+// Unlike `regression_under_mock_normalized` (a `MockProvider` with NO bases, so
+// it pins ferro's no-op behavior), this gate serves the committed transcript
+// snapshot's REAL version-exact bases + CDS (issue #719, increment I4). It runs
+// every snapshot-covered `normalized` case against `cases.json` truth with NO
+// manifest, so the normalized axis becomes a real per-PR correctness gate, not
+// just a refactor pin.
+//
+// Coverage is the snapshot's transcript set. A row whose bare transcript the
+// snapshot does not carry — a genomic-anchored parent needing NG bases, or a
+// transcript absent from the local reference — is skipped here; it stays covered
+// by the manifest-backed `axis_normalized` (and, for genomic, the deferred
+// genomic snapshot). A skip is not a failure.
+//
+// Annotation-aware via the shared `AxisTally`: a snapshot-covered row carrying a
+// `known_bug`/`accepted_divergence`/`improvement`/`spec_citation`/
+// `reference_unavailable` annotation for the normalized axis is bucketed, not
+// failed — so this gate asserts only genuine, unannotated divergences on real
+// bases.
+
+const SNAPSHOT_DIR: &str = "tests/fixtures/mutalyzer-normalize/reference-snapshot";
+
+/// Whether a `normalized`-axis row is soundly coverable by the **transcript**
+/// snapshot, i.e. snapshot-normalize is equivalent to the manifest-backed
+/// `axis_normalized`. The snapshot models each transcript as a single-exon,
+/// transcript-space sequence + CDS with no cdot or genomic context, which
+/// supports bare `c.` exonic normalization but NOT:
+/// - a genomic / compound context `(...)` — needs the NG bases (deferred genomic
+///   snapshot);
+/// - intronic offset positions (`c.52+1`, `c.378-17`, `c.*824+10`) — need the
+///   multi-exon structure;
+/// - `n.` input on a coding transcript — mutalyzer's `n.→c.` conversion needs
+///   cdot; ferro keeps `n.` without it (so restrict to `c.` / [`HgvsVariant::Cds`]);
+/// - a `delins` against a *coordinate range* (`delinsN_M…`) — rendering the
+///   referenced/inverted segment needs reference context the snapshot lacks.
+///
+/// Excluded rows are not failures here; they stay covered by the manifest-backed
+/// `axis_normalized` (and, for genomic, the deferred genomic snapshot).
+fn snapshot_coverable_normalized(input: &str, v: &HgvsVariant) -> bool {
+    if !matches!(v, HgvsVariant::Cds(_)) {
+        return false;
+    }
+    if input.contains('(') {
+        return false;
+    }
+    let coord = match input.split_once(":c.") {
+        Some((_, c)) => c,
+        None => return false,
+    };
+    !has_intron_offset(coord) && !delins_coordinate_range(coord)
+}
+
+/// True if `coord` has an intron offset: a digit immediately followed by `+`/`-`
+/// then a digit (e.g. `52+1`, `378-17`, `*824+10`). The `+`/`-` in a UTR marker
+/// (`-1`, `*1`) is not between two digits, so those exonic positions are kept.
+fn has_intron_offset(coord: &str) -> bool {
+    let b = coord.as_bytes();
+    (1..b.len().saturating_sub(1)).any(|i| {
+        (b[i] == b'+' || b[i] == b'-') && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit()
+    })
+}
+
+/// True if `coord` is a `delins` against a coordinate range — `delins` directly
+/// followed by a digit (e.g. `delins190_220inv`), as opposed to literal bases
+/// (`delinsATC`).
+fn delins_coordinate_range(coord: &str) -> bool {
+    coord
+        .find("delins")
+        .and_then(|idx| coord.as_bytes().get(idx + "delins".len()))
+        .is_some_and(u8::is_ascii_digit)
+}
+
+#[test]
+fn gate_normalized_snapshot() {
+    use ferro_hgvs::conformance::reference_snapshot::{load_provider, TranscriptSnapshot};
+    use std::collections::HashSet;
+
+    let provider = load_provider(SNAPSHOT_DIR)
+        .unwrap_or_else(|e| panic!("load snapshot provider from {SNAPSHOT_DIR}: {e}"));
+    // Derive coverage from transcripts the provider actually serves, not raw
+    // metadata keys: `to_provider` skips any metadata entry whose bases are
+    // absent from the FASTA, so a metadata-only entry would otherwise count as
+    // covered yet no-op (a divergent FAIL) instead of being skipped. Filtering
+    // through `has_transcript` keeps `covered` and the served set in lockstep.
+    let covered: HashSet<String> = TranscriptSnapshot::from_json_path(
+        Path::new(SNAPSHOT_DIR).join("transcripts.metadata.json"),
+    )
+    .expect("snapshot metadata loads")
+    .transcripts
+    .keys()
+    .filter(|accession| provider.has_transcript(accession))
+    .cloned()
+    .collect();
+    let normalizer = Normalizer::new(provider);
+
+    let mut t = AxisTally::new(Axis::Normalized);
+    let mut covered_count = 0usize;
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        let Some(expected) = case.normalized.as_deref() else {
+            continue;
+        };
+        // A parse error or non-transcript input is out of this gate's scope
+        // (still covered by the manifest-backed axis), not a failure here.
+        let Ok(v) = parse_hgvs(&case.input) else {
+            continue;
+        };
+        let Some(tx) = transcript_of(&v) else {
+            continue;
+        };
+        // Coverage: the snapshot must carry the transcript, and the row must be
+        // soundly coverable by a transcript-only (single-exon, no-cdot) model.
+        if !covered.contains(&tx) || !snapshot_coverable_normalized(&case.input, &v) {
+            continue;
+        }
+        covered_count += 1;
+
+        let actual = catch_panics(|| -> Result<String, String> {
+            let n = normalizer
+                .normalize(&v)
+                .map_err(|e| format!("normalize: {e}"))?;
+            Ok(format!("{n}"))
+        });
+        t.record(case, expected, actual);
+    }
+
+    assert!(
+        covered_count > 0,
+        "gate_normalized_snapshot: snapshot covered zero normalized rows — the \
+         coverage filter or the committed snapshot is broken"
+    );
+    assert!(
+        t.fail.is_empty(),
+        "gate_normalized_snapshot: {} hermetic divergence(s) from cases.json on \
+         {covered_count} snapshot-covered normalized row(s) (real version-exact \
+         bases, no manifest):\n{}",
+        t.fail.len(),
+        t.fail
+            .iter()
+            .take(20)
+            .map(|(i, d)| format!("  {i} | {d}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    println!(
+        "gate_normalized_snapshot: {covered_count} snapshot-covered normalized row(s) \
+         pass hermetically (no manifest); {} known_bug, {} improvement, {} reference_unavailable",
+        t.known_bug.len(),
+        t.improvement.len(),
+        t.reference_unavailable.len(),
+    );
+}
+
+// ----------------------------------------------------------------------------
 // Comparator unit tests
 // ----------------------------------------------------------------------------
 //

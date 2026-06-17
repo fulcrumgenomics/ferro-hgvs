@@ -273,12 +273,6 @@
         "M2: Just a variant where we should roll."
       ],
       "input": "NM_003002.2:c.273del",
-      "reference_unavailable": {
-        "axis": "normalized",
-        "reason": "accession-version-absent",
-        "tracking_issue": 672,
-        "note": "Not a normalize bug — reference-version-absent: NM_003002.2 is not in the prepared manifest (only .4 present), so ferro no-ops. The .2 and .4 CDS are byte-identical and ferro rolls NM_003002.4:c.273del -> c.274del correctly (the GG at c.273-274). Resolves (XPASS) once the exact version is provisioned (#672)."
-      },
       "normalized": "NM_003002.2:c.274del",
       "protein_description": "NP_002993.1:p.(Asp92ThrfsTer43)",
       "infos": [
