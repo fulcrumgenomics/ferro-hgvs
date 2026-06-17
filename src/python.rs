@@ -3212,6 +3212,8 @@ impl PyPrepareConfig {
                 clinvar_file: None,
                 patterns_file: None,
                 validate_canonical_accessions: None,
+                derive_ng_placements: None,
+                genome: "grch38".to_string(),
                 dry_run,
             },
         }

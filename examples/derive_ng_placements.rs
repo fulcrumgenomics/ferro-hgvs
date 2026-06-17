@@ -72,8 +72,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
          Source manifest: {}.",
         cli.manifest.display()
     );
-    let artifact = derive_placements_for_accessions(&provider, &accessions, &builds, description)
-        .map_err(|e| anyhow::anyhow!("derive: {e}"))?;
+    let (artifact, declined) =
+        derive_placements_for_accessions(&provider, &accessions, &builds, description)
+            .map_err(|e| anyhow::anyhow!("derive: {e}"))?;
 
     let json = artifact
         .to_json()
@@ -81,8 +82,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     std::fs::write(&cli.out, &json)
         .map_err(|e| anyhow::anyhow!("write {}: {e}", cli.out.display()))?;
     println!(
-        "Derived {} placement(s). Wrote {}.",
+        "Derived {} placement(s), {} declined. Wrote {}.",
         artifact.placements.len(),
+        declined,
         cli.out.display()
     );
     Ok(())

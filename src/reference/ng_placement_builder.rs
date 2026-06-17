@@ -178,12 +178,16 @@ impl GenomeSlice for ProviderGenomeSlice<'_> {
 
 /// Derive validated placements for `accessions` over `builds` using `provider`
 /// (cdot + genome) and live NCBI EFetch. Declines are logged via `warn!`.
+/// Derives NG_/LRG_ placements for `accessions` over `builds`, returning the
+/// validated artifact and the number of accessions that declined on every
+/// requested build (so callers can surface an all-declined run rather than
+/// reporting a bare success).
 pub fn derive_placements_for_accessions(
     provider: &MultiFastaProvider,
     accessions: &[String],
     builds: &[String],
     description: String,
-) -> Result<DerivedPlacements, FerroError> {
+) -> Result<(DerivedPlacements, usize), FerroError> {
     let cdot = provider.cdot_mapper().ok_or_else(|| FerroError::Io {
         msg: "manifest has no cdot; cannot derive NG_ placements".to_string(),
     })?;
@@ -196,10 +200,14 @@ pub fn derive_placements_for_accessions(
     for d in &declined {
         log::warn!("derive NG_ placement declined: {d}");
     }
-    Ok(DerivedPlacements {
-        description,
-        placements,
-    })
+    let declined_count = declined.len();
+    Ok((
+        DerivedPlacements {
+            description,
+            placements,
+        },
+        declined_count,
+    ))
 }
 
 #[cfg(test)]
@@ -306,7 +314,7 @@ mod tests {
             .expect("load manifest");
         let accs = vec!["NG_012337.3".to_string()];
         let builds = vec!["GRCh38".to_string()];
-        let artifact =
+        let (artifact, _declined) =
             super::derive_placements_for_accessions(&provider, &accs, &builds, "test".into())
                 .expect("derive");
         // Either a validated placement or a principled decline (no panic, valid artifact).

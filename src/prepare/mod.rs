@@ -782,7 +782,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                      --derive-ng-placements {}`.",
                     acc_file.display()
                 );
-                let artifact =
+                let (artifact, declined) =
                     crate::reference::ng_placement_builder::derive_placements_for_accessions(
                         &provider,
                         &accessions,
@@ -792,7 +792,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                 std::fs::write(&out_path, artifact.to_json()?).map_err(|e| FerroError::Io {
                     msg: format!("write {}: {e}", out_path.display()),
                 })?;
-                eprintln!("  Derived {} placement(s).", artifact.placements.len());
+                eprintln!(
+                    "  Derived {} placement(s), {} declined.",
+                    artifact.placements.len(),
+                    declined
+                );
                 manifest.derived_refseqgene_placements = Some(out_path);
                 manifest.save()?;
             }
