@@ -209,6 +209,10 @@ name = "build_conformance_snapshot"
 required-features = ["dev"]
 
 [[example]]
+name = "derive_ng_placements"
+required-features = ["dev"]
+
+[[example]]
 name = "generate_tool_support_tables"
 required-features = ["dev"]
 

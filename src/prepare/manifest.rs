@@ -37,6 +37,14 @@ pub struct ReferenceManifest {
     /// the same way `genome_grch37_fasta`/`cdot_grch37_json` pair their GRCh38 fields.
     #[serde(default)]
     pub refseqgene_alignments_grch37: Option<PathBuf>,
+    /// Derived `NG_`/`LRG_` placements (`derived_placement::DerivedPlacements`
+    /// JSON) for versions absent from the alignment snapshots above — built at
+    /// prepare time from each NG_'s GenBank record + cdot and validated by full
+    /// sequence comparison (#728). Merged into the placement map *after* the
+    /// authoritative GFF3 snapshots (first-source-wins, so a GFF3 entry is never
+    /// overridden); fills only genuine version gaps.
+    #[serde(default)]
+    pub derived_refseqgene_placements: Option<PathBuf>,
     /// NCBI `LRG_RefSeqGene` association table, mapping each gene to its
     /// reference-standard transcript. Consumed to resolve legacy gene-model
     /// selectors (`NG_(GENE_v001):c.…`) to the transcript accession (#500/#637).
@@ -109,6 +117,7 @@ impl Default for ReferenceManifest {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: None,
+            derived_refseqgene_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -254,6 +263,7 @@ impl ReferenceManifest {
             &self.genome_grch37_fasta,
             &self.refseqgene_alignments,
             &self.refseqgene_alignments_grch37,
+            &self.derived_refseqgene_placements,
             &self.refseqgene_summary,
             &self.lrg_refseq_mapping,
             &self.cdot_json,
@@ -293,6 +303,7 @@ impl ReferenceManifest {
             &mut self.genome_grch37_fasta,
             &mut self.refseqgene_alignments,
             &mut self.refseqgene_alignments_grch37,
+            &mut self.derived_refseqgene_placements,
             &mut self.refseqgene_summary,
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
@@ -521,6 +532,7 @@ mod tests {
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],
             refseqgene_alignments: Some(ref_dir.join("refseqgene_alignments.gff3")),
             refseqgene_alignments_grch37: Some(ref_dir.join("refseqgene_alignments_grch37.gff3")),
+            derived_refseqgene_placements: None,
             refseqgene_summary: Some(ref_dir.join("LRG_RefSeqGene")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
             lrg_xmls: vec![ref_dir.join("lrg.xml")],
