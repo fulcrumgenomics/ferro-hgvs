@@ -14,7 +14,7 @@
 //!   carrying the exact bases. Standard format so the bytes are reviewable and
 //!   greppable.
 //! - `transcripts.metadata.json` — this [`TranscriptSnapshot`]: per-accession
-//!   CDS bounds, strand, gene/protein labels, and provenance (source + a
+//!   CDS bounds, gene/protein labels, and provenance (source + a
 //!   `sha256` of the bases) so the committed sequence is auditable against its
 //!   authoritative source.
 //!
@@ -47,9 +47,9 @@ pub const TRANSCRIPTS_METADATA: &str = "transcripts.metadata.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
-    /// How the entry was sourced, e.g. `"manifest:transcript-fasta"` (bases)
-    /// paired with the cdot build that supplied the CDS, or `"efetch"` for an
-    /// accession absent from local sources.
+    /// How the entry was sourced. The builder emits
+    /// `"manifest:transcript-fasta+cdot"` — the bases from the transcript FASTA
+    /// manifest, paired with the cdot build that supplied the CDS.
     pub source: String,
     /// Lowercase hex SHA-256 of the entry's bases (uppercase, no newlines),
     /// for auditing the committed FASTA against the source.
