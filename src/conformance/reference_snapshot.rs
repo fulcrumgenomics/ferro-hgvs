@@ -35,6 +35,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::cdot::CdotMapper;
 use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use crate::reference::MockProvider;
 use crate::FerroError;
@@ -185,31 +186,52 @@ impl TranscriptSnapshot {
     /// expected to agree — the integrity test enforces that).
     pub fn to_provider(&self, sequences: &BTreeMap<String, String>) -> MockProvider {
         let mut provider = MockProvider::new();
-        for (accession, entry) in &self.transcripts {
-            let Some(bases) = sequences.get(accession) else {
-                continue;
-            };
-            let exons = vec![Exon::new(1, 1, entry.length)];
-            let transcript = Transcript::new(
-                accession.clone(),
-                entry.gene_symbol.clone(),
-                Strand::Plus,
-                Some(bases.clone()),
-                entry.cds_start,
-                entry.cds_end,
-                exons,
-                None,
-                None,
-                None,
-                GenomeBuild::default(),
-                ManeStatus::default(),
-                None,
-                None,
-            )
-            .with_protein_id(entry.protein.clone());
+        for transcript in self.build_transcripts(sequences) {
             provider.add_transcript(transcript);
         }
         provider
+    }
+
+    /// Build a [`CdotMapper`] from this snapshot's transcripts so the protein
+    /// axis can project `c.` → `p.` hermetically: the projector reads each
+    /// transcript's CDS + bases (both carried here) to translate the consequence.
+    /// (The transcripts are transcript-space single-exon with no genomic
+    /// coordinates — fine for `c.`/`p.`, which are transcript-frame.)
+    pub fn to_cdot(&self, sequences: &BTreeMap<String, String>) -> CdotMapper {
+        CdotMapper::from_transcripts(self.build_transcripts(sequences).iter())
+    }
+
+    /// The in-memory single-exon transcripts (real bases + CDS) shared by
+    /// [`to_provider`](Self::to_provider) and [`to_cdot`](Self::to_cdot). Strand
+    /// is `Plus`: a transcript's own sequence is 5'→3' mRNA, so transcript-frame
+    /// operations are strand-independent. An entry whose bases are absent from
+    /// `sequences` is skipped (metadata/FASTA are expected to agree).
+    fn build_transcripts(&self, sequences: &BTreeMap<String, String>) -> Vec<Transcript> {
+        self.transcripts
+            .iter()
+            .filter_map(|(accession, entry)| {
+                let bases = sequences.get(accession)?;
+                Some(
+                    Transcript::new(
+                        accession.clone(),
+                        entry.gene_symbol.clone(),
+                        Strand::Plus,
+                        Some(bases.clone()),
+                        entry.cds_start,
+                        entry.cds_end,
+                        vec![Exon::new(1, 1, entry.length)],
+                        None,
+                        None,
+                        None,
+                        GenomeBuild::default(),
+                        ManeStatus::default(),
+                        None,
+                        None,
+                    )
+                    .with_protein_id(entry.protein.clone()),
+                )
+            })
+            .collect()
     }
 }
 
@@ -334,5 +356,29 @@ mod tests {
         assert_eq!(tx.cds_start, Some(2));
         assert_eq!(tx.cds_end, Some(7));
         assert_eq!(tx.protein_id.as_deref(), Some("NP_000001.1"));
+    }
+
+    #[test]
+    fn to_cdot_drives_protein_projection() {
+        // Feasibility: a CdotMapper built from the committed snapshot's
+        // single-exon transcripts drives hermetic c. -> p. projection, matching
+        // the corpus's known protein consequence (no manifest, no network).
+        use crate::data::projection::Projector;
+        use crate::{parse_hgvs, VariantProjector};
+        use std::path::PathBuf;
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/mutalyzer-normalize/reference-snapshot");
+        let snapshot = TranscriptSnapshot::from_json_path(dir.join(TRANSCRIPTS_METADATA))
+            .expect("snapshot metadata loads");
+        let sequences = load_sequences(&dir).expect("snapshot FASTA loads");
+        let provider = snapshot.to_provider(&sequences);
+        let cdot = snapshot.to_cdot(&sequences);
+        let vp = VariantProjector::new(Projector::new(cdot), provider);
+
+        let v = parse_hgvs("NM_003002.2:c.273del").expect("parses");
+        let result = vp.project_variant(&v, "NM_003002.2").expect("projects");
+        let protein = result.protein.as_ref().expect("protein predicted");
+        assert_eq!(format!("{protein}"), "NP_002993.1:p.(Asp92ThrfsTer43)");
     }
 }

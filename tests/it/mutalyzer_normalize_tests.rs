@@ -1336,11 +1336,11 @@ fn regression_under_mock_normalized() {
 
 const SNAPSHOT_DIR: &str = "tests/fixtures/mutalyzer-normalize/reference-snapshot";
 
-/// Whether a `normalized`-axis row is soundly coverable by the **transcript**
-/// snapshot, i.e. snapshot-normalize is equivalent to the manifest-backed
-/// `axis_normalized`. The snapshot models each transcript as a single-exon,
-/// transcript-space sequence + CDS with no cdot or genomic context, which
-/// supports bare `c.` exonic normalization but NOT:
+/// Whether a row is soundly coverable by the **transcript** snapshot — used by
+/// both the normalized and protein hermetic gates. The snapshot models each
+/// transcript as a single-exon, transcript-space sequence + CDS with no cdot or
+/// genomic context, so snapshot-derived `c.` normalization / `c.→p.` projection
+/// equal the manifest-backed axes for bare `c.` exonic rows but NOT for:
 /// - a genomic / compound context `(...)` — needs the NG bases (deferred genomic
 ///   snapshot);
 /// - intronic offset positions (`c.52+1`, `c.378-17`, `c.*824+10`) — need the
@@ -1351,8 +1351,8 @@ const SNAPSHOT_DIR: &str = "tests/fixtures/mutalyzer-normalize/reference-snapsho
 ///   referenced/inverted segment needs reference context the snapshot lacks.
 ///
 /// Excluded rows are not failures here; they stay covered by the manifest-backed
-/// `axis_normalized` (and, for genomic, the deferred genomic snapshot).
-fn snapshot_coverable_normalized(input: &str, v: &HgvsVariant) -> bool {
+/// axes (and, for genomic, the deferred genomic snapshot).
+fn snapshot_coverable(input: &str, v: &HgvsVariant) -> bool {
     if !matches!(v, HgvsVariant::Cds(_)) {
         return false;
     }
@@ -1428,7 +1428,7 @@ fn gate_normalized_snapshot() {
         };
         // Coverage: the snapshot must carry the transcript, and the row must be
         // soundly coverable by a transcript-only (single-exon, no-cdot) model.
-        if !covered.contains(&tx) || !snapshot_coverable_normalized(&case.input, &v) {
+        if !covered.contains(&tx) || !snapshot_coverable(&case.input, &v) {
             continue;
         }
         covered_count += 1;
@@ -1467,6 +1467,118 @@ fn gate_normalized_snapshot() {
         t.improvement.len(),
         t.reference_unavailable.len(),
     );
+}
+
+/// Hermetic gate for the `protein_description` axis (CI-always), the analog of
+/// `gate_normalized_snapshot`. The snapshot carries each transcript's CDS + bases,
+/// so a `CdotMapper` built from it (`TranscriptSnapshot::to_cdot`) drives
+/// `c.→p.` projection with no manifest or network — the protein consequence is
+/// transcript-frame translation. Coverage is the same transcript-only subset
+/// (`snapshot_coverable`); genomic-anchored / intronic rows stay on the nightly
+/// manifest axis.
+#[test]
+fn gate_protein_snapshot() {
+    use ferro_hgvs::conformance::reference_snapshot::{load_sequences, TranscriptSnapshot};
+    use ferro_hgvs::data::projection::Projector;
+    use std::collections::HashSet;
+
+    let dir = Path::new(SNAPSHOT_DIR);
+    let snapshot = TranscriptSnapshot::from_json_path(dir.join("transcripts.metadata.json"))
+        .expect("snapshot metadata loads");
+    let sequences = load_sequences(dir).expect("snapshot FASTA loads");
+    let covered: HashSet<String> = snapshot.transcripts.keys().cloned().collect();
+    let projector = VariantProjector::new(
+        Projector::new(snapshot.to_cdot(&sequences)),
+        snapshot.to_provider(&sequences),
+    );
+
+    let mut t = AxisTally::new(Axis::ProteinDescription);
+    let mut covered_count = 0usize;
+    let mut empty_skipped = 0usize;
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        let Some(expected) = case.protein_description.as_deref() else {
+            continue;
+        };
+        let Ok(v) = parse_hgvs(&case.input) else {
+            continue;
+        };
+        let Some(tx) = transcript_of(&v) else {
+            continue;
+        };
+        if !covered.contains(&tx) || !snapshot_coverable(&case.input, &v) {
+            continue;
+        }
+
+        let actual = catch_panics(|| -> Result<String, String> {
+            let result = projector
+                .project_variant(&v, &tx)
+                .map_err(|e| format!("project: {e}"))?;
+            result
+                .protein
+                .as_ref()
+                .map(|p| format!("{p}"))
+                .ok_or_else(|| "<empty>".to_string())
+        });
+        // Empty protein predictions (start-loss `p.?`, synonymous `p.(=)`) are a
+        // separate output-quality concern (#651), and occur on transcripts the
+        // manifest axis treats as reference_unavailable (so it never validated
+        // them). Report, don't gate.
+        if matches!(&actual, Err(e) if e == "<empty>") {
+            empty_skipped += 1;
+            continue;
+        }
+        covered_count += 1;
+        // Compare the spec-correct **bare** `NP_:p.` consequence: mutalyzer wraps
+        // it as `NM_x(NP_y):p.…`, which ferro intentionally does not emit (#498,
+        // the corpus's `bare-np-protein` spec_citation cluster).
+        t.record(case, &to_bare_protein(expected), actual);
+    }
+
+    assert!(
+        covered_count > 0,
+        "gate_protein_snapshot: snapshot covered zero protein rows — the coverage \
+         filter or the committed snapshot is broken"
+    );
+    assert!(
+        t.fail.is_empty(),
+        "gate_protein_snapshot: {} hermetic divergence(s) from cases.json on \
+         {covered_count} snapshot-covered protein row(s) (real bases + CDS, no manifest):\n{}",
+        t.fail.len(),
+        t.fail
+            .iter()
+            .take(20)
+            .map(|(i, d)| format!("  {i} | {d}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    println!(
+        "gate_protein_snapshot: {covered_count} snapshot-covered protein row(s) pass \
+         hermetically (no manifest); {empty_skipped} empty-projection skipped (#651); \
+         {} spec_overridden, {} known_bug",
+        t.spec_overridden.len(),
+        t.known_bug.len(),
+    );
+}
+
+/// Strip mutalyzer's non-standard `NM_x(NP_y):p.…` genomic-context wrapper to the
+/// spec-correct bare `NP_y:p.…` ferro emits (#498). A value that is not wrapped
+/// (the inner token before `:` is not an `NP_`/`XP_` accession) is returned
+/// unchanged — including a bare `NP_y:p.(…)` whose first `(` belongs to the
+/// consequence.
+fn to_bare_protein(desc: &str) -> String {
+    if let Some(open) = desc.find('(') {
+        if let Some(close_rel) = desc[open..].find(')') {
+            let inner = &desc[open + 1..open + close_rel];
+            let rest = &desc[open + close_rel + 1..];
+            if inner.starts_with("NP_") || inner.starts_with("XP_") {
+                return format!("{inner}{rest}");
+            }
+        }
+    }
+    desc.to_string()
 }
 
 // ----------------------------------------------------------------------------
@@ -2432,5 +2544,108 @@ mod comparator_tests {
         assert!(empty_budget_verdict(3, 5).is_ok(), "below = improvement");
         let err = empty_budget_verdict(6, 5).expect_err("rise must fail");
         assert!(err.contains("5 -> 6"), "message names the rise: {err}");
+    }
+
+    // ------------------------------------------------------------------------
+    // Snapshot-coverage string-parser unit tests
+    // ------------------------------------------------------------------------
+    //
+    // The snapshot gates exercise these byte-level helpers only indirectly via
+    // the corpus. These tests pin the named edge cases from each helper's doc
+    // comment directly against its behavior.
+
+    // (25) Intron-offset detection: a `+`/`-` between two digits flags an
+    // intronic position; a leading `-` (UTR) or `*` (3'UTR) marker does not.
+    #[test]
+    fn has_intron_offset_flags_intronic_and_keeps_utr() {
+        // Intronic: digit `+`/`-` digit.
+        assert!(has_intron_offset("52+1"), "c.52+1 is intronic");
+        assert!(has_intron_offset("378-17"), "c.378-17 is intronic");
+        assert!(has_intron_offset("*824+10"), "c.*824+10 is intronic");
+        // UTR / exonic: the `+`/`-` is not flanked by two digits.
+        assert!(
+            !has_intron_offset("-1"),
+            "c.-1 is a 5'UTR position, not intronic"
+        );
+        assert!(
+            !has_intron_offset("*1"),
+            "c.*1 is a 3'UTR position, not intronic"
+        );
+        assert!(!has_intron_offset("273del"), "c.273del has no offset");
+    }
+
+    // (26) Delins coordinate-range detection: `delins` immediately followed by
+    // a digit is a range delins; `delins` followed by literal bases is not.
+    #[test]
+    fn delins_coordinate_range_distinguishes_range_from_literal() {
+        assert!(
+            delins_coordinate_range("206_210delins190_220inv"),
+            "delins followed by a digit references a coordinate range"
+        );
+        assert!(
+            !delins_coordinate_range("100delinsATC"),
+            "delins followed by literal bases is not a coordinate range"
+        );
+        assert!(
+            !delins_coordinate_range("273del"),
+            "plain del has no delins"
+        );
+    }
+
+    // (27) `snapshot_coverable` composes the above filters: a bare exonic `c.`
+    // [`HgvsVariant::Cds`] row is coverable; non-`Cds`, parenthesized,
+    // intronic, and range-delins rows are excluded.
+    #[test]
+    fn snapshot_coverable_covers_bare_exonic_cds_only() {
+        let coverable = parse_hgvs("NM_003002.2:c.273del").expect("parse c.273del");
+        assert!(
+            snapshot_coverable("NM_003002.2:c.273del", &coverable),
+            "bare exonic c. on a coding transcript is snapshot-coverable"
+        );
+
+        // Intronic offset → excluded (needs multi-exon structure).
+        let intronic = parse_hgvs("NM_003002.2:c.274+20C>T").expect("parse intronic");
+        assert!(
+            !snapshot_coverable("NM_003002.2:c.274+20C>T", &intronic),
+            "intronic offset rows are excluded"
+        );
+
+        // Range delins → excluded (needs reference context to render the segment).
+        let range_delins =
+            parse_hgvs("NM_003002.4:c.206_210delins190_220inv").expect("parse range delins");
+        assert!(
+            !snapshot_coverable("NM_003002.4:c.206_210delins190_220inv", &range_delins),
+            "coordinate-range delins rows are excluded"
+        );
+
+        // Non-`Cds` (genomic) → excluded regardless of the coordinate.
+        let genomic = parse_hgvs("NC_012920.1:g.3243A>G").expect("parse genomic");
+        assert!(
+            !matches!(genomic, HgvsVariant::Cds(_)),
+            "fixture genomic input must not be a Cds variant"
+        );
+        assert!(
+            !snapshot_coverable("NC_012920.1:g.3243A>G", &genomic),
+            "non-Cds variants are excluded"
+        );
+    }
+
+    // (28) `to_bare_protein` strips mutalyzer's `NM_x(NP_y):p.…` wrapper to the
+    // bare `NP_y:p.…` and leaves an already-bare `NP_y:p.(…)` unchanged.
+    #[test]
+    fn to_bare_protein_unwraps_wrapper_and_preserves_bare() {
+        // Wrapped: first `(` encloses the NP_ accession.
+        assert_eq!(
+            to_bare_protein("NG_007485.1(NP_478102.2):p.(Asp68_Gly69delinsGlu)"),
+            "NP_478102.2:p.(Asp68_Gly69delinsGlu)",
+        );
+        // Already bare: the first `(` belongs to the `p.(…)` consequence, whose
+        // inner token does not start with `NP_`/`XP_`, so it is returned as-is.
+        assert_eq!(
+            to_bare_protein("NP_002993.1:p.(Asp92ThrfsTer43)"),
+            "NP_002993.1:p.(Asp92ThrfsTer43)",
+        );
+        // No parentheses at all → returned unchanged.
+        assert_eq!(to_bare_protein("NP_002993.1:p.="), "NP_002993.1:p.=");
     }
 }
