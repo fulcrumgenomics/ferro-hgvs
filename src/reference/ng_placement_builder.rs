@@ -7,8 +7,14 @@
 
 use std::process::Command;
 
-use crate::reference::derived_placement::DerivedPlacement;
-use crate::reference::{GenomicPlacement, Strand};
+use crate::data::cdot::CdotMapper;
+use crate::hgvs::parser::accession::parse_accession;
+use crate::hgvs::variant::Accession;
+use crate::reference::derived_placement::{
+    derive_ng_placement, DerivedPlacement, DerivedPlacements, GenomeSlice, NcExonSource,
+};
+use crate::reference::multi_fasta::MultiFastaProvider;
+use crate::reference::{GenomicPlacement, ReferenceProvider, Strand};
 use crate::FerroError;
 
 /// Derive placements for `accessions` over `builds`, fetching record/sequence
@@ -126,6 +132,76 @@ fn fasta_bases(fasta: &str) -> Vec<u8> {
         .collect()
 }
 
+/// `NcExonSource` over a cdot mapper for one build. cdot `exons` entries are
+/// 0-based half-open, so the 1-based inclusive interval `derive_ng_placement`
+/// expects is `(genome_start + 1, genome_end)`.
+struct CdotNcExons<'a> {
+    cdot: &'a CdotMapper,
+    build: &'a str,
+}
+
+impl NcExonSource for CdotNcExons<'_> {
+    fn nc_exons(&self, transcript_id: &str) -> Option<Vec<(u64, u64)>> {
+        let tx = self
+            .cdot
+            .get_transcript_on_build_exact(transcript_id, self.build)?;
+        Some(tx.exons.iter().map(|e| (e[0] + 1, e[1])).collect())
+    }
+    fn nc_contig(&self, transcript_id: &str) -> Option<Accession> {
+        let tx = self
+            .cdot
+            .get_transcript_on_build_exact(transcript_id, self.build)?;
+        match parse_accession(&tx.contig) {
+            Ok(("", acc)) => Some(acc),
+            _ => None,
+        }
+    }
+}
+
+/// `GenomeSlice` over a provider: 1-based inclusive `[start, end]` → the
+/// provider's 0-based half-open `get_sequence`.
+struct ProviderGenomeSlice<'a> {
+    provider: &'a MultiFastaProvider,
+}
+
+impl GenomeSlice for ProviderGenomeSlice<'_> {
+    fn slice(&self, nc: &Accession, start: u64, end: u64) -> Option<Vec<u8>> {
+        if start == 0 || end < start {
+            return None;
+        }
+        self.provider
+            .get_sequence(&nc.full(), start - 1, end)
+            .ok()
+            .map(String::into_bytes)
+    }
+}
+
+/// Derive validated placements for `accessions` over `builds` using `provider`
+/// (cdot + genome) and live NCBI EFetch. Declines are logged via `warn!`.
+pub fn derive_placements_for_accessions(
+    provider: &MultiFastaProvider,
+    accessions: &[String],
+    builds: &[String],
+    description: String,
+) -> Result<DerivedPlacements, FerroError> {
+    let cdot = provider.cdot_mapper().ok_or_else(|| FerroError::Io {
+        msg: "manifest has no cdot; cannot derive NG_ placements".to_string(),
+    })?;
+    let genome = ProviderGenomeSlice { provider };
+    let derive = |genbank: &str, seq: &[u8], build: &str| -> Option<GenomicPlacement> {
+        let nc_source = CdotNcExons { cdot, build };
+        derive_ng_placement(genbank, seq, &nc_source, &genome)
+    };
+    let (placements, declined) = build_placements(accessions, builds, efetch_text, derive);
+    for d in &declined {
+        log::warn!("derive NG_ placement declined: {d}");
+    }
+    Ok(DerivedPlacements {
+        description,
+        placements,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +293,23 @@ mod tests {
         assert!(url.contains("id=NG_012337.3"));
         assert!(url.contains("rettype=gb"));
         assert!(url.contains("retmode=text"));
+    }
+
+    #[test]
+    fn derive_for_real_reference_when_available() {
+        // Gated: only runs against a prepared reference (repo convention).
+        let manifest = match std::env::var("FERRO_MANIFEST") {
+            Ok(m) => std::path::PathBuf::from(m),
+            Err(_) => return, // skip when no reference is configured
+        };
+        let provider = crate::reference::multi_fasta::MultiFastaProvider::from_manifest(&manifest)
+            .expect("load manifest");
+        let accs = vec!["NG_012337.3".to_string()];
+        let builds = vec!["GRCh38".to_string()];
+        let artifact =
+            super::derive_placements_for_accessions(&provider, &accs, &builds, "test".into())
+                .expect("derive");
+        // Either a validated placement or a principled decline (no panic, valid artifact).
+        assert!(artifact.placements.len() <= 1);
     }
 }
