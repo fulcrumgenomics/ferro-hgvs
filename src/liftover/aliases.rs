@@ -5,6 +5,7 @@
 //! - RefSeq: NC_000001.10 (GRCh37), NC_000001.11 (GRCh38)
 //! - Ensembl: 1, 2, ..., X, Y, MT
 
+use crate::liftover::assembly_report::AssemblyReport;
 use crate::reference::transcript::GenomeBuild;
 use std::collections::HashMap;
 
@@ -115,6 +116,48 @@ impl ContigAliases {
             .refseq_to_ensembl
             .insert("NC_012920.1".to_string(), "MT".to_string());
 
+        aliases
+    }
+
+    /// Build a contig-alias table from parsed NCBI assembly reports, one per
+    /// genome build.
+    ///
+    /// Data-driven counterpart to [`default_human`](Self::default_human): the
+    /// `(name, build) → RefSeq` and reverse maps are derived from the report's
+    /// own `assembled-molecule` rows rather than a hardcoded per-chromosome
+    /// version table (#716). For each such row the RefSeq accession is
+    /// registered as a self-alias (so [`infer_genome_build_from_accession_with`]
+    /// can classify it), alongside its UCSC-style name (column 9) and Ensembl
+    /// name (the Assigned-Molecule, column 2). Rows whose UCSC name is the `na`
+    /// placeholder contribute no UCSC alias.
+    ///
+    /// Multiple reports are merged, so passing both the GRCh37 and GRCh38
+    /// reports yields one table covering both builds — an accession present in
+    /// only one build resolves under that build alone, which is exactly the
+    /// signal build inference needs.
+    pub fn from_assembly_reports(reports: &[(GenomeBuild, &AssemblyReport)]) -> Self {
+        let mut aliases = Self::new();
+        for (build, report) in reports {
+            for entry in report.assembled_molecules_with_refseq() {
+                let refseq = entry.refseq_accession.as_str();
+                let ensembl = entry.assigned_molecule.as_str();
+                let ucsc = entry.ucsc_name.as_str();
+
+                aliases.add_alias(refseq, *build, refseq);
+                if !ensembl.is_empty() && ensembl != "na" {
+                    aliases.add_alias(ensembl, *build, refseq);
+                    aliases
+                        .refseq_to_ensembl
+                        .insert(refseq.to_string(), ensembl.to_string());
+                }
+                if !ucsc.is_empty() && ucsc != "na" {
+                    aliases.add_alias(ucsc, *build, refseq);
+                    aliases
+                        .refseq_to_ucsc
+                        .insert(refseq.to_string(), ucsc.to_string());
+                }
+            }
+        }
         aliases
     }
 
@@ -249,6 +292,25 @@ fn default_human_aliases() -> &'static ContigAliases {
 pub fn infer_genome_build_from_accession(
     accession: &crate::hgvs::variant::Accession,
 ) -> Option<&'static str> {
+    infer_genome_build_from_accession_with(default_human_aliases(), accession)
+}
+
+/// Like [`infer_genome_build_from_accession`] but consulting an explicitly
+/// supplied [`ContigAliases`] table rather than the bundled
+/// [`default_human`](ContigAliases::default_human) heuristic.
+///
+/// This is the data-driven entry point (#716): pass a table built from the
+/// prepared reference's own `assembly_report.txt`
+/// ([`ContigAliases::from_assembly_reports`]) and build inference becomes
+/// authoritative — it classifies any `NC_` accession the report describes,
+/// including versions absent from the hardcoded table. The `accession.assembly`
+/// explicit-build field and the `NC_`-prefix gate are honored identically to
+/// the bundled path, so the only behavioral difference is the source of the
+/// accession→build mapping.
+pub fn infer_genome_build_from_accession_with(
+    aliases: &ContigAliases,
+    accession: &crate::hgvs::variant::Accession,
+) -> Option<&'static str> {
     // Assembly-style references (`GRCh37(chr1)`, `GRCh38(chrX)`) carry the
     // build name explicitly; honor it before the prefix check.
     if let Some(asm) = accession.assembly.as_deref() {
@@ -261,8 +323,9 @@ pub fn infer_genome_build_from_accession(
     if &*accession.prefix != "NC" {
         return None;
     }
-    let aliases = default_human_aliases();
     let acc_str = accession.full();
+    // GRCh38 is checked first so an accession present under both builds (e.g.
+    // mtDNA `NC_012920.1`) resolves to GRCh38, ferro's default-when-ambiguous.
     if aliases
         .resolve_to_refseq(&acc_str, GenomeBuild::GRCh38)
         .is_some()
@@ -397,5 +460,127 @@ mod tests {
             "NC_000001.10"
         );
         assert_eq!(aliases.normalize("unknown", GenomeBuild::GRCh37), "unknown");
+    }
+
+    // ----- #716: data-driven build inference from assembly reports -----
+
+    use crate::hgvs::variant::Accession;
+    use crate::liftover::assembly_report::parse_assembly_report;
+
+    /// A minimal but format-faithful assembly_report for one or more
+    /// chromosomes: `(ucsc, ensembl, refseq)` rows under the given name.
+    fn synthetic_report(name: &str, rows: &[(&str, &str, &str)]) -> String {
+        let mut s = format!("# Assembly name:  {name}\n");
+        for (ucsc, ensembl, refseq) in rows {
+            // cols: name role assigned type genbank rel refseq unit length ucsc
+            s.push_str(&format!(
+                "{ensembl}\tassembled-molecule\t{ensembl}\tChromosome\tCM000000.1\t=\t{refseq}\tPrimary Assembly\t1000\t{ucsc}\n"
+            ));
+        }
+        s
+    }
+
+    #[test]
+    fn from_assembly_reports_builds_resolvable_aliases() {
+        let report = parse_assembly_report(&synthetic_report(
+            "GRCh38.p14",
+            &[("chr1", "1", "NC_000001.11"), ("chrX", "X", "NC_000023.11")],
+        ));
+        let aliases = ContigAliases::from_assembly_reports(&[(GenomeBuild::GRCh38, &report)]);
+
+        assert_eq!(
+            aliases.resolve_to_refseq("chr1", GenomeBuild::GRCh38),
+            Some("NC_000001.11")
+        );
+        assert_eq!(
+            aliases.resolve_to_refseq("1", GenomeBuild::GRCh38),
+            Some("NC_000001.11")
+        );
+        // Self-alias powers build inference.
+        assert_eq!(
+            aliases.resolve_to_refseq("NC_000023.11", GenomeBuild::GRCh38),
+            Some("NC_000023.11")
+        );
+        assert_eq!(aliases.refseq_to_ucsc("NC_000001.11"), Some("chr1"));
+        assert_eq!(aliases.refseq_to_ensembl("NC_000023.11"), Some("X"));
+    }
+
+    #[test]
+    fn infer_with_classifies_from_merged_reports() {
+        let g38 = parse_assembly_report(&synthetic_report(
+            "GRCh38.p14",
+            &[("chr1", "1", "NC_000001.11")],
+        ));
+        let g37 = parse_assembly_report(&synthetic_report(
+            "GRCh37.p13",
+            &[("chr1", "1", "NC_000001.10")],
+        ));
+        let aliases = ContigAliases::from_assembly_reports(&[
+            (GenomeBuild::GRCh38, &g38),
+            (GenomeBuild::GRCh37, &g37),
+        ]);
+
+        assert_eq!(
+            infer_genome_build_from_accession_with(
+                &aliases,
+                &Accession::new("NC", "000001", Some(11))
+            ),
+            Some("GRCh38")
+        );
+        assert_eq!(
+            infer_genome_build_from_accession_with(
+                &aliases,
+                &Accession::new("NC", "000001", Some(10))
+            ),
+            Some("GRCh37")
+        );
+    }
+
+    #[test]
+    fn infer_with_hardens_beyond_the_hardcoded_table() {
+        // A version the bundled table does not know (`NC_000001.12` is a
+        // hypothetical future GRCh38 chr1 build). The hardcoded default
+        // declines; a report-built table classifies it authoritatively.
+        let unknown_to_default = Accession::new("NC", "000001", Some(12));
+        assert_eq!(
+            infer_genome_build_from_accession(&unknown_to_default),
+            None,
+            "the bundled version table must not know NC_000001.12"
+        );
+
+        let report = parse_assembly_report(&synthetic_report(
+            "GRCh38.p15",
+            &[("chr1", "1", "NC_000001.12")],
+        ));
+        let aliases = ContigAliases::from_assembly_reports(&[(GenomeBuild::GRCh38, &report)]);
+        assert_eq!(
+            infer_genome_build_from_accession_with(&aliases, &unknown_to_default),
+            Some("GRCh38"),
+            "report-derived aliases must classify accessions absent from the bundled table"
+        );
+    }
+
+    #[test]
+    fn infer_default_path_is_unchanged() {
+        // The public no-arg entry point delegates to the bundled table; its
+        // behavior must be identical to before the #716 refactor.
+        assert_eq!(
+            infer_genome_build_from_accession(&Accession::new("NC", "000017", Some(11))),
+            Some("GRCh38")
+        );
+        assert_eq!(
+            infer_genome_build_from_accession(&Accession::new("NC", "000017", Some(10))),
+            Some("GRCh37")
+        );
+        // mtDNA is shared across builds and resolves to the GRCh38 default.
+        assert_eq!(
+            infer_genome_build_from_accession(&Accession::new("NC", "012920", Some(1))),
+            Some("GRCh38")
+        );
+        // Non-NC prefixes still decline.
+        assert_eq!(
+            infer_genome_build_from_accession(&Accession::new("NG", "012337", Some(1))),
+            None
+        );
     }
 }
