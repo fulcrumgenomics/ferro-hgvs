@@ -35,6 +35,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+use crate::reference::MockProvider;
 use crate::FerroError;
 
 /// File name of the committed transcript FASTA within a snapshot directory.
@@ -165,6 +167,62 @@ pub fn load_sequences<P: AsRef<Path>>(dir: P) -> Result<BTreeMap<String, String>
     Ok(parse_fasta(&text))
 }
 
+impl TranscriptSnapshot {
+    /// Build an in-memory, **hermetic** [`MockProvider`] serving this snapshot's
+    /// transcripts with their real version-exact bases + CDS — the
+    /// reference oracle for the transcript-coordinate conformance axes with no
+    /// manifest or network.
+    ///
+    /// Each transcript is modeled as a **single-exon spliced** transcript: an
+    /// mRNA is already spliced, so its whole sequence is one exon spanning
+    /// `1..=length` — the same shape `MultiFastaProvider` uses for its
+    /// supplemental-CDS transcripts. Strand is `Plus`: a transcript's own
+    /// sequence is 5'→3' mRNA, so `c.`/`n.` normalization and CDS translation
+    /// are strand-independent here.
+    ///
+    /// `sequences` is the companion FASTA (see [`load_sequences`]); an entry
+    /// whose bases are absent from it is skipped (the metadata and FASTA are
+    /// expected to agree — the integrity test enforces that).
+    pub fn to_provider(&self, sequences: &BTreeMap<String, String>) -> MockProvider {
+        let mut provider = MockProvider::new();
+        for (accession, entry) in &self.transcripts {
+            let Some(bases) = sequences.get(accession) else {
+                continue;
+            };
+            let exons = vec![Exon::new(1, 1, entry.length)];
+            let transcript = Transcript::new(
+                accession.clone(),
+                entry.gene_symbol.clone(),
+                Strand::Plus,
+                Some(bases.clone()),
+                entry.cds_start,
+                entry.cds_end,
+                exons,
+                None,
+                None,
+                None,
+                GenomeBuild::default(),
+                ManeStatus::default(),
+                None,
+                None,
+            )
+            .with_protein_id(entry.protein.clone());
+            provider.add_transcript(transcript);
+        }
+        provider
+    }
+}
+
+/// Load the committed snapshot in `dir` (metadata + FASTA) and build a hermetic
+/// [`MockProvider`] from it — convenience over [`TranscriptSnapshot::from_json_path`]
+/// + [`load_sequences`] + [`TranscriptSnapshot::to_provider`].
+pub fn load_provider<P: AsRef<Path>>(dir: P) -> Result<MockProvider, FerroError> {
+    let dir = dir.as_ref();
+    let snapshot = TranscriptSnapshot::from_json_path(dir.join(TRANSCRIPTS_METADATA))?;
+    let sequences = load_sequences(dir)?;
+    Ok(snapshot.to_provider(&sequences))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +297,42 @@ mod tests {
         // `deny_unknown_fields` guards against silent schema drift.
         let json = r#"{"description":"x","transcripts":{},"bogus":1}"#;
         assert!(serde_json::from_str::<TranscriptSnapshot>(json).is_err());
+    }
+
+    #[test]
+    fn to_provider_serves_bases_and_cds() {
+        use crate::reference::ReferenceProvider;
+
+        let bases = "ACGTACGTAC".to_string(); // length 10
+        let mut snapshot = TranscriptSnapshot::default();
+        snapshot.transcripts.insert(
+            "NM_000001.1".to_string(),
+            TranscriptEntry {
+                cds_start: Some(2),
+                cds_end: Some(7),
+                gene_symbol: Some("GENE".to_string()),
+                protein: Some("NP_000001.1".to_string()),
+                length: bases.len() as u64,
+                provenance: Provenance {
+                    source: "test".to_string(),
+                    sha256: "test".to_string(),
+                },
+            },
+        );
+        let mut sequences = BTreeMap::new();
+        sequences.insert("NM_000001.1".to_string(), bases.clone());
+
+        let provider = snapshot.to_provider(&sequences);
+        assert!(provider.has_transcript("NM_000001.1"));
+        // Real bases are served (a sliced read works), and CDS bounds survive.
+        assert_eq!(
+            provider.get_sequence("NM_000001.1", 0, 4).expect("bases"),
+            "ACGT"
+        );
+        let tx = provider.get_transcript("NM_000001.1").expect("transcript");
+        assert_eq!(tx.sequence.as_deref(), Some(bases.as_str()));
+        assert_eq!(tx.cds_start, Some(2));
+        assert_eq!(tx.cds_end, Some(7));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_000001.1"));
     }
 }
