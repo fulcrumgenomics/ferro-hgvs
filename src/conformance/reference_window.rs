@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::reference::provider::ReferenceProvider;
+use crate::reference::derived_placement::{DerivedPlacement, DerivedPlacements};
+use crate::reference::provider::{select_placement_for_build, GenomicPlacement, ReferenceProvider};
 use crate::reference::transcript::Transcript;
 use crate::FerroError;
 
@@ -91,6 +92,13 @@ pub struct WindowFixture {
     /// Per-contig genomic windows (one or more disjoint slices per contig).
     #[serde(default)]
     pub genomic: Vec<GenomicWindow>,
+    /// Version-independent `NG_`/`LRG_` → chromosome placements (#728) the pass
+    /// used to re-anchor a transcript-coordinate variant into its genomic
+    /// parent's own frame (#480). Empty for corpora that never reference an
+    /// `NG_`/`LRG_` parent (e.g. biocommons); the mutalyzer genomic gate
+    /// populates it so [`WindowProvider`] can serve `genomic_placement`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<DerivedPlacement>,
 }
 
 impl WindowFixture {
@@ -120,6 +128,19 @@ impl WindowFixture {
         for w in &self.genomic {
             genomic.entry(w.contig.clone()).or_default().push(w.clone());
         }
+        // Resolve the serialized `DerivedPlacement` records into the runtime
+        // `GenomicPlacement` map, grouped per parent accession (one entry per
+        // genome build, mirroring `MultiFastaProvider::refseqgene_placements`).
+        // A record with an unparseable `nc` or a non-`+`/`-` strand is dropped
+        // by `to_placements` rather than silently mis-placed.
+        let mut placements: HashMap<String, Vec<GenomicPlacement>> = HashMap::new();
+        let resolved = DerivedPlacements {
+            description: String::new(),
+            placements: self.placements.clone(),
+        };
+        for (parent, placement) in resolved.to_placements() {
+            placements.entry(parent).or_default().push(placement);
+        }
         WindowProvider {
             transcripts,
             genomic,
@@ -128,6 +149,7 @@ impl WindowFixture {
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect(),
+            placements,
         }
     }
 }
@@ -143,6 +165,10 @@ pub struct WindowProvider {
     transcripts: HashMap<String, Arc<Transcript>>,
     genomic: HashMap<String, Vec<GenomicWindow>>,
     contig_lengths: HashMap<String, u64>,
+    /// `NG_`/`LRG_` parent → its chromosome placement(s), one per genome build.
+    /// Empty unless the fixture carried `placements` (the mutalyzer genomic
+    /// gate). Served via [`ReferenceProvider::genomic_placement_on_build`].
+    placements: HashMap<String, Vec<GenomicPlacement>>,
 }
 
 impl WindowProvider {
@@ -238,6 +264,25 @@ impl ReferenceProvider for WindowProvider {
         !self.genomic.is_empty()
     }
 
+    fn genomic_placement(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<GenomicPlacement> {
+        self.genomic_placement_on_build(parent, None)
+    }
+
+    fn genomic_placement_on_build(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        // Mirror `MultiFastaProvider`: select the placement matching the
+        // resolved build (or GRCh38-preferred with no hint), declining rather
+        // than mis-anchoring onto another build's placement.
+        let list = self.placements.get(&parent.full())?;
+        select_placement_for_build(list, build)
+    }
+
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         // Captured true contig length is authoritative for windowed contigs.
         if let Some(&len) = self.contig_lengths.get(id) {
@@ -316,7 +361,45 @@ mod tests {
                     bases: "AAACCCGGGTTT".to_string(),
                 },
             ],
+            placements: Vec::new(),
         }
+    }
+
+    #[test]
+    fn serves_ng_placement_from_fixture_and_round_trips() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::Strand;
+
+        let mut f = fixture();
+        f.placements = vec![DerivedPlacement {
+            parent: "NG_012337.1".to_string(),
+            nc: "NC_000011.10".to_string(),
+            nc_start: 112_081_847,
+            nc_end: 112_097_794,
+            strand: "+".to_string(),
+            anchored_by: String::new(),
+            mismatch_fraction: 0.0,
+        }];
+
+        // The placements field survives a JSON round trip (committed-fixture path).
+        let reloaded: WindowFixture = serde_json::from_str(&f.to_json().unwrap()).unwrap();
+        assert_eq!(reloaded.placements, f.placements);
+
+        let p = reloaded.to_provider();
+        let ng = Accession::new("NG", "012337", Some(1));
+        let placement = p
+            .genomic_placement(&ng)
+            .expect("WindowProvider serves the fixture's NG_ placement");
+        assert_eq!(placement.nc.full(), "NC_000011.10");
+        assert_eq!(placement.parent_start, 1);
+        assert_eq!(placement.nc_start, 112_081_847);
+        assert_eq!(placement.nc_end, 112_097_794);
+        assert_eq!(placement.strand, Strand::Plus);
+
+        // An unplaced parent declines.
+        assert!(p
+            .genomic_placement(&Accession::new("NG", "999999", Some(9)))
+            .is_none());
     }
 
     #[test]
@@ -413,6 +496,7 @@ mod tests {
             contig_lengths: BTreeMap::new(),
             transcripts: vec![tx("NM_TEST.1", "ACGT")],
             genomic: vec![],
+            placements: Vec::new(),
         };
         assert!(!empty.to_provider().has_genomic_data());
     }

@@ -304,6 +304,9 @@ fn build_fixture(provider: &RecordingProvider, captured_from: String) -> WindowF
         contig_lengths,
         transcripts,
         genomic,
+        // The biocommons corpus references no NG_/LRG_ parents, so it captures
+        // no version-independent placements.
+        placements: Vec::new(),
     }
 }
 
