@@ -1,9 +1,9 @@
-//! Paraphase Exhaustive Tests
+//! GIAB CMRG Exhaustive Tests
 //!
-//! Tests against ALL ClinVar variants for Paraphase-supported genes.
-//! This is the exhaustive version with 435K variants from 35 segdup genes.
+//! Tests against ALL ClinVar variants for the 273 CMRG genes.
+//! This is the exhaustive version with 4.8M variants.
 //!
-//! Run with: cargo test --release --test paraphase_exhaustive_tests -- --nocapture
+//! Run with: cargo test --release --test cmrg_exhaustive_tests -- --nocapture
 
 use ferro_hgvs::parse_hgvs;
 use flate2::read::GzDecoder;
@@ -16,70 +16,75 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-mod common;
-use common::failure_expectations::{enforce, FixtureCheck};
+use crate::common::failure_expectations::{enforce, FixtureCheck};
 
 const FAILURE_EXPECTATIONS_PATH: &str =
-    "tests/fixtures/validation/paraphase_genes_failure_expectations.json";
+    "tests/fixtures/validation/cmrg_genes_failure_expectations.json";
 
-// Slim deserialization shape: borrowed `&'a str` against the
-// decompressed JSON buffer. See cmrg_exhaustive_tests for rationale.
+// Slim deserialization shape: only the fields the test reads are
+// captured. `&'a str` borrows directly into the decompressed JSON
+// buffer (no per-string allocation; serde_json hands back slices
+// pointing into the buffer). Combined with `IgnoredAny` for unread
+// keys this avoids ~10M `String` allocations on the cmrg fixture.
 #[derive(Deserialize)]
-struct ParaphaseFixture<'a> {
-    total_target_genes: usize,
+struct CmrgFixture<'a> {
+    total_cmrg_genes: usize,
     genes_with_variants: usize,
     #[serde(borrow)]
-    gene_descriptions: HashMap<&'a str, &'a str>,
-    #[serde(borrow)]
-    test_cases: Vec<ParaphaseCase<'a>>,
+    test_cases: Vec<CmrgCase<'a>>,
 }
 
 #[derive(Deserialize)]
-struct ParaphaseCase<'a> {
+struct CmrgCase<'a> {
     #[serde(borrow)]
     input: &'a str,
     #[serde(rename = "type", borrow)]
     coord_type: &'a str,
-    #[serde(borrow)]
-    gene: &'a str,
 }
 
 fn load_fixture_bytes() -> Option<Vec<u8>> {
-    let path = "tests/fixtures/validation/paraphase_genes_exhaustive.json.gz";
+    let path = "tests/fixtures/validation/cmrg_genes_exhaustive.json.gz";
     if !std::path::Path::new(path).exists() {
         return None;
     }
-    // See cmrg_exhaustive_tests::load_fixture_bytes for why we
-    // decompress to a Vec and use `from_slice`.
-    let file = File::open(path).expect("Failed to open paraphase_genes_exhaustive.json.gz");
+    // Decompress to an in-memory Vec, then deser via `from_slice` rather
+    // than `from_reader` over a streaming gzip pipeline. Empirically ~5x
+    // faster on this fixture (34s -> 7s in debug mode) — `from_slice`
+    // works against a contiguous byte slice and supports zero-copy
+    // borrowed `&str` deserialization. The transient ~1 GB buffer is
+    // fine on the CI runner (16 GB RAM).
+    let file = File::open(path).expect("Failed to open cmrg_genes_exhaustive.json.gz");
     let mut buf = Vec::new();
     GzDecoder::new(file)
         .read_to_end(&mut buf)
-        .expect("Failed to decompress paraphase_genes_exhaustive.json.gz");
+        .expect("Failed to decompress cmrg_genes_exhaustive.json.gz");
     Some(buf)
 }
 
 #[test]
-fn test_paraphase_exhaustive_benchmark() {
+fn test_cmrg_exhaustive_benchmark() {
     let buf = match load_fixture_bytes() {
         Some(b) => b,
         None => {
-            eprintln!("Skipping: paraphase_genes_exhaustive.json not found");
+            eprintln!("Skipping: cmrg_genes_exhaustive.json not found");
             return;
         }
     };
-    let fixture: ParaphaseFixture<'_> =
-        serde_json::from_slice(&buf).expect("Failed to parse paraphase_genes_exhaustive.json.gz");
+    let fixture: CmrgFixture<'_> =
+        serde_json::from_slice(&buf).expect("Failed to parse cmrg_genes_exhaustive.json.gz");
 
     let total = fixture.test_cases.len();
     eprintln!("\n========================================");
-    eprintln!("Paraphase Exhaustive Benchmark");
+    eprintln!("GIAB CMRG Exhaustive Benchmark");
     eprintln!("========================================");
-    eprintln!("Total target genes: {}", fixture.total_target_genes);
+    eprintln!("Total CMRG genes: {}", fixture.total_cmrg_genes);
     eprintln!("Genes with variants: {}", fixture.genes_with_variants);
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
+    // Parse all cases (parallel with rayon when available). For each
+    // failure capture (input, error_string) so the per-input expectations
+    // framework can categorize it.
     #[cfg(feature = "parallel")]
     let case_failures: Vec<(&str, String)> = fixture
         .test_cases
@@ -107,17 +112,14 @@ fn test_paraphase_exhaustive_benchmark() {
     let rate = total as f64 / elapsed.as_secs_f64();
     let pass_rate = (passed as f64 / total as f64) * 100.0;
 
+    // Per-coord-type tally for diagnostic eprintln only.
     let mut by_type: HashMap<&str, (usize, usize)> = HashMap::new();
-    let mut by_gene: HashMap<&str, (usize, usize)> = HashMap::new();
     for case in &fixture.test_cases {
-        let type_entry = by_type.entry(case.coord_type).or_insert((0, 0));
-        let gene_entry = by_gene.entry(case.gene).or_insert((0, 0));
+        let entry = by_type.entry(case.coord_type).or_insert((0, 0));
         if failures.contains_key(case.input) {
-            type_entry.1 += 1;
-            gene_entry.1 += 1;
+            entry.1 += 1;
         } else {
-            type_entry.0 += 1;
-            gene_entry.0 += 1;
+            entry.0 += 1;
         }
     }
 
@@ -129,22 +131,10 @@ fn test_paraphase_exhaustive_benchmark() {
     eprintln!("  Passed: {}/{} ({:.2}%)", passed, total, pass_rate);
 
     eprintln!("\nBy coordinate type:");
-    let mut types: Vec<_> = by_type.iter().collect();
-    types.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
-    for (t, (p, f)) in types.iter() {
+    for (t, (p, f)) in by_type.iter() {
         let tot = p + f;
         let r = (*p as f64 / tot as f64) * 100.0;
         eprintln!("  {}: {}/{} ({:.2}%)", t, p, tot, r);
-    }
-
-    eprintln!("\nTop 10 genes by variant count:");
-    let mut genes: Vec<_> = by_gene.iter().collect();
-    genes.sort_by_key(|b| std::cmp::Reverse(b.1 .0 + b.1 .1));
-    for (gene, (p, f)) in genes.iter().take(10) {
-        let tot = p + f;
-        let r = (*p as f64 / tot as f64) * 100.0;
-        let desc = fixture.gene_descriptions.get(*gene).copied().unwrap_or("");
-        eprintln!("  {}: {}/{} ({:.2}%) - {}", gene, p, tot, r, desc);
     }
 
     eprintln!("\n========================================\n");

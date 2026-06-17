@@ -4,10 +4,8 @@
 //! and `tests/ins_shift_matrix.rs` (#81 A1, A7) for completeness of the
 //! ins/del/dup canonical-form trilogy.
 
-mod common;
-
 mod genomic {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder, PAD_OFFSET};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder, PAD_OFFSET};
     use rstest::rstest;
 
     /// 1-based HGVS position of the first base of the core region.
@@ -147,7 +145,7 @@ mod genomic {
 }
 
 mod cds_plus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -271,7 +269,7 @@ mod cds_plus {
 }
 
 mod cds_minus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -394,7 +392,7 @@ mod cds_minus {
 }
 
 mod noncoding_plus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -510,7 +508,7 @@ mod noncoding_plus {
 }
 
 mod noncoding_minus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -626,7 +624,7 @@ mod noncoding_minus {
 }
 
 mod rna_plus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -745,7 +743,7 @@ mod rna_plus {
 }
 
 mod rna_minus {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 

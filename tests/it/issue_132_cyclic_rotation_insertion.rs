@@ -6,9 +6,7 @@
 //! handles this; this file pins the single-copy fix and the round-trip
 //! equivalence between rotation-mismatched alts and the matched alt.
 
-mod common;
-
-use common::synthetic::{normalize_to_string, SyntheticBuilder};
+use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
 
 /// First synthetic core from the issue: `AAGTGTGTTTTTTTAA`.
 /// GT[3] tract at core pos 3..8 (HGVS pos 259..264 with PAD_OFFSET=256).

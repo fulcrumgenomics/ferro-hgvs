@@ -15,8 +15,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
-mod common;
-use common::failure_expectations::{enforce, FixtureCheck};
+use crate::common::failure_expectations::{enforce, FixtureCheck};
 
 const CLINVAR_500K_FAILURE_EXPECTATIONS_PATH: &str =
     "tests/fixtures/bulk/clinvar_hgvs_500k_failure_expectations.json";

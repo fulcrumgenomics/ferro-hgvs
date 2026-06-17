@@ -15,10 +15,8 @@
 //! See spec at
 //! `docs/superpowers/specs/2026-05-05-b1-ins-repeat-unit-increment-design.md`.
 
-mod common;
-
 mod genomic {
-    use super::common::synthetic::{normalize_to_string, SyntheticBuilder, PAD_OFFSET};
+    use crate::common::synthetic::{normalize_to_string, SyntheticBuilder, PAD_OFFSET};
     use rstest::rstest;
 
     /// 1-based HGVS position of the first base of the core region.
@@ -79,7 +77,7 @@ mod genomic {
 }
 
 mod cds_plus {
-    use super::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -151,7 +149,7 @@ mod cds_plus {
 }
 
 mod cds_minus {
-    use super::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -191,7 +189,7 @@ mod cds_minus {
 }
 
 mod noncoding_plus {
-    use super::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 
@@ -216,7 +214,7 @@ mod noncoding_plus {
 }
 
 mod noncoding_minus {
-    use super::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
+    use crate::common::synthetic::{hgvs, normalize_to_string, SyntheticBuilder};
     use ferro_hgvs::reference::transcript::Strand;
     use rstest::rstest;
 

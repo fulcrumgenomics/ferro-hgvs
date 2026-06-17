@@ -15,9 +15,7 @@
 //! Examples below use synthetic genomic providers via `SyntheticBuilder`,
 //! which pads the core with 256 bases so HGVS pos 257 maps to core base 1.
 
-mod common;
-
-use common::synthetic::{normalize_to_string, SyntheticBuilder};
+use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
 /// HGVS sequence-id used by `SyntheticBuilder::genomic`.

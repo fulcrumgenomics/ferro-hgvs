@@ -40,8 +40,6 @@
 //! work is tracked under #210 and intentionally out of scope here so
 //! this PR stays focused on the codon-frame gate fix.)
 
-mod common;
-
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
