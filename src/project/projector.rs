@@ -752,12 +752,100 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return Ok(variant.clone());
         }
 
+        // #537: a `c.pter`/`c.qter` telomere-flank input resolves to the parent
+        // reference's own genomic terminus, not a transcript-mapped coordinate.
+        // Handle it before the cdot pivot below, which cannot (and per #534
+        // must not) number a transcript-flank marker.
+        if let Some(result) = self.project_cds_terminus_to_parent(variant) {
+            return result;
+        }
+
         match self.project_to_genomic_nc(variant)? {
             HgvsVariant::Genome(gv) => {
                 self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))
             }
             other => Ok(other),
         }
+    }
+
+    /// Project a `c.pter`/`c.qter` (telomere-flank marker) coding input onto its
+    /// parent reference's own genomic frame (#537).
+    ///
+    /// `pter` denotes the 5'-most position of the parent reference (`g.1`) and
+    /// `qter` the 3'-most (`g.<length>`); a `pter_qter` range spans the whole
+    /// reference. Unlike a numeric `c.` coordinate these markers do not number a
+    /// transcript position — PR #534 correctly refuses to do so on the `c.`
+    /// axis — so they map straight to the parent reference's termini with no
+    /// cdot transcript mapping. The emitted `g.1` / `g.<length>` is normalized
+    /// downstream (e.g. the 3' rule rolls `g.1del` through a leading homopolymer
+    /// run, matching mutalyzer's `g.3del`).
+    ///
+    /// Returns `None` when `variant` is not a handled terminus case — not a
+    /// `Cds` input, an endpoint that is not a `pter`/`qter` marker (numeric,
+    /// `?`, `cen`, or a mixed marker/numeric range), or a reversed `qter_pter` —
+    /// so the caller falls through to the normal transcript-mapped projection
+    /// (which declines or numbers as appropriate). Returns `Some(Err(..))` when
+    /// the parent reference is unresolvable or its length is unknown to the
+    /// provider (e.g. the pinned parent version is absent — a reference-coverage
+    /// gap, #645/#672 — not a projection bug).
+    fn project_cds_terminus_to_parent(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Option<Result<HgvsVariant, FerroError>> {
+        use crate::hgvs::interval::GenomeInterval;
+        use crate::hgvs::location::{GenomePos, SpecialPosition};
+        use crate::hgvs::variant::{GenomeVariant, LocEdit};
+
+        let HgvsVariant::Cds(v) = variant else {
+            return None;
+        };
+        // Both endpoints must be telomere markers. A numeric or `?` endpoint, or
+        // a mixed marker/numeric range (e.g. `c.pter_-51`), needs the transcript
+        // mapping and is left to the normal path.
+        let start = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start").ok()?;
+        let end = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end").ok()?;
+        let (Some(start_marker), Some(end_marker)) = (start.special, end.special) else {
+            return None;
+        };
+
+        // Resolve the parent genomic reference: an explicit `genomic_context`
+        // parent, or the structural `LRG_<n>` parent of a bare LRG transcript
+        // (#480). No parent → leave it to the normal path, which raises the
+        // canonical "no parent reference" error.
+        let parent = match v.accession.genomic_context.as_deref().cloned() {
+            Some(p) => p,
+            None => Self::lrg_genomic_parent(&v.accession)?,
+        };
+        let length = match self.provider.get_sequence_length(&parent.full()) {
+            Ok(n) => n,
+            Err(e) => return Some(Err(e)),
+        };
+        // A zero-length parent is unreachable for any real NG/LRG/NC contig, but
+        // guard the endpoint math against it (#526): `qter` would build an
+        // invalid 1-based `g.0` and `pter_qter` a reversed `g.1_0`. Decline so
+        // the normal path raises the canonical refusal rather than emitting a
+        // malformed interval.
+        if length == 0 {
+            return None;
+        }
+
+        // pter → 5'-most (g.1); qter → 3'-most (g.<length>); pter_qter → the
+        // whole reference. `cen` and a reversed `qter_pter` are out of scope and
+        // left to the normal path (which declines).
+        let (g_start, g_end) = match (start_marker, end_marker) {
+            (SpecialPosition::Pter, SpecialPosition::Pter) => (1, 1),
+            (SpecialPosition::Qter, SpecialPosition::Qter) => (length, length),
+            (SpecialPosition::Pter, SpecialPosition::Qter) => (1, length),
+            _ => return None,
+        };
+
+        let interval = GenomeInterval::new(GenomePos::new(g_start), GenomePos::new(g_end));
+        let gv = GenomeVariant {
+            accession: parent,
+            gene_symbol: None,
+            loc_edit: LocEdit::with_uncertainty(interval, v.loc_edit.edit.clone()),
+        };
+        Some(Ok(HgvsVariant::Genome(gv)))
     }
 
     /// Re-anchor a chromosome-frame genomic projection into its parent's own
@@ -6193,12 +6281,16 @@ mod tests {
 
         // -- special positions (pter/qter/cen) in project_to_genomic ----------
 
-        /// A `pter` CDS position is special (base==0, special.is_some()): it must
-        /// not slip past the `is_unknown()` guard and then fail with "Invalid CDS
-        /// position: 0". The extended guard must catch it as `UnsupportedProjection`.
+        /// #537: a `pter` CDS marker projects to the parent reference's 5'-most
+        /// genomic coordinate (`g.1`), not the old special-sentinel rejection.
+        /// (PR #534 keeps the *c.-axis* refusal; this covers the g. axis.) The
+        /// raw projection is `g.1del`; the normalizer's 3' rule rolls it
+        /// downstream.
         #[test]
-        fn project_to_genomic_special_pter_returns_unsupported() {
-            let (projector, provider) = make_test_provider_and_projector();
+        fn project_to_genomic_special_pter_projects_to_parent_terminus() {
+            let (projector, mut provider) = make_test_provider_and_projector();
+            // pter/qter resolve against the parent reference's length.
+            provider.add_genomic_sequence("NG_TEST.1", "A".repeat(40));
             let vp = VariantProjector::new(projector, provider);
 
             let cds = CdsVariant {
@@ -6213,17 +6305,17 @@ mod tests {
                 ),
             };
             let input = HgvsVariant::Cds(cds);
-            let err = vp
+            let g = vp
                 .project_to_genomic(&input)
-                .expect_err("pter position must not project to genomic");
-            assert!(
-                matches!(err, FerroError::UnsupportedProjection { .. }),
-                "expected UnsupportedProjection for pter position, got: {:?}",
-                err
-            );
+                .expect("pter must project to the parent's 5' terminus");
+            assert_eq!(g.to_string(), "NG_TEST.1:g.1del");
         }
 
-        /// A `qter` endpoint must be rejected with the same error.
+        /// A *mixed* numeric/`qter` range (`c.1_qter`) is out of #537 scope —
+        /// the numeric endpoint still needs a transcript mapping — so it remains
+        /// `UnsupportedProjection`. (A pure `c.qter` resolves to the parent
+        /// terminus; that is covered by the `tests/it/issue_537_*` integration
+        /// tests, which have a parent length to resolve against.)
         #[test]
         fn project_to_genomic_special_qter_returns_unsupported() {
             let (projector, provider) = make_test_provider_and_projector();
