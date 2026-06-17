@@ -27,6 +27,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::mutalyzer::Fixture;
+use crate::hgvs::parser::accession::parse_accession;
+use crate::reference::provider::ReferenceProvider;
 
 /// The reference source class an accession belongs to — i.e. which kind of
 /// reference data a version-complete snapshot must carry for it.
@@ -218,6 +220,63 @@ impl Inventory {
             .filter(|(versioned, _)| !available.contains(*versioned))
             .map(|(_, entry)| entry)
             .collect()
+    }
+}
+
+/// Result of [`corpus_missing_ng_placements`]: the uncovered versioned `NG_`
+/// accessions (sorted, deduped) and the count of bare (versionless) `NG_`
+/// references skipped because a specific version is required to derive.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MissingNgReport {
+    /// Versioned `NG_` accession.versions with no placement on any requested
+    /// build, e.g. `["NG_012337.1"]`. Sorted ascending, deduped.
+    pub missing: Vec<String>,
+    /// Number of bare (versionless) `NG_` references skipped.
+    pub skipped_bare: usize,
+}
+
+/// The versioned `NG_` accessions referenced by `inventory` that `provider` has
+/// no genomic placement for — the set a derivation step must fill. An entry is
+/// "missing" when none of `builds` yields a placement (or `genomic_placement`
+/// yields none when `builds` is empty). Bare (versionless) `NG_` references are
+/// skipped (counted in `skipped_bare`): a specific version is required to derive.
+pub fn corpus_missing_ng_placements(
+    inventory: &Inventory,
+    provider: &impl ReferenceProvider,
+    builds: &[String],
+) -> MissingNgReport {
+    let mut missing = BTreeSet::new();
+    let mut skipped_bare = 0usize;
+    for entry in inventory.entries() {
+        let acc_ref = &entry.acc_ref;
+        if acc_ref.class != AccessionClass::RefSeqGenomic || !acc_ref.accession.starts_with("NG_") {
+            continue;
+        }
+        if acc_ref.version.is_none() {
+            skipped_bare += 1;
+            continue;
+        }
+        let versioned = acc_ref.versioned();
+        let accession = match parse_accession(&versioned) {
+            Ok(("", acc)) => acc,
+            _ => continue, // unparseable accession token — cannot query/derive
+        };
+        let placed = if builds.is_empty() {
+            provider.genomic_placement(&accession).is_some()
+        } else {
+            builds.iter().any(|b| {
+                provider
+                    .genomic_placement_on_build(&accession, Some(b))
+                    .is_some()
+            })
+        };
+        if !placed {
+            missing.insert(versioned);
+        }
+    }
+    MissingNgReport {
+        missing: missing.into_iter().collect(),
+        skipped_bare,
     }
 }
 
@@ -467,5 +526,65 @@ mod tests {
         assert_eq!(counts.get(&AccessionClass::RefSeqGenomic), Some(&1));
         assert_eq!(counts.get(&AccessionClass::RefSeqTranscript), Some(&1));
         assert_eq!(counts.get(&AccessionClass::RefSeqProtein), Some(&1));
+    }
+
+    #[test]
+    fn corpus_missing_ng_placements_reports_uncovered_versioned_ng() {
+        use crate::hgvs::parser::accession::parse_accession;
+        use crate::reference::mock::MockProvider;
+        use crate::reference::provider::GenomicPlacement;
+        use crate::reference::Strand;
+
+        // Corpus references: NG_012337.1 (will be placed), NG_999999.7 (no placement),
+        // a bare NG_777777 (versionless → skipped), and a non-NG_ NM_ (ignored).
+        let fixture = fixture_from_cases(
+            r#"
+            {"input":"NG_012337.1(NM_003002.2):c.273del"},
+            {"input":"NG_999999.7:g.100del"},
+            {"input":"NG_777777:g.5del"},
+            {"input":"NM_003002.4:c.1del"}
+            "#,
+        );
+        let inv = Inventory::from_fixture(&fixture);
+
+        // Provider places only NG_012337.1 on GRCh38.
+        let mut provider = MockProvider::new();
+        let (_, placed_acc) = parse_accession("NC_000011.10").unwrap();
+        provider.add_genomic_placement(
+            "NG_012337.1",
+            GenomicPlacement {
+                nc: placed_acc,
+                nc_start: 100,
+                nc_end: 200,
+                parent_start: 1,
+                strand: Strand::Plus,
+            },
+        );
+
+        let report = corpus_missing_ng_placements(&inv, &provider, &["GRCh38".to_string()]);
+
+        // NG_999999.7 is the only uncovered *versioned* NG_.
+        assert_eq!(report.missing, vec!["NG_999999.7".to_string()]);
+        // The bare NG_777777 is skipped, not derived.
+        assert_eq!(report.skipped_bare, 1);
+    }
+
+    #[test]
+    fn corpus_missing_ng_against_real_reference_when_available() {
+        let manifest = match std::env::var("FERRO_MANIFEST") {
+            Ok(m) => std::path::PathBuf::from(m),
+            Err(_) => return, // skip without a prepared reference
+        };
+        let provider =
+            crate::reference::multi_fasta::MultiFastaProvider::from_manifest(&manifest).unwrap();
+        // Minimal corpus referencing one known NG_ version.
+        let fixture = fixture_from_cases(r#"{"input":"NG_012337.1(NM_003002.2):c.273del"}"#);
+        let inv = Inventory::from_fixture(&fixture);
+        let report = corpus_missing_ng_placements(&inv, &provider, &["GRCh38".to_string()]);
+        // Sane shape: sorted, deduped, no bare entries counted here.
+        assert_eq!(report.skipped_bare, 0);
+        let mut sorted = report.missing.clone();
+        sorted.sort();
+        assert_eq!(report.missing, sorted);
     }
 }
