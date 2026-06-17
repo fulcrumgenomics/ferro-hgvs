@@ -534,6 +534,14 @@ enum Commands {
         #[arg(long)]
         ensembl: bool,
 
+        /// Newline-delimited file of exact NG_ versions (e.g. `NG_012337.3`) to
+        /// derive version-independent genomic placements for at prepare time,
+        /// writing `derived_refseqgene_placements.json` and wiring the manifest
+        /// field. Requires cdot + genome in the same prepare run. Networked
+        /// (NCBI EFetch per accession); per-accession failures warn and continue.
+        #[arg(long)]
+        derive_ng_placements: Option<PathBuf>,
+
         /// Dry run - show what would be downloaded without downloading
         #[arg(long)]
         dry_run: bool,
@@ -862,6 +870,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clinvar,
             validate_canonical,
             ensembl,
+            derive_ng_placements,
             dry_run,
         } => run_prepare(
             &output_dir,
@@ -876,6 +885,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clinvar.as_deref(),
             validate_canonical.as_deref(),
             ensembl,
+            derive_ng_placements,
             dry_run,
         ),
         Commands::Check {
@@ -3227,6 +3237,7 @@ fn run_prepare(
     clinvar: Option<&Path>,
     validate_canonical: Option<&Path>,
     ensembl: bool,
+    derive_ng_placements: Option<PathBuf>,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::prepare::{prepare_references, PrepareConfig};
@@ -3246,6 +3257,8 @@ fn run_prepare(
         clinvar_file: clinvar.map(|p| p.to_path_buf()),
         patterns_file: patterns.map(|p| p.to_path_buf()),
         validate_canonical_accessions: validate_canonical.map(|p| p.to_path_buf()),
+        derive_ng_placements,
+        genome: genome.to_string(),
         dry_run,
     };
 

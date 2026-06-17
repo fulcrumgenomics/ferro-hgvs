@@ -62,6 +62,12 @@ pub struct PrepareConfig {
     /// their authoritative GenBank records, writing a canonical-overrides file
     /// (issue #520). `None` skips the canonical-validation stage.
     pub validate_canonical_accessions: Option<PathBuf>,
+    /// Optional newline-delimited NG_ accession file; when set, prepare derives
+    /// `derived_refseqgene_placements.json` and wires the manifest field.
+    pub derive_ng_placements: Option<PathBuf>,
+    /// Genome build selection string ("grch38", "grch37", "all", "none").
+    /// Stored so `builds_for_genome` can map it to build names at derivation time.
+    pub genome: String,
     /// Dry run - show what would be fetched without fetching
     pub dry_run: bool,
 }
@@ -83,6 +89,8 @@ impl Default for PrepareConfig {
             clinvar_file: None,
             patterns_file: None,
             validate_canonical_accessions: None,
+            derive_ng_placements: None,
+            genome: "grch38".to_string(),
             dry_run: false,
         }
     }
@@ -744,12 +752,72 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
     }
 
     manifest.save()?;
+
+    // Derive version-independent NG_ placements (#728/#740) when requested.
+    // The manifest is already saved above, so the provider can load cdot +
+    // genome from disk. Honors skip_existing: an existing output file is left
+    // in place unless --force.
+    if let Some(acc_file) = &config.derive_ng_placements {
+        if config.dry_run {
+            eprintln!(
+                "  [dry-run] would derive NG_ placements from {}",
+                acc_file.display()
+            );
+        } else {
+            let out_path = config.output_dir.join("derived_refseqgene_placements.json");
+            if config.skip_existing && out_path.exists() {
+                eprintln!("  Skipping NG_ placement derivation (exists)");
+                manifest.derived_refseqgene_placements = Some(out_path);
+                manifest.save()?;
+            } else {
+                eprintln!("  Deriving NG_ placements from {}...", acc_file.display());
+                let accessions = read_accession_list(acc_file)?;
+                let builds = builds_for_genome(&config.genome);
+                let manifest_path = config.output_dir.join("manifest.json");
+                let provider = crate::reference::multi_fasta::MultiFastaProvider::from_manifest(
+                    &manifest_path,
+                )?;
+                let description = format!(
+                    "Derived NG_/LRG_ placements (#728) produced by `ferro prepare \
+                     --derive-ng-placements {}`.",
+                    acc_file.display()
+                );
+                let (artifact, declined) =
+                    crate::reference::ng_placement_builder::derive_placements_for_accessions(
+                        &provider,
+                        &accessions,
+                        &builds,
+                        description,
+                    )?;
+                std::fs::write(&out_path, artifact.to_json()?).map_err(|e| FerroError::Io {
+                    msg: format!("write {}: {e}", out_path.display()),
+                })?;
+                eprintln!(
+                    "  Derived {} placement(s), {} declined.",
+                    artifact.placements.len(),
+                    declined
+                );
+                manifest.derived_refseqgene_placements = Some(out_path);
+                manifest.save()?;
+            }
+        }
+    }
+
     eprintln!("\n=== Preparation complete ===");
     eprintln!(
         "Manifest: {}",
         manifest.reference_dir.join("manifest.json").display()
     );
     Ok(manifest)
+}
+
+/// Genome-build names to derive placements for, from the `--genome` selection.
+fn builds_for_genome(genome: &str) -> Vec<String> {
+    match genome {
+        "grch37" => vec!["GRCh37".to_string()],
+        "all" => vec!["GRCh38".to_string(), "GRCh37".to_string()],
+        _ => vec!["GRCh38".to_string()], // grch38 / none / default
+    }
 }
 
 /// Fetch supplemental data from ClinVar/patterns (benchmark feature only)
@@ -1866,5 +1934,22 @@ mod tests {
         // Should not detect non-.gz files
         let detected = detect_clinvar_from_ferro_reference(ferro_ref);
         assert!(detected.is_none());
+    }
+
+    #[test]
+    fn prepare_config_default_has_no_derive_ng() {
+        let cfg = PrepareConfig::default();
+        assert!(cfg.derive_ng_placements.is_none());
+    }
+
+    #[test]
+    fn builds_for_genome_maps_selection() {
+        assert_eq!(builds_for_genome("grch38"), vec!["GRCh38".to_string()]);
+        assert_eq!(builds_for_genome("grch37"), vec!["GRCh37".to_string()]);
+        assert_eq!(
+            builds_for_genome("all"),
+            vec!["GRCh38".to_string(), "GRCh37".to_string()]
+        );
+        assert_eq!(builds_for_genome("none"), vec!["GRCh38".to_string()]);
     }
 }
