@@ -1512,9 +1512,10 @@ fn run_prepare_tool(
                 validate_canonical_accessions: None,
                 derive_ng_placements: None,
                 genome: match genome {
+                    GenomeOption::None => "none".to_string(),
                     GenomeOption::Grch37 => "grch37".to_string(),
+                    GenomeOption::Grch38 => "grch38".to_string(),
                     GenomeOption::All => "all".to_string(),
-                    _ => "grch38".to_string(),
                 },
                 dry_run: false,
             };

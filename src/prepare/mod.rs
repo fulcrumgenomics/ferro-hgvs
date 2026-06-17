@@ -216,6 +216,23 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         config.output_dir.display()
     );
 
+    // Pre-flight: deriving NG_ placements needs cdot + a genome build in the
+    // same run (the provider reconstructs NC_ exon structure from cdot). Reject
+    // a cdot-less selection (e.g. `--genome none` or `--no-cdot`, where neither
+    // `download_cdot*` flag is set) up front, before any downloads, instead of
+    // running the whole download budget and failing in the late guard in
+    // `derive_placements_for_accessions`.
+    if config.derive_ng_placements.is_some()
+        && !(config.download_cdot || config.download_cdot_grch37)
+    {
+        return Err(FerroError::Io {
+            msg: "--derive-ng-placements requires cdot + a genome build in the same \
+                  prepare run; the current selection (e.g. --genome none or --no-cdot) \
+                  downloads no cdot metadata, so NG_ placements cannot be derived"
+                .to_string(),
+        });
+    }
+
     // Create output directory
     fs::create_dir_all(&config.output_dir).map_err(|e| FerroError::Io {
         msg: format!(
@@ -814,9 +831,14 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 /// Genome-build names to derive placements for, from the `--genome` selection.
 fn builds_for_genome(genome: &str) -> Vec<String> {
     match genome {
+        "grch38" => vec!["GRCh38".to_string()],
         "grch37" => vec!["GRCh37".to_string()],
         "all" => vec!["GRCh38".to_string(), "GRCh37".to_string()],
-        _ => vec!["GRCh38".to_string()], // grch38 / none / default
+        // `none` (and any unknown selection) provisions no genome build, so it
+        // has no builds to derive placements for. The up-front guard in
+        // `prepare_references` already rejects `--derive-ng-placements` with such
+        // a selection; returning empty keeps this consistent if reached otherwise.
+        _ => Vec::new(),
     }
 }
 
@@ -1950,6 +1972,9 @@ mod tests {
             builds_for_genome("all"),
             vec!["GRCh38".to_string(), "GRCh37".to_string()]
         );
-        assert_eq!(builds_for_genome("none"), vec!["GRCh38".to_string()]);
+        // `none` provisions no genome build, so it has no builds to derive
+        // placements for (the up-front guard rejects --derive-ng-placements
+        // with this selection).
+        assert!(builds_for_genome("none").is_empty());
     }
 }
