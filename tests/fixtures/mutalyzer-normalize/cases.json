@@ -2423,6 +2423,11 @@
       "input": "NG_008835.1(NM_022124.6):c.3304_3305del",
       "normalized": "NG_008835.1(NM_022124.6):c.3305_3306del",
       "genomic": "NG_008835.1:g.320803_320804del",
+      "known_bug": {
+        "axis": "genomic",
+        "tracking_issue": 745,
+        "note": "ferro re-expresses this deletion inside a genomic homopolymer run as a repeat contraction (g.320802_320804T[1]) instead of del; convergence to mutalyzer's del tracked in #745."
+      },
       "to_test": true
     },
     {
@@ -2451,6 +2456,11 @@
       "input": "NG_008835.1(NM_001168390.2):c.*3186_*3187del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
+      "known_bug": {
+        "axis": "genomic",
+        "tracking_issue": 745,
+        "note": "ferro re-expresses this deletion inside a genomic homopolymer run as a repeat contraction (g.320802_320804T[1]) instead of del; convergence to mutalyzer's del tracked in #745."
+      },
       "to_test": true
     },
     {

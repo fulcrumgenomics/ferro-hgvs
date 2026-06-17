@@ -213,6 +213,10 @@ name = "derive_ng_placements"
 required-features = ["dev"]
 
 [[example]]
+name = "extract_mutalyzer_genomic_windows"
+required-features = ["dev"]
+
+[[example]]
 name = "generate_tool_support_tables"
 required-features = ["dev"]
 
