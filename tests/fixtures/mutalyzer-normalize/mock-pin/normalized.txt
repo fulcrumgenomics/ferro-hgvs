@@ -233,9 +233,9 @@ NM_003002.4:c.169_170insATA	NM_003002.4:c.169_170insATA
 NG_008835.1(NM_022153.2):c.677-21_704+62del	NG_008835.1(NM_022153.2):c.677-21_704+62del
 NG_008835.1(NM_022153.2):c.677-20_704+62del	NG_008835.1(NM_022153.2):c.677-20_704+62del
 NM_003002.4:c.206_210delins190_220inv	normalize error: Reference not found: NM_003002.4
-NG_012337.3:g.136delinsNG_012337.1(NM_012459.2):c.200	parse error: Parse error at position 25: Unexpected trailing characters: '_012337.1(NM_012459.2):c.200'
-NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203	parse error: Parse error at position 38: Unexpected trailing characters: '_012337.1(NM_012459.2):c.200_203'
-NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203	parse error: Parse error at position 38: Unexpected trailing characters: '_012337.3(NM_003002.4):c.200_203'
+NG_012337.3:g.136delinsNG_012337.1(NM_012459.2):c.200	normalize error: Unsupported variant type: ins[NG_012337.1(NM_012459.2):c.200] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
+NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203	normalize error: Reference not found: NG_012337.1(NM_012459.2)
+NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203	normalize error: Reference not found: NG_012337.3(NM_003002.4)
 NM_003002.4:n.206_210del	NM_003002.4:n.206_210del
 NG_007485.1(NM_058195.3):n.204_205insATC	NG_007485.1(NM_058195.3):n.204_205insATC
 LRG_199t1:c.11LRG_199t1:c.11[10]	parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: "LRG_199t1:c.11[10]", code: Tag })

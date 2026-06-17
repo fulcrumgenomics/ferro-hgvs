@@ -552,6 +552,46 @@ fn is_reference_accession_prefix(input: &str) -> bool {
     false
 }
 
+/// Whether `acc` is a valid cross-reference accession: an accession-like base
+/// (`[A-Za-z0-9_.]`, starting with a letter) optionally followed by a single
+/// trailing parenthesized gene-selector / genomic-context group whose contents
+/// are also accession-like — e.g. `NM_000558.3` or `NG_012337.1(NM_012459.2)`
+/// (and gene-ID/symbol selectors such as `NG_012337.1(10683)`) (#692).
+fn is_crossref_accession(acc: &str) -> bool {
+    let is_acc_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'.';
+    // Split off an optional trailing `(selector)` group.
+    let (base, selector) = match acc.find('(') {
+        Some(open) => {
+            let rest = &acc[open + 1..];
+            let Some(close) = rest.find(')') else {
+                return false;
+            };
+            // Exactly one trailing group: the `)` must be the final character.
+            if close + 1 != rest.len() {
+                return false;
+            }
+            (&acc[..open], Some(&rest[..close]))
+        }
+        None => (acc, None),
+    };
+    let base_bytes = base.as_bytes();
+    if base_bytes.is_empty()
+        || !base_bytes[0].is_ascii_alphabetic()
+        || !base_bytes.iter().all(|&b| is_acc_char(b))
+    {
+        return false;
+    }
+    if let Some(sel) = selector {
+        let sel_bytes = sel.as_bytes();
+        // A selector may be a gene ID (all-digit) so it need not start with a
+        // letter, but it must be non-empty and accession-like.
+        if sel_bytes.is_empty() || !sel_bytes.iter().all(|&b| is_acc_char(b)) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Parse a reference location (e.g., NC_012920.1:m.12435_12527 or AF118569:g.14094_14382)
 /// Returns the full reference string if valid, None otherwise
 fn parse_reference_location(input: &str) -> Option<String> {
@@ -571,22 +611,12 @@ fn parse_reference_location(input: &str) -> Option<String> {
         return None;
     }
 
-    // The accession part must look like an accession (alphanumeric, dots, underscores)
+    // The accession part must look like an accession (alphanumeric, dots,
+    // underscores), optionally carrying a parenthesized gene-selector /
+    // genomic-context group, e.g. `NG_012337.1(NM_012459.2)` (#692).
     let accession = &input[..colon_pos];
-    if accession.is_empty() {
+    if !is_crossref_accession(accession) {
         return None;
-    }
-
-    // Check that accession starts with a letter and contains valid accession characters
-    let acc_bytes = accession.as_bytes();
-    if !acc_bytes[0].is_ascii_alphabetic() {
-        return None;
-    }
-
-    for &b in acc_bytes {
-        if !b.is_ascii_alphanumeric() && b != b'_' && b != b'.' {
-            return None;
-        }
     }
 
     // Now find where the coordinates end
@@ -3031,6 +3061,90 @@ mod tests {
         } else {
             panic!("Expected insertion");
         }
+    }
+
+    /// A cross-reference insert whose accession carries a parenthesized
+    /// gene-selector / genomic-context (`NG_<v>(NM_<v>):c.<a>_<b>`) must parse —
+    /// in both `ins` and `delins`. Before #692 `parse_reference_location`
+    /// rejected the `(`/`)`, so the parser fell through to reading `NG` as
+    /// nucleotide bases and choked on the trailing `_012459...`.
+    #[test]
+    fn test_parse_crossref_with_parenthesized_selector() {
+        // Plain ins with a selector cross-ref — proves the gap was never
+        // delins-specific (the issue's framing); it failed in `ins` too.
+        let ref_str = "NG_012337.1(NM_012459.2):c.200_203";
+        let ins_input = format!("ins{ref_str}");
+        let (remaining, edit) =
+            parse_na_edit(&ins_input).expect("selector cross-ref ins must parse");
+        assert_eq!(remaining, "");
+        match edit {
+            NaEdit::Insertion {
+                sequence: InsertedSequence::Reference(r),
+            } => assert_eq!(r, ref_str),
+            other => panic!("expected Reference insertion, got {other:?}"),
+        }
+
+        // The same selector cross-ref inside a delins payload.
+        let delins_input = format!("delins{ref_str}");
+        let (remaining, edit) =
+            parse_na_edit(&delins_input).expect("selector cross-ref delins must parse");
+        assert_eq!(remaining, "");
+        match edit {
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(r),
+                ..
+            } => assert_eq!(r, ref_str),
+            other => panic!("expected Reference delins, got {other:?}"),
+        }
+    }
+
+    /// The two exact `rna_description`-corpus inputs from #692 parse end-to-end.
+    /// ferro canonicalizes a single-reference delins payload to the bracketed
+    /// form on Display (pre-existing behavior, also true of selector-free
+    /// cross-refs), and that canonical form re-parses identically (idempotent).
+    #[test]
+    fn test_parse_issue_692_crossref_delins_rows() {
+        for (input, canonical) in [
+            (
+                "NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203",
+                "NG_012337.3(NM_003002.4):c.274delins[NG_012337.1(NM_012459.2):c.200_203]",
+            ),
+            (
+                "NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203",
+                "NG_012337.1(NM_012459.2):c.274delins[NG_012337.3(NM_003002.4):c.200_203]",
+            ),
+        ] {
+            let variant = crate::parse_hgvs(input)
+                .unwrap_or_else(|e| panic!("#692 row must parse: {input}\n  err: {e:?}"));
+            assert_eq!(variant.to_string(), canonical, "canonical Display");
+            // Idempotence: the canonical form re-parses to the same Display.
+            let reparsed = crate::parse_hgvs(canonical).expect("canonical form must re-parse");
+            assert_eq!(reparsed.to_string(), canonical, "Display is idempotent");
+        }
+    }
+
+    /// A simple (selector-free) cross-reference must keep working, and a
+    /// malformed selector (unbalanced paren) must still be rejected as a
+    /// reference — i.e. the `(`/`)` allowance is structurally validated, not a
+    /// blanket pass.
+    #[test]
+    fn test_crossref_selector_validation_boundaries() {
+        // Regression: selector-free cross-ref still parses as a reference.
+        let (_, edit) = parse_na_edit("delinsNM_000558.3:c.424_425").expect("simple delins parses");
+        assert!(matches!(
+            edit,
+            NaEdit::Delins {
+                sequence: InsertedSequence::Reference(_),
+                ..
+            }
+        ));
+
+        // An unbalanced parenthesis must NOT be accepted as a cross-reference
+        // accession (it is not a valid `<base>(<selector>)`).
+        assert!(
+            parse_reference_location("NG_012337.1(NM_012459.2:c.200_203").is_none(),
+            "unbalanced selector paren must not parse as a reference location"
+        );
     }
 
     #[test]
