@@ -923,3 +923,104 @@ mod issue_704_nr_exon_to_intron {
         assert_eq!(result, "NM_EDGE.1:n.30+3dup");
     }
 }
+
+// =============================================================================
+// #704 increment r.: route intronic / boundary-spanning `r.` through the tx
+// machinery, plus the sub-problem-A exon→intron edge post-check.
+//
+// `NM_PLUS.1` has cds_start=1 so `r.N == c.N == n.N`; each `r.` case mirrors the
+// already-passing `n.` case. Pre-#704 every intronic/boundary `r.` returned
+// `Err(IntronicVariant)`. The display carries the `r.` prefix and U/T rendering.
+// =============================================================================
+
+mod issue_704_r_intronic {
+    use super::*;
+
+    #[test]
+    fn r_boundary_spanning_deletion_normalizes() {
+        // One exonic + one intronic endpoint: no equivalent shift, normalizes to
+        // itself — but must NOT error (was Err pre-#704). Mirror of the `n.` case.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30_30+1del");
+        assert_eq!(result, Ok("NM_PLUS.1:r.30_30+1del".to_string()));
+    }
+
+    #[test]
+    fn r_intron_exon_junction_insertion_normalizes() {
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.31-1_31insa");
+        assert_eq!(result, Ok("NM_PLUS.1:r.31-1_31insa".to_string()));
+    }
+
+    #[test]
+    fn r_both_intronic_same_intron_shifts() {
+        // Both intronic in the same intron → normalize_intronic_tx; the homopolymer
+        // shifts. Mirror of `n.30+1del -> n.30+3del`.
+        let result = normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30+1del");
+        assert_eq!(result, "NM_PLUS.1:r.30+3del");
+    }
+
+    #[test]
+    fn r_multi_intron_span_routes_to_boundary_spanning() {
+        // Both intronic but in DIFFERENT introns → boundary-spanning (the
+        // same_intron_tx split). No equivalent shift; normalizes to itself.
+        let result = try_normalize(make_provider_with_plus_strand(), "NM_PLUS.1:r.30+2_60+2del");
+        assert_eq!(result, Ok("NM_PLUS.1:r.30+2_60+2del".to_string()));
+    }
+
+    #[test]
+    fn r_exonic_edge_deletion_shifts_into_intron() {
+        // Sub-problem A for `r.`: a purely-exonic edge del must cross into the
+        // intron. Mirror of `c./n.30del -> 30+3del` on the homopolymer fixture.
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:r.30del");
+        assert_eq!(result, "NM_EDGE.1:r.30+3del");
+    }
+
+    #[test]
+    fn r_exonic_edge_duplication_shifts_into_intron() {
+        let result = normalize(make_provider_with_edge(), "NM_EDGE.1:r.30dup");
+        assert_eq!(result, "NM_EDGE.1:r.30+3dup");
+    }
+
+    #[test]
+    fn r_minus_strand_cds_relative_intronic_shifts() {
+        // The shipped cases above all use NM_PLUS.1/NM_EDGE.1 with cds_start=1,
+        // where r.N == n.N — so they never exercise the CDS-relative arm of
+        // `rna_pos_to_txpos`/`txpos_to_rnapos`. NM_MUTR.1 is minus-strand with
+        // cds_start=6, so r.N != n.N (r.20 == n.25, r.21 == n.26) and the anchor
+        // base must be remapped through the CDS offset on the way to tx and back.
+        //
+        // Each `r.` result is the trusted part-1 `n.` result (same genomic
+        // position) re-expressed in CDS-relative numbering with lowercase U/T
+        // rendering: n.26-3 -> r.21-3, n.24_26-3A[8] -> r.19_21-3a[8]. This also
+        // covers boundary-spanning (`r.20_20+1`), the genomic-space repeat
+        // notation, and the minus-strand intronic orientation in one place.
+        let p = make_provider_with_minus_utr;
+
+        // same-intron shuffle (both intronic) on a minus strand, cds-relative
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20+1del"),
+            Ok("NM_MUTR.1:r.21-3del".to_string())
+        );
+        // boundary-spanning (one exonic + one intronic endpoint)
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20_20+1del"),
+            Ok("NM_MUTR.1:r.19_21-3a[8]".to_string())
+        );
+        // multi-base intronic span in the same intron
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:r.20+1_20+2del"),
+            Ok("NM_MUTR.1:r.19_21-3a[8]".to_string())
+        );
+
+        // Cross-check the r.<->n. correspondence the assertions above encode:
+        // r.20 == n.25 and r.21 == n.26, so the r. outputs must be the n. outputs
+        // shifted by the same cds offset (5) — proving the CDS-relative round trip.
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:n.25+1del"),
+            Ok("NM_MUTR.1:n.26-3del".to_string())
+        );
+        assert_eq!(
+            try_normalize(p(), "NM_MUTR.1:n.25_25+1del"),
+            Ok("NM_MUTR.1:n.24_26-3A[8]".to_string())
+        );
+    }
+}

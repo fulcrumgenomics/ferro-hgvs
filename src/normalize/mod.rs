@@ -3916,14 +3916,82 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
 
-        // NOTE (#704): the `r.` path does not normalize intronic variants at all
-        // (it errors), so the #670 exon/intron 3' rule does not apply here. `r.`
-        // parity with `c.` is tracked in #704.
+        // #704: route intronic / boundary-spanning `r.` through the same
+        // genomic-space machinery the `n.` path uses. On a coding transcript
+        // `r.` shares `c.`/`n.` numbering for the exonic anchor and the intron
+        // offset is identical across all three axes, so convert the `r.`
+        // endpoints to `TxPos`, delegate to the tx intronic dispatch (the
+        // `same_intron_tx` split → `normalize_intronic_tx`, else
+        // `normalize_boundary_spanning_tx`), then convert the result back to
+        // `r.`. Pre-#704 this errored for any intronic `r.`.
         if start_pos.is_intronic() || end_pos.is_intronic() {
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-                detail: None,
-            });
+            use crate::hgvs::variant::{LocEdit, TxVariant};
+            // Accession-aware lookup so an NG/NC-parented input resolves the
+            // build-correct chromosome; fall back to the plain transcript. A
+            // missing transcript preserves the historical "can't normalize
+            // intronic r." signal.
+            let plain_accession = variant.accession.transcript_accession();
+            let transcript = self
+                .provider
+                .get_transcript_for_accession(&variant.accession)
+                .or_else(|_| self.provider.get_transcript(&plain_accession))
+                .map_err(|_| FerroError::IntronicVariant {
+                    variant: format!("{}", variant),
+                    detail: None,
+                })?;
+            let cds_info = transcript.cds_start.zip(transcript.cds_end);
+
+            let (tx_start, tx_end) = match (
+                self.rna_pos_to_txpos(start_pos, cds_info),
+                self.rna_pos_to_txpos(end_pos, cds_info),
+            ) {
+                (Some(s), Some(e)) => (s, e),
+                _ => {
+                    return Err(FerroError::IntronicVariant {
+                        variant: format!("{}", variant),
+                        detail: None,
+                    })
+                }
+            };
+
+            let tx_variant = TxVariant {
+                accession: variant.accession.clone(),
+                gene_symbol: variant.gene_symbol.clone(),
+                loc_edit: LocEdit::new(Interval::new(tx_start, tx_end), edit.clone()),
+            };
+
+            // Mirror of the `normalize_tx` intronic dispatch (both intronic in the
+            // same intron → single-intron shuffle; one endpoint exonic or a
+            // multi-intron span → genomic boundary-spanning).
+            let (tx_result, tx_warnings) = if tx_start.is_intronic()
+                && tx_end.is_intronic()
+                && self.same_intron_tx(&transcript, &tx_start, &tx_end)
+            {
+                self.normalize_intronic_tx(&tx_variant, &transcript, &tx_start, &tx_end, edit)?
+            } else {
+                self.normalize_boundary_spanning_tx(
+                    &tx_variant,
+                    &transcript,
+                    &tx_start,
+                    &tx_end,
+                    edit,
+                )?
+            };
+
+            // The tx engines always return a bare `HV::Tx`; convert it back to
+            // `r.` and finish through the same canonical-split tail as the exonic
+            // path (T/U-equivalent rev-comp scan).
+            let HV::Tx(tv) = tx_result else {
+                return Err(FerroError::IntronicVariant {
+                    variant: format!("{}", variant),
+                    detail: None,
+                });
+            };
+            let rna_variant = self.txvariant_to_rnavariant(&tv, cds_info)?;
+            let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(rna_variant));
+            let mut warnings = tx_warnings;
+            warnings.append(&mut split_warnings);
+            return Ok((wrap_allele_if_split(split), warnings));
         }
 
         // Try to get transcript (RNA uses the same accession as mRNA transcripts)
@@ -4007,6 +4075,69 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
+        // #704 sub-problem A (mirror of the `normalize_cds`/`normalize_tx`
+        // post-check, #670): apply the 3' rule across the exon/intron junction
+        // for a purely-exonic `r.` del/dup that comes to rest at an exon's 3'
+        // edge. The exon-confined shuffle above only sees spliced bases; when it
+        // lands exactly at the exon boundary (`boundaries.right`, the del/dup
+        // exon bound), a downstream intron exists, and we have genomic context,
+        // re-run the shuffle in genomic space (which spans the junction) and
+        // adopt the result only if it actually crossed into the intron. The
+        // original endpoints are purely exonic here, so they map to plain
+        // (offset-less) `TxPos`. 3'-only; the hot path is untouched.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && new_tx_end == boundaries.right
+            && self.provider.has_genomic_data()
+        {
+            use crate::hgvs::variant::{LocEdit, TxVariant};
+            let boundary_transcript = self
+                .provider
+                .get_transcript_for_accession(&variant.accession)
+                .unwrap_or_else(|_| transcript.clone());
+            if boundary_transcript.chromosome.is_some() {
+                let bs_start = TxPos::new(tx_start as i64);
+                let bs_end = TxPos::new(tx_end as i64);
+                let bs_variant = TxVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: LocEdit::new(Interval::new(bs_start, bs_end), edit.clone()),
+                };
+                // Engine errors (no following intron — last exon — no genomic
+                // alignment, …) fall through to the exon-confined result, the
+                // safe pre-#704 behavior.
+                if let Ok((HV::Tx(tv), boundary_warnings)) = self.normalize_boundary_spanning_tx(
+                    &bs_variant,
+                    &boundary_transcript,
+                    &bs_start,
+                    &bs_end,
+                    edit,
+                ) {
+                    let crossed_into_intron = tv
+                        .loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .is_some_and(|p| p.is_intronic())
+                        || tv
+                            .loc_edit
+                            .location
+                            .end
+                            .inner()
+                            .is_some_and(|p| p.is_intronic());
+                    if crossed_into_intron {
+                        if let Ok(rna_variant) = self.txvariant_to_rnavariant(&tv, cds_info) {
+                            let (split, mut split_warnings) =
+                                self.apply_canonical_split(HV::Rna(rna_variant));
+                            let mut combined = warnings;
+                            combined.extend(boundary_warnings);
+                            combined.append(&mut split_warnings);
+                            return Ok((wrap_allele_if_split(split), combined));
+                        }
+                    }
+                }
+            }
+        }
+
         // Convert each normalized tx position back to a CDS-relative `r.`
         // position via `tx_to_rna_pos`, which restores the correct region for
         // every tx index: `r.-N` (5'UTR, `pos < cds_start`), `r.N` (CDS,
@@ -4035,6 +4166,96 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(new_variant));
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split), warnings))
+    }
+
+    /// Convert an `r.` position to a transcript-numbered [`TxPos`], carrying the
+    /// intron offset verbatim (#704). On a coding transcript the exonic anchor
+    /// maps through CDS-relative numbering (`rna_to_tx_pos`); without a CDS
+    /// (coordinate-only / mock providers) positive non-UTR bases fall back to
+    /// transcript-1 indices and UTR / non-positive bases are unresolvable
+    /// (`None`), mirroring the exonic `map_in` in `normalize_rna`.
+    ///
+    /// The intron offset is identical across the `c.`/`n.`/`r.` axes — it is
+    /// measured from the nearest exon boundary regardless of how the anchor base
+    /// is numbered — so it is copied through unchanged.
+    fn rna_pos_to_txpos(&self, pos: &RnaPos, cds_info: Option<(u64, u64)>) -> Option<TxPos> {
+        let base = match cds_info {
+            Some((cds_start, cds_end)) => self.rna_to_tx_pos(pos, cds_start, Some(cds_end)).ok()?,
+            None => {
+                if pos.utr3 || pos.base < 1 {
+                    return None;
+                }
+                pos.base as u64
+            }
+        };
+        Some(TxPos {
+            base: base as i64,
+            offset: pos.offset,
+            downstream: false,
+        })
+    }
+
+    /// Convert a transcript-numbered [`TxPos`] back to an `r.` position,
+    /// restoring the CDS-relative region and carrying the intron offset (#704).
+    /// Inverse of [`Self::rna_pos_to_txpos`].
+    fn txpos_to_rnapos(
+        &self,
+        pos: &TxPos,
+        cds_info: Option<(u64, u64)>,
+    ) -> Result<RnaPos, FerroError> {
+        let mut rna = match cds_info {
+            Some((cds_start, cds_end)) => {
+                self.tx_to_rna_pos(pos.base as u64, cds_start, Some(cds_end))?
+            }
+            None => RnaPos::new(pos.base),
+        };
+        rna.offset = pos.offset;
+        Ok(rna)
+    }
+
+    /// Re-express a normalized `n.`-axis [`TxVariant`] (the result of the tx
+    /// intronic / boundary-spanning engines) as an `r.` [`RnaVariant`] (#704),
+    /// mapping both endpoints back to CDS-relative `r.` positions. The U/T
+    /// rendering is left to `RnaVariant`'s Display (`to_rna_string`), so the
+    /// DNA-base edit produced by the tx engine needs no translation.
+    fn txvariant_to_rnavariant(
+        &self,
+        tv: &crate::hgvs::variant::TxVariant,
+        cds_info: Option<(u64, u64)>,
+    ) -> Result<crate::hgvs::variant::RnaVariant, FerroError> {
+        use crate::hgvs::interval::RnaInterval;
+        use crate::hgvs::variant::{LocEdit, RnaVariant};
+        let start_tp =
+            tv.loc_edit
+                .location
+                .start
+                .inner()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no start position".to_string(),
+                })?;
+        let end_tp =
+            tv.loc_edit
+                .location
+                .end
+                .inner()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no end position".to_string(),
+                })?;
+        let new_start = self.txpos_to_rnapos(start_tp, cds_info)?;
+        let new_end = self.txpos_to_rnapos(end_tp, cds_info)?;
+        let new_edit =
+            tv.loc_edit
+                .edit
+                .inner()
+                .cloned()
+                .ok_or_else(|| FerroError::ConversionError {
+                    msg: "boundary-spanning r. result has no edit".to_string(),
+                })?;
+        Ok(RnaVariant {
+            accession: tv.accession.clone(),
+            gene_symbol: tv.gene_symbol.clone(),
+            loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
+        })
     }
 
     /// Convert an RNA position to a transcript-1 position.
