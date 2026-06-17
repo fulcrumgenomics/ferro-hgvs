@@ -199,6 +199,14 @@ rstest = "0.23"
 pulldown-cmark = { version = "0.13", default-features = false }
 serde_yaml = "0.9"
 anyhow = "1"
+# Used by examples/build_conformance_snapshot.rs to record a per-entry SHA-256 of
+# the harvested bases (snapshot provenance). Examples have access to
+# dev-dependencies, so this stays out of the runtime dependency tree.
+sha2 = "0.10"
+
+[[example]]
+name = "build_conformance_snapshot"
+required-features = ["dev"]
 
 [[example]]
 name = "generate_tool_support_tables"

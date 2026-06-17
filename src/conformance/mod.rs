@@ -14,6 +14,7 @@ pub mod accession_inventory;
 pub mod biocommons;
 pub mod hgvs_rs_projection;
 pub mod mutalyzer;
+pub mod reference_snapshot;
 pub mod reference_window;
 pub mod schema;
 pub mod summary;
