@@ -713,6 +713,30 @@ mod tests {
     }
 
     #[test]
+    fn save_preserves_derived_refseqgene_placements_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let placements = dir.path().join("derived_refseqgene_placements.json");
+        std::fs::write(&placements, "{}").unwrap();
+
+        // First run wires the field (as a hand-edit or a --derive-ng-placements run would).
+        let mut m = ReferenceManifest::load_or_default(dir.path()).unwrap();
+        m.derived_refseqgene_placements = Some(placements.clone());
+        m.save().unwrap();
+
+        // A subsequent prepare loads the existing manifest — the field must survive.
+        let reloaded = ReferenceManifest::load_or_default(dir.path()).unwrap();
+        assert_eq!(
+            reloaded
+                .derived_refseqgene_placements
+                .map(|p| p.file_name().unwrap().to_owned()),
+            Some(std::ffi::OsString::from(
+                "derived_refseqgene_placements.json"
+            )),
+            "derived_refseqgene_placements must be preserved across load_or_default/save"
+        );
+    }
+
+    #[test]
     fn test_save_refreshes_prepared_at() {
         use std::io::Read;
         use tempfile::TempDir;
