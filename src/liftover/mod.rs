@@ -39,9 +39,11 @@
 //! - <https://hgdownload.cse.ucsc.edu/goldenpath/hg38/liftOver/hg38ToHg19.over.chain.gz>
 
 pub mod aliases;
+pub mod assembly_report;
 pub mod chain;
 pub mod lift;
 
 pub use aliases::ContigAliases;
+pub use assembly_report::{parse_assembly_report, AssemblyReport, AssemblyReportEntry};
 pub use chain::{Chain, ChainBlock, ChainFile};
 pub use lift::{IntervalLiftoverResult, Liftover, LiftoverResult, LiftoverStatus};
