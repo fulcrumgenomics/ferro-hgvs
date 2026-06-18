@@ -210,7 +210,7 @@ NM_003002.2:c.pterdel	NM_003002.2:c.pterdel
 NM_003002.2:c.qterdel	NM_003002.2:c.qterdel
 LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.pter_-51'
 LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.*835_qter'
-LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer positions or ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
+LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n./r. axes with simple positive-integer positions or ranges. Out-of-scope: p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
 LRG_24t1:c.pter_qterdelinspter_qter	parse error: Parse error at position 26: Unexpected trailing characters: 'pter_qter'
 LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]	parse error: Parse error at position 23: Unexpected trailing characters: 'ins[pter_qter;NM_003002.2:c.*835_qter]'
 NG_012337.1(NM_003002.2):c.[274=;275del]	NG_012337.1(NM_003002.2):c.[274=;275del]

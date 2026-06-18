@@ -219,26 +219,21 @@ fn mito_cross_reference_expands_to_literal() {
 }
 
 // =============================================================================
-// Out-of-scope axis: r. (RNA) — should defer with a clear message
+// r. (RNA) cross-reference now expands (coding-aware, transcript-relative for
+// non-coding). #773.
 // =============================================================================
 
 #[test]
-fn rna_cross_reference_continues_to_defer() {
-    let mut p = MockProvider::new();
+fn rna_cross_reference_expands_to_literal() {
+    let mut p = MockProvider::with_test_data();
     p.add_genomic_sequence("NC_000022.10", "ACGT".repeat(50));
-    // Inner is r. axis — needs U->T translation; deferred until that's
-    // wired through the cross-reference path.
-    let result = normalize("NC_000022.10:g.10_15delins[NR_001234.1:r.10_15]", p);
+    // NR_000123.1 is non-coding ("ACGTACGTACGT"), so r. is transcript-relative:
+    // r.1_4 == n.1_4 == "ACGT". The delins payload must flatten to that literal.
+    let out = normalize("NC_000022.10:g.10_15delins[NR_000123.1:r.1_4]", p)
+        .expect("r.-axis cross-reference must expand");
     assert!(
-        result.is_err(),
-        "r.-axis cross-reference must defer; got Ok({:?})",
-        result.ok(),
-    );
-    let err = result.unwrap_err();
-    let msg = format!("{}", err);
-    assert!(
-        msg.contains("cross-reference"),
-        "deferral message must mention 'cross-reference'; got {msg}",
+        !out.contains("[NR_"),
+        "r. cross-reference must be flattened; got {out}",
     );
 }
 
@@ -293,10 +288,10 @@ fn unsupported_cross_reference_after_repeat_part_still_defers() {
     let mut p = MockProvider::new();
     p.add_genomic_sequence("NC_000022.10", "ACGT".repeat(50));
     // `N[2800]` is a non-flattenable Repeat part; the trailing
-    // `NR_001234.1:r.10_15` is an out-of-scope r.-axis cross-reference.
-    // The r.-axis member must still surface an error regardless of its
-    // position after the Repeat.
-    let result = normalize("NC_000022.10:g.5_6ins[N[2800];NR_001234.1:r.10_15]", p);
+    // `NP_000079.2:p.10_15` is an out-of-scope p.-axis cross-reference
+    // (structurally invalid as a DNA payload). The p.-axis member must still
+    // surface an error regardless of its position after the Repeat.
+    let result = normalize("NC_000022.10:g.5_6ins[N[2800];NP_000079.2:p.10_15]", p);
     assert!(
         result.is_err(),
         "unsupported cross-reference after a Repeat part must defer; got Ok({:?})",

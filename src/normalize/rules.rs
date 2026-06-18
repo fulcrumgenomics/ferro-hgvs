@@ -1869,6 +1869,13 @@ pub enum InsCoordKind {
     /// translates to transcript coordinates via `cds_start` looked up
     /// from the provider.
     Cds,
+    /// RNA (`r.`): position numbering follows the associated DNA reference —
+    /// CDS-relative (== `c.`) for a coding transcript, transcript-relative
+    /// (== `n.`) for a non-coding one. The coding/non-coding split needs the
+    /// provider, so this is resolved to `Cds`/`Direct` at fetch time in
+    /// `fetch_position_range_bases` via `Transcript::is_coding()`. Produced only
+    /// by `parse_cross_reference` for an `r.` cross-reference payload. #773.
+    Rna,
 }
 
 /// Fetch a 1-based inclusive byte range `[start_1based..=end_1based]`
@@ -1897,6 +1904,26 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
             ),
         });
     }
+
+    // Resolve an `r.` axis to its effective DNA-numbering frame. r. follows the
+    // associated DNA numbering: CDS-relative (== `c.`) for a coding transcript,
+    // transcript-relative (== `n.`) for a non-coding one. Deciding this needs
+    // the provider, so it happens here rather than in `parse_cross_reference`.
+    // We reuse the existing `Cds`/`Direct` arithmetic below so the cross-ref
+    // path cannot drift from `normalize_rna`. No `U->T` step is applied: the
+    // provider stores transcript bases as DNA (T), so fetched bases are already
+    // DNA — translating them would be a no-op (the `g./c./n.` paths splice
+    // provider output directly for the same reason). #773.
+    let kind = match kind {
+        InsCoordKind::Rna => {
+            if provider.get_transcript(accession)?.is_coding() {
+                InsCoordKind::Cds
+            } else {
+                InsCoordKind::Direct
+            }
+        }
+        other => other,
+    };
 
     // Translate CDS → transcript coordinates if needed. The helper only
     // accepts positive CDS positions; UTR-3 (`*N`) and 5' UTR (`-N`) are
@@ -1956,6 +1983,9 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
             })?;
             (tx_start, tx_end)
         }
+        // `Rna` is always resolved to `Cds` or `Direct` by the block above
+        // before this match is reached — this arm is unreachable in practice.
+        InsCoordKind::Rna => unreachable!("Rna kind must be resolved before this match"),
     };
 
     // `provider.get_sequence(id, s, e)` follows the convention used
@@ -1973,7 +2003,9 @@ struct CrossReferenceParse {
     /// `NG_012337.3(NM_012459.2)`), as written before the `:`.
     accession: String,
     /// How the positions are translated when fetching bases (`Cds` translates
-    /// via the foreign transcript's `cds_start`; `Direct` fetches directly).
+    /// via the foreign transcript's `cds_start`; `Direct` fetches directly;
+    /// `Rna` is resolved coding-aware to `Cds`/`Direct` in
+    /// `fetch_position_range_bases` via `Transcript::is_coding()`).
     kind: InsCoordKind,
     /// One-based start position.
     start: u64,
@@ -1995,7 +2027,7 @@ struct CrossReferenceParse {
 /// and the `transcript_relative` flag) on success.
 ///
 /// Two payload forms are accepted:
-///   - **Axis-qualified** (`<ACC>:<axis>.<range>`): supports g./m./o./c./n.
+///   - **Axis-qualified** (`<ACC>:<axis>.<range>`): supports g./m./o./c./n./r.
 ///     axes with simple positive-integer positions or ranges (no offsets,
 ///     no `*N`, no `?`, no `pter`/`qter` markers).
 ///   - **Axis-less native-frame** (`<ACC>:<range>`, #759): the bare positions
@@ -2020,12 +2052,16 @@ struct CrossReferenceParse {
 ///   - `n.`: non-coding transcript; positions are already transcript-
 ///     relative (`Direct`).
 ///
-/// **Deferred axes (`r.`, `p.`):** RNA needs U→T translation on the
-/// fetched bases (the existing `r.→g.` projection has the primitive
-/// but isn't wired here); protein is structurally invalid as a DNA-
-/// insertion payload. Both stay `UnsupportedVariant` for now. If
-/// `parse_reference_location` ever broadens to additional axes, keep
-/// the match arm below in sync.
+/// **`r.` (RNA):** supported — numbering follows the associated DNA frame
+/// (CDS-relative for coding transcripts, transcript-relative for non-coding),
+/// resolved coding-aware in `fetch_position_range_bases` via
+/// `Transcript::is_coding()`. No `U→T` step is needed: the provider stores
+/// transcript bases as DNA. #773.
+///
+/// **Deferred axis (`p.`):** protein is structurally invalid as a DNA-
+/// insertion payload, so it stays `UnsupportedVariant`. If
+/// `parse_reference_location` ever broadens to additional axes, keep the
+/// match arm below in sync.
 fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
     let (acc_part, after_colon) = reference.split_once(':')?;
     if acc_part.is_empty() || after_colon.is_empty() {
@@ -2038,20 +2074,23 @@ fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
     let (kind, transcript_relative, range_str) = if axis_qualified {
         // c. requires CDS translation via the foreign transcript's cds_start;
         // g./m./o./n. are direct position-range fetches on the inner accession.
-        // r. and p. are deferred — see the doc-comment above.
+        // r. is resolved coding-aware in fetch_position_range_bases; p. is
+        // deferred — see the doc-comment above. #773.
         let kind = match bytes[0] {
             b'g' | b'm' | b'o' | b'n' => InsCoordKind::Direct,
             b'c' => InsCoordKind::Cds,
+            b'r' => InsCoordKind::Rna,
             _ => return None,
         };
-        // `c.` and `n.` are transcript-relative (their positions index the
+        // `c.`, `n.`, and `r.` are transcript-relative (their positions index the
         // transcript), so a genomic-context compound payload accession
         // (`NG_(NM_)`) must be reduced to its transcript before lookup.
         // `g./m./o.` are genomic / absolute and fetch on the named accession
         // unchanged. (`n.` shares the `Direct` *fetch* path with `g./m./o.` — it
         // needs no cds_start translation — so the kind alone can't distinguish
-        // it; this flag carries that out.)
-        let transcript_relative = matches!(bytes[0], b'c' | b'n');
+        // it; this flag carries that out. `r.` likewise resolves to `Direct` for
+        // a non-coding transcript, so it relies on the flag too.)
+        let transcript_relative = matches!(bytes[0], b'c' | b'n' | b'r');
         (kind, transcript_relative, &after_colon[2..])
     } else {
         // Axis-less payload `<ACC>:<range>` (#759): the bare positions index the
@@ -2117,10 +2156,9 @@ fn cross_reference_shape_error(reference: &str) -> FerroError {
     FerroError::UnsupportedVariant {
         variant_type: format!(
             "ins[{}] cross-reference shape not yet supported. \
-             Expansion currently covers g./m./o./c./n. axes with simple \
-             positive-integer positions or ranges. Out-of-scope: r. (RNA — needs U->T \
-             translation; see follow-up), p. (protein — structurally \
-             invalid as DNA-insertion payload), offsets (+/-), UTR \
+             Expansion currently covers g./m./o./c./n./r. axes with simple \
+             positive-integer positions or ranges. Out-of-scope: p. (protein — \
+             structurally invalid as DNA-insertion payload), offsets (+/-), UTR \
              markers (*N), unknown markers (?), and pter/qter/cen \
              decorations",
             reference,
@@ -2139,7 +2177,7 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
         end,
         transcript_relative,
     } = parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
-    // A transcript-relative payload (`c.` or `n.`) indexes the transcript, so a
+    // A transcript-relative payload (`c.`, `n.`, or `r.`) indexes the transcript, so a
     // genomic-context compound accession (`NG_(NM_)`) must be reduced to its
     // transcript (`NM_`/`NR_`) before lookup — otherwise the fetch fails on the
     // compound string (`c.` at the cds_start lookup, `n.` at the sequence
@@ -2270,7 +2308,7 @@ fn append_part_bases<P: ReferenceProvider>(
 ///
 /// - intronic-offset CDS range (`CdsPositionRange`), and
 /// - an out-of-scope cross-reference (`ExternalRef` whose form
-///   `parse_cross_reference` cannot handle — r./p. axes, offsets, UTR
+///   `parse_cross_reference` cannot handle — p. axis, offsets, UTR
 ///   markers, `pter`/`qter`, etc.).
 ///
 /// Both are *shape* deferrals (provider-independent), unlike a resolvable
@@ -2358,11 +2396,11 @@ pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
 ///   - **Intronic-offset / UTR-marker CDS range** (`CdsPositionRange`):
 ///     spec-undefined; error carries the grep tag `"CDS-offset range"`
 ///     and `"follow-up"`.
-///   - **Out-of-scope cross-reference** (r./p. axes, or `pter`/`qter`
+///   - **Out-of-scope cross-reference** (p. axis, or `pter`/`qter`
 ///     decoration, etc.): error carries `"cross-reference"` and
 ///     describes the supported axis set. Simple positive-integer
-///     ranges on g./m./o./c./n. are now expanded (#422) and no
-///     longer surface as errors.
+///     ranges on g./m./o./c./n. (#422) and r. (#773) are now
+///     expanded and no longer surface as errors.
 /// - `Err(FerroError::...)` — genuine provider lookup failure
 ///   (`ReferenceNotFound`, `InvalidCoordinates`, etc.).
 pub fn expand_inserted_sequence<P: ReferenceProvider>(
@@ -4063,6 +4101,59 @@ mod tests {
         let provider = crate::reference::mock::MockProvider::with_test_data();
         let bases = resolve_cross_reference_bases("NM_001234.1:2", &provider)
             .expect("axis-less single-position cross-reference should resolve");
+        assert_eq!(bases, "T");
+    }
+
+    #[test]
+    fn resolve_cross_reference_rna_coding_is_cds_relative() {
+        // r. numbering follows c. (CDS-relative) for a coding transcript, NOT
+        // the transcript/n. frame. NM_001234.1 has cds_start=5 over
+        // "AAAAATGCCCAAG…", so c.2 == transcript pos 6 == "T", while n.2 ==
+        // transcript pos 2 == "A". r.2 must equal c.2 ("T"), not n.2 ("A"). #773.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let r = resolve_cross_reference_bases("NM_001234.1:r.2", &provider)
+            .expect("coding r. cross-reference should resolve");
+        let c = resolve_cross_reference_bases("NM_001234.1:c.2", &provider)
+            .expect("c.2 should resolve");
+        let n = resolve_cross_reference_bases("NM_001234.1:n.2", &provider)
+            .expect("n.2 should resolve");
+        assert_eq!(r, "T");
+        assert_eq!(r, c, "coding r.N must match c.N");
+        assert_ne!(r, n, "coding r.N must differ from n.N (off by 5'UTR)");
+    }
+
+    #[test]
+    fn resolve_cross_reference_rna_coding_range_is_cds_relative() {
+        // r.1_3 == c.1_3 == transcript pos 5..7 == "ATG" (cds_start=5), not
+        // n.1_3 == "AAA".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let r = resolve_cross_reference_bases("NM_001234.1:r.1_3", &provider)
+            .expect("coding r. range should resolve");
+        assert_eq!(r, "ATG");
+    }
+
+    #[test]
+    fn resolve_cross_reference_rna_noncoding_is_transcript_relative() {
+        // A non-coding transcript has no CDS, so r. is transcript-relative
+        // (== n.). NR_000123.1 is "ACGTACGTACGT", so r.2 == n.2 == "C" and
+        // r.1_4 == "ACGT". #773.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let single = resolve_cross_reference_bases("NR_000123.1:r.2", &provider)
+            .expect("non-coding r. cross-reference should resolve");
+        assert_eq!(single, "C");
+        let range = resolve_cross_reference_bases("NR_000123.1:r.1_4", &provider)
+            .expect("non-coding r. range should resolve");
+        assert_eq!(range, "ACGT");
+    }
+
+    #[test]
+    fn resolve_cross_reference_rna_reduces_genomic_context_compound() {
+        // A genomic-context compound payload addressed in r. must reduce to its
+        // transcript before lookup (r. is transcript/CDS-relative). The inner
+        // NM_001234.1 has cds_start=5, so r.2 == c.2 == "T". #773.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NG_999999.9(NM_001234.1):r.2", &provider)
+            .expect("genomic-context compound r. cross-reference should resolve");
         assert_eq!(bases, "T");
     }
 
