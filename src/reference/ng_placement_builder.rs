@@ -132,9 +132,11 @@ fn fasta_bases(fasta: &str) -> Vec<u8> {
         .collect()
 }
 
-/// `NcExonSource` over a cdot mapper for one build. cdot `exons` entries are
-/// 0-based half-open, so the 1-based inclusive interval `derive_ng_placement`
-/// expects is `(genome_start + 1, genome_end)`.
+/// `NcExonSource` over a cdot mapper for one build. Since #742 the loaded
+/// `CdotTranscript.exons` entry `[genome_start, genome_end, ..]` is in the HGVS
+/// convention — `genome_start` 1-based inclusive, `genome_end` 1-based exclusive
+/// — so the 1-based inclusive interval `derive_ng_placement` expects is
+/// `(genome_start, genome_end - 1)`.
 struct CdotNcExons<'a> {
     cdot: &'a CdotMapper,
     build: &'a str,
@@ -145,7 +147,7 @@ impl NcExonSource for CdotNcExons<'_> {
         let tx = self
             .cdot
             .get_transcript_on_build_exact(transcript_id, self.build)?;
-        Some(tx.exons.iter().map(|e| (e[0] + 1, e[1])).collect())
+        Some(tx.exons.iter().map(|e| (e[0], e[1] - 1)).collect())
     }
     fn nc_contig(&self, transcript_id: &str) -> Option<Accession> {
         let tx = self

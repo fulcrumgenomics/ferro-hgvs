@@ -6693,21 +6693,23 @@ mod tests {
                 .get_transcript_on_build("NM_MB_TEST.1", "GRCh38")
                 .expect("GRCh38 view must be populated in primary transcripts");
             assert_eq!(tx38.contig, "NC_000001.11");
-            assert_eq!(tx38.exons, vec![[20000, 20010, 0, 10]]);
+            // #742: genome bounds load in the HGVS 1-based convention (+1 vs the
+            // raw cdot 0-based alt_start/alt_end).
+            assert_eq!(tx38.exons, vec![[20001, 20011, 0, 10]]);
             assert_eq!(tx38.cds_start, Some(0));
             assert_eq!(tx38.cds_end, Some(10));
             let tx37 = cdot
                 .get_transcript_on_build("NM_MB_TEST.1", "GRCh37")
                 .expect("GRCh37 view must be populated in alt_build_transcripts");
             assert_eq!(tx37.contig, "NC_000001.10");
-            assert_eq!(tx37.exons, vec![[10000, 10010, 0, 10]]);
+            assert_eq!(tx37.exons, vec![[10001, 10011, 0, 10]]);
         }
 
         /// c.5A>T against NC_000001.10(NM_MB_TEST.1) → expect GRCh37
-        /// coordinates (g.10004; cdot's internal exon[0] is HGVS-numeric,
-        /// so c.1 sits at g.10000 and c.5 at g.10004). Pre-fix, this
+        /// coordinates (g.10005; cdot's internal exon[0] is HGVS-numeric,
+        /// so c.1 sits at g.10001 and c.5 at g.10005). Pre-fix, this
         /// would have used the primary (GRCh38) view and produced
-        /// ~g.20004, despite the parent's GRCh37 version.
+        /// ~g.20005, despite the parent's GRCh37 version.
         #[test]
         fn project_to_genomic_uses_grch37_view_for_nc_v10_parent() {
             let vp = make_multi_build_projector("GRCh38");
@@ -6729,8 +6731,8 @@ mod tests {
                 HgvsVariant::Genome(g) => {
                     let s = g.to_string();
                     assert!(
-                        s.contains(":g.10004A>T"),
-                        "expected GRCh37 coord g.10004A>T, got: {}",
+                        s.contains(":g.10005A>T"),
+                        "expected GRCh37 coord g.10005A>T, got: {}",
                         s
                     );
                 }
@@ -6739,7 +6741,7 @@ mod tests {
         }
 
         /// c.5A>T against NC_000001.11(NM_MB_TEST.1) → expect GRCh38
-        /// coordinates (g.20004). Sibling to the GRCh37 case; together
+        /// coordinates (g.20005). Sibling to the GRCh37 case; together
         /// they prove the parent's build version is what drives the
         /// cdot view selection.
         #[test]
@@ -6763,8 +6765,8 @@ mod tests {
                 HgvsVariant::Genome(g) => {
                     let s = g.to_string();
                     assert!(
-                        s.contains(":g.20004A>T"),
-                        "expected GRCh38 coord g.20004A>T, got: {}",
+                        s.contains(":g.20005A>T"),
+                        "expected GRCh38 coord g.20005A>T, got: {}",
                         s
                     );
                 }
@@ -6772,10 +6774,10 @@ mod tests {
             }
         }
 
-        /// g. → c.: NC_000001.10:g.10004A>T projected onto NM_MB_TEST.1
+        /// g. → c.: NC_000001.10:g.10005A>T projected onto NM_MB_TEST.1
         /// → expect c.5A>T. Pre-fix, `project_single_inner` used the
         /// primary (GRCh38) `transcript_genome_span` of [20000, 20010),
-        /// so position 10004 fell outside and the call returned
+        /// so position 10005 fell outside and the call returned
         /// `TranscriptNotOverlapping`. Post-fix the GRCh37 span
         /// [10000, 10010) is consulted and the projection succeeds.
         #[test]
@@ -6785,7 +6787,7 @@ mod tests {
                 accession: nc_chr1(10),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(10004)),
+                    GenomeInterval::point(GenomePos::new(10005)),
                     NaEdit::Substitution {
                         reference: Base::A,
                         alternative: Base::T,
@@ -6810,7 +6812,7 @@ mod tests {
         /// NG_* parents are build-agnostic per the HGVS spec — the chromosome
         /// (`NC_`) pivot falls back to the primary cdot view rather than forcing
         /// an alt-build lookup. With primary=GRCh38 the c.5 position must come
-        /// back at the GRCh38 exon's position (g.20004) regardless of any GRCh37
+        /// back at the GRCh38 exon's position (g.20005) regardless of any GRCh37
         /// alt-build data.
         ///
         /// This is asserted on the `project_to_genomic_nc` pivot, which is where
@@ -6845,7 +6847,7 @@ mod tests {
                         s
                     );
                     assert!(
-                        s.contains(":g.20004A>T"),
+                        s.contains(":g.20005A>T"),
                         "NG (build-agnostic) parent must use primary (GRCh38) coords, got: {}",
                         s
                     );
@@ -6878,12 +6880,12 @@ mod tests {
         fn caches_partition_by_genome_build_for_nc_inputs() {
             let vp = make_multi_build_projector("GRCh38");
 
-            // c.5del on GRCh37 (g.10004del on NC_000001.10).
+            // c.5del on GRCh37 (g.10005del on NC_000001.10).
             let g37 = GenomeVariant {
                 accession: nc_chr1(10),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(10004)),
+                    GenomeInterval::point(GenomePos::new(10005)),
                     NaEdit::Deletion {
                         sequence: None,
                         length: None,
@@ -6893,12 +6895,12 @@ mod tests {
             vp.project_normalized(&HgvsVariant::Genome(g37), "NM_MB_TEST.1")
                 .expect("GRCh37 deletion projection must succeed");
 
-            // c.5del on GRCh38 (g.20004del on NC_000001.11).
+            // c.5del on GRCh38 (g.20005del on NC_000001.11).
             let g38 = GenomeVariant {
                 accession: nc_chr1(11),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(20004)),
+                    GenomeInterval::point(GenomePos::new(20005)),
                     NaEdit::Deletion {
                         sequence: None,
                         length: None,
@@ -6959,7 +6961,7 @@ mod tests {
                 accession: nc_chr1(11),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(20004)),
+                    GenomeInterval::point(GenomePos::new(20005)),
                     NaEdit::Substitution {
                         reference: Base::A,
                         alternative: Base::T,
@@ -6998,7 +7000,7 @@ mod tests {
                 accession: nc_chr1(10),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(10004)),
+                    GenomeInterval::point(GenomePos::new(10005)),
                     NaEdit::Substitution {
                         reference: Base::A,
                         alternative: Base::T,
@@ -7039,7 +7041,7 @@ mod tests {
                 accession: nc_chr1(11),
                 gene_symbol: None,
                 loc_edit: LocEdit::new(
-                    GenomeInterval::point(GenomePos::new(20004)),
+                    GenomeInterval::point(GenomePos::new(20005)),
                     NaEdit::Substitution {
                         reference: Base::A,
                         alternative: Base::T,
@@ -7071,7 +7073,7 @@ mod tests {
         // Builds on the two-build cdot fixture above by giving NM_MB_TEST.1's
         // NG_ parent (NG_000999.1) per-build chromosomal placements with
         // *different* parent offsets, so the re-anchored NG_ coordinate reveals
-        // which build's placement was selected: GRCh38 → g.104, GRCh37 → g.204.
+        // which build's placement was selected: GRCh38 → g.105, GRCh37 → g.205.
         // This is the end-to-end GRCh37 NG_ path #713 deferred (only reachable
         // once the override supplies a build for a bare NG_).
         // ---------------------------------------------------------------------
@@ -7154,7 +7156,7 @@ mod tests {
         }
 
         /// `--assembly GRCh37` makes a bare NG_ select its GRCh37 placement and
-        /// re-anchor against the GRCh37 chromosome view (g.204, not g.104).
+        /// re-anchor against the GRCh37 chromosome view (g.205, not g.105).
         #[test]
         fn assembly_override_selects_grch37_placement_for_bare_ng() {
             let vp = make_ng_assembly_projector(true).with_assembly(Some("GRCh37"));
@@ -7163,13 +7165,13 @@ mod tests {
                 .expect("GRCh37 override should re-anchor via the GRCh37 placement");
             let s = out.to_string();
             assert!(
-                s.contains(":g.204A>T"),
-                "expected the GRCh37 placement (parent_start 200 -> g.204), got: {s}"
+                s.contains(":g.205A>T"),
+                "expected the GRCh37 placement (parent_start 200 -> g.205), got: {s}"
             );
         }
 
         /// Without the override a bare NG_ keeps the GRCh38-preferred placement
-        /// (g.104) — adding a GRCh37 placement must not shift the default (#713).
+        /// (g.105) — adding a GRCh37 placement must not shift the default (#713).
         #[test]
         fn no_assembly_override_keeps_grch38_placement_for_bare_ng() {
             let vp = make_ng_assembly_projector(true);
@@ -7178,8 +7180,8 @@ mod tests {
                 .expect("default should re-anchor via the GRCh38 placement");
             let s = out.to_string();
             assert!(
-                s.contains(":g.104A>T"),
-                "expected the GRCh38 placement (parent_start 100 -> g.104), got: {s}"
+                s.contains(":g.105A>T"),
+                "expected the GRCh38 placement (parent_start 100 -> g.105), got: {s}"
             );
         }
 
@@ -7219,8 +7221,8 @@ mod tests {
                 .expect("explicit NC_*.11 parent projects on GRCh38 despite the override");
             let s = out.to_string();
             assert!(
-                s.starts_with("NC_000001.11") && s.contains(":g.20004A>T"),
-                "input-encoded GRCh38 (g.20004) must win over --assembly GRCh37 (g.10004), got: {s}"
+                s.starts_with("NC_000001.11") && s.contains(":g.20005A>T"),
+                "input-encoded GRCh38 (g.20005) must win over --assembly GRCh37 (g.10005), got: {s}"
             );
         }
     }

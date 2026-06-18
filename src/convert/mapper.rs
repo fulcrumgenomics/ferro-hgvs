@@ -1306,12 +1306,13 @@ mod intronic_debug_tests {
         );
     }
 
-    /// Test that cdot tx coordinates are correctly interpreted as 1-based.
+    /// Test that cdot tx coordinates are stored 0-based half-open.
     ///
-    /// The cdot format uses 1-based tx_start and tx_end coordinates (the first exon
-    /// starts at position 1, not 0). This test verifies that assumption.
+    /// On load, `from_genome_build` converts cdot's raw 1-based-inclusive tx bounds
+    /// into the engine's HGVS convention: tx 0-based half-open (the first exon starts
+    /// at position 0, not 1). This test verifies that conversion (#742).
     #[test]
-    fn test_cdot_tx_coordinates_are_1_based() {
+    fn test_cdot_tx_coordinates_are_0_based() {
         use crate::data::cdot::CdotMapper;
         use std::path::PathBuf;
 
@@ -1327,11 +1328,11 @@ mod intronic_debug_tests {
             .get_transcript("NM_003742.4")
             .expect("NM_003742.4 not in cdot");
 
-        // First exon should have tx_start = 1 (1-based, not 0-based)
+        // First exon should have tx_start = 0 (0-based, after the #742 conversion)
         let first_exon = &tx.exons[0];
         assert_eq!(
-            first_exon[2], 1,
-            "cdot tx_start for first exon should be 1 (1-based), got {}",
+            first_exon[2], 0,
+            "cdot tx_start for first exon should be 0 (0-based half-open), got {}",
             first_exon[2]
         );
 

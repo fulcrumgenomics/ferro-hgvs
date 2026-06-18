@@ -53,7 +53,10 @@ mod rkyv_cache {
     /// Bump whenever the layout below changes so a stale archive is rejected by
     /// the version check (in addition to rkyv's own structural validation) and
     /// regenerated rather than mis-read.
-    pub(super) const RKYV_FORMAT_VERSION: u32 = 1;
+    // v2 (#742): exon coordinates are now stored in the HGVS convention
+    // (genome 1-based, tx 0-based half-open); a v1 cache holds the old raw
+    // cdot convention and must be regenerated.
+    pub(super) const RKYV_FORMAT_VERSION: u32 = 2;
 
     #[derive(Archive, Serialize, Deserialize)]
     pub(super) struct RkyvCigar {
@@ -350,7 +353,9 @@ mod rkyv_cache {
 /// loader falls back to parsing the multi-hundred-MB JSON on every run — ~10x
 /// slower — with no indication anything is wrong.
 const CDOT_BINCODE_MAGIC: [u8; 4] = *b"FCDT";
-const CDOT_BINCODE_VERSION: u32 = 1;
+// v2 (#742): exon coordinates now stored in the HGVS convention (genome
+// 1-based, tx 0-based half-open); a v1 cache holds the old raw cdot convention.
+const CDOT_BINCODE_VERSION: u32 = 2;
 
 /// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
 /// or `None` when there is no trailing numeric `.<n>`. Used to pick the highest
@@ -453,10 +458,14 @@ struct RawGenomeBuild {
     strand: Option<String>,
     /// Exons in cdot format: [genomic_start, genomic_end, exon_num, tx_start, tx_end, gap_info]
     exons: Vec<Vec<serde_json::Value>>,
-    /// CDS start in genomic coordinates
+    /// CDS start in raw cdot genomic coordinates (0-based, inclusive — same space
+    /// as the raw exon `alt_start`). The genomic-CDS fallback in `from_genome_build`
+    /// must `+ 1` this to match the 1-based exon table before mapping it to tx.
     #[serde(default)]
     cds_start: Option<u64>,
-    /// CDS end in genomic coordinates
+    /// CDS end in raw cdot genomic coordinates (0-based, exclusive — same space as
+    /// the raw exon `alt_end`). The genomic-CDS fallback in `from_genome_build` must
+    /// `+ 1` this to match the 1-based exon table before mapping it to tx.
     #[serde(default)]
     cds_end: Option<u64>,
 }
@@ -486,11 +495,21 @@ impl RawCdotTranscript {
             .iter()
             .filter_map(|e| {
                 if e.len() >= 5 {
+                    // cdot stores genomic bounds 0-based half-open (`alt_start`
+                    // 0-based inclusive, `alt_end` 0-based exclusive) and cDNA
+                    // bounds 1-based **inclusive** (`cds_start_i`/`cds_end_i`).
+                    // `Exon` + every mapping primitive (and the fixtures) use the
+                    // *HGVS* convention: genome 1-based (`genome_start` inclusive,
+                    // `genome_end` exclusive) and tx 0-based half-open. Convert
+                    // here so the in-memory layout matches that contract — leaving
+                    // it raw made the two off-by-ones cancel only for exon-interior
+                    // positions, mis-mapping the last cDNA base of each exon and
+                    // dropping the first base of the next (#742).
                     let exon = [
-                        e[0].as_u64()?,
-                        e[1].as_u64()?,
-                        e[3].as_u64()?, // tx_start is at index 3
-                        e[4].as_u64()?, // tx_end is at index 4
+                        e[0].as_u64()? + 1,               // genome_start: 0-based incl → 1-based incl
+                        e[1].as_u64()? + 1,               // genome_end: 0-based excl → 1-based excl
+                        e[3].as_u64()?.saturating_sub(1), // tx_start: 1-based incl → 0-based incl
+                        e[4].as_u64()?, // tx_end: 1-based incl → 0-based excl (same value)
                     ];
                     // Parse CIGAR gap info from index 5 if present
                     let cigar = if e.len() > 5 {
@@ -525,9 +544,15 @@ impl RawCdotTranscript {
             // Fall back to converting genomic CDS coordinates to transcript coordinates
             match (build.cds_start, build.cds_end) {
                 (Some(g_start), Some(g_end)) => {
-                    // Find transcript positions for genomic CDS boundaries
-                    let tx_cds_start = genomic_to_tx_pos(&exons, g_start, strand);
-                    let tx_cds_end = genomic_to_tx_pos(&exons, g_end, strand);
+                    // `build.cds_start`/`cds_end` are raw cdot genomic coordinates in
+                    // the same 0-based half-open space as the raw exon `alt_start`/
+                    // `alt_end` bounds. `exons` was converted to the HGVS 1-based
+                    // convention above (`e[0] + 1` / `e[1] + 1`, lines 505-506), so
+                    // these CDS bounds must get the same `+ 1` before being scanned
+                    // against the now-1-based exon table — otherwise every comparison
+                    // in `genomic_to_tx_pos` is off by one (#742).
+                    let tx_cds_start = genomic_to_tx_pos(&exons, g_start + 1, strand);
+                    let tx_cds_end = genomic_to_tx_pos(&exons, g_end + 1, strand);
 
                     match (tx_cds_start, tx_cds_end) {
                         (Some(s), Some(e)) => {
@@ -3123,6 +3148,69 @@ impl Default for CdotMapper {
 mod tests {
     use super::*;
 
+    /// #742 regression: a 2-exon minus-strand transcript loaded from raw cdot
+    /// JSON (genome 0-based, cdna 1-based — the real cdot convention) maps the
+    /// exon-interior, exon-last, and next-exon-first coding bases to the correct
+    /// 1-based genomic coordinates. Pre-fix, the last cdna base of an exon
+    /// mis-mapped (off by one) and the first base of the next exon declined.
+    ///
+    /// NM_012459.2 (TIMM8B, GRCh38, NC_000011.10, minus): start_codon=30, exon B
+    /// (5') cdna 1..159 = genome 0-based [112086639,112086798), exon A (3') cdna
+    /// 160..822 = genome 0-based [112084799,112085462). c.N → tx (cdna) → genome.
+    #[test]
+    fn cdot_exon_junction_maps_to_correct_genomic_coords_issue_742() {
+        use crate::data::mapping::CoordinateMapper;
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_012459.2": {
+                    "gene_name": "TIMM8B",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000011.10",
+                            "strand": "-",
+                            "exons": [
+                                [112084799, 112085462, 1, 160, 822, "M663"],
+                                [112086639, 112086798, 0, 1, 159, "M159"]
+                            ]
+                        }
+                    },
+                    "start_codon": 30,
+                    "stop_codon": 327
+                }
+            }
+        }
+        "#;
+        let cdot = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38").unwrap();
+        let tx = cdot.get_transcript("NM_012459.2").unwrap();
+        assert_eq!(tx.cds_start, Some(30), "cds_start must survive loading");
+        // Exons load in the HGVS convention: genome 1-based, tx 0-based half-open.
+        assert_eq!(tx.exons[0], [112086640, 112086799, 0, 159]); // exon B (sorted first)
+        assert_eq!(tx.exons[1], [112084800, 112085463, 159, 822]); // exon A
+
+        let mapper = CoordinateMapper::new(cdot);
+        let g = |base: i64| {
+            mapper
+                .cds_to_genome(
+                    "NM_012459.2",
+                    &CdsPos {
+                        base,
+                        offset: None,
+                        utr3: false,
+                        special: None,
+                    },
+                )
+                .unwrap()
+                .variant
+                .base
+        };
+        assert_eq!(g(5), 112086764, "c.5 (interior)"); // unchanged by the fix
+        assert_eq!(g(127), 112086642, "c.127 (interior)");
+        assert_eq!(g(128), 112086641, "c.128 (interior)");
+        assert_eq!(g(129), 112086640, "c.129 (last cdna base of exon B)"); // was off-by-one
+        assert_eq!(g(130), 112085462, "c.130 (first cdna base of exon A)"); // was a decline
+    }
+
     fn sample_transcript() -> CdotTranscript {
         // Simple transcript with 3 exons on + strand
         // Exons: [genome_start, genome_end, tx_start, tx_end]
@@ -3473,8 +3561,11 @@ mod tests {
         // Verify the transcript was fully parsed (not dropped due to bad exon format)
         let tx = mapper.get_transcript("NM_000088.3").unwrap();
         assert_eq!(tx.exons.len(), 1);
-        assert_eq!(tx.exons[0][0], 48263025); // genome_start
-        assert_eq!(tx.exons[0][1], 48263098); // genome_end
+        // #742: exons are stored in the HGVS convention (genome 1-based), so the
+        // raw cdot 0-based `alt_start`/`alt_end` (48263025, 48263098) load as
+        // 1-based `genome_start`/`genome_end` (+1 each).
+        assert_eq!(tx.exons[0][0], 48263026); // genome_start (1-based incl)
+        assert_eq!(tx.exons[0][1], 48263099); // genome_end (1-based excl)
     }
 
     #[test]

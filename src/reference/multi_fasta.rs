@@ -1321,16 +1321,14 @@ impl MultiFastaProvider {
             .enumerate()
             .map(|(i, e)| TxExon {
                 number: (i + 1) as u32,
-                start: e[2],
-                end: e[3],
-                // NOTE: this mirrors the (pre-existing, likely off-by-one)
-                // projection in the FASTA path above. cdot's `e[0]` is
-                // HGVS-1-based per src/data/cdot.rs, so the `+1` here is
-                // strictly speaking wrong, but matching the FASTA path keeps
-                // downstream behavior consistent. Fixing the convention is
-                // out of scope for #331 — track separately if needed.
-                genomic_start: Some(e[0] + 1),
-                genomic_end: Some(e[1]),
+                // #742: `CdotTranscript.exons` is now HGVS-convention
+                // ([genome 1-based incl/excl, tx 0-based incl/excl]); `TxExon`
+                // is 1-based-inclusive on both axes. (This also resolves the
+                // former #331 genomic-coordinate off-by-one noted here.)
+                start: e[2] + 1,             // tx_start: 0-based incl → 1-based incl
+                end: e[3],                   // tx_end: 0-based excl = 1-based incl
+                genomic_start: Some(e[0]),   // genome_start: already 1-based incl
+                genomic_end: Some(e[1] - 1), // genome_end: 1-based excl → 1-based incl
             })
             .collect();
 
@@ -1632,22 +1630,22 @@ impl MultiFastaProvider {
                         None => cdot.get_transcript_exact(&resolved),
                     };
                     if let Some(tx) = cdot_tx_opt {
-                        // Convert cdot exons to transcript exons
-                        // cdot internal format: [genome_start, genome_end, tx_start, tx_end]
-                        // COORDINATE SYSTEMS:
-                        // - tx_start/tx_end: 1-based (use directly, no conversion needed)
-                        // - genome_start: 0-based, convert to 1-based by adding 1
-                        // - genome_end: 0-based exclusive = 1-based inclusive (no conversion)
+                        // Convert cdot in-memory exons to transcript exons.
+                        // #742: `CdotTranscript.exons` now uses the HGVS
+                        // convention — `[genome_start (1-based incl), genome_end
+                        // (1-based excl), tx_start (0-based incl), tx_end (0-based
+                        // excl)]`. `TxExon` uses 1-based-inclusive coordinates on
+                        // both axes, so convert accordingly.
                         let exons: Vec<TxExon> = tx
                             .exons
                             .iter()
                             .enumerate()
                             .map(|(i, e)| TxExon {
                                 number: (i + 1) as u32,
-                                start: e[2], // tx_start: already 1-based
-                                end: e[3],   // tx_end: already 1-based
-                                genomic_start: Some(e[0] + 1), // genome_start: 0-based → 1-based
-                                genomic_end: Some(e[1]), // genome_end: 0-based excl = 1-based incl
+                                start: e[2] + 1, // tx_start: 0-based incl → 1-based incl
+                                end: e[3],       // tx_end: 0-based excl = 1-based incl
+                                genomic_start: Some(e[0]), // genome_start: already 1-based incl
+                                genomic_end: Some(e[1] - 1), // genome_end: 1-based excl → incl
                             })
                             .collect();
 
