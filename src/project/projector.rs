@@ -1654,9 +1654,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let noncoding = noncoding_variants
             .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
 
+        // An initiation-codon-affecting member yields a whole-protein "unknown"
+        // (`p.?`) consequence (see `build_whole_protein_unknown`, #772/#771). When
+        // any member disrupts the start codon, that uncertainty dominates the whole
+        // allele: with the reading frame's start in question, the remaining members'
+        // individual consequences are moot. Report the single `p.?` for the compound
+        // — matching mutalyzer and the spec's "an effect is expected but cannot be
+        // reliably predicted" guidance (recommendations/uncertain.md). This must
+        // precede the all-or-nothing rule below: a downstream member on a non-AUG
+        // transcript declines protein (`None`) under the #625 guard and would
+        // otherwise sink the whole allele to `None`.
+        let whole_protein_unknown = inner_projections.iter().find_map(|p| match &p.protein {
+            Some(prot @ HgvsVariant::Protein(pv))
+                if matches!(
+                    pv.loc_edit.edit.inner(),
+                    Some(crate::hgvs::edit::ProteinEdit::Unknown {
+                        whole_protein: true,
+                        ..
+                    })
+                ) =>
+            {
+                Some(prot.clone())
+            }
+            _ => None,
+        });
+
         // Build the protein allele only if ALL inner projections have a protein.
         let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
-        let protein = if all_have_protein {
+        let protein = if let Some(unknown) = whole_protein_unknown {
+            Some(unknown)
+        } else if all_have_protein {
             let protein_variants: Vec<HgvsVariant> = inner_projections
                 .iter()
                 .filter_map(|p| p.protein.clone())
@@ -7437,6 +7464,51 @@ mod tests {
             proj.protein.is_none(),
             "non-initiation variant on a non-ATG transcript must decline (#625)"
         );
+    }
+
+    #[test]
+    fn project_nonaug_compound_with_init_member_reports_unknown_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{AlleleVariant, CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A cis compound on the non-AUG transcript NM_NOATG.1: the first member
+        // disrupts the initiation codon (c.1C>G → p.?), the second is a downstream
+        // substitution (c.4C>A) that individually declines under the #625 guard
+        // (no protein). The initiation-codon uncertainty must dominate: with the
+        // start in question, downstream consequences are moot, so the whole
+        // compound reports a single p.? rather than declining because one member
+        // has no protein.
+        let init = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let downstream = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![init, downstream]));
+        let proj = vp
+            .project_variant(&allele, "NM_NOATG.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("an init-codon member must make the compound report p.?");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.?");
     }
 
     #[test]
