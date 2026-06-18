@@ -454,6 +454,35 @@ impl AxisTally {
                 return;
             }
         }
+        // On the `coding_protein_descriptions` axis specifically, a "missing
+        // pair" `Err` is a transcript-SET divergence: ferro produced
+        // coding/protein pairs but not the exact set mutalyzer expected
+        // (`expected ⊆ got`). That is not a ferro failure — ferro enumerates the
+        // latest curated overlapping-transcript set while mutalyzer lists a
+        // different set (#763). So `accepted_divergence` buckets it here, like
+        // the errors-axis exception below buckets a divergent `Err`. The bucket
+        // is gated on the exact `missing pair` prefix the runner emits (see line
+        // ~1074); every other non-panic `Err` class on this axis — `parse:`
+        // (parse failure) and `project_all:` (projection error) — is a genuine
+        // ferro failure and must still hard-FAIL below, even with the
+        // annotation, so a regression on the 7 annotated #763 cases is never
+        // silently masked. This is scoped to this one axis on purpose: on every
+        // other axis an `Err` means ferro failed to produce a result and must
+        // still FAIL even when annotated (see
+        // `tally_infos_under_emission_err_with_accepted_divergence_still_fails`).
+        // A genuine panic / the empty-projection sentinel (#651) still hard-FAIL
+        // below; a match XPASS-FAILs above.
+        if self.axis == Axis::CodingProteinDescriptions {
+            if let Some(ad) = &case.accepted_divergence {
+                if ad.axis == self.axis
+                    && matches!(&actual, Err(e) if e.starts_with("missing pair"))
+                {
+                    self.divergence_accepted
+                        .push((case.input.clone(), ad.policy.to_string()));
+                    return;
+                }
+            }
+        }
         // On the errors axis a non-panic `Err` is the expected "ferro diverges"
         // outcome, so annotations bucket it the same way an `Ok` mismatch is
         // bucketed elsewhere; a genuine panic stays a hard FAIL. See the
@@ -2255,6 +2284,118 @@ mod comparator_tests {
             "stale errors-axis annotation must XPASS-FAIL"
         );
         assert!(t.fail[0].1.contains("XPASS"));
+    }
+
+    // (7g) coding_protein_descriptions axis: a non-panic "missing pair" `Err`
+    // (ferro produced a different transcript set) WITH an `accepted_divergence`
+    // buckets as divergence_accepted — the #763 transcript-set-enumeration
+    // exception, scoped to this one axis.
+    #[test]
+    fn tally_coding_protein_missing_pair_err_with_accepted_divergence_buckets() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::CodingProteinDescriptions,
+                policy: Policy::TranscriptSetEnumeration763,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(
+            &case,
+            "[(\"NM_x.1:c.1A>T\", \"NP_x.1:p.(=)\")]",
+            Err("missing pair (\"NM_x.1:c.1A>T\", \"NP_x.1:p.(=)\"); got [...]".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert_eq!(t.fail.len(), 0, "transcript-set divergence must not FAIL");
+        assert_eq!(
+            t.divergence_accepted,
+            vec![(
+                "in".to_string(),
+                "ferro-policy-763-transcript-set-enumeration".to_string()
+            )]
+        );
+    }
+
+    // (7h) coding_protein_descriptions axis: a genuine PANIC still hard-FAILs
+    // even with the #763 annotation — real crashes are never masked.
+    #[test]
+    fn tally_coding_protein_panic_still_fails_despite_annotation() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::CodingProteinDescriptions,
+                policy: Policy::TranscriptSetEnumeration763,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(&case, "exp", Err("panic: boom".to_string()));
+        assert_eq!(t.fail.len(), 1);
+        assert!(t.divergence_accepted.is_empty());
+    }
+
+    // (7i) coding_protein_descriptions axis: an empty-projection `Err` (#651)
+    // still hard-FAILs and is counted in `empty_got` even with the annotation —
+    // a populated→empty degradation must remain visible.
+    #[test]
+    fn tally_coding_protein_empty_projection_still_fails_despite_annotation() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::CodingProteinDescriptions,
+                policy: Policy::TranscriptSetEnumeration763,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(
+            &case,
+            "exp",
+            Err(format!("{EMPTY_PROJECTION_SENTINEL}produced no pairs")),
+        );
+        assert_eq!(t.fail.len(), 1, "empty projection must still FAIL");
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.empty_got, 1);
+    }
+
+    // (7j) coding_protein_descriptions axis: a `parse:` / `project_all:` `Err`
+    // (a genuine ferro parse or projection failure, NOT a transcript-set
+    // divergence) still hard-FAILs even with the #763 annotation present. The
+    // #763 exception is gated on the exact `missing pair` prefix, so these other
+    // non-panic `Err` classes are never silenced into divergence_accepted.
+    #[test]
+    fn tally_coding_protein_nondivergence_err_still_fails_despite_annotation() {
+        for err in ["parse: bad input", "project_all: projection failed"] {
+            let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+            let case = make_case(
+                "in",
+                Some(AcceptedDivergence {
+                    axis: Axis::CodingProteinDescriptions,
+                    policy: Policy::TranscriptSetEnumeration763,
+                    note: None,
+                    cluster: None,
+                }),
+                None,
+            );
+            t.record(&case, "exp", Err(err.to_string()));
+            assert_eq!(t.pass, 0);
+            assert!(
+                t.divergence_accepted.is_empty(),
+                "a non-missing-pair Err ({err:?}) must not bucket into divergence_accepted"
+            );
+            assert_eq!(
+                t.fail.len(),
+                1,
+                "non-divergence Err ({err:?}) must still FAIL"
+            );
+        }
     }
 
     // (7) Mismatch with no annotation is FAIL.

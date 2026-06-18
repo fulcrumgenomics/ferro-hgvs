@@ -118,6 +118,22 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 
 _No seeded member rows yet (manifest-gated seeding, #325)._
 
+### coding_protein_descriptions transcript-set enumeration
+
+Spec: `background/refseq.md L256, L259, L264`
+
+On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-insensitive) ferro enumerates the latest curated version of every transcript cdot reports overlapping the locus (#710: collapse superseded versions, prefer curated NM_/NR_ over predicted XM_/XR_). Mutalyzer instead lists the neighbouring overlapping transcripts and partitions the input gene's own consequence onto its separate `protein_description` field — an info-model choice, not spec-mandated. `background/refseq.md` L256/L259 pose 'which transcript / which reference sequence should one use' as open questions and L264 endorses the latest build, so ferro's complete-current-curated-set enumeration is spec-valid; both representations are correct. Accepted divergence, not a convergence target — tightening would regress the #710 curation and cannot fix the rows anyway (the matcher is version-insensitive). Reference-coverage gaps where cdot lacks a transcript base mutalyzer used are tracked separately in #645.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_007485.1(NM_058195.3):c.141_142del` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_008835.1(NM_022153.2):c.568del` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1(NM_012459.2):c.129G>T` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1(NM_012459.2):c.130G>A` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B):c.12_15dupCAGC` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B):c.12dupC` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1:g.4812_4813insTAC` | coding_protein_descriptions | accepted_divergence | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -193,6 +209,7 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
+| coding_protein_descriptions | 7 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
