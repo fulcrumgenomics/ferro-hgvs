@@ -15,7 +15,7 @@ use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
     affects_initiation_codon, build_initiator_unknown, cds_has_valid_start, predict_indel_protein,
-    predict_substitution_protein, read_cds_start_codon, RefProteinBundle,
+    predict_substitution_protein, read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -1738,10 +1738,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// (`project_single_inner`) and the direct bare-NM_ path
     /// (`project_coding_direct`) so both compute protein identically.
     ///
-    /// Returns `Ok(None)` when no protein consequence applies — intronic, UTR,
-    /// a non-coding transcript, or an edit shape with no in-frame/frameshift
-    /// prediction. `Err` is reserved for genuine failures (unknown reference,
-    /// etc.), never for "no consequence" (mirrors the existing contract).
+    /// Returns `Ok(None)` when no protein consequence applies — most intronic
+    /// edits, UTR, a non-coding transcript, or an edit shape with no
+    /// in-frame/frameshift prediction. The intronic carve-out: a deletion whose
+    /// endpoints are both intronic and bracket one or more complete coding exons
+    /// (`whole_exon_deletion_span` returns `Some`) *is* predicted — it routes
+    /// through the indel predictor on its clamped exonic CDS span (#498) — so
+    /// only non-whole-exon intronic edits return `None`. `Err` is reserved for
+    /// genuine failures (unknown reference, etc.), never for "no consequence"
+    /// (mirrors the existing contract).
     ///
     /// `cds_start`/`cds_end` are 1-based CDS positions; `cache_variant` keys
     /// the per-(transcript, parent) sequence and ref-translation caches.
@@ -1770,7 +1775,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             && cds_start.offset.is_none()
             && cds_end.offset.is_none()
             && affects_initiation_codon(c_edit, cds_start.base, cds_end.base);
-        if is_intronic || !is_coding || (is_utr && !affects_init) {
+        // A deletion that removes one or more complete coding exons (both
+        // endpoints intronic, bracketing the exon) has a predictable protein
+        // consequence (HGVS protein/deletion.md "one or more exons"; #498).
+        // Clamp it to the exonic CDS bases removed; if that yields a span, let
+        // it through the intronic gate so the indel predictor runs on it below.
+        let whole_exon = whole_exon_deletion_span(c_edit, cds_start, cds_end);
+        if (is_intronic && whole_exon.is_none()) || !is_coding || (is_utr && !affects_init) {
             return Ok(None);
         }
         // Resolve the protein accession: explicit cdot/reference value, else
@@ -1875,13 +1886,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     &prot_acc,
                 )?);
             }
+            // Whole-exon deletion (both endpoints intronic): predict from the
+            // clamped exonic CDS span, reusing the indel predictor on a clean
+            // exonic deletion of that span (#498).
+            NaEdit::Deletion { .. } if whole_exon.is_some() => {
+                let (lo, hi) = whole_exon.expect("checked is_some");
+                let tx_for_codon =
+                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+                let ref_bundle =
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                let exonic_del = NaEdit::Deletion { sequence: None, length: None };
+                match predict_indel_protein(
+                    &tx_for_codon,
+                    &ref_bundle,
+                    lo,
+                    hi,
+                    &exonic_del,
+                    &prot_acc,
+                ) {
+                    Ok(pv) => protein = Some(pv),
+                    Err(FerroError::UnsupportedProjection { .. })
+                    | Err(FerroError::ProteinSequenceUnavailable { .. }) => {}
+                    Err(other) => return Err(other),
+                }
+            }
             NaEdit::Deletion { .. }
             | NaEdit::Insertion { .. }
             | NaEdit::Duplication { .. }
             | NaEdit::Delins { .. }
             | NaEdit::Inversion { .. }
-                // Only predict for concrete exonic CDS positions (intronic
-                // offsets are already excluded by the is_intronic guard).
+                // Only predict for concrete exonic CDS positions. This arm's
+                // own `offset.is_none()` guards exclude intronic offsets — the
+                // loosened intronic gate above no longer does, since whole-exon
+                // deletions now pass it (they are handled by the arm above).
                 if cds_start.offset.is_none()
                     && cds_end.offset.is_none()
                     && cds_start.base > 0
@@ -7402,6 +7439,86 @@ mod tests {
             "intronic variant should not predict a protein consequence"
         );
         assert!(proj.is_intronic, "is_intronic flag should be set");
+    }
+
+    #[test]
+    fn project_whole_exon_deletion_predicts_inframe() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4-1_6+1del: both endpoints intronic, brackets the exonic span c.4_6
+        // (codon 2, CGC = Arg). Clamp [4, 6] → in-frame single-residue deletion.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::with_offset(4, -1), CdsPos::with_offset(6, 1)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("whole-exon deletion projection should succeed");
+        let protein = proj.protein.expect("protein should be predicted");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2del)");
+    }
+
+    #[test]
+    fn project_pure_intron_deletion_has_no_protein() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4+1_4+9del: both offsets on base 4 → lo 5 > hi 4 → no exonic CDS → None.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::with_offset(4, 1), CdsPos::with_offset(4, 9)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("pure-intron deletion projection should succeed (no protein)");
+        assert!(
+            proj.protein.is_none(),
+            "pure-intron deletion must not predict a protein"
+        );
+    }
+
+    #[test]
+    fn project_partial_exon_deletion_has_no_protein() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4-1_5del: one exonic endpoint (c.5) → partial-exon / splice → None.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::with_offset(4, -1), CdsPos::new(5)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_TEST.1")
+            .expect("partial-exon deletion projection should succeed (no protein)");
+        assert!(
+            proj.protein.is_none(),
+            "partial-exon deletion must not predict a protein"
+        );
     }
 
     // ------------------------------------------------------------------
