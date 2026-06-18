@@ -372,6 +372,17 @@ pub enum Policy {
     /// positional `=` is spec-valid. Terminal rendering divergence (#654).
     #[serde(rename = "ferro-policy-654-explicit-identity-rendering")]
     ExplicitIdentityRendering654,
+    /// On `coding_protein_descriptions` ferro enumerates the latest curated
+    /// version of every transcript cdot reports overlapping the locus (#710:
+    /// collapse superseded versions, prefer curated NM_/NR_ over predicted
+    /// XM_/XR_), whereas mutalyzer lists a different overlapping-transcript set
+    /// and partitions the input gene's own consequence onto its separate
+    /// `protein_description` field. `background/refseq.md` L256/L259 leave "which
+    /// transcript / reference sequence should one use" open and L264 endorses
+    /// the latest build, so ferro's complete-current-curated-set enumeration is
+    /// spec-valid; both representations are correct. Accepted divergence (#763).
+    #[serde(rename = "ferro-policy-763-transcript-set-enumeration")]
+    TranscriptSetEnumeration763,
 }
 
 impl Policy {
@@ -383,6 +394,7 @@ impl Policy {
             Policy::ShuffleAppliedCompoundAllele499 => {
                 "ferro-policy-499-shuffle-applied-compound-allele"
             }
+            Policy::TranscriptSetEnumeration763 => "ferro-policy-763-transcript-set-enumeration",
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"
