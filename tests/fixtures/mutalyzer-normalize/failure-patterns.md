@@ -135,6 +135,20 @@ On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-ins
 | `NG_012337.1(TIMM8B):c.12dupC` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1:g.4812_4813insTAC` | coding_protein_descriptions | accepted_divergence | — | — |
 
+### Transcript 5'/3' flank not c.-numberable (pter/qter)
+
+Spec: `background/refseq.md L45-46`
+
+A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking sequences and can not be used to describe variants there (refseq.md L45-46). pter/qter denote those flanks, so they are not c.-numberable — as a coordinate or inside a cross-reference/delins payload. ferro declines; mutalyzer extrapolates the flank and resolves the bases. ferro's refusal is spec-correct (#758/#537).
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter` | normalized | accepted_divergence | — | — |
+| `LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.pter_qterdelinspter_qter` | normalized | accepted_divergence | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -214,5 +228,5 @@ On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-ins
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 18 | 21 | 15 | 5 | 9 |
+| normalized | 23 | 21 | 15 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |
