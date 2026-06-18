@@ -7,7 +7,10 @@ input per line).
 These files are **informational** — not read by the test runner or CI. The
 enforced gates are the per-case dispositions in `cases.json` (XPASS-guarded),
 the `mock-pin/*.txt` regression pins, and (on manifest runs only) the
-`empty-projection/<axis>.count` output-quality budget (#651). The committed
+reference-pinned `empty-projection/<axis>.count` output-quality budget
+(#651/#764). That budget's count is pinned to the reference it was blessed
+against — it enforces a rise only when the live reference matches and otherwise
+skips with a notice (see `../../CORPUS_LAYOUT.md` for the format). The committed
 live-FAIL set here is a **non-hermetic snapshot** (it can only be reproduced
 from a reference manifest); its principled retirement — seeding the untriaged
 rows into `cases.json` and deleting these snapshots — is tracked by #325 / #326.
