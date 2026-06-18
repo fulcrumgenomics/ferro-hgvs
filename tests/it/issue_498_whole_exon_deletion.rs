@@ -9,10 +9,10 @@
 //!   (c.961_1331, 371 nt) via the direct path. Spec exons-10–11 case
 //!   (`p.(His321Leufs*3)` on NP_003997.2); ferro emits the version-`.1` value
 //!   with matching anchor + stop distance.
-//! - VSIR (NM_022153.2): a reverse-strand whole-exon deletion that currently
-//!   DECLINES, blocked by the reverse-strand normalization bug #762 — a
-//!   guard that ferro does not emit a *wrong* protein from mis-normalized
-//!   endpoints. Predicts the `cases.json` oracle once #762 lands.
+//! - VSIR (NM_022153.2): a reverse-strand whole-exon deletion that predicts a
+//!   frameshift now that the reverse-strand normalization bug #762 is fixed
+//!   (PR #766). Pins the `cases.json` mutalyzer oracle
+//!   `p.(Arg226ProfsTer102)` end-to-end on the reverse-strand whole-exon path.
 
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::reference::transcript::Transcript;
@@ -155,24 +155,25 @@ fn protein_of(vp: &VariantProjector<ArcProvider>, input: &str, tx: &str) -> Opti
 // Tests
 // ---------------------------------------------------------------------------
 
-/// VSIR: internal whole-exon deletion on a reverse-strand gene — currently
-/// DECLINES, blocked by the reverse-strand coding-normalization bug (#762).
+/// VSIR: internal whole-exon deletion on a reverse-strand gene — predicts a
+/// frameshift now that the reverse-strand coding-normalization bug (#762) is
+/// fixed.
 ///
 /// `NG_008835.1(NM_022153.2):c.677-21_704+62del` removes coding exon 7
 /// (c.677_704, 28 nt → frameshift); mutalyzer predicts `p.(Arg226ProfsTer102)`
-/// (the `cases.json` oracle). But ferro's reverse-strand normalization
-/// mis-renders the interval as the crossed form `c.704-18_677+65del`, so the
-/// protein gate is handed non-canonical endpoints and `whole_exon_deletion_span`
-/// declines — rather than predict a *wrong* protein from the bad positions
-/// (it would otherwise emit `p.(Ala227GlnfsTer6)`). This is the deliberate safe
-/// behavior; it stays `None` until #762 corrects the normalization, at which
-/// point the canonical endpoints `(677, -18)/(704, +65)` predict
-/// `p.(Arg226ProfsTer102)`. This test guards against silently emitting a wrong
-/// protein here.
+/// (the `cases.json` oracle). Before #762, ferro's reverse-strand normalization
+/// mis-rendered the interval as the crossed form `c.704-18_677+65del`, so the
+/// protein gate was handed non-canonical endpoints and `whole_exon_deletion_span`
+/// declined (`None`) rather than emit a *wrong* protein (`p.(Ala227GlnfsTer6)`)
+/// from the bad positions. #762 now normalizes to the canonical endpoints
+/// `(677, -18)/(704, +65)`, and the gate predicts the correct frameshift. This
+/// test exercises the reverse-strand whole-exon path end-to-end and pins the
+/// mutalyzer-matching consequence. (Rendered bare-`NP_`, matching ferro's live
+/// output for an `NG_(NM_)` direct projection.)
 #[test]
-fn vsir_whole_exon_deletion_declines_pending_762() {
+fn vsir_whole_exon_deletion_reverse_strand_frameshift() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("vsir_whole_exon_deletion_declines_pending_762: skipping — no manifest");
+        eprintln!("vsir_whole_exon_deletion_reverse_strand_frameshift: skipping — no manifest");
         return;
     };
     let got = protein_of(
@@ -180,10 +181,13 @@ fn vsir_whole_exon_deletion_declines_pending_762() {
         "NG_008835.1(NM_022153.2):c.677-21_704+62del",
         "NM_022153.2",
     );
+    // Consequence `p.(Arg226ProfsTer102)` is the mutalyzer oracle from cases.json;
+    // the `NP_071436.1` accession/version is captured from ferro's live output.
     assert_eq!(
-        got, None,
-        "VSIR must decline (reverse-strand #762 mis-normalization) rather than \
-         emit a wrong protein; unblocks once #762 lands"
+        got.as_deref(),
+        Some("NP_071436.1:p.(Arg226ProfsTer102)"),
+        "VSIR reverse-strand whole-exon deletion must predict the mutalyzer-matching \
+         frameshift now that #762 normalizes the interval canonically"
     );
 }
 
