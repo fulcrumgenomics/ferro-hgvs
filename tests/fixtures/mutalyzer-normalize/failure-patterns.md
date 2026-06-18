@@ -14,12 +14,6 @@ On an `NG_/NC_/LRG_` reference ferro preserves the input's gene-symbol selector;
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `NG_008939.1(PCCB_v001):c.156_157insGTCCTGTGCTCATTATCTGGC` | normalized | improvement | — | #500 |
-| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTC;ATTATCTGGC]` | normalized | improvement | — | #500 |
-| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTCATTATCTGGC]` | normalized | improvement | — | #500 |
-| `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | normalized | improvement | — | #500 |
-| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | normalized | improvement | — | #500 |
-| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | normalized | improvement | — | #500 |
 | `NG_008939.1:c.155_157del3` | normalized | improvement | — | #500 |
 | `NG_008939.1:c.155_157delAAC` | normalized | improvement | — | #500 |
 | `NG_008939.1:c.274_275inv` | normalized | improvement | — | #500 |
@@ -35,9 +29,6 @@ On an `NG_/NC_/LRG_` reference ferro preserves the input's gene-symbol selector;
 | `NG_012337.1(TIMM8B_v001):c.12_13insGATC` | normalized | improvement | — | #500 |
 | `NG_012337.1(TIMM8B_v001):c.12_13ins[GATC]` | normalized | improvement | — | #500 |
 | `NG_012337.1(TIMM8B_v001):c.12_13ins[TTT;GATC]` | normalized | improvement | — | #500 |
-| `NG_012772.1(BRCA2_v001):c.622_672del` | normalized | improvement | — | #500 |
-| `NG_012772.1(BRCA2_v001):c.622_674del` | normalized | improvement | — | #500 |
-| `NG_012772.1(BRCA2_v001):c.632_681del` | normalized | improvement | — | #500 |
 
 ### Bare NP_ protein reference
 
@@ -125,12 +116,7 @@ Spec: `background/numbering.md#DNAc (exception 3' rule NOTE); recommendations/DN
 
 ferro shuffles genomic-context c./n. variants in spliced transcript space (cross_boundaries hardcoded false), which has no intronic bases, so it under-applies the 3' rule at exon/intron and intron/exon junctions. The spec applies the 3' rule across these junctions (suppressing it only at exon/exon junctions). The fix requires 3'-shifting in genomic coordinate space, which depends on the c↔g projection keystone (#642/#647/#616). Tracked in #670.
 
-| input | axis | disposition | ferro output | tracking |
-|---|---|---|---|---|
-| `NG_007107.2(NM_004992.3):c.378-17delT` | normalized | known_bug | — | #670 |
-| `NG_008835.1(NM_022153.2):c.677-21_704+62del` | normalized | known_bug | — | #670 |
-| `NG_008835.1(NM_022153.2):c.82del` | normalized | known_bug | — | #670 |
-| `NG_009497.1(NM_206933.2):c.8682-19dupT` | normalized | known_bug | — | #670 |
+_No seeded member rows yet (manifest-gated seeding, #325)._
 
 ### Ungrouped
 
@@ -152,5 +138,5 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 |---|---:|---:|---:|---:|---:|
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 0 | 4 | 24 | 5 | 6 |
+| normalized | 0 | 0 | 15 | 5 | 6 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |

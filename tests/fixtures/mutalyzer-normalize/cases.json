@@ -437,14 +437,7 @@
       "input": "NG_012772.1(BRCA2_v001):c.632_681del",
       "normalized": "NG_012772.1(NM_000059.3):c.632_681del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -475,14 +468,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_674del",
       "genomic": "NG_012772.1:g.16125_19006del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208TyrfsTer3)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -503,14 +489,7 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_672del",
       "genomic": "NG_012772.1:g.16125_19004del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208_Asp224del)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -843,14 +822,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -862,14 +834,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -880,14 +845,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -1159,14 +1117,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -1178,14 +1129,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -1196,14 +1140,7 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2508,12 +2445,6 @@
     {
       "keywords": [],
       "input": "NG_007107.2(NM_004992.3):c.378-17delT",
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 670,
-        "note": "Intronic 3'-shift off-by-one: ferro shifts the intronic deletion one position (c.378-16del) vs mutalyzer's c.378-17del. Version-independent (identical on local NG_007107.3). Intronic shifting is handled by the deficient pre-keystone path; the exact spec position must be adjudicated against the pinned NG_007107.2 intron sequence (#672) when #670 is implemented.",
-        "cluster": "exon-intron-3prime-shift"
-      },
       "normalized": "NG_007107.2(NM_004992.3):c.378-17del",
       "genomic": "NG_007107.2:g.110661del",
       "to_test": true
@@ -2535,12 +2466,6 @@
     {
       "keywords": [],
       "input": "NG_009497.1(NM_206933.2):c.8682-19dupT",
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 670,
-        "note": "Intronic 3'-shift off-by-one: ferro shifts the intronic duplication one position (c.8682-18dup) vs mutalyzer's c.8682-19dup. Version-independent (identical on local NG_009497.2). Same family as #670; exact spec position adjudicated against the pinned NG_009497.1 intron sequence (#672) when #670 is implemented.",
-        "cluster": "exon-intron-3prime-shift"
-      },
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
       "to_test": true
@@ -3619,12 +3544,6 @@
         "protein reverse strand exon end splice site error"
       ],
       "input": "NG_008835.1(NM_022153.2):c.82del",
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 670,
-        "note": "Exon/intron boundary: ferro echoes c.82del; the 3' rule shifts the deletion into the intron (c.82+1del) per numbering.md#DNAc NOTE and deletion.md L57-59 (exon/intron border, 'not as c.1704del'). ferro shuffles in spliced space and cannot reach intronic positions; fix depends on the c↔g keystone (#642/#647/#616).",
-        "cluster": "exon-intron-3prime-shift"
-      },
       "normalized": "NG_008835.1(NM_022153.2):c.82+1del",
       "genomic": "NG_008835.1:g.381412del",
       "coding_protein_descriptions": [
@@ -3772,12 +3691,6 @@
         "protein reverse strand whole exon deletion with shift"
       ],
       "input": "NG_008835.1(NM_022153.2):c.677-21_704+62del",
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 670,
-        "note": "Intronic-span 3' shift: ferro echoes the input; the spec shifts both ends 3' across the intron/exon junctions (c.677-18_704+65del). Same root cause as #670 (spliced-space shuffle has no intronic bases); fix depends on the c↔g keystone (#642/#647/#616).",
-        "cluster": "exon-intron-3prime-shift"
-      },
       "normalized": "NG_008835.1(NM_022153.2):c.677-18_704+65del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
