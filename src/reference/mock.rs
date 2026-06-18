@@ -264,6 +264,29 @@ impl MockProvider {
             cached_introns: OnceLock::new(),
         });
 
+        // Add a non-coding transcript (NR_) for r.-axis cross-reference tests.
+        // With no CDS, r. numbering is transcript-relative (== n.); positions
+        // map directly to transcript bases (#773).
+        provider.add_transcript(Transcript {
+            id: "NR_000123.1".to_string(),
+            gene_symbol: Some("NONCODING".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("ACGTACGTACGT".to_string()),
+            cds_start: None,
+            cds_end: None,
+            exons: vec![Exon::new(1, 1, 12)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+
         // Add test protein sequences for validation testing
         // NP_000079.2 is used for BRAF V600E-style testing
         // We need Val at position 600, Arg at 97 for frameshift tests
@@ -624,6 +647,16 @@ mod tests {
         let provider = MockProvider::with_test_data();
         let result = provider.get_transcript("NM_NONEXISTENT.1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn with_test_data_includes_a_noncoding_transcript() {
+        let provider = MockProvider::with_test_data();
+        let tx = provider
+            .get_transcript("NR_000123.1")
+            .expect("NR_000123.1 should be present in test data");
+        assert!(!tx.is_coding(), "NR_ transcript must be non-coding");
+        assert_eq!(tx.sequence.as_deref(), Some("ACGTACGTACGT"));
     }
 
     #[test]
