@@ -2474,11 +2474,16 @@
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
       "accepted_divergence": {
-        "axis": "normalized",
+        "axis": "genomic",
         "policy": "ferro-policy-745-homopolymer-repeat-contraction",
-        "note": "ferro renders the 3'UTR homopolymer deletion as the repeat contraction c.*3186_*3188A[1]; mutalyzer keeps del. Same #745 class on the normalized axis."
+        "note": "ferro renders the deletion inside the genomic homopolymer as the spec-valid repeat contraction g.320802_320804T[1]; mutalyzer keeps del. Accepted per #745/#750."
       },
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (DNA contraction)",
+        "note": "Same #745 homopolymer repeat-contraction on the normalized axis (c.*3186_*3188A[1] vs mutalyzer's c.*3187_*3188del); recorded via spec_citation because this row's accepted_divergence slot documents the genomic-axis divergence."
+      }
     },
     {
       "keywords": [],

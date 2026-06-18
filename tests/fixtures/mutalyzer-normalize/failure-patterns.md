@@ -140,7 +140,8 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(NM_058195.3):n.204_205insATC` | normalized | accepted_divergence | — | — |
-| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | accepted_divergence | — | — |
+| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
+| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | spec_citation | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1:g.320802_320803del` | normalized | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | normalized | accepted_divergence | — | — |
@@ -188,7 +189,7 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 1 | 0 | 0 | 0 | 0 |
+| genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 15 | 20 | 15 | 5 | 7 |
+| normalized | 14 | 20 | 15 | 5 | 8 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |

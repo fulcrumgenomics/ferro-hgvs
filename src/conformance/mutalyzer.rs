@@ -660,6 +660,14 @@ pub enum SpecSection {
     /// HGVS, so ferro's output is the spec-correct value (#487).
     #[serde(rename = "HGVS §Repeated (coding codon exception)")]
     RepeatCodingCodonException,
+    /// A deletion inside a DNA homopolymer / short tandem tract: ferro renders
+    /// the spec-valid repeat contraction `N[k]` (DNA `repeated.md` L5 allows a
+    /// unit of "one or more" nucleotides) while mutalyzer keeps a plain `del`.
+    /// Same divergence as the `ferro-policy-745-homopolymer-repeat-contraction`
+    /// accepted_divergence; cited here for the secondary axis of a row whose
+    /// single `accepted_divergence` slot already documents the other axis (#745).
+    #[serde(rename = "HGVS §Repeated (DNA contraction)")]
+    RepeatDnaContraction,
 }
 
 impl SpecSection {
@@ -680,6 +688,7 @@ impl SpecSection {
                 "HGVS §Standards (three-letter ext Ter preferred over ext*)"
             }
             SpecSection::RepeatCodingCodonException => "HGVS §Repeated (coding codon exception)",
+            SpecSection::RepeatDnaContraction => "HGVS §Repeated (DNA contraction)",
         }
     }
 }
