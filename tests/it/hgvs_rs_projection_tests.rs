@@ -159,6 +159,53 @@ impl ReferenceProvider for ArcProvider {
     fn has_protein_data(&self) -> bool {
         self.0.has_protein_data()
     }
+    // The remaining overridable methods must be forwarded too — the same
+    // wrapper-drops-overrides bug #726 fixed for the blanket `Arc<T>`/`Box<T>`
+    // impls also affected this hand-written newtype, which #726's audit missed.
+    // Without these, the conformance harness silently used the trait defaults
+    // (`None` / the `genomic_context`-blind `get_transcript` fallback), so rows
+    // that ferro resolves in production (NG_/LRG_ re-anchoring #480; legacy
+    // gene-model selectors per #500/#709; intronic normalization via the
+    // build-aware transcript probe) surfaced here as spurious `Err` divergences
+    // rather than real ferro behavior. Mirror the blanket impl exactly so this
+    // wrapper measures ferro, not the wrapper.
+    fn genomic_placement(
+        &self,
+        parent: &ferro_hgvs::hgvs::variant::Accession,
+    ) -> Option<ferro_hgvs::reference::GenomicPlacement> {
+        self.0.genomic_placement(parent)
+    }
+    fn get_transcript_for_variant(
+        &self,
+        variant: &ferro_hgvs::hgvs::variant::HgvsVariant,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        self.0.get_transcript_for_variant(variant)
+    }
+    fn get_transcript_for_accession(
+        &self,
+        accession: &ferro_hgvs::hgvs::variant::Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        self.0.get_transcript_for_accession(accession)
+    }
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        self.0.has_transcript_version_exact(id)
+    }
+    fn genomic_placement_on_build(
+        &self,
+        parent: &ferro_hgvs::hgvs::variant::Accession,
+        build: Option<&str>,
+    ) -> Option<ferro_hgvs::reference::GenomicPlacement> {
+        self.0.genomic_placement_on_build(parent, build)
+    }
+    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+        self.0.resolve_legacy_gene_selector(selector)
+    }
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        self.0.get_protein_length(accession)
+    }
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.0.get_sequence_length(id)
+    }
 }
 
 fn variant_projector() -> Option<VariantProjector<ArcProvider>> {
