@@ -4,4 +4,3 @@ LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]
 LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]
 LRG_24t1:c.pter_qterdelinspter_qter
 NG_012337.1(NM_003002.2):c.[274+20C>T;400_401insNM_003002.4:100_102]
-NG_012337.1(NM_003002.2):c.*824+10del

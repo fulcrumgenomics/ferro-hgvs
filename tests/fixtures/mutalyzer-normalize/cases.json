@@ -2366,7 +2366,12 @@
       "input": "NG_012337.1(NM_003002.2):c.*824+10del",
       "normalized": "NG_012337.1(NM_003002.2):c.*834del",
       "genomic": "NG_012337.1:g.13958del",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 672,
+        "note": "ferro folds the spurious `c.*824+10` UTR offset to `c.*834` (no enclosing intron exists for the offset in ferro's NM_003002.2 model), then 3'-shifts `*834del` to the transcript terminus `*841del`. The divergence from mutalyzer's `*834del` is a reference-version artifact: the prepared manifest carries only a degenerate single-exon supplemental NM_003002.2 (no genomic placement, a longer 3'UTR ending at *841), so the 3' shuffle runs to the end of that synthetic 3'UTR. ferro's shuffle is correct for the reference it resolves; provisioning the real NM_003002.2 (#672) will let it match. The underlying c.*N+offset->genomic conversion gap (which also hit the present NM_003002.4, now -> c.*834del) is fixed. [review: reference-version artifact]"
+      }
     },
     {
       "keywords": [],

@@ -164,6 +164,7 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
+| `NG_012337.1(NM_003002.2):c.*824+10del` | normalized | known_bug | — | #672 |
 | `NG_012337.1(NM_003002.2):c.*824del` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | normalized | known_bug | — | #487 |
@@ -195,5 +196,5 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 18 | 20 | 15 | 5 | 8 |
+| normalized | 18 | 21 | 15 | 5 | 8 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |
