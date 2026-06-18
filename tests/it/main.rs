@@ -179,6 +179,7 @@ mod issue_468_protein_bracket_whole_entity;
 mod issue_480_ng_lrg_parent_frame;
 mod issue_486_eintronic;
 mod issue_486_numeric_length_mismatch;
+mod issue_486_overlap_insertion;
 mod issue_486_position_out_of_bounds;
 mod issue_487_allele_collapse;
 mod issue_487_mito_g_to_m;

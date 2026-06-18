@@ -1365,6 +1365,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   4. detect post-shift overlaps and emit warnings
         let mut all_warnings = Vec::new();
         let original_len = allele.variants.len();
+        // Detect insertion overlaps on the *raw* members before merge collapses
+        // them: two insertions sharing a junction, or an insertion interior to a
+        // span edit, are mutalyzer `EOVERLAP` cases (#486). The merge below
+        // would otherwise fold them into one combined edit, hiding the overlap
+        // from the post-shift `detect_overlap_conflicts` pass. Strict mode then
+        // promotes the W5002 warning to a typed error.
+        all_warnings.extend(crate::normalize::overlap::detect_insertion_overlaps(
+            &allele.variants,
+            allele.phase,
+        ));
         // Collapse overlapping cis edits (insertions flanking a deletion/sub at
         // one locus) into a single delins first; `merge_consecutive_edits` only
         // handles strictly-consecutive non-overlapping edits (#487).
