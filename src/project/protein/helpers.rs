@@ -6,7 +6,7 @@
 use crate::error::FerroError;
 use crate::hgvs::edit::{ExtDirection, InsertedSequence, NaEdit, ProteinEdit};
 use crate::hgvs::interval::ProtInterval;
-use crate::hgvs::location::{AminoAcid, ProtPos};
+use crate::hgvs::location::{AminoAcid, CdsPos, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
 use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
@@ -624,6 +624,69 @@ pub(crate) fn net_length_change(edit: &NaEdit, del_len: usize) -> Option<i64> {
     }
 }
 
+/// Clamp a whole-exon deletion to the exonic CDS bases it removes, but only for
+/// the **well-formed canonical bracketing** form — the one configuration whose
+/// removed exonic span is unambiguous.
+///
+/// Returns `Some((start.base, end.base))` — the inclusive 1-based CDS span
+/// removed — when ALL of these hold:
+///   * `edit` is a plain `Deletion`;
+///   * both endpoints are intronic (`offset.is_some()`);
+///   * the interval is well-formed ascending: `start.base <= end.base`;
+///   * the 5' endpoint's offset is `< 0` (it lies in the intron *before*
+///     `start.base`, so `start.base` is the first exonic base removed);
+///   * the 3' endpoint's offset is `> 0` (it lies in the intron *after*
+///     `end.base`, so `end.base` is the last exonic base removed);
+///   * the span is entirely within the CDS (`start.base > 0`).
+///
+/// Returns `None` for everything else.
+///
+/// Why only the canonical form: an intronic-flanked deletion's removed exonic
+/// span is trustworthy only when the endpoints bracket the exon(s) from outside
+/// (5' offset `< 0`, 3' offset `> 0`) in a well-formed ascending interval. Other
+/// shapes — a descending/crossed-offset interval (e.g. ferro's reverse-strand
+/// mis-normalization `c.704-18_677+65del`, #762), a 5' offset `> 0`, an
+/// exonic endpoint, or a pure-/deep-intronic span — are ambiguous or known to
+/// come from unreliable normalization, so predicting from them risks a *wrong*
+/// protein. We decline rather than guess; cases blocked only by #762 begin
+/// predicting automatically once that normalization is corrected. See the
+/// design spec and HGVS `protein/deletion.md` "one or more exons".
+pub(crate) fn whole_exon_deletion_span(
+    edit: &NaEdit,
+    cds_start: &CdsPos,
+    cds_end: &CdsPos,
+) -> Option<(i64, i64)> {
+    if !matches!(edit, NaEdit::Deletion { .. }) {
+        return None;
+    }
+    // Both endpoints must be intronic.
+    let start_off = cds_start.offset?;
+    let end_off = cds_end.offset?;
+    // Reject any UTR endpoint. A 3'UTR position (`c.*N`) carries `utr3: true`
+    // with a *positive* `base`, so it would otherwise pass the `base > 0`
+    // check below and be mis-treated as a CDS coordinate — splicing 3'UTR
+    // offsets into the CDS and emitting a wrong protein. (5'UTR is `base <= 0`,
+    // already rejected below, but guard it here too for clarity.)
+    if cds_start.utr3 || cds_end.utr3 {
+        return None;
+    }
+    // Canonical bracketing only: well-formed ascending interval whose 5' end
+    // sits in the intron before its base and 3' end in the intron after its
+    // base. Anything else (incl. the reverse-strand crossed form) is declined.
+    if cds_start.base > cds_end.base || start_off >= 0 || end_off <= 0 {
+        return None;
+    }
+    let lo = cds_start.base;
+    let hi = cds_end.base;
+    // Span must sit inside the CDS, not the 5'UTR (`base <= 0`). The ascending
+    // `base` order (`lo <= hi`) is already guaranteed by the `cds_start.base >
+    // cds_end.base` rejection above.
+    if lo <= 0 {
+        return None;
+    }
+    Some((lo, hi))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1001,5 +1064,148 @@ mod tests {
             length: None,
         };
         assert_eq!(net_length_change(&edit, 6), Some(0));
+    }
+
+    // ── whole_exon_deletion_span ──────────────────────────────────────────
+
+    #[test]
+    fn whole_exon_span_canonical_bracketing() {
+        // c.677-18_704+65del: 5' offset <0, 3' offset >0 → clamp [677, 704].
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(677, -18);
+        let end = CdsPos::with_offset(704, 65);
+        assert_eq!(
+            whole_exon_deletion_span(&edit, &start, &end),
+            Some((677, 704))
+        );
+    }
+
+    #[test]
+    fn whole_exon_span_inframe_codon_aligned() {
+        // DMD c.961-1_1149+3del → [961, 1149] (189 bases).
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(961, -1);
+        let end = CdsPos::with_offset(1149, 3);
+        assert_eq!(
+            whole_exon_deletion_span(&edit, &start, &end),
+            Some((961, 1149))
+        );
+    }
+
+    #[test]
+    fn whole_exon_span_noncanonical_offset_positive_start_declines() {
+        // c.960+1_1149+3del: 5' offset > 0 is non-canonical. We decline rather
+        // than guess (an offset>0 start can't be safely disambiguated from
+        // unreliable normalization). → None.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(960, 1);
+        let end = CdsPos::with_offset(1149, 3);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_pure_intron_declines() {
+        // c.681+1_682-1del: lo = 682, hi = 681 → lo > hi → None.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(681, 1);
+        let end = CdsPos::with_offset(682, -1);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_deep_intron_declines() {
+        // c.961-50_961-10del: both in the same intron, no exonic base → None.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(961, -50);
+        let end = CdsPos::with_offset(961, -10);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_requires_both_intronic() {
+        // One exonic endpoint (partial-exon) → None.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(632, -5);
+        let end = CdsPos::new(670); // exonic, offset None
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_only_plain_deletions() {
+        // A substitution with offsets is never a whole-exon deletion.
+        let edit = NaEdit::Substitution {
+            reference: crate::hgvs::edit::Base::A,
+            alternative: crate::hgvs::edit::Base::G,
+        };
+        let start = CdsPos::with_offset(677, -18);
+        let end = CdsPos::with_offset(704, 65);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_reverse_strand_crossed_form_declines() {
+        // The exact #762 reverse-strand mis-normalization for VSIR:
+        // cds_start = (704, -18), cds_end = (677, +65). Descending base order
+        // with crossed offsets — declining here is what prevents emitting a
+        // wrong protein (e.g. p.(Ala227GlnfsTer6) instead of the correct
+        // p.(Arg226ProfsTer102)). Predicts correctly once #762 is fixed and
+        // the endpoints arrive canonical as (677, -18)/(704, +65).
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(704, -18);
+        let end = CdsPos::with_offset(677, 65);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_utr_only_declines() {
+        // Exonic overlap entirely in the 5'UTR (CDS base <= 0) → None.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos::with_offset(-5, -2);
+        let end = CdsPos::with_offset(-1, 2);
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    #[test]
+    fn whole_exon_span_utr3_intronic_declines() {
+        // 3'UTR positions (`c.*N`) carry utr3=true with a *positive* base, so
+        // they'd pass the `base > 0` check; the explicit utr3 guard must reject
+        // them rather than splice 3'UTR offsets into the CDS. (c.*100-5_*200+5del)
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let start = CdsPos {
+            utr3: true,
+            ..CdsPos::with_offset(100, -5)
+        };
+        let end = CdsPos {
+            utr3: true,
+            ..CdsPos::with_offset(200, 5)
+        };
+        assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
     }
 }
