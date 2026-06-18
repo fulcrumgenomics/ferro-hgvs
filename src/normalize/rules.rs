@@ -2069,7 +2069,28 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
 ) -> Result<String, FerroError> {
     let (acc, kind, start, end) =
         parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
+    // A `c.` payload's CDS translation (in `fetch_position_range_bases`) needs
+    // the *transcript* accession. When the payload names a genomic-context
+    // compound (`NG_(NM_)`), reduce it to the transcript (`NM_`) so the
+    // cds_start lookup resolves instead of failing on the compound string.
+    // `Direct` (g./m./o./n.) payloads fetch on the named accession unchanged.
+    let acc = match kind {
+        InsCoordKind::Cds => transcript_accession_of(&acc).unwrap_or(acc),
+        _ => acc,
+    };
     fetch_position_range_bases(&acc, start, end, kind, provider)
+}
+
+/// Reduce an accession string to its transcript accession (`NM_`/`NR_`/`ENST`),
+/// dropping any `NG_(…)`/`LRG_(…)` genomic-context wrapper. Returns `None` when
+/// the string does not parse as a single accession, so the caller can fall back
+/// to the original string unchanged.
+fn transcript_accession_of(accession: &str) -> Option<String> {
+    let (rest, parsed) = crate::hgvs::parser::accession::parse_accession(accession).ok()?;
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(parsed.transcript_accession())
 }
 
 /// Append bases of an `InsertedPart` to `out` if the part is a
@@ -3836,6 +3857,19 @@ mod tests {
             format!("{}", got),
             "delins[NC_000022.11:g.17178616_17178886]"
         );
+    }
+
+    #[test]
+    fn resolve_cross_reference_extracts_transcript_from_genomic_context_cds_payload() {
+        // A cross-reference `c.` payload whose accession is a genomic-context
+        // compound `NG_(NM_)` must resolve the *transcript* (`NM_`) for the CDS
+        // lookup, not the whole compound string — otherwise the CDS translation
+        // fails with "transcript NG_…(NM_…) has no CDS start". `NM_000088.3` in
+        // the mock has cds_start=1 and sequence "ATGCCCAAG…", so c.1_3 == "ATG".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NG_999999.9(NM_000088.3):c.1_3", &provider)
+            .expect("genomic-context compound c. cross-reference should resolve");
+        assert_eq!(bases, "ATG");
     }
 
     #[test]
