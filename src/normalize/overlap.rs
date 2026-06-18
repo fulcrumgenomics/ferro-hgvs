@@ -1,13 +1,23 @@
-//! Detect cis-allele sub-variants whose reference bounds coincide.
+//! Detect overlapping cis-allele sub-variants.
 //!
 //! See `docs/superpowers/specs/2026-05-05-allele-overlap-same-position-design.md`.
 //!
-//! Two or more cis-phase, same-accession sub-variants whose `(coord-system
-//! region, signed start, signed end)` keys are identical have no canonical
-//! HGVS form. Rather than silently picking a winner, ferro preserves the
-//! input verbatim and emits one [`NormalizationWarning::OverlapConflict`]
-//! per coincident-bounds group. Insertions are excluded (they anchor at a
-//! boundary `[end, start]`, not a single-base location).
+//! Two cis-phase, same-accession sub-variants overlap when they describe edits
+//! on the same reference territory — a case with no canonical HGVS form.
+//! Rather than silently picking a winner, ferro preserves the input verbatim
+//! and emits one [`NormalizationWarning::OverlapConflict`] per overlap (strict
+//! mode promotes it to an error).
+//!
+//! Two detectors run at different points in the allele pipeline:
+//!
+//! - [`detect_overlap_conflicts`] — *post-shift* coincident bounds: span edits
+//!   (`sub`/`del`/`delins`/`dup`/`inv`/`repeat`) whose `(region, start, end)`
+//!   keys are identical. Insertions are excluded here (they anchor at a
+//!   boundary, not a single-base span).
+//! - [`detect_insertion_overlaps`] — *pre-merge* insertion overlaps: two
+//!   insertions at one junction, or an insertion interior to a span edit
+//!   (mutalyzer `EOVERLAP`, #486). Must run before the normalizer's merge step
+//!   collapses overlapping cis edits into one combined edit.
 
 use std::collections::BTreeMap;
 
@@ -75,6 +85,146 @@ pub(crate) fn detect_overlap_conflicts(
             edit_kinds,
         });
     }
+    warnings
+}
+
+/// Detect overlaps that involve at least one insertion within a cis allele.
+///
+/// An insertion `a_(a+1)ins…` occupies the zero-width junction between
+/// reference positions `a` and `a+1`. It overlaps:
+///
+/// - **another insertion** at the *same* junction (`[4_5insT;4_5insA]`); and
+/// - **a span edit** (`del`/`delins`/`dup`/`inv`/`sub`/`repeat`) whose
+///   reference range *strictly encloses* the junction, i.e.
+///   `range.start <= a` and `a + 1 <= range.end`
+///   (`[274_275delinsT;274_275insA]`).
+///
+/// An insertion abutting a span's edge — e.g. `100_101ins` next to a single-
+/// base `100` substitution — is *not* interior, so it does not overlap. This
+/// keeps the spec-valid `[273_274insT;274G>T;274_275insA]` accepted.
+///
+/// One warning is emitted per same-junction insertion group and one per span
+/// edit that encloses ≥1 insertion. Iteration is in deterministic order
+/// (BTreeMap junction key, then input index) so equivalent inputs yield
+/// identical warning sequences.
+///
+/// This must run on the *pre-merge* allele members: the normalizer collapses
+/// overlapping cis edits into a single combined edit before
+/// [`detect_overlap_conflicts`] sees the post-shift list, so by then the
+/// overlap is no longer observable as two sub-variants.
+pub(crate) fn detect_insertion_overlaps(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+) -> Vec<NormalizationWarning> {
+    if phase != AllelePhase::Cis || variants.len() < 2 {
+        return Vec::new();
+    }
+    struct Insertion {
+        idx: usize,
+        accession: String,
+        coord_system: &'static str,
+        region: Region,
+        gap: i64,
+    }
+    struct Span {
+        idx: usize,
+        accession: String,
+        coord_system: &'static str,
+        region: Region,
+        start: i64,
+        end: i64,
+    }
+
+    let mut insertions: Vec<Insertion> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    for (idx, variant) in variants.iter().enumerate() {
+        let Some((coord_system, region, start, end)) = simple_span(variant) else {
+            continue;
+        };
+        let Some(accession) = variant.accession().map(|a| a.to_string()) else {
+            continue;
+        };
+        let Some(edit) = inner_edit(variant) else {
+            continue;
+        };
+        if matches!(edit, NaEdit::Insertion { .. }) {
+            // A canonical insertion anchors at two adjacent positions; anything
+            // else (e.g. a malformed single-position insertion) has no junction.
+            if end == start + 1 {
+                insertions.push(Insertion {
+                    idx,
+                    accession,
+                    coord_system,
+                    region,
+                    gap: start,
+                });
+            }
+        } else if is_overlap_edit(edit) {
+            spans.push(Span {
+                idx,
+                accession,
+                coord_system,
+                region,
+                start,
+                end,
+            });
+        }
+    }
+
+    let mut warnings = Vec::new();
+
+    // (a) Two or more insertions sharing a junction.
+    let mut by_junction: BTreeMap<(String, &'static str, Region, i64), Vec<usize>> =
+        BTreeMap::new();
+    for ins in &insertions {
+        by_junction
+            .entry((ins.accession.clone(), ins.coord_system, ins.region, ins.gap))
+            .or_default()
+            .push(ins.idx);
+    }
+    for ((accession, coord_system, _region, _gap), indices) in &by_junction {
+        if indices.len() < 2 {
+            continue;
+        }
+        // Render the junction via the insertion's HGVS Display (like branch (b)
+        // and `detect_overlap_conflicts`) so region prefixes (`*`/`-`) survive;
+        // the raw signed `gap` drops them (e.g. 3'UTR `*1_*2` → `1_2`).
+        let location = location_for_variant(&variants[indices[0]])
+            .expect("same-junction insertion has a renderable location");
+        warnings.push(NormalizationWarning::OverlapConflict {
+            accession: accession.clone(),
+            coordinate_system: coord_system.to_string(),
+            location,
+            edit_kinds: indices.iter().map(|_| "ins".to_string()).collect(),
+        });
+    }
+
+    // (b) An insertion junction strictly interior to a span edit's range.
+    for span in &spans {
+        let interior = insertions.iter().filter(|ins| {
+            ins.accession == span.accession
+                && ins.coord_system == span.coord_system
+                && ins.region == span.region
+                && span.start <= ins.gap
+                // `gap + 1 <= end` (junction interior); `gap < end` for ints.
+                && ins.gap < span.end
+        });
+        let mut edit_kinds = vec![edit_kind(&variants[span.idx])
+            .expect("span edit has a known kind")
+            .to_string()];
+        edit_kinds.extend(interior.map(|_| "ins".to_string()));
+        if edit_kinds.len() < 2 {
+            continue;
+        }
+        warnings.push(NormalizationWarning::OverlapConflict {
+            accession: span.accession.clone(),
+            coordinate_system: span.coord_system.to_string(),
+            location: location_for_variant(&variants[span.idx])
+                .expect("span edit has a renderable location"),
+            edit_kinds,
+        });
+    }
+
     warnings
 }
 
@@ -152,6 +302,49 @@ fn na_range<L>(
         return None;
     }
     range_fn(&loc_edit.location)
+}
+
+/// The certain inner [`NaEdit`] of an NaEdit-bearing variant, or `None` for
+/// non-NaEdit variants and uncertain edits.
+fn inner_edit(variant: &HgvsVariant) -> Option<&NaEdit> {
+    match variant {
+        HgvsVariant::Genome(g) => g.loc_edit.edit.inner(),
+        HgvsVariant::Cds(c) => c.loc_edit.edit.inner(),
+        HgvsVariant::Tx(t) => t.loc_edit.edit.inner(),
+        HgvsVariant::Rna(r) => r.loc_edit.edit.inner(),
+        HgvsVariant::Mt(m) => m.loc_edit.edit.inner(),
+        _ => None,
+    }
+}
+
+/// Extract `(coord_system, region, start, end)` for a certain NaEdit-bearing
+/// variant *regardless of edit kind*.
+///
+/// This is [`simple_range`] without the `is_overlap_edit` gate: insertion-
+/// overlap detection needs the flanking-position span of an `Insertion`,
+/// which `simple_range` deliberately drops. Position-validity gates (special
+/// anchors, intronic offsets, `?` sentinels, region splits) still apply via
+/// the per-coordinate-system range helpers.
+fn simple_span(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)> {
+    fn na_span<L>(
+        loc_edit: &LocEdit<Interval<L>, NaEdit>,
+        range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
+    ) -> Option<(Region, i64, i64)> {
+        if !loc_edit.edit.is_certain() {
+            return None;
+        }
+        range_fn(&loc_edit.location)
+    }
+    match variant {
+        HgvsVariant::Genome(g) => {
+            na_span(&g.loc_edit, genome_range).map(|(r, s, e)| ("g", r, s, e))
+        }
+        HgvsVariant::Cds(c) => na_span(&c.loc_edit, cds_range).map(|(r, s, e)| ("c", r, s, e)),
+        HgvsVariant::Tx(t) => na_span(&t.loc_edit, tx_range).map(|(r, s, e)| ("n", r, s, e)),
+        HgvsVariant::Rna(r) => na_span(&r.loc_edit, rna_range).map(|(rg, s, e)| ("r", rg, s, e)),
+        HgvsVariant::Mt(m) => na_span(&m.loc_edit, genome_range).map(|(r, s, e)| ("m", r, s, e)),
+        _ => None,
+    }
 }
 
 /// Edit kinds that have a single, definite reference span. Insertions are
@@ -460,6 +653,92 @@ mod tests {
         // Insertions anchor at p_p+1 — no single-base location to coincide.
         let (variants, phase) = parse_allele("NC_000001.11:g.[100A>C;100_101insT]");
         assert!(detect_overlap_conflicts(&variants, phase).is_empty());
+    }
+
+    // --- Insertion overlap detection (#486 EOVERLAP) -------------------------
+
+    #[test]
+    fn two_insertions_at_same_junction_emit_one_warning() {
+        // Two insertions at the same interspace `4_5` overlap (mutalyzer
+        // EOVERLAP). The inserted sequence is irrelevant — the junction is
+        // shared.
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_5insT;4_5insA]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict {
+            location,
+            edit_kinds,
+            ..
+        } = &warnings[0]
+        else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(location, "4_5");
+        assert_eq!(edit_kinds, &vec!["ins".to_string(), "ins".to_string()]);
+    }
+
+    #[test]
+    fn same_junction_insertions_render_utr_location_with_star_prefix() {
+        // Regression: the same-junction branch must render the location via
+        // HGVS Display, not the raw signed base. A 3'UTR junction `*1_*2`
+        // would otherwise drop the `*` prefix and print `1_2`.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[*1_*2insT;*1_*2insA]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict { location, .. } = &warnings[0] else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(location, "*1_*2");
+    }
+
+    #[test]
+    fn insertion_interior_to_delins_emits_one_warning() {
+        // An insertion `274_275ins` whose junction sits strictly inside a
+        // `274_275delins` range overlaps it (mutalyzer EOVERLAP).
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[274_275delinsT;274_275insA]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict { edit_kinds, .. } = &warnings[0] else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert!(edit_kinds.contains(&"delins".to_string()));
+        assert!(edit_kinds.contains(&"ins".to_string()));
+    }
+
+    #[test]
+    fn insertion_interior_to_deletion_emits_one_warning() {
+        // Insertion junction `5_6` is strictly interior to the deleted range
+        // `4_7` (positions 4..=7), so they overlap.
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_7del;5_6insAA]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+    }
+
+    #[test]
+    fn two_insertions_at_different_junctions_no_warning() {
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_5insT;8_9insA]");
+        assert!(detect_insertion_overlaps(&variants, phase).is_empty());
+    }
+
+    #[test]
+    fn insertions_flanking_a_sub_no_warning() {
+        // `273_274ins` and `274_275ins` are at distinct junctions either side
+        // of the substitution at `274`; none overlaps the single-base sub.
+        // Mutalyzer normalizes this to `c.274delinsTTA` (no EOVERLAP).
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[273_274insT;274G>T;274_275insA]");
+        assert!(
+            detect_insertion_overlaps(&variants, phase).is_empty(),
+            "non-overlapping flanking insertions must not warn: {:?}",
+            detect_insertion_overlaps(&variants, phase)
+        );
+    }
+
+    #[test]
+    fn insertion_overlap_only_in_cis() {
+        // Trans phase: the edits are on different haplotypes, so coincident
+        // junctions are not a conflict.
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_5insT];[4_5insA]");
+        assert!(detect_insertion_overlaps(&variants, phase).is_empty());
     }
 
     #[test]

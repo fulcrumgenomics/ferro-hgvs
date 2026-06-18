@@ -1047,7 +1047,12 @@ fn axis_errors() {
         // Intronic-on-bare-transcript (#486 EINTRONIC) — same strict-mode-on-
         // the-errors-axis rationale: ferro's default is a lenient warn; the
         // spec-compliant reject is asserted here. See the #486 design doc.
-        .with_error_override(ErrorType::IntronicOnBareTranscript, ErrorOverride::Reject);
+        .with_error_override(ErrorType::IntronicOnBareTranscript, ErrorOverride::Reject)
+        // Overlapping cis-allele edits (#486 EOVERLAP) — ferro's default is a
+        // lenient W5002 warn; the spec-compliant reject is asserted on the
+        // errors axis, same rationale as the categories above. Covers both
+        // coincident-bounds and insertion-junction overlaps.
+        .with_error_override(ErrorType::OverlapConflictingEdits, ErrorOverride::Reject);
     let normalizer = Normalizer::with_config(ArcProvider(p), cfg);
 
     let mut t = AxisTally::new(Axis::Errors);
