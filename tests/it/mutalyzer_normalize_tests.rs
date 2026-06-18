@@ -292,10 +292,18 @@ impl AxisTally {
     /// 7. FAIL otherwise.
     ///
     /// `accepted_divergence`, `known_bug`, `improvement`, `reference_unavailable`,
-    /// and `spec_citation` only catch a *string mismatch* from a successful run.
-    /// An `Err` means ferro failed to produce any result (panic, parse error,
-    /// normalize failure) — those are real bugs and must surface as FAIL even
-    /// when an annotation is present.
+    /// and `spec_citation` catch a *string mismatch* from a successful run on
+    /// the projection axes. On those axes an `Err` means ferro failed to produce
+    /// any result (panic, parse error, normalize failure) — a real bug that must
+    /// surface as FAIL even when an annotation is present.
+    ///
+    /// The **errors axis is the exception**: there a non-matching `Err` is the
+    /// *expected* "ferro diverges" signal — ferro emitted no error, or a
+    /// different error class than the mutalyzer code the row expects — not a
+    /// crash. So on the errors axis the annotation buckets also apply to an
+    /// `Err` actual, mirroring the OK-path on every other axis. A genuine panic
+    /// (`"panic: …"`) is still a hard FAIL there, so real crashes are never
+    /// masked by an annotation.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
         // Output-quality signal (#651): the axis runner stamps
         // `EMPTY_PROJECTION_SENTINEL` on its `Err` when ferro produced nothing
@@ -365,7 +373,13 @@ impl AxisTally {
             self.pass += 1;
             return;
         }
-        if actual.is_ok() {
+        // On the errors axis a non-panic `Err` is the expected "ferro diverges"
+        // outcome, so annotations bucket it the same way an `Ok` mismatch is
+        // bucketed elsewhere; a genuine panic stays a hard FAIL. See the
+        // `record` doc comment.
+        let errors_axis_divergence =
+            self.axis == Axis::Errors && matches!(&actual, Err(e) if !e.starts_with("panic:"));
+        if actual.is_ok() || errors_axis_divergence {
             if let Some(ad) = &case.accepted_divergence {
                 if ad.axis == self.axis {
                     self.divergence_accepted
@@ -2045,9 +2059,11 @@ mod comparator_tests {
     // info"`); under-emission, parse, and normalize errors must still surface
     // as real failures even when the case carries the annotation.
     //
-    // `AxisTally::record` itself never silences `Err` results — this test
-    // mirrors `tally_err_with_accepted_divergence_still_fails` for `Axis::Infos`
-    // to confirm that the bucket contract is axis-independent.
+    // On every axis EXCEPT errors, `AxisTally::record` never silences `Err`
+    // results — this test mirrors `tally_err_with_accepted_divergence_still_fails`
+    // for `Axis::Infos`. (The errors axis is the deliberate exception, where a
+    // non-panic `Err` is the expected divergence signal; see the errors-axis
+    // tests below.)
     #[test]
     fn tally_infos_under_emission_err_with_accepted_divergence_still_fails() {
         let mut t = AxisTally::new(Axis::Infos);
@@ -2072,6 +2088,91 @@ mod comparator_tests {
             "under-emission Err must not silence into divergence_accepted bucket"
         );
         assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7d) Errors axis: a non-panic `Err` (ferro emitted no error, or a
+    // different error class than the expected mutalyzer code) WITH an
+    // `accepted_divergence` on the errors axis buckets as divergence_accepted —
+    // not FAIL. This is the errors-axis exception to the Err-is-always-FAIL rule
+    // the projection axes follow (#486).
+    #[test]
+    fn tally_errors_axis_err_with_accepted_divergence_buckets() {
+        let mut t = AxisTally::new(Axis::Errors);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::Errors,
+                policy: Policy::ParseTimeRejectionTaxonomy486,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(
+            &case,
+            "EINTRONIC",
+            Err("ferro produced no error; mutalyzer expected [\"EINTRONIC\"]".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert_eq!(t.fail.len(), 0, "errors-axis divergence must not FAIL");
+        assert_eq!(
+            t.divergence_accepted,
+            vec![(
+                "in".to_string(),
+                "ferro-policy-486-parse-time-rejection-taxonomy".to_string()
+            )]
+        );
+    }
+
+    // (7e) Errors axis: a genuine PANIC (`"panic: …"`) is STILL a hard FAIL even
+    // with an errors-axis `accepted_divergence` — real crashes are never masked.
+    #[test]
+    fn tally_errors_axis_panic_still_fails_despite_annotation() {
+        let mut t = AxisTally::new(Axis::Errors);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::Errors,
+                policy: Policy::ParseTimeRejectionTaxonomy486,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(&case, "EINTRONIC", Err("panic: boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.divergence_accepted.is_empty(),
+            "a panic must not bucket into divergence_accepted"
+        );
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7f) Errors axis: if ferro NOW emits the expected tag (the annotated
+    // divergence is gone), the row is an XPASS and FAILs loudly so the stale
+    // annotation gets cleaned up — same guard as every other axis.
+    #[test]
+    fn tally_errors_axis_xpass_fails_to_flag_stale_annotation() {
+        let mut t = AxisTally::new(Axis::Errors);
+        let case = make_case(
+            "in",
+            Some(AcceptedDivergence {
+                axis: Axis::Errors,
+                policy: Policy::ParseTimeRejectionTaxonomy486,
+                note: None,
+                cluster: None,
+            }),
+            None,
+        );
+        t.record(&case, "EINTRONIC", Ok("EINTRONIC".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(
+            t.fail.len(),
+            1,
+            "stale errors-axis annotation must XPASS-FAIL"
+        );
+        assert!(t.fail[0].1.contains("XPASS"));
     }
 
     // (7) Mismatch with no annotation is FAIL.

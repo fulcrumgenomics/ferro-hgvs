@@ -2081,7 +2081,12 @@
       "errors": [
         "ENOSELECTORFOUND"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-selector-existence-not-validated",
+        "note": "ferro does not validate selector existence (DUMMYACCNO_9999.9) against the reference catalog and normalizes; mutalyzer reports ENOSELECTORFOUND."
+      }
     },
     {
       "keywords": [
@@ -3085,7 +3090,12 @@
       "errors": [
         "EINTRONIC"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects this malformed allele (embedded accession in the insert) with a structured parse error; mutalyzer reports EINTRONIC. Both reject."
+      }
     },
     {
       "keywords": [],
@@ -3148,7 +3158,12 @@
       "errors": [
         "ERETR"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-ensembl-transcript-supported",
+        "note": "ferro resolves the Ensembl transcript natively; mutalyzer has no Ensembl backend and reports ERETR."
+      }
     },
     {
       "keywords": [
@@ -3314,7 +3329,12 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects the single-position insertion (4insA) at parse time (InvalidEdit); mutalyzer reports EINSERTIONRANGE+EOVERLAP. Both reject."
+      }
     },
     {
       "keywords": [],
@@ -3331,7 +3351,12 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects the single-position insertion (4insA) at parse time (InvalidEdit); mutalyzer reports EINSERTIONRANGE+EOVERLAP. Both reject."
+      }
     },
     {
       "keywords": [],
@@ -3340,7 +3365,12 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects the single-position insertion (4insA) at parse time (InvalidEdit); mutalyzer reports EINSERTIONRANGE+EOVERLAP. Both reject."
+      }
     },
     {
       "keywords": [],
@@ -3349,7 +3379,12 @@
         "EINSERTIONRANGE",
         "EOVERLAP"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects the single-position insertion (4insA) at parse time (InvalidEdit); mutalyzer reports EINSERTIONRANGE+EOVERLAP. Both reject."
+      }
     },
     {
       "keywords": [],
@@ -3755,7 +3790,12 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects this incomplete variant (no edit after the position) with a structured parse error; mutalyzer reports ENOCDS. Both reject."
+      }
     },
     {
       "keywords": [
@@ -3924,7 +3964,12 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-transcript-coordinate-lenient",
+        "note": "ferro accepts n. (non-coding) numbering on a coding transcript leniently; mutalyzer reports ENOCDS."
+      }
     },
     {
       "keywords": [
@@ -3934,7 +3979,12 @@
       "errors": [
         "EREPEATUNSUPPORTED"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects this input (missing the c./g. axis prefix) with a structured parse error; mutalyzer reports EREPEATUNSUPPORTED for the complex multi-unit repeat. Both reject."
+      }
     },
     {
       "keywords": [
@@ -3944,7 +3994,12 @@
       "errors": [
         "EVARIANTNOTSUPPORTED"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "ferro rejects this malformed (concatenated) input with a structured parse error; mutalyzer reports EVARIANTNOTSUPPORTED. Both reject."
+      }
     },
     {
       "keywords": [
@@ -4014,7 +4069,12 @@
       "errors": [
         "ENOSELECTORFOUND"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-selector-existence-not-validated",
+        "note": "ferro does not require the selector to be version-pinned (NM_003002 has no version) and normalizes; mutalyzer reports ENOSELECTORFOUND."
+      }
     },
     {
       "keywords": [],
@@ -4030,7 +4090,12 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro resolves the gene-symbol selector (CDKN2A) and normalizes; mutalyzer reports ESELECTOROPTIONS (#121-adjacent)."
+      }
     },
     {
       "keywords": [],
@@ -4038,7 +4103,12 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro resolves the legacy locus selector (CDKN2A_v001) and normalizes; mutalyzer reports ESELECTOROPTIONS (#121-adjacent)."
+      }
     },
     {
       "keywords": [],
@@ -4046,7 +4116,12 @@
       "errors": [
         "ESELECTOROPTIONS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-121-gene-symbol-selector",
+        "note": "ferro resolves the numeric legacy selector (1787) and normalizes; mutalyzer reports ESELECTOROPTIONS (#121-adjacent)."
+      }
     },
     {
       "keywords": [
@@ -4064,7 +4139,12 @@
       "errors": [
         "EINTRONICRNA"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-transcript-coordinate-lenient",
+        "note": "ferro accepts an intronic offset on an r. (RNA) position leniently; mutalyzer reports EINTRONICRNA."
+      }
     },
     {
       "keywords": [],

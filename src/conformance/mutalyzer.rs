@@ -287,6 +287,38 @@ pub enum Policy {
     /// Accepted divergence per #745.
     #[serde(rename = "ferro-policy-745-homopolymer-repeat-contraction")]
     HomopolymerRepeatContraction745,
+    /// #486 errors axis: ferro resolves an Ensembl transcript (`ENST…`)
+    /// natively, so a well-formed `ENST…:c.` input normalizes instead of
+    /// erroring. Mutalyzer's reference retrieval has no Ensembl backend and
+    /// rejects with `ERETR`. ferro's broader reference support is an accepted
+    /// divergence, not a defect (#486 lists Ensembl `ERETR` as a "not a bug").
+    #[serde(rename = "ferro-policy-486-ensembl-transcript-supported")]
+    EnsemblTranscriptSupported486,
+    /// #486 errors axis: ferro rejects an HGVS-invalid input at *parse* time
+    /// with a structured parse error — single-position insertion
+    /// (`EINSERTIONRANGE`, also flanked by `EOVERLAP`), malformed concatenation,
+    /// missing axis prefix, or an incomplete edit — whereas mutalyzer rejects
+    /// the same input downstream with a semantic code (`EINTRONIC`, `ENOCDS`,
+    /// `EREPEATUNSUPPORTED`, `EVARIANTNOTSUPPORTED`). Both reject the input;
+    /// only the error taxonomy differs, so the rejection is accepted.
+    #[serde(rename = "ferro-policy-486-parse-time-rejection-taxonomy")]
+    ParseTimeRejectionTaxonomy486,
+    /// #486 errors axis: ferro does not validate that a parenthesised transcript
+    /// selector exists (or is version-pinned) in the reference catalog —
+    /// selector resolution is a deferred scope boundary (#500-class) — so an
+    /// unknown or unversioned selector normalizes rather than erroring.
+    /// Mutalyzer rejects with `ENOSELECTORFOUND`. Accepted divergence pending
+    /// dedicated selector-resolution work.
+    #[serde(rename = "ferro-policy-486-selector-existence-not-validated")]
+    SelectorExistenceNotValidated486,
+    /// #486 errors axis: ferro is lenient about transcript-relative
+    /// coordinate-system constraints that mutalyzer enforces — an `n.` position
+    /// on a coding transcript (mutalyzer `ENOCDS`) and an intronic offset on an
+    /// `r.` RNA position (mutalyzer `EINTRONICRNA`) both normalize rather than
+    /// erroring. Accepted divergence pending stricter coordinate-system
+    /// validation.
+    #[serde(rename = "ferro-policy-486-transcript-coordinate-lenient")]
+    TranscriptCoordinateLenient486,
 }
 
 impl Policy {
@@ -301,6 +333,18 @@ impl Policy {
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"
+            }
+            Policy::EnsemblTranscriptSupported486 => {
+                "ferro-policy-486-ensembl-transcript-supported"
+            }
+            Policy::ParseTimeRejectionTaxonomy486 => {
+                "ferro-policy-486-parse-time-rejection-taxonomy"
+            }
+            Policy::SelectorExistenceNotValidated486 => {
+                "ferro-policy-486-selector-existence-not-validated"
+            }
+            Policy::TranscriptCoordinateLenient486 => {
+                "ferro-policy-486-transcript-coordinate-lenient"
             }
         }
     }
