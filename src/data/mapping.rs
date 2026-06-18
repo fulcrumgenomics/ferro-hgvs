@@ -499,11 +499,34 @@ impl CoordinateMapper {
                 info.exon_numbers.push(exon.number);
                 info.splice_distance = Some(dist);
 
-                // Get the CDS position at the exon boundary
-                let boundary_tx_pos = if is_after_exon {
-                    exon.tx_end - 1 // Last position of exon
-                } else {
-                    exon.tx_start // First position of exon
+                // Get the CDS position at the exon boundary. `is_after_exon` is
+                // a *genomic* concept (true = the intronic position is on the
+                // high-coordinate side of the exon). The transcript-nearest
+                // exon base depends on strand: on the minus strand the
+                // transcript runs opposite to the genome, so the
+                // genomically-after side is the transcript-5' side (anchor
+                // `tx_start`) and the genomically-before side is transcript-3'
+                // (anchor `tx_end - 1`) — the reverse of the plus-strand
+                // mapping. Without this, a minus-strand intron-flanked deletion
+                // attaches each offset to the wrong CDS base, producing a
+                // crossed/descending c. interval (#762). The offset sign below
+                // is already strand-aware; this makes the base selection so too.
+                let boundary_tx_pos = match tx.strand {
+                    Strand::Minus => {
+                        if is_after_exon {
+                            exon.tx_start // genomically-after = transcript 5' side
+                        } else {
+                            exon.tx_end - 1 // genomically-before = transcript 3' side
+                        }
+                    }
+                    // Plus (and Unknown, which errors at the offset match below).
+                    _ => {
+                        if is_after_exon {
+                            exon.tx_end - 1 // Last position of exon
+                        } else {
+                            exon.tx_start // First position of exon
+                        }
+                    }
                 };
 
                 let cds_region = tx.tx_to_cds(boundary_tx_pos);
@@ -747,6 +770,92 @@ mod tests {
 
         assert!(result.info.in_5utr);
         assert!(result.variant.base < 0);
+    }
+
+    // Issue #762: on the minus strand the genomically-after side of an exon is
+    // the transcript-5' side, so the intronic offset must anchor to `tx_start`
+    // (not `tx_end`). NM_MINUS.1 exon 2 is genome [2000, 2200] = tx [150, 350]
+    // (CDS c.101_300, since cds_start = tx 50). The bug anchored to the wrong
+    // exon end, attaching the offset to the opposite CDS base.
+
+    #[test]
+    fn test_genome_to_cds_intronic_minus_after_exon_anchors_5prime() {
+        let mapper = create_test_mapper();
+        // Genome 2205: 6 bp above exon 2's genome-end (2200) = the transcript-5'
+        // intron of exon 2. Nearest exonic base is tx 150 = c.101, so c.101-6.
+        // The pre-#762 bug anchored to tx 349 (c.300) → c.300-6.
+        let result = mapper
+            .genome_to_cds("NM_MINUS.1", &GenomePos::new(2205))
+            .unwrap();
+        assert!(result.info.is_intronic);
+        assert_eq!(
+            result.variant.base, 101,
+            "must anchor to exon 2's 5' CDS base"
+        );
+        assert_eq!(result.variant.offset, Some(-6));
+    }
+
+    #[test]
+    fn test_genome_to_cds_intronic_minus_before_exon_anchors_3prime() {
+        let mapper = create_test_mapper();
+        // Genome 1995: 5 bp below exon 2's genome-start (2000) = the
+        // transcript-3' intron of exon 2. Nearest exonic base is tx 349 = c.300,
+        // so c.300+5. The pre-#762 bug anchored to tx 150 (c.101) → c.101+5.
+        let result = mapper
+            .genome_to_cds("NM_MINUS.1", &GenomePos::new(1995))
+            .unwrap();
+        assert!(result.info.is_intronic);
+        assert_eq!(
+            result.variant.base, 300,
+            "must anchor to exon 2's 3' CDS base"
+        );
+        assert_eq!(result.variant.offset, Some(5));
+    }
+
+    // Issue #762 (user-visible symptom): a minus-strand deletion whose genomic
+    // interval flanks exon 2 on both intronic sides must yield a non-descending
+    // c. interval. Genome [1995, 2205] spans exon 2's transcript-3' intron
+    // (1995 = c.300+5) and transcript-5' intron (2205 = c.101-6). On the minus
+    // strand the genomic start/end swap, so the resulting CdsInterval is
+    // start = c.101-6 .. end = c.300+5 — ascending (101 <= 300). The pre-#762
+    // bug anchored each offset to the opposite CDS base, returning a
+    // crossed/descending interval.
+    #[test]
+    fn test_genome_interval_to_cds_minus_intron_flanked_not_descending() {
+        let mapper = create_test_mapper();
+        let result = mapper
+            .genome_interval_to_cds(
+                "NM_MINUS.1",
+                &GenomeInterval::new(GenomePos::new(1995), GenomePos::new(2205)),
+            )
+            .unwrap();
+
+        let start = result
+            .variant
+            .start
+            .inner()
+            .expect("c. interval start must be a concrete position");
+        let end = result
+            .variant
+            .end
+            .inner()
+            .expect("c. interval end must be a concrete position");
+
+        assert_eq!(
+            start.base, 101,
+            "interval start anchors exon 2's 5' CDS base"
+        );
+        assert_eq!(start.offset, Some(-6));
+        assert_eq!(end.base, 300, "interval end anchors exon 2's 3' CDS base");
+        assert_eq!(end.offset, Some(5));
+        assert!(
+            start.base <= end.base,
+            "c. interval must not be descending: start c.{}{:+} > end c.{}{:+}",
+            start.base,
+            start.offset.unwrap_or(0),
+            end.base,
+            end.offset.unwrap_or(0),
+        );
     }
 
     /// Build a mapper with a single-exon transcript carrying a CIGAR
