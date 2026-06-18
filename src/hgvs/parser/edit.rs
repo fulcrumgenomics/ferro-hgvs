@@ -595,19 +595,10 @@ fn is_crossref_accession(acc: &str) -> bool {
 /// Parse a reference location (e.g., NC_012920.1:m.12435_12527 or AF118569:g.14094_14382)
 /// Returns the full reference string if valid, None otherwise
 fn parse_reference_location(input: &str) -> Option<String> {
-    // Must contain a colon followed by coordinate type
+    // Must contain a colon separating the accession from the payload.
     let colon_pos = input.find(':')?;
-
-    // Check that we have at least "X:Y." pattern
     let after_colon = &input[colon_pos + 1..];
-    if after_colon.len() < 2 {
-        return None;
-    }
-
-    // Must have coordinate type (g., c., m., n., r., p., o.)
-    let coord_type = after_colon.as_bytes()[0];
-    let dot = after_colon.as_bytes()[1];
-    if dot != b'.' || !matches!(coord_type, b'g' | b'c' | b'm' | b'n' | b'r' | b'p' | b'o') {
+    if after_colon.is_empty() {
         return None;
     }
 
@@ -619,11 +610,24 @@ fn parse_reference_location(input: &str) -> Option<String> {
         return None;
     }
 
-    // Now find where the coordinates end
-    let mut end_pos = colon_pos + 3; // Skip past ":X."
-    let pos_part = &input[end_pos..];
+    // The payload is either axis-qualified — `<axis>.<positions>` with axis in
+    // g./c./m./n./r./p./o. — or axis-less — `<positions>` interpreted in the
+    // accession's native frame (#759). Locate where the positions start.
+    let bytes = after_colon.as_bytes();
+    let pos_start = if bytes.len() >= 2
+        && bytes[1] == b'.'
+        && matches!(bytes[0], b'g' | b'c' | b'm' | b'n' | b'r' | b'p' | b'o')
+    {
+        colon_pos + 3 // skip ":X."
+    } else if bytes[0].is_ascii_digit() {
+        colon_pos + 1 // skip ":" — axis-less native-frame payload
+    } else {
+        return None;
+    };
 
-    for c in pos_part.chars() {
+    // Find where the coordinates end.
+    let mut end_pos = pos_start;
+    for c in input[end_pos..].chars() {
         if c.is_ascii_digit() || c == '_' || c == '+' || c == '-' || c == '?' {
             end_pos += c.len_utf8();
         } else {
@@ -631,8 +635,8 @@ fn parse_reference_location(input: &str) -> Option<String> {
         }
     }
 
-    // Must have at least one position character
-    if end_pos <= colon_pos + 3 {
+    // Must have at least one position character.
+    if end_pos <= pos_start {
         return None;
     }
 
@@ -3145,6 +3149,47 @@ mod tests {
             parse_reference_location("NG_012337.1(NM_012459.2:c.200_203").is_none(),
             "unbalanced selector paren must not parse as a reference location"
         );
+    }
+
+    /// An axis-less cross-reference payload `<ACC>:<range>` (no `c.`/`g.`/…
+    /// prefix) must parse as a `Reference`, not fall through to reading the
+    /// accession letters as nucleotide bases (#759).
+    #[test]
+    fn test_parse_axisless_crossref_insertion() {
+        for ref_str in ["NM_003002.4:100_102", "NM_003002.4:100"] {
+            let ins_input = format!("ins{ref_str}");
+            let (remaining, edit) =
+                parse_na_edit(&ins_input).expect("axis-less cross-ref ins must parse");
+            assert_eq!(remaining, "", "input fully consumed for {ref_str}");
+            match edit {
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Reference(r),
+                } => assert_eq!(r, ref_str),
+                other => panic!("expected Reference insertion for {ref_str}, got {other:?}"),
+            }
+        }
+    }
+
+    /// `parse_reference_location` recognizes both the axis-qualified and the
+    /// axis-less forms, and still rejects payloads with neither an axis nor a
+    /// leading position digit.
+    #[test]
+    fn test_parse_reference_location_axisless() {
+        assert_eq!(
+            parse_reference_location("NM_003002.4:100_102").as_deref(),
+            Some("NM_003002.4:100_102")
+        );
+        assert_eq!(
+            parse_reference_location("NM_003002.4:100").as_deref(),
+            Some("NM_003002.4:100")
+        );
+        // Axis-qualified still works.
+        assert_eq!(
+            parse_reference_location("NC_012920.1:m.123_456").as_deref(),
+            Some("NC_012920.1:m.123_456")
+        );
+        // Neither axis nor a leading digit → not a reference location.
+        assert!(parse_reference_location("NM_003002.4:xyz").is_none());
     }
 
     #[test]

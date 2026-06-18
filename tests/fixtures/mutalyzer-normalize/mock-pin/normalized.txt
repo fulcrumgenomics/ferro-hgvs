@@ -183,7 +183,7 @@ NG_009299.1(NM_017668.3):c.[250del;41A>C]	NG_009299.1(NM_017668.3):c.[250del;41A
 NG_009299.1(NM_017668.3):c.[41>CA;250del]	parse error: Parse error at position 25: Failed to parse variant: Error(Error { input: ">CA", code: Tag })
 NG_009299.1(NM_017668.3):c.[250del;41>CA]	parse error: Parse error at position 25: Failed to parse variant: Error(Error { input: ">CA", code: Tag })
 NG_009299.1(NM_002474.3):c.[310del;295G>A]	NG_009299.1(NM_002474.3):c.[310del;295G>A]
-NG_012337.1(NM_003002.2):c.[274+20C>T;400_401insNM_003002.4:100_102]	parse error: Parse error at position 25: Failed to parse variant: Error(Error { input: "_003002.4:100_102", code: Tag })
+NG_012337.1(NM_003002.2):c.[274+20C>T;400_401insNM_003002.4:100_102]	normalize error: Reference not found: NM_003002.4
 NM_002001.2:c.=	NM_002001.2:c.=
 NG_012337.1(NM_003002.2):c.=	NG_012337.1(NM_003002.2):c.=
 ENST00000375549:c.100del	ENST00000375549:c.100del

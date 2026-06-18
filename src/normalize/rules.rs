@@ -1966,32 +1966,6 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
     provider.get_sequence(accession, tx_start - 1, tx_end)
 }
 
-/// Parse a cross-reference string (e.g.
-/// `"NC_000022.10:g.42536337_42536382"`) into its components for
-/// provider lookup. Returns `(accession, coord_kind, start, end)` on
-/// success.
-///
-/// Supports g./m./o./c./n. axes with simple positive-integer positions or ranges
-/// (no offsets, no `*N`, no `?`, no `pter`/`qter` markers). Out-of-scope
-/// shapes return `None` so the caller can surface a focused
-/// `FerroError::UnsupportedVariant`. #422.
-///
-/// **Axis-set rationale:** the parser's `parse_reference_location`
-/// (`src/hgvs/parser/edit.rs`) accepts `g/c/m/n/r/p/o` axes for
-/// `Reference` strings. This helper accepts the subset that has a
-/// well-defined position-range fetch on the inner accession:
-///   - `g.`/`m.`/`o.`: genomic position-range fetch (`Direct`).
-///   - `c.`: CDS-relative; translated via the FOREIGN transcript's
-///     `cds_start` inside `fetch_position_range_bases`.
-///   - `n.`: non-coding transcript; positions are already transcript-
-///     relative (`Direct`).
-///
-/// **Deferred axes (`r.`, `p.`):** RNA needs U→T translation on the
-/// fetched bases (the existing `r.→g.` projection has the primitive
-/// but isn't wired here); protein is structurally invalid as a DNA-
-/// insertion payload. Both stay `UnsupportedVariant` for now. If
-/// `parse_reference_location` ever broadens to additional axes, keep
-/// the match arm below in sync.
 /// A parsed cross-reference payload: the inner accession, how its positions
 /// are interpreted, and the position range.
 struct CrossReferenceParse {
@@ -2014,29 +1988,84 @@ struct CrossReferenceParse {
     transcript_relative: bool,
 }
 
+/// Parse a cross-reference string (e.g.
+/// `"NC_000022.10:g.42536337_42536382"`) into its components for
+/// provider lookup. Returns a `CrossReferenceParse` (the inner accession,
+/// the `InsCoordKind` used to fetch its bases, the one-based `start`/`end`,
+/// and the `transcript_relative` flag) on success.
+///
+/// Two payload forms are accepted:
+///   - **Axis-qualified** (`<ACC>:<axis>.<range>`): supports g./m./o./c./n.
+///     axes with simple positive-integer positions or ranges (no offsets,
+///     no `*N`, no `?`, no `pter`/`qter` markers).
+///   - **Axis-less native-frame** (`<ACC>:<range>`, #759): the bare positions
+///     index the accession's *native frame* — the axis an explicit
+///     description would default to for that accession
+///     (`Accession::inferred_variant_type`, resolved via
+///     `axisless_native_frame`): `c.` for a coding transcript (`NM_`/`ENST`),
+///     `n.` for a non-coding one (`NR_`/`XR_`), `g.` for a genomic reference
+///     (`NC_`/`NG_`). So `NM_003002.4:100_102` == `NM_003002.4:c.100_102`.
+///     Protein / unknown native frames are out of scope.
+///
+/// Out-of-scope shapes return `None` so the caller can surface a focused
+/// `FerroError::UnsupportedVariant`. #422.
+///
+/// **Axis-set rationale:** the parser's `parse_reference_location`
+/// (`src/hgvs/parser/edit.rs`) accepts `g/c/m/n/r/p/o` axes for
+/// `Reference` strings. This helper accepts the subset that has a
+/// well-defined position-range fetch on the inner accession:
+///   - `g.`/`m.`/`o.`: genomic position-range fetch (`Direct`).
+///   - `c.`: CDS-relative; translated via the FOREIGN transcript's
+///     `cds_start` inside `fetch_position_range_bases`.
+///   - `n.`: non-coding transcript; positions are already transcript-
+///     relative (`Direct`).
+///
+/// **Deferred axes (`r.`, `p.`):** RNA needs U→T translation on the
+/// fetched bases (the existing `r.→g.` projection has the primitive
+/// but isn't wired here); protein is structurally invalid as a DNA-
+/// insertion payload. Both stay `UnsupportedVariant` for now. If
+/// `parse_reference_location` ever broadens to additional axes, keep
+/// the match arm below in sync.
 fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
     let (acc_part, after_colon) = reference.split_once(':')?;
-    // Minimum well-formed shape: a single position `g.A` = 3 chars (axis + dot
-    // + one position char). A range `g.A_B` is 5+.
-    if acc_part.is_empty() || after_colon.len() < 3 {
+    if acc_part.is_empty() || after_colon.is_empty() {
         return None;
     }
-    let coord_byte = *after_colon.as_bytes().first()?;
-    if after_colon.as_bytes().get(1) != Some(&b'.') {
-        return None;
-    }
-    // c. requires CDS translation via the foreign transcript's cds_start;
-    // g./m./o./n. are direct position-range fetches on the inner accession.
-    // r. and p. are deferred — see the doc-comment above.
-    let kind = match coord_byte {
-        b'g' | b'm' | b'o' | b'n' => InsCoordKind::Direct,
-        b'c' => InsCoordKind::Cds,
-        _ => return None,
+    let bytes = after_colon.as_bytes();
+    // An axis-qualified payload is `<axis>.<range>` (`g.`/`c.`/…); anything else
+    // is treated as an axis-less native-frame payload (`<ACC>:<range>`, #759).
+    let axis_qualified = bytes.len() >= 2 && bytes[1] == b'.';
+    let (kind, transcript_relative, range_str) = if axis_qualified {
+        // c. requires CDS translation via the foreign transcript's cds_start;
+        // g./m./o./n. are direct position-range fetches on the inner accession.
+        // r. and p. are deferred — see the doc-comment above.
+        let kind = match bytes[0] {
+            b'g' | b'm' | b'o' | b'n' => InsCoordKind::Direct,
+            b'c' => InsCoordKind::Cds,
+            _ => return None,
+        };
+        // `c.` and `n.` are transcript-relative (their positions index the
+        // transcript), so a genomic-context compound payload accession
+        // (`NG_(NM_)`) must be reduced to its transcript before lookup.
+        // `g./m./o.` are genomic / absolute and fetch on the named accession
+        // unchanged. (`n.` shares the `Direct` *fetch* path with `g./m./o.` — it
+        // needs no cds_start translation — so the kind alone can't distinguish
+        // it; this flag carries that out.)
+        let transcript_relative = matches!(bytes[0], b'c' | b'n');
+        (kind, transcript_relative, &after_colon[2..])
+    } else {
+        // Axis-less payload `<ACC>:<range>` (#759): the bare positions index the
+        // accession's *native frame*, i.e. the axis an explicit description would
+        // default to for that accession — `c.` for a coding transcript (`NM_`,
+        // `ENST`), `n.` for a non-coding one (`NR_`/`XR_`), `g.` for a genomic
+        // reference (`NC_`/`NG_`). So `NM_003002.4:100_102` == `NM_003002.4:c.100_102`.
+        // Protein / unknown native frames are out of scope (return None).
+        if !bytes[0].is_ascii_digit() {
+            return None;
+        }
+        let (kind, transcript_relative) = axisless_native_frame(acc_part)?;
+        (kind, transcript_relative, after_colon)
     };
-    // See `CrossReferenceParse::transcript_relative` for why `c.`/`n.` are set
-    // here while `g./m./o.` are not.
-    let transcript_relative = matches!(coord_byte, b'c' | b'n');
-    let range_str = &after_colon[2..];
     // A payload may name a range (`A_B`) or a single position (`A`, a one-base
     // copy with start == end).
     let (start_str, end_str) = match range_str.split_once('_') {
@@ -2122,6 +2151,32 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
         accession
     };
     fetch_position_range_bases(&accession, start, end, kind, provider)
+}
+
+/// Resolve the `(InsCoordKind, transcript_relative)` an axis-less cross-reference
+/// payload should use, from the accession's *native frame* (#759).
+///
+/// An axis-less `<ACC>:<range>` is interpreted in the axis an explicit
+/// description would default to for that accession (`Accession::inferred_variant_type`):
+/// - `c.` (coding transcript `NM_`/`ENST`) → `Cds` (CDS-translated), transcript-relative;
+/// - `n.` (non-coding `NR_`/`XR_`) → `Direct` fetch, transcript-relative;
+/// - `g.`/`m.`/`o.` (genomic `NC_`/`NG_`/…) → `Direct` fetch, not transcript-relative.
+///
+/// `transcript_relative` lets a compound `NG_(NM_)` accession reduce to its inner
+/// transcript before lookup (the parsed accession of a compound is the inner one).
+/// Returns `None` when the accession does not parse or its native frame is out of
+/// scope (protein / unknown), so the cross-reference is rejected as unsupported.
+fn axisless_native_frame(accession: &str) -> Option<(InsCoordKind, bool)> {
+    let (rest, parsed) = crate::hgvs::parser::accession::parse_accession(accession).ok()?;
+    if !rest.is_empty() {
+        return None;
+    }
+    match parsed.inferred_variant_type() {
+        Some("c") => Some((InsCoordKind::Cds, true)),
+        Some("n") => Some((InsCoordKind::Direct, true)),
+        Some("g") | Some("m") | Some("o") => Some((InsCoordKind::Direct, false)),
+        _ => None,
+    }
 }
 
 /// Reduce an accession string to its transcript accession (`NM_`/`NR_`/`ENST`),
@@ -3948,6 +4003,66 @@ mod tests {
         let provider = crate::reference::mock::MockProvider::with_test_data();
         let bases = resolve_cross_reference_bases("NM_000088.3:n.2", &provider)
             .expect("single-position n. cross-reference should resolve");
+        assert_eq!(bases, "T");
+    }
+
+    #[test]
+    fn resolve_cross_reference_resolves_axisless_coding_payload_in_cds_frame() {
+        // An axis-less payload `<ACC>:<range>` (no `c.`/`n.`/`g.` prefix) is
+        // interpreted in the accession's native frame (#759). For a *coding*
+        // transcript that is `c.` (CDS), not `n.` — `NM_…:100` == `NM_…:c.100`.
+        // `NM_001234.1` is "AAAAATGCCC…" with cds_start=5, so the frames differ:
+        //   axis-less 1_3 == c.1_3 == "ATG"   (CDS-translated)
+        //   n.1_3 == "AAA"                     (sequence-native, NOT used here)
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NM_001234.1:1_3", &provider)
+            .expect("axis-less coding cross-reference should resolve");
+        assert_eq!(bases, "ATG");
+        // Same as the explicit `c.` form, and distinct from the `n.` form.
+        assert_eq!(
+            resolve_cross_reference_bases("NM_001234.1:c.1_3", &provider).unwrap(),
+            "ATG"
+        );
+        assert_eq!(
+            resolve_cross_reference_bases("NM_001234.1:n.1_3", &provider).unwrap(),
+            "AAA"
+        );
+    }
+
+    #[test]
+    fn resolve_cross_reference_resolves_axisless_noncoding_payload_in_transcript_frame() {
+        // A non-coding accession's native frame is `n.` (sequence-native). The
+        // mock has no NR_; emulate by checking that the coding/non-coding split
+        // is driven by inferred_variant_type: NR_ would be Direct/transcript.
+        // Here we assert the helper classifies a coding NM_ as CDS-framed.
+        assert_eq!(
+            axisless_native_frame("NM_001234.1"),
+            Some((InsCoordKind::Cds, true))
+        );
+        assert_eq!(
+            axisless_native_frame("NR_000001.1"),
+            Some((InsCoordKind::Direct, true))
+        );
+        assert_eq!(
+            axisless_native_frame("NC_000001.11"),
+            Some((InsCoordKind::Direct, false))
+        );
+        // Compound NG_(NM_) parses to the inner transcript → CDS-framed.
+        assert_eq!(
+            axisless_native_frame("NG_012337.1(NM_003002.4)"),
+            Some((InsCoordKind::Cds, true))
+        );
+        // Protein / unparseable → out of scope.
+        assert_eq!(axisless_native_frame("NP_000079.2"), None);
+    }
+
+    #[test]
+    fn resolve_cross_reference_accepts_an_axisless_single_position() {
+        // A single axis-less position (no `_` range) — a one-base copy in the
+        // coding (c.) frame. `NM_001234.1` c.2 == transcript pos 6 == "T".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NM_001234.1:2", &provider)
+            .expect("axis-less single-position cross-reference should resolve");
         assert_eq!(bases, "T");
     }
 

@@ -3110,7 +3110,13 @@
         "ICORRECTEDCOORDINATESYSTEM",
         "ICORRECTEDPOINT"
       ],
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (coding codon exception)",
+        "cluster": "coding-repeat-codon-exception",
+        "note": "Two independent divergences; ferro is spec-conforming on both. (1) The axis-less cross-reference insert payload now parses and expands (#759): `400_401insNM_003002.4:100_102` resolves in NM_003002.4's native coding frame (c.100_102 == TTT). mutalyzer renders the resulting +3-copy T expansion as `399_401T[6]`, but a length-1 repeat unit in coding c. is INVALID HGVS (DNA/repeated.md L21-24 marks `c.…A[10]`/`c.…TA[6]` class=\"invalid\"; repeat notation in c. is permitted only for units whose length is a multiple of 3). ferro emits the spec-mandated literal `401_402insTTT`, the spec-correct value. (2) Member 1 `c.274+20C>T`: mutalyzer corrects the point to `c.294C>T` using the real NM_003002.2 exon structure (the row's ICORRECTEDPOINT info), which ferro cannot reproduce because the prepared manifest carries only a degenerate single-exon supplemental NM_003002.2 (no intron there to resolve 274+20 against, and folding it would wrongly collapse genuine intronic positions like c.52+1 elsewhere). ferro echoes the valid-but-uncorrected `274+20C>T`; real-version provisioning is tracked by #672. Neither member emits invalid HGVS; the row simply cannot match mutalyzer (its member-2 expected value is itself invalid HGVS)."
+      }
     },
     {
       "keywords": [
