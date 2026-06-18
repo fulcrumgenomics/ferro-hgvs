@@ -8,15 +8,16 @@ use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::{CdsInterval, TxInterval};
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
 use crate::hgvs::variant::{
-    is_frameshift, Accession, AlleleVariant, CdsVariant, HgvsVariant, LocEdit, TxVariant,
+    is_frameshift, Accession, AllelePhase, AlleleVariant, CdsVariant, HgvsVariant, LocEdit,
+    TxVariant,
 };
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
-    affects_initiation_codon, build_initiator_unknown, build_whole_protein_unknown,
-    cds_has_valid_start, predict_indel_protein, predict_substitution_protein, read_cds_start_codon,
-    whole_exon_deletion_span, RefProteinBundle,
+    build_initiator_unknown, build_whole_protein_unknown, cds_has_valid_start,
+    edit_reaches_initiation_codon, predict_indel_protein, predict_substitution_protein,
+    read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -1621,6 +1622,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 is_frameshift: false,
                 is_intronic: false,
                 is_utr: false,
+                // Empty allele: no inner edit, so no initiation-codon effect.
+                affects_init: false,
             });
         }
 
@@ -1654,19 +1657,43 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let noncoding = noncoding_variants
             .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
 
-        // Build the protein allele only if ALL inner projections have a protein.
-        let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
-        let protein = if all_have_protein {
-            let protein_variants: Vec<HgvsVariant> = inner_projections
+        // A cis allele whose member disrupts the translation initiation codon
+        // has an unknown whole-protein consequence: once initiation is uncertain
+        // the downstream members are moot (a protein product whose start codon
+        // is unknown cannot be described). Collapse to that member's init-unknown
+        // form — `p.(Met1?)` on a canonical `ATG` start, `p.?` on a
+        // non-AUG-initiation transcript — mirroring the single-variant path
+        // (#771) and the corpus row `NM_024426.4:c.1_4delinsATGA` →
+        // `c.[1C>A;4C>A]` → `p.?`. This also rescues the common case where a
+        // downstream non-initiation member declines under the #625 non-`ATG`
+        // guard, which would otherwise drop the all-or-nothing allele protein to
+        // `None`. Cis only: trans members are independent alleles, left to the
+        // all-or-nothing rule below.
+        let cis_init_unknown = if allele.phase == AllelePhase::Cis {
+            inner_projections
                 .iter()
-                .filter_map(|p| p.protein.clone())
-                .collect();
-            Some(HgvsVariant::Allele(AlleleVariant::new(
-                protein_variants,
-                allele.phase,
-            )))
+                .find(|p| p.affects_init)
+                .and_then(|p| p.protein.clone())
         } else {
             None
+        };
+        let protein = if let Some(init_unknown) = cis_init_unknown {
+            Some(init_unknown)
+        } else {
+            // Build the protein allele only if ALL inner projections have a protein.
+            let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
+            if all_have_protein {
+                let protein_variants: Vec<HgvsVariant> = inner_projections
+                    .iter()
+                    .filter_map(|p| p.protein.clone())
+                    .collect();
+                Some(HgvsVariant::Allele(AlleleVariant::new(
+                    protein_variants,
+                    allele.phase,
+                )))
+            } else {
+                None
+            }
         };
 
         // Derive `.genomic` from the inner projections, not the raw `original`:
@@ -1701,6 +1728,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_frameshift,
             is_intronic,
             is_utr,
+            // Aggregate: true when any member's edit reaches the initiation codon.
+            affects_init: inner_projections.iter().any(|p| p.affects_init),
         })
     }
 
@@ -1775,10 +1804,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // duplication like `c.-1_2dup` — so the coarse `is_utr` gate must not
         // drop it to "no protein predicted" (#504). Intronic offsets never
         // reach the initiation codon, so an offset disqualifies the edit here.
-        let affects_init = !is_intronic
-            && cds_start.offset.is_none()
-            && cds_end.offset.is_none()
-            && affects_initiation_codon(c_edit, cds_start.base, cds_end.base);
+        let affects_init = edit_reaches_initiation_codon(c_edit, cds_start, cds_end, is_intronic);
         // A deletion that removes one or more complete coding exons (both
         // endpoints intronic, bracketing the exon) has a predictable protein
         // consequence (HGVS protein/deletion.md "one or more exons"; #498).
@@ -2110,6 +2136,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_frameshift: frameshift,
             is_intronic,
             is_utr,
+            affects_init: edit_reaches_initiation_codon(&edit, &cds_start, &cds_end, is_intronic),
         })
     }
 
@@ -2279,6 +2306,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 is_frameshift: false,
                 is_intronic: start_tx.offset.is_some() || end_tx.offset.is_some(),
                 is_utr: false,
+                // Non-coding transcript: no CDS, so no initiation codon to reach.
+                affects_init: false,
             });
         }
 
@@ -2333,6 +2362,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_frameshift: frameshift,
             is_intronic,
             is_utr,
+            affects_init: edit_reaches_initiation_codon(&c_edit, &cds_start, &cds_end, is_intronic),
         })
     }
 
@@ -2930,6 +2960,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_frameshift: frameshift,
             is_intronic,
             is_utr,
+            affects_init: edit_reaches_initiation_codon(&c_edit, &cds_start, &cds_end, is_intronic),
         })
     }
 }
@@ -6135,6 +6166,7 @@ mod tests {
                 is_frameshift: false,
                 is_intronic: false,
                 is_utr: false,
+                affects_init: false,
             };
             let framed = VariantProjector::<MockProvider>::frame_projection_owned(
                 proj,
@@ -7436,6 +7468,150 @@ mod tests {
         assert!(
             proj.protein.is_none(),
             "non-initiation variant on a non-ATG transcript must decline (#625)"
+        );
+    }
+
+    #[test]
+    fn project_cis_allele_init_codon_member_nonaug_reports_unknown_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_NOATG.1 starts with CTG (non-AUG). The cis allele `c.[1C>G;4C>A]`
+        // has an initiation-codon member (`c.1C>G`) and a downstream member
+        // (`c.4C>A`, codon 2). Once initiation is disrupted the whole-allele
+        // protein consequence is unknown, so it collapses to the spec-correct
+        // `p.?` — even though the downstream member declines under the #625
+        // non-ATG guard (which would otherwise make the all-or-nothing allele
+        // protein `None`). Mirrors the single-variant #771 fix and the corpus
+        // row `NM_024426.4:c.1_4delinsATGA` → `c.[1C>A;4C>A]` → `p.?`.
+        let member_init = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let member_downstream = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![member_init, member_downstream]));
+        let proj = vp
+            .project_variant(&allele, "NM_NOATG.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("a cis allele with an init-codon member must report a protein consequence");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.?");
+    }
+
+    #[test]
+    fn project_cis_allele_init_codon_member_atg_reports_met1_unknown() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_TEST.1 starts with ATG (canonical). The cis allele `c.[1A>G;4C>A]`
+        // has an initiation-codon member (`c.1A>G`); on an ATG transcript the
+        // unknown form is `p.(Met1?)`. The whole-allele protein collapses to it
+        // (initiation unknown dominates the downstream missense member).
+        let member_init = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let member_downstream = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TEST.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![member_init, member_downstream]));
+        let proj = vp
+            .project_variant(&allele, "NM_TEST.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("a cis allele with an init-codon member must report a protein consequence");
+        assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Met1?)");
+    }
+
+    #[test]
+    fn project_trans_allele_init_codon_member_does_not_collapse() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // Pins the `allele.phase == AllelePhase::Cis` guard at the init-codon
+        // collapse (projector.rs ~1672). The same members as the non-AUG cis
+        // test — `c.1C>G` (initiation codon) and `c.4C>A` (codon 2) on the
+        // non-AUG NM_NOATG.1 — are assembled here as a *trans* allele instead.
+        // The init-codon collapse is cis-only: trans members are independent
+        // alleles, so they fall through to the all-or-nothing protein rule. The
+        // downstream member declines under the #625 non-ATG guard, so the
+        // all-or-nothing rule yields no whole-allele protein (`None`) — i.e. the
+        // `p.?` collapse is NOT applied. Dropping the `== Cis` guard (or widening
+        // it to `!= Trans`) would start collapsing this case and fail here.
+        //
+        // The five other non-cis phases (`Unknown`, `Mosaic`, `Chimeric`,
+        // `AndOr`, `Products`) take the same non-cis fall-through path; `Trans`
+        // is the representative negative case.
+        let member_init = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let member_downstream = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let allele =
+            HgvsVariant::Allele(AlleleVariant::trans(vec![member_init, member_downstream]));
+        let proj = vp
+            .project_variant(&allele, "NM_NOATG.1")
+            .expect("projection should succeed");
+        assert!(
+            proj.protein.is_none(),
+            "a trans allele must not trigger the cis init-codon collapse; with a downstream \
+             member declining under the #625 non-ATG guard the all-or-nothing protein is None, \
+             got {:?}",
+            proj.protein
         );
     }
 

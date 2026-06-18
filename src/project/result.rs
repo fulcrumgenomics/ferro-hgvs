@@ -35,4 +35,16 @@ pub struct VariantProjection {
     pub is_frameshift: bool,
     pub is_intronic: bool,
     pub is_utr: bool,
+    /// Whether this projection's edit reaches the translation initiation codon
+    /// (CDS 1–3, exonic and non-offset). Set on the single-variant coding path
+    /// via `edit_reaches_initiation_codon`; the allele-protein path reads it
+    /// to collapse a cis allele's whole-protein consequence to the
+    /// initiation-codon-unknown form (`p.(Met1?)` / `p.?`) when a member
+    /// disrupts the start codon (#771 follow-on). On an aggregate (allele)
+    /// projection this is the OR of its members — `true` when any member's edit
+    /// reaches the initiation codon — and that value propagates outward so an
+    /// enclosing nested allele's cis-collapse check can read it. `false` for
+    /// non-coding and empty-allele projections, and for any aggregate whose
+    /// members all leave the start codon untouched.
+    pub affects_init: bool,
 }

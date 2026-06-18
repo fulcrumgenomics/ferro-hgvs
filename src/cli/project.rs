@@ -260,6 +260,7 @@ mod tests {
             is_frameshift: false,
             is_intronic: false,
             is_utr: false,
+            affects_init: false,
         }
     }
 

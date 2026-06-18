@@ -1562,7 +1562,13 @@
       ],
       "input": "NM_024426.4:c.1_4delinsATGA",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "This delins over the initiation codon normalizes to the cis compound allele c.[1C>A;4C>A]; once a member (c.1C>A) disrupts the start codon of this non-AUG-initiation transcript the whole-allele protein consequence is unknown (downstream members are moot), so ferro collapses it to the spec-correct whole-protein unknown p.? — mirroring the single-variant path (#771; substitution.md:51, uncertain.md). The only remaining delta is the protein reference form: HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
