@@ -1971,7 +1971,7 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
 /// provider lookup. Returns `(accession, coord_kind, start, end)` on
 /// success.
 ///
-/// Supports g./m./o./c./n. axes with simple positive-integer ranges
+/// Supports g./m./o./c./n. axes with simple positive-integer positions or ranges
 /// (no offsets, no `*N`, no `?`, no `pter`/`qter` markers). Out-of-scope
 /// shapes return `None` so the caller can surface a focused
 /// `FerroError::UnsupportedVariant`. #422.
@@ -1994,9 +1994,9 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
 /// the match arm below in sync.
 fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, u64)> {
     let (acc_part, after_colon) = reference.split_once(':')?;
-    // Minimum well-formed shape: `g.A_B` = 5 chars (axis + dot + start
-    // + underscore + end).
-    if acc_part.is_empty() || after_colon.len() < 5 {
+    // Minimum well-formed shape: a single position `g.A` = 3 chars (axis + dot
+    // + one position char). A range `g.A_B` is 5+.
+    if acc_part.is_empty() || after_colon.len() < 3 {
         return None;
     }
     let coord_byte = *after_colon.as_bytes().first()?;
@@ -2012,7 +2012,12 @@ fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, 
         _ => return None,
     };
     let range_str = &after_colon[2..];
-    let (start_str, end_str) = range_str.split_once('_')?;
+    // A payload may name a range (`A_B`) or a single position (`A`, a one-base
+    // copy with start == end).
+    let (start_str, end_str) = match range_str.split_once('_') {
+        Some((s, e)) => (s, e),
+        None => (range_str, range_str),
+    };
     if start_str.is_empty() || end_str.is_empty() {
         return None;
     }
@@ -2053,7 +2058,7 @@ fn cross_reference_shape_error(reference: &str) -> FerroError {
         variant_type: format!(
             "ins[{}] cross-reference shape not yet supported. \
              Expansion currently covers g./m./o./c./n. axes with simple \
-             positive-integer ranges. Out-of-scope: r. (RNA — needs U->T \
+             positive-integer positions or ranges. Out-of-scope: r. (RNA — needs U->T \
              translation; see follow-up), p. (protein — structurally \
              invalid as DNA-insertion payload), offsets (+/-), UTR \
              markers (*N), unknown markers (?), and pter/qter/cen \
@@ -3870,6 +3875,18 @@ mod tests {
         let bases = resolve_cross_reference_bases("NG_999999.9(NM_000088.3):c.1_3", &provider)
             .expect("genomic-context compound c. cross-reference should resolve");
         assert_eq!(bases, "ATG");
+    }
+
+    #[test]
+    fn resolve_cross_reference_accepts_a_single_position_payload() {
+        // A cross-reference payload may name a single position (no `_` range),
+        // e.g. `NM_…:c.2` — a one-base copy. `NM_000088.3` is "ATG…" with
+        // cds_start=1, so c.2 == "T". Without single-position support the
+        // payload is rejected as an out-of-scope cross-reference shape.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NM_000088.3:c.2", &provider)
+            .expect("single-position c. cross-reference should resolve");
+        assert_eq!(bases, "T");
     }
 
     #[test]

@@ -210,7 +210,7 @@ NM_003002.2:c.pterdel	NM_003002.2:c.pterdel
 NM_003002.2:c.qterdel	NM_003002.2:c.qterdel
 LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.pter_-51'
 LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter	parse error: Parse error at position 26: Unexpected trailing characters: '_003002.2:c.*835_qter'
-LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
+LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]	normalize error: Unsupported variant type: ins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer positions or ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
 LRG_24t1:c.pter_qterdelinspter_qter	parse error: Parse error at position 26: Unexpected trailing characters: 'pter_qter'
 LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]	parse error: Parse error at position 23: Unexpected trailing characters: 'ins[pter_qter;NM_003002.2:c.*835_qter]'
 NG_012337.1(NM_003002.2):c.[274=;275del]	NG_012337.1(NM_003002.2):c.[274=;275del]
@@ -233,7 +233,7 @@ NM_003002.4:c.169_170insATA	NM_003002.4:c.169_170insATA
 NG_008835.1(NM_022153.2):c.677-21_704+62del	NG_008835.1(NM_022153.2):c.677-21_704+62del
 NG_008835.1(NM_022153.2):c.677-20_704+62del	NG_008835.1(NM_022153.2):c.677-20_704+62del
 NM_003002.4:c.206_210delins190_220inv	normalize error: Reference not found: NM_003002.4
-NG_012337.3:g.136delinsNG_012337.1(NM_012459.2):c.200	normalize error: Unsupported variant type: ins[NG_012337.1(NM_012459.2):c.200] cross-reference shape not yet supported. Expansion currently covers g./m./o./c./n. axes with simple positive-integer ranges. Out-of-scope: r. (RNA — needs U->T translation; see follow-up), p. (protein — structurally invalid as DNA-insertion payload), offsets (+/-), UTR markers (*N), unknown markers (?), and pter/qter/cen decorations
+NG_012337.3:g.136delinsNG_012337.1(NM_012459.2):c.200	normalize error: Reference not found: NM_012459.2
 NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203	normalize error: Reference not found: NM_012459.2
 NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203	normalize error: Reference not found: NM_003002.4
 NM_003002.4:n.206_210del	NM_003002.4:n.206_210del
