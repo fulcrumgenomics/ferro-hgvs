@@ -1,5 +1,0 @@
-LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter
-LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51
-LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]
-LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]
-LRG_24t1:c.pter_qterdelinspter_qter

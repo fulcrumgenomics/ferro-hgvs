@@ -483,6 +483,17 @@ pub enum RejectionReason {
     /// ferro's rejection is the spec-correct behaviour (#654).
     #[serde(rename = "ferro-policy-654-malformed-input-rejected")]
     MalformedInputRejected654,
+    /// ferro rejects an input that numbers a transcript's 5'/3' flank in `c.`
+    /// (a `pter`/`qter` marker as a coordinate or inside a cross-reference /
+    /// delins payload). A coding/non-coding DNA reference does not contain the
+    /// gene's flanking sequences and "can not be used to describe variants"
+    /// there (HGVS background/refseq.md L45-46), so the flank is not
+    /// `c.`-numberable. mutalyzer leniently extrapolates `pter`/`qter` into the
+    /// genomic flank and resolves the bases; ferro declines, which is the
+    /// spec-correct behaviour (#758, consistent with the `c.pterdel`/`c.qterdel`
+    /// `spec_citation` rows and #537).
+    #[serde(rename = "ferro-policy-758-transcript-flank-not-numberable-in-c")]
+    TranscriptFlankNotNumberableInC758,
 }
 
 impl RejectionReason {
@@ -491,6 +502,9 @@ impl RejectionReason {
         match self {
             RejectionReason::MalformedInputRejected654 => {
                 "ferro-policy-654-malformed-input-rejected"
+            }
+            RejectionReason::TranscriptFlankNotNumberableInC758 => {
+                "ferro-policy-758-transcript-flank-not-numberable-in-c"
             }
         }
     }

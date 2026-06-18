@@ -58,6 +58,12 @@
       "title": "coding_protein_descriptions transcript-set enumeration",
       "spec_section": "background/refseq.md L256, L259, L264",
       "note": "On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-insensitive) ferro enumerates the latest curated version of every transcript cdot reports overlapping the locus (#710: collapse superseded versions, prefer curated NM_/NR_ over predicted XM_/XR_). Mutalyzer instead lists the neighbouring overlapping transcripts and partitions the input gene's own consequence onto its separate `protein_description` field — an info-model choice, not spec-mandated. `background/refseq.md` L256/L259 pose 'which transcript / which reference sequence should one use' as open questions and L264 endorses the latest build, so ferro's complete-current-curated-set enumeration is spec-valid; both representations are correct. Accepted divergence, not a convergence target — tightening would regress the #710 curation and cannot fix the rows anyway (the matcher is version-insensitive). Reference-coverage gaps where cdot lacks a transcript base mutalyzer used are tracked separately in #645."
+    },
+    {
+      "id": "transcript-flank-not-numberable",
+      "title": "Transcript 5'/3' flank not c.-numberable (pter/qter)",
+      "spec_section": "background/refseq.md L45-46",
+      "note": "A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking sequences and can not be used to describe variants there (refseq.md L45-46). pter/qter denote those flanks, so they are not c.-numberable — as a coordinate or inside a cross-reference/delins payload. ferro declines; mutalyzer extrapolates the flank and resolves the bases. ferro's refusal is spec-correct (#758/#537)."
     }
   ],
   "cases": [
@@ -3583,7 +3589,13 @@
       "keywords": [],
       "input": "LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51",
       "normalized": "LRG_24:g.5525_5532delinsGTGGGAATTGT",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+        "cluster": "transcript-flank-not-numberable",
+        "note": "delins payload `NM_003002.2:c.pter_-51` numbers the 5' transcript flank (pter) in c.; a c. reference can not describe flanking sequence (refseq.md L45-46). ferro rejects (parse error); mutalyzer extrapolates pter into the genomic 5' flank and resolves GTGGGAATTGT. ferro's refusal is spec-correct."
+      }
     },
     {
       "keywords": [],
@@ -3593,28 +3605,52 @@
         "LRG_24:5524:CGGGGCAC:AAAAAAA"
       ],
       "normalized": "LRG_24:g.5525_5532delinsAAAAAAA",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+        "cluster": "transcript-flank-not-numberable",
+        "note": "delins payload `NM_003002.2:c.*835_qter` numbers the 3' transcript flank (qter) in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer extrapolates qter into the genomic 3' flank and resolves AAAAAAA. ferro's refusal is spec-correct."
+      }
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]",
       "normalized": "LRG_24t1:c.126_133delinsGTGGGAATTGTAAAAAAA",
       "genomic": "LRG_24:g.5525_5532delinsGTGGGAATTGTAAAAAAA",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+        "cluster": "transcript-flank-not-numberable",
+        "note": "bracketed delins payload references both the 5' (pter) and 3' (qter) transcript flanks in c. (refseq.md L45-46). ferro rejects (cross-reference shape error explicitly lists pter/qter decorations as out of scope); mutalyzer resolves the concatenated flank bases. ferro's refusal is spec-correct."
+      }
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.pter_qterdelinspter_qter",
       "normalized": "LRG_24t1:c.=",
       "genomic": "LRG_24:g.=",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+        "cluster": "transcript-flank-not-numberable",
+        "note": "the variant coordinate `c.pter_qter` numbers both transcript flanks in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer treats pter_qter delins pter_qter as a whole-transcript identity (c.=). ferro's refusal is spec-correct."
+      }
     },
     {
       "keywords": [],
       "input": "LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]",
       "normalized": "LRG_24t1:c.*2327_*2328insAAAAAAA",
       "genomic": "LRG_24:g.11486_11487insAAAAAAA",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+        "cluster": "transcript-flank-not-numberable",
+        "note": "the variant coordinate `c.pter_qter` and the bracketed payload both number transcript flanks (pter/qter) in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer resolves it to a 3'-flank insertion. ferro's refusal is spec-correct."
+      }
     },
     {
       "keywords": [],
