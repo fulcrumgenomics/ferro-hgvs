@@ -52,6 +52,27 @@ pub(crate) fn build_initiator_unknown(
     })
 }
 
+/// Build a whole-protein-unknown `p.?` variant.
+///
+/// Used for an initiation-codon-affecting edit on a **non-AUG-initiation**
+/// transcript: the consequence is unknown, but the `p.(Met1?)` form
+/// [`build_initiator_unknown`] emits is wrong because residue 1 is not `Met`
+/// when the start codon is not `ATG`. The whole-protein `p.?` ("an effect is
+/// expected but cannot be reliably predicted", `recommendations/uncertain.md`)
+/// is the spec-correct form and matches mutalyzer. The location is ignored when
+/// the edit is a whole-protein unknown, so a placeholder `Met1` point is fine.
+pub(crate) fn build_whole_protein_unknown(
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> HgvsVariant {
+    let loc = ProtInterval::point(ProtPos::new(AminoAcid::Met, 1));
+    HgvsVariant::Protein(ProteinVariant {
+        accession: parse_accession(protein_accession),
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new(loc, ProteinEdit::whole_protein_unknown()),
+    })
+}
+
 /// Does the reference CDS begin with a canonical `ATG` start codon?
 ///
 /// The protein-consequence path translates a transcript's CDS bases directly,
