@@ -56,6 +56,7 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NM_003002.4:c.206_210delins190_220inv` | protein_description | spec_citation | — | — |
 | `NM_024426.4:c.1C>A` | protein_description | spec_citation | — | — |
 | `NM_024426.4:c.1C>G` | protein_description | spec_citation | — | — |
+| `NM_024426.4:c.1_4delinsATGA` | protein_description | spec_citation | — | — |
 
 ### Protein initiation codon → p.(Met1?)
 
@@ -231,4 +232,4 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 23 | 21 | 15 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 21 |
+| protein_description | 0 | 0 | 0 | 0 | 22 |

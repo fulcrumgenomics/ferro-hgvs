@@ -34,6 +34,29 @@ pub(crate) fn affects_initiation_codon(
     }
 }
 
+/// Does `edit` reach the translation initiation codon on the coding axis,
+/// taking the full CDS-position context (offsets, intronic state) into account?
+///
+/// True only for an **exonic, non-offset** edit whose span overlaps CDS 1–3
+/// ([`affects_initiation_codon`]). An intronic edit, or one whose start/end
+/// carries an intronic offset, never reaches the start codon and returns
+/// `false`. This is the exact gate the single-variant protein path uses to
+/// short-circuit to the initiation-codon-unknown form (`p.(Met1?)` on an `ATG`
+/// start, `p.?` on a non-AUG-initiation transcript; #771). It is exposed so the
+/// allele-protein path can detect an initiation-disrupting cis member and
+/// collapse the whole-allele consequence to that unknown form.
+pub(crate) fn edit_reaches_initiation_codon(
+    edit: &NaEdit,
+    cds_start: &CdsPos,
+    cds_end: &CdsPos,
+    is_intronic: bool,
+) -> bool {
+    !is_intronic
+        && cds_start.offset.is_none()
+        && cds_end.offset.is_none()
+        && affects_initiation_codon(edit, cds_start.base, cds_end.base)
+}
+
 /// Build a predicted `p.(Met1?)` variant for a change affecting the translation
 /// initiation codon. Per HGVS (`recommendations/protein/substitution.md:51`,
 /// `deletion.md:62`) the protein consequence of an initiation-codon variant
