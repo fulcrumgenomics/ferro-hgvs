@@ -105,6 +105,7 @@ On a coding DNA reference (c.), repeat notation unit[N] is permitted only for re
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
+| `NG_012337.1(NM_003002.2):c.[274+20C>T;400_401insNM_003002.4:100_102]` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.10CA[5]` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.3GC[5]` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.6C[4]` | normalized | spec_citation | — | — |
@@ -196,5 +197,5 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 18 | 21 | 15 | 5 | 8 |
+| normalized | 18 | 21 | 15 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |
