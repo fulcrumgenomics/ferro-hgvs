@@ -138,18 +138,35 @@ ferro shuffles genomic-context c./n. variants in spliced transcript space (cross
 |---|---|---|---|---|
 | `ENSG00000184937.16(ENST00000452863.10):c.9del` | normalized | reference_unavailable | — | #671 |
 | `ENSG00000204370.13(ENST00000375549.8):c.100del` | normalized | reference_unavailable | — | #671 |
+| `ENST00000375549.7:c.100del` | errors | accepted_divergence | — | — |
 | `ENST00000375549.8:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000375549:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000452863.10:c.9del` | normalized | reference_unavailable | — | #671 |
+| `LRG_199t1:c.11LRG_199t1:c.11` | errors | accepted_divergence | — | — |
+| `LRG_1t1:52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]` | errors | accepted_divergence | — | — |
+| `NG_007485.1(1787):n.204_205insATC` | errors | accepted_divergence | — | — |
+| `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
+| `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
+| `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
+| `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
+| `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
+| `NG_012337.1:g.[4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
+| `NG_012337.1:g.[4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
+| `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
+| `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
+| `NG_012337.3(NM_003002):274+400G>T` | errors | accepted_divergence | — | — |
+| `NG_012337.3(NM_003002.4):r.274+10G>T` | errors | accepted_divergence | — | — |
+| `NM_003002.2:c.[100del;200_201insNM_003002.2:274+20]` | errors | accepted_divergence | — | — |
 
 ## Disposition tallies
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
+| errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 0 | 4 | 24 | 5 | 6 |

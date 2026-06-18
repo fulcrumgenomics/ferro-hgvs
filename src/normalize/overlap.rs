@@ -715,6 +715,25 @@ mod tests {
     }
 
     #[test]
+    fn insertions_sharing_junction_and_interior_to_span_emit_two_warnings() {
+        // `5_6insA` and `5_6insT` share junction `5` (branch (a)) *and* both
+        // sit strictly interior to the `4_7del` range positions 4..=7
+        // (branch (b)), so the pass emits two `OverlapConflict` warnings for
+        // the one overlap cluster. The combined-shape outcome is still a
+        // correct rejection; this pins the per-branch warning count so a
+        // future dedup refactor doesn't silently change it.
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_7del;5_6insA;5_6insT]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 2, "expected two warnings, got {warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .all(|w| matches!(w, NormalizationWarning::OverlapConflict { .. })),
+            "all warnings must be OverlapConflict: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn two_insertions_at_different_junctions_no_warning() {
         let (variants, phase) = parse_allele("NG_012337.1:g.[4_5insT;8_9insA]");
         assert!(detect_insertion_overlaps(&variants, phase).is_empty());
