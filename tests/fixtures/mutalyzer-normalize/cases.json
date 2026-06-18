@@ -1562,7 +1562,13 @@
       ],
       "input": "NM_024426.4:c.1_4delinsATGA",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro reports this initiation-codon-disrupting compound — c.1_4delinsATGA, which normalizes to the cis pair c.[1C>A;4C>A] — on this non-AUG-initiation transcript as the spec-correct whole-protein unknown p.?: the init-codon member's uncertainty dominates the allele, so the whole compound is p.? rather than declining because the downstream member individually has no protein (#771). The only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
