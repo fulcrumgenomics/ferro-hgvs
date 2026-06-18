@@ -2011,11 +2011,12 @@ struct CrossReferenceParse {
     start: u64,
     /// One-based end position (equal to `start` for a single-position payload).
     end: u64,
-    /// Whether the positions index the transcript (`c.`/`n.`) rather than a
+    /// Whether the positions index the transcript (`c.`/`n.`/`r.`) rather than a
     /// genomic / absolute frame (`g./m./o.`). When set, a genomic-context
     /// compound accession (`NG_(NM_)`) must be reduced to its transcript before
     /// lookup. `n.` shares the `Direct` *fetch* path with `g./m./o.` (it needs
-    /// no `cds_start` translation), so `kind` alone cannot distinguish it — this
+    /// no `cds_start` translation), and `r.` resolves to `Direct` for a
+    /// non-coding transcript, so `kind` alone cannot distinguish either — this
     /// flag carries that bit.
     transcript_relative: bool,
 }

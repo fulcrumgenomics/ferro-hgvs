@@ -237,6 +237,38 @@ fn rna_cross_reference_expands_to_literal() {
     );
 }
 
+#[test]
+fn rna_cross_reference_coding_expands_cds_relative() {
+    let mut p = MockProvider::with_test_data();
+    p.add_genomic_sequence("NC_000022.10", "ACGT".repeat(50));
+    // NM_001234.1 is coding (cds_start=5 over "AAAAATGCCCAAG…"), so r. is
+    // CDS-relative: r.1_3 == c.1_3 == "ATG" (NOT n.1_3 == "AAA"). After
+    // expansion the normalizer suffix-trims the trailing "G" that matches the
+    // reference base at g.15, collapsing "ATG" → "AT" and the outer range from
+    // g.10_15 → g.10_14. If r. had been resolved transcript-relative the
+    // inserted bases would have been "AAA", which shares no suffix with the ref
+    // run "CGTACG" and would produce g.10_15delinsAAA — distinct from g.10_14.
+    // Asserting the g.10_14 outcome therefore proves CDS-relative r. numbering
+    // end to end. #773.
+    let out = normalize("NC_000022.10:g.10_15delins[NM_001234.1:r.1_3]", p)
+        .expect("coding r.-axis cross-reference must expand");
+    assert!(
+        !out.contains("[NM_"),
+        "r. cross-reference must be flattened; got {out}"
+    );
+    assert!(
+        !out.contains("AAA"),
+        "transcript-relative AAA must not appear in output; got {out}",
+    );
+    // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref).
+    // Presence of "g.10_14" in the output confirms CDS-relative expansion
+    // succeeded (transcript-relative "AAA" would produce "g.10_15").
+    assert!(
+        out.contains("g.10_14"),
+        "CDS-relative r.1_3 (ATG) must normalize to g.10_14 range; got {out}",
+    );
+}
+
 // =============================================================================
 // Out-of-scope axis: p. (protein) — structurally invalid as DNA payload
 // =============================================================================
