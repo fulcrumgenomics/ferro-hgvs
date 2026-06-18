@@ -2474,11 +2474,16 @@
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
       "accepted_divergence": {
-        "axis": "normalized",
+        "axis": "genomic",
         "policy": "ferro-policy-745-homopolymer-repeat-contraction",
-        "note": "ferro renders the 3'UTR homopolymer deletion as the repeat contraction c.*3186_*3188A[1]; mutalyzer keeps del. Same #745 class on the normalized axis."
+        "note": "ferro renders the deletion inside the genomic homopolymer as the spec-valid repeat contraction g.320802_320804T[1]; mutalyzer keeps del. Accepted per #745/#750."
       },
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Repeated (DNA contraction)",
+        "note": "Same #745 homopolymer repeat-contraction on the normalized axis (c.*3186_*3188A[1] vs mutalyzer's c.*3187_*3188del); recorded via spec_citation because this row's accepted_divergence slot documents the genomic-axis divergence."
+      }
     },
     {
       "keywords": [],
@@ -3045,7 +3050,12 @@
         "ICORRECTEDVARIANTTYPE",
         "ICORRECTEDPOINT"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "'41>CA' is a substitution lacking a reference base (malformed HGVS); ferro rejects it at parse time. mutalyzer leniently reinterprets the allele (-> c.[40dup;*189del])."
+      }
     },
     {
       "keywords": [
@@ -3058,7 +3068,12 @@
         "ICORRECTEDPOINT",
         "ISORTEDVARIANTS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Same malformed '41>CA' substitution (no reference base); ferro rejects at parse time, mutalyzer leniently reinterprets."
+      }
     },
     {
       "keywords": [
@@ -4095,7 +4110,12 @@
       ],
       "input": "LRG_199t1:c.11LRG_199t1:c.11[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Malformed input: a duplicated/concatenated accession+coordinate ('c.11LRG_199t1:c.11[10]'); ferro rejects at parse time. mutalyzer leniently reads it as the repeat c.11_13G[10]."
+      }
     },
     {
       "keywords": [
@@ -4103,7 +4123,12 @@
       ],
       "input": "LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Malformed input: a concatenated second accession after 'c.11'; ferro rejects at parse time. mutalyzer leniently reads it as c.11_13G[10]."
+      }
     },
     {
       "keywords": [
