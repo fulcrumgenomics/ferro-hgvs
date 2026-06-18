@@ -857,7 +857,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53AlafsTer5)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro expands the copy-range payload ins180_188 to the literal bases insGCGAGGAAA; mutalyzer keeps the positional notation. Same edit; literal inserted sequence is spec-valid."
+      }
     },
     {
       "keywords": [
@@ -869,7 +874,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188inv",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53PhefsTer11)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro expands the inverted copy-range payload to literal bases (insTTTCCTCGC); mutalyzer keeps positional notation."
+      }
     },
     {
       "keywords": [
@@ -882,7 +892,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53AlafsTer5)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "bracketed copy-range payload expanded to literal bases by ferro; mutalyzer keeps positional notation."
+      }
     },
     {
       "keywords": [
@@ -895,7 +910,12 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157ins180_188inv",
       "genomic": "NG_008939.1:g.5207_5208ins5231_10536inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53PhefsTer11)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "bracketed inverted copy-range payload expanded to literal bases by ferro; mutalyzer keeps positional notation."
+      }
     },
     {
       "keywords": [
@@ -1151,7 +1171,12 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins180_188",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 480,
+        "note": "ferro expands the c.180_188 copy range as transcript-contiguous bases; mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele with intronic offsets. Genomic-context copy-range expansion tracked in #480. [review: ferro-vs-mutalyzer correctness]"
+      }
     },
     {
       "keywords": [
@@ -1162,7 +1187,12 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins180_188inv",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 480,
+        "note": "inverted copy-range delins; ferro expands transcript-contiguous, mutalyzer through the genomic (intron-split) reference. Tracked in #480. [review]"
+      }
     },
     {
       "keywords": [
@@ -1174,7 +1204,12 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins[180_188]",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 480,
+        "note": "bracketed copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480. [review]"
+      }
     },
     {
       "keywords": [
@@ -1186,7 +1221,12 @@
       "input": "NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]",
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 480,
+        "note": "bracketed inverted copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480. [review]"
+      }
     },
     {
       "keywords": [
@@ -1223,7 +1263,12 @@
       ],
       "input": "NM_002001.2:c.1_3delinsATG",
       "normalized": "NM_002001.2:c.=",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-explicit-identity-rendering",
+        "note": "reference-identical delins (ATG==ref at c.1_3): ferro renders the positional identity c.1_3=; mutalyzer collapses to whole-reference c.=. Both denote no change."
+      }
     },
     {
       "keywords": [
@@ -2042,7 +2087,12 @@
       "genomic": "LRG_199:g.[499798A>T;499800G>T]",
       "normalized": "LRG_199t1:c.[235A>T;237G>T]",
       "protein_description": "LRG_199p1:p.(Lys79Tyr)",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the block delins c.235_237delinsTAT; mutalyzer trims the unchanged interior base and decomposes to per-position substitutions c.[235A>T;237G>T]. Canonical edit-form convergence tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2087,7 +2137,12 @@
       ],
       "input": "NG_012337.1:g.4delins7_31",
       "normalized": "NG_012337.1:g.4delins7_31",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro expands the genomic copy-range delins7_31 to literal bases; mutalyzer keeps positional notation. g. is contiguous so the literal copy is unambiguous."
+      }
     },
     {
       "keywords": [
@@ -2192,7 +2247,12 @@
       "keywords": [],
       "input": "NG_017013.2:g.17496_17497insAGCTGCTCAGATAGCGA",
       "normalized": "NG_017013.2:g.17496_17497ins[A;17481_17496]",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro emits the literal inserted sequence; mutalyzer renders the mixed literal+copy form ins[A;17481_17496]. Same inserted bases on a contiguous genomic reference."
+      }
     },
     {
       "keywords": [],
@@ -2222,7 +2282,12 @@
       "keywords": [],
       "input": "NG_012337.1:g.4delins7_50",
       "normalized": "NG_012337.1:g.[3_4insGGTT;5_6insACCATATCTCTACTTTGTGTTTATGTTTGTGTATGCATT]",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro emits the literal copied sequence for delins7_50; mutalyzer decomposes it into a two-insert allele. Both describe the same edit on a contiguous genomic reference."
+      }
     },
     {
       "keywords": [],
@@ -2289,7 +2354,12 @@
       "input": "NG_012337.1(NM_003002.2):c.*824del",
       "normalized": "NG_012337.1(NM_003002.2):c.*824del",
       "genomic": "NG_012337.1:g.13948del",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro 3'-shifts the 3'UTR deletion to c.*841del; mutalyzer keeps c.*824del. 3'UTR shift behaviour tracked in #487."
+      }
     },
     {
       "keywords": [],
@@ -2320,7 +2390,12 @@
       "input": "NG_029724.1(NM_004321.7):c.101del",
       "normalized": "",
       "genomic": "NG_029724.1:g.27557del",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-mutalyzer-no-normalized-form",
+        "note": "the corpus carries no normalized value for this row (mutalyzer emitted none); ferro normalizes to the spec-valid c.102del (3' shift). No competing form to match."
+      }
     },
     {
       "keywords": [],
@@ -2399,9 +2474,9 @@
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
       "accepted_divergence": {
-        "axis": "genomic",
+        "axis": "normalized",
         "policy": "ferro-policy-745-homopolymer-repeat-contraction",
-        "note": "ferro renders this deletion inside a genomic homopolymer run as the spec-valid repeat contraction (g.320802_320804T[1]); mutalyzer emits a plain del. DNA repeated.md L5 allows a unit of one or more nucleotides, and ferro's repeat rendering is deliberate, so both forms are spec-defensible (#745, working as intended)."
+        "note": "ferro renders the 3'UTR homopolymer deletion as the repeat contraction c.*3186_*3188A[1]; mutalyzer keeps del. Same #745 class on the normalized axis."
       },
       "to_test": true
     },
@@ -2431,7 +2506,12 @@
       "input": "NG_008835.1:g.320802_320803del",
       "normalized": "NG_008835.1:g.320803_320804del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-745-homopolymer-repeat-contraction",
+        "note": "ferro renders the deletion inside the genomic homopolymer as the spec-valid repeat contraction g.320802_320804T[1]; mutalyzer keeps del. Same class as #745/#750 on the genomic axis."
+      }
     },
     {
       "keywords": [],
@@ -2480,7 +2560,12 @@
       "input": "NG_009497.1(USH2A_v001):c.8682-19dup",
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 500,
+        "note": "ferro resolves the legacy selector USH2A_v001 to the current reference-standard NM_206933.4; the corpus pins NM_206933.2. The variant body is identical (c.8682-19dup); only the resolved transcript version differs. Selector version-selection tracked in #500."
+      }
     },
     {
       "keywords": [],
@@ -2529,7 +2614,12 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[0]",
       "normalized": "LRG_303:g.=",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ins[0] is a zero-copy (no-op) insertion; mutalyzer collapses to g.=. ferro should canonicalize the zero-copy insert to identity. Tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2537,7 +2627,12 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[1]",
       "normalized": "LRG_303:g.6908_6932dup",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "a single inserted copy of the adjacent 25-mer is a duplication; mutalyzer renders g.6908_6932dup. ferro keeps ins[1]. ins->dup canonicalization tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2545,7 +2640,12 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[2]",
       "normalized": "LRG_303:g.6908_6932AGCAACGTGATCGCCTCCCTCACCT[3]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "two inserted copies plus the existing copy form a 3-copy repeat; mutalyzer renders the repeat. ferro keeps ins[2]. Repeat canonicalization tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2561,7 +2661,12 @@
       ],
       "input": "LRG_303:g.4_5insGT[5]",
       "normalized": "LRG_303:g.1_4GT[7]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the inserted repeat as ins GT[5]; mutalyzer merges it with the adjacent existing GT tract into g.1_4GT[7]. Tandem-repeat canonicalization tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2614,7 +2719,12 @@
       "input": "NG_009299.1(NM_017668.3):c.33_35CAA[5]",
       "normalized": "NG_009299.1(NM_017668.3):c.34_39AAC[6]",
       "genomic": "NG_009299.1:g.137803_137808TTG[6]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the input repeat anchor (c.33_35CAA[5]); mutalyzer 3'-shifts the repeat unit to c.34_39AAC[6]. Repeat 3' normalization tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2760,7 +2870,12 @@
         "ICORRECTEDLRGREFERENCE",
         "ILRGWARNING"
       ],
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro resolves the cross-reference payload then renders it as a duplication (c.10_11dup); mutalyzer keeps the literal insGA. ins->dup canonicalization (and the dup anchor position) tracked in #487."
+      }
     },
     {
       "keywords": [],
@@ -2817,7 +2932,12 @@
       ],
       "input": "NG_012337.1:274",
       "normalized": "NG_012337.1:g.274",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-explicit-identity-rendering",
+        "note": "a bare position with no edit operator: ferro renders the explicit identity g.274=; mutalyzer renders the bare position g.274. Both denote no change at 274."
+      }
     },
     {
       "keywords": [
@@ -2826,7 +2946,12 @@
       "input": "NG_012337.1(NM_003002.2):c.[274;600]",
       "normalized": "NG_012337.1(NM_003002.2):c.[274;*120]",
       "genomic": "NG_012337.1:g.[7125;13244]",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro renders the bare-position allele members with explicit identity and an absolute past-CDS coordinate (c.[274=;600=]); mutalyzer uses the 3'UTR form and drops the identity (c.[274;*120]). Past-CDS coordinate rendering + allele identity tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2856,7 +2981,12 @@
       "normalized": "NG_012337.1(NM_012459.2):c.1_*2del",
       "genomic": "NG_012337.1:g.3449_4924del",
       "protein_description": "NG_012337.1(NP_036591.2):p.?",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro echoes the input c.-1_*1del; mutalyzer 3'-shifts the deletion across the CDS boundary to c.1_*2del. 3' shift tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2880,7 +3010,12 @@
         ]
       ],
       "protein_description": "NG_009299.1(NP_060138.1):p.?",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps c.250del; mutalyzer 3'-shifts it to c.*189del. Compound-allele 3' shift tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2892,7 +3027,12 @@
         "ICORRECTEDPOINT",
         "ISORTEDVARIANTS"
       ],
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the c.250del member; mutalyzer 3'-shifts it across the allele to c.*189del (c.[41A>C;*189del]). Compound-allele 3' shift tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -2935,7 +3075,12 @@
         "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
         "cluster": "shuffle-applied-compound-allele-499"
       },
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §Prioritization",
+        "note": "ferro preserves the input compound-allele member order ([311del;295G>A]); mutalyzer sorts members ([295G>A;311del]). Both spec-valid (the per-member 3' shift 310del->311del is correct). Same #499 divergence the infos-axis accepted_divergence already records for this row; recorded here via spec_citation because a case carries one accepted_divergence slot."
+      }
     },
     {
       "keywords": [],
@@ -3220,7 +3365,12 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the two-member allele ([9del;7_8insC]); mutalyzer collapses the delete+insert into the equivalent substitution c.8A>C. Allele->substitution collapse tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -3415,14 +3565,24 @@
       "input": "NG_012337.1(NM_003002.2):c.[274=;275del]",
       "normalized": "NG_012337.1(NM_003002.2):c.275del",
       "genomic": "NG_012337.1:g.7126del",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the redundant c.274= identity member; mutalyzer drops it, collapsing the allele to c.275del. Allele identity-member collapse tracked in #487."
+      }
     },
     {
       "keywords": [],
       "input": "NG_012337.1(NM_003002.2):c.[274del;275=]",
       "normalized": "NG_012337.1(NM_003002.2):c.274del",
       "genomic": "NG_012337.1:g.7125del",
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "normalized",
+        "tracking_issue": 487,
+        "note": "ferro keeps the redundant c.275= identity member; mutalyzer collapses to c.274del. Allele identity-member collapse tracked in #487."
+      }
     },
     {
       "keywords": [
@@ -3760,6 +3920,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro expands the inverted copy-range delins payload to literal bases; mutalyzer keeps the positional copy notation (c.206_209delins191_220inv)."
       }
     },
     {
@@ -3838,7 +4003,12 @@
       "normalized": "NM_003002.4:c.171_175del",
       "rna_description": "NM_003002.4:r.(171_175del)",
       "protein_description": "NM_003002.4(NP_002993.1):p.(Gly58GlnfsTer9)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-transcript-coordinate-preserved",
+        "note": "ferro preserves the input n. numbering (n.206_210del); mutalyzer renumbers to CDS-relative c. (c.171_175del). Same position."
+      }
     },
     {
       "keywords": [
@@ -3867,7 +4037,12 @@
       "input": "NG_007485.1(NM_058195.3):n.204_205insATC",
       "normalized": "NG_007485.1(NM_058195.3):c.44_45insATC",
       "rna_description": "NG_007485.1(NM_058195.3):r.(44_45insauc)",
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-654-transcript-coordinate-preserved",
+        "note": "ferro preserves the input n. (non-coding) numbering; mutalyzer re-expresses it as c. (c.44_45insATC) for the coding transcript. Same position, different coordinate-system convention."
+      }
     },
     {
       "keywords": [

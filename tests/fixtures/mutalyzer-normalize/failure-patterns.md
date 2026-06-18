@@ -129,31 +129,66 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | `ENST00000375549:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000452863.10:c.9del` | normalized | reference_unavailable | — | #671 |
 | `LRG_199t1:c.11LRG_199t1:c.11` | errors | accepted_divergence | — | — |
+| `LRG_199t1:c.235_237delinsTAT` | normalized | known_bug | — | #487 |
 | `LRG_1t1:52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]` | errors | accepted_divergence | — | — |
+| `LRG_303:g.4_5insGT[5]` | normalized | known_bug | — | #487 |
+| `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[0]` | normalized | known_bug | — | #487 |
+| `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[1]` | normalized | known_bug | — | #487 |
+| `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[2]` | normalized | known_bug | — | #487 |
+| `LRG_303t1:c.10_11insLRG_1t1:c.100_101` | normalized | known_bug | — | #487 |
 | `NG_007485.1(1787):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
-| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
+| `NG_007485.1(NM_058195.3):n.204_205insATC` | normalized | accepted_divergence | — | — |
+| `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | accepted_divergence | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
+| `NG_008835.1:g.320802_320803del` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins180_188` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins180_188inv` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins[180_188]` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | normalized | known_bug | — | #480 |
+| `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | normalized | spec_citation | — | — |
+| `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | normalized | known_bug | — | #487 |
+| `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
+| `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
+| `NG_009497.1(USH2A_v001):c.8682-19dup` | normalized | known_bug | — | #500 |
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
+| `NG_012337.1(NM_003002.2):c.*824del` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_003002.2):c.[274=;275del]` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_003002.2):c.[274del;275=]` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.-1_*1del` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | normalized | known_bug | — | #487 |
+| `NG_012337.1:274` | normalized | accepted_divergence | — | — |
+| `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
+| `NG_012337.1:g.4delins7_50` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.[4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002):274+400G>T` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002.4):r.274+10G>T` | errors | accepted_divergence | — | — |
+| `NG_017013.2:g.17496_17497insAGCTGCTCAGATAGCGA` | normalized | accepted_divergence | — | — |
+| `NG_029724.1(NM_004321.7):c.101del` | normalized | accepted_divergence | — | — |
+| `NM_002001.2:c.1_3delinsATG` | normalized | accepted_divergence | — | — |
 | `NM_003002.2:c.[100del;200_201insNM_003002.2:274+20]` | errors | accepted_divergence | — | — |
+| `NM_003002.4:c.206_210delins190_220inv` | normalized | accepted_divergence | — | — |
+| `NM_003002.4:n.206_210del` | normalized | accepted_divergence | — | — |
 
 ## Disposition tallies
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 2 | 0 | 0 | 0 | 0 |
+| genomic | 1 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 0 | 0 | 15 | 5 | 6 |
+| normalized | 15 | 20 | 15 | 5 | 7 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |
