@@ -319,6 +319,36 @@ pub enum Policy {
     /// validation.
     #[serde(rename = "ferro-policy-486-transcript-coordinate-lenient")]
     TranscriptCoordinateLenient486,
+    /// ferro expands a positional / copy-range insertion payload
+    /// (`ins N_M` / `delins N_M`) into the literal copied bases it denotes
+    /// (e.g. `ins180_188` -> `insGCGAGGAAA`), whereas mutalyzer preserves the
+    /// positional notation (or re-expresses it as a decomposed allele). Both
+    /// describe the same edit; the literal inserted sequence is always a
+    /// spec-valid HGVS form (`insertion.md` permits an explicit inserted
+    /// sequence). Terminal rendering divergence (#654).
+    #[serde(rename = "ferro-policy-654-positional-insert-literal-expansion")]
+    PositionalInsertLiteralExpansion654,
+    /// ferro preserves the input's transcript coordinate system, whereas
+    /// mutalyzer re-expresses it: a `c.`-coding transcript addressed in `n.`
+    /// (non-coding) coordinates keeps ferro's `n.` numbering rather than being
+    /// renumbered to `c.`. ferro is lenient where mutalyzer enforces the
+    /// coordinate-system convention; both reference the same position. Mirrors
+    /// the errors-axis `transcript-coordinate-lenient` stance (#654).
+    #[serde(rename = "ferro-policy-654-transcript-coordinate-preserved")]
+    TranscriptCoordinatePreserved654,
+    /// mutalyzer emitted no normalized form for the row (empty oracle value)
+    /// while ferro normalizes the input to a spec-valid result. There is no
+    /// competing normalized form to match, so the divergence is recorded rather
+    /// than failing the run (#654).
+    #[serde(rename = "ferro-policy-654-mutalyzer-no-normalized-form")]
+    MutalyzerNoNormalizedForm654,
+    /// For a no-op edit (a reference-identical `delins`, or a bare position with
+    /// no operator) ferro renders the explicit positional identity it computed —
+    /// `c.1_3=` / `g.274=` — while mutalyzer collapses it to the whole-reference
+    /// `=` or a bare position. Both denote "no change" at that locus; ferro's
+    /// positional `=` is spec-valid. Terminal rendering divergence (#654).
+    #[serde(rename = "ferro-policy-654-explicit-identity-rendering")]
+    ExplicitIdentityRendering654,
 }
 
 impl Policy {
@@ -346,6 +376,14 @@ impl Policy {
             Policy::TranscriptCoordinateLenient486 => {
                 "ferro-policy-486-transcript-coordinate-lenient"
             }
+            Policy::PositionalInsertLiteralExpansion654 => {
+                "ferro-policy-654-positional-insert-literal-expansion"
+            }
+            Policy::TranscriptCoordinatePreserved654 => {
+                "ferro-policy-654-transcript-coordinate-preserved"
+            }
+            Policy::MutalyzerNoNormalizedForm654 => "ferro-policy-654-mutalyzer-no-normalized-form",
+            Policy::ExplicitIdentityRendering654 => "ferro-policy-654-explicit-identity-rendering",
         }
     }
 }
