@@ -1971,7 +1971,7 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
 /// provider lookup. Returns `(accession, coord_kind, start, end)` on
 /// success.
 ///
-/// Supports g./m./o./c./n. axes with simple positive-integer ranges
+/// Supports g./m./o./c./n. axes with simple positive-integer positions or ranges
 /// (no offsets, no `*N`, no `?`, no `pter`/`qter` markers). Out-of-scope
 /// shapes return `None` so the caller can surface a focused
 /// `FerroError::UnsupportedVariant`. #422.
@@ -1992,11 +1992,33 @@ fn fetch_position_range_bases<P: ReferenceProvider>(
 /// insertion payload. Both stay `UnsupportedVariant` for now. If
 /// `parse_reference_location` ever broadens to additional axes, keep
 /// the match arm below in sync.
-fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, u64)> {
+/// A parsed cross-reference payload: the inner accession, how its positions
+/// are interpreted, and the position range.
+struct CrossReferenceParse {
+    /// The payload's accession string (e.g. `NM_000088.3` or the compound
+    /// `NG_012337.3(NM_012459.2)`), as written before the `:`.
+    accession: String,
+    /// How the positions are translated when fetching bases (`Cds` translates
+    /// via the foreign transcript's `cds_start`; `Direct` fetches directly).
+    kind: InsCoordKind,
+    /// One-based start position.
+    start: u64,
+    /// One-based end position (equal to `start` for a single-position payload).
+    end: u64,
+    /// Whether the positions index the transcript (`c.`/`n.`) rather than a
+    /// genomic / absolute frame (`g./m./o.`). When set, a genomic-context
+    /// compound accession (`NG_(NM_)`) must be reduced to its transcript before
+    /// lookup. `n.` shares the `Direct` *fetch* path with `g./m./o.` (it needs
+    /// no `cds_start` translation), so `kind` alone cannot distinguish it — this
+    /// flag carries that bit.
+    transcript_relative: bool,
+}
+
+fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
     let (acc_part, after_colon) = reference.split_once(':')?;
-    // Minimum well-formed shape: `g.A_B` = 5 chars (axis + dot + start
-    // + underscore + end).
-    if acc_part.is_empty() || after_colon.len() < 5 {
+    // Minimum well-formed shape: a single position `g.A` = 3 chars (axis + dot
+    // + one position char). A range `g.A_B` is 5+.
+    if acc_part.is_empty() || after_colon.len() < 3 {
         return None;
     }
     let coord_byte = *after_colon.as_bytes().first()?;
@@ -2011,8 +2033,16 @@ fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, 
         b'c' => InsCoordKind::Cds,
         _ => return None,
     };
+    // See `CrossReferenceParse::transcript_relative` for why `c.`/`n.` are set
+    // here while `g./m./o.` are not.
+    let transcript_relative = matches!(coord_byte, b'c' | b'n');
     let range_str = &after_colon[2..];
-    let (start_str, end_str) = range_str.split_once('_')?;
+    // A payload may name a range (`A_B`) or a single position (`A`, a one-base
+    // copy with start == end).
+    let (start_str, end_str) = match range_str.split_once('_') {
+        Some((s, e)) => (s, e),
+        None => (range_str, range_str),
+    };
     if start_str.is_empty() || end_str.is_empty() {
         return None;
     }
@@ -2027,7 +2057,13 @@ fn parse_cross_reference(reference: &str) -> Option<(String, InsCoordKind, u64, 
     }
     let start: u64 = start_str.parse().ok()?;
     let end: u64 = end_str.parse().ok()?;
-    Some((acc_part.to_string(), kind, start, end))
+    Some(CrossReferenceParse {
+        accession: acc_part.to_string(),
+        kind,
+        start,
+        end,
+        transcript_relative,
+    })
 }
 
 /// Resolve a cross-reference string to its literal sequence via the
@@ -2053,7 +2089,7 @@ fn cross_reference_shape_error(reference: &str) -> FerroError {
         variant_type: format!(
             "ins[{}] cross-reference shape not yet supported. \
              Expansion currently covers g./m./o./c./n. axes with simple \
-             positive-integer ranges. Out-of-scope: r. (RNA — needs U->T \
+             positive-integer positions or ranges. Out-of-scope: r. (RNA — needs U->T \
              translation; see follow-up), p. (protein — structurally \
              invalid as DNA-insertion payload), offsets (+/-), UTR \
              markers (*N), unknown markers (?), and pter/qter/cen \
@@ -2067,9 +2103,37 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
     reference: &str,
     provider: &P,
 ) -> Result<String, FerroError> {
-    let (acc, kind, start, end) =
-        parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
-    fetch_position_range_bases(&acc, start, end, kind, provider)
+    let CrossReferenceParse {
+        accession,
+        kind,
+        start,
+        end,
+        transcript_relative,
+    } = parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
+    // A transcript-relative payload (`c.` or `n.`) indexes the transcript, so a
+    // genomic-context compound accession (`NG_(NM_)`) must be reduced to its
+    // transcript (`NM_`/`NR_`) before lookup — otherwise the fetch fails on the
+    // compound string (`c.` at the cds_start lookup, `n.` at the sequence
+    // lookup). Genomic / absolute payloads (`g./m./o.`) fetch on the named
+    // accession unchanged.
+    let accession = if transcript_relative {
+        transcript_accession_of(&accession).unwrap_or(accession)
+    } else {
+        accession
+    };
+    fetch_position_range_bases(&accession, start, end, kind, provider)
+}
+
+/// Reduce an accession string to its transcript accession (`NM_`/`NR_`/`ENST`),
+/// dropping any `NG_(…)`/`LRG_(…)` genomic-context wrapper. Returns `None` when
+/// the string does not parse as a single accession, so the caller can fall back
+/// to the original string unchanged.
+fn transcript_accession_of(accession: &str) -> Option<String> {
+    let (rest, parsed) = crate::hgvs::parser::accession::parse_accession(accession).ok()?;
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(parsed.transcript_accession())
 }
 
 /// Append bases of an `InsertedPart` to `out` if the part is a
@@ -3836,6 +3900,55 @@ mod tests {
             format!("{}", got),
             "delins[NC_000022.11:g.17178616_17178886]"
         );
+    }
+
+    #[test]
+    fn resolve_cross_reference_extracts_transcript_from_genomic_context_cds_payload() {
+        // A cross-reference `c.` payload whose accession is a genomic-context
+        // compound `NG_(NM_)` must resolve the *transcript* (`NM_`) for the CDS
+        // lookup, not the whole compound string — otherwise the CDS translation
+        // fails with "transcript NG_…(NM_…) has no CDS start". `NM_000088.3` in
+        // the mock has cds_start=1 and sequence "ATGCCCAAG…", so c.1_3 == "ATG".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NG_999999.9(NM_000088.3):c.1_3", &provider)
+            .expect("genomic-context compound c. cross-reference should resolve");
+        assert_eq!(bases, "ATG");
+    }
+
+    #[test]
+    fn resolve_cross_reference_accepts_a_single_position_payload() {
+        // A cross-reference payload may name a single position (no `_` range),
+        // e.g. `NM_…:c.2` — a one-base copy. `NM_000088.3` is "ATG…" with
+        // cds_start=1, so c.2 == "T". Without single-position support the
+        // payload is rejected as an out-of-scope cross-reference shape.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NM_000088.3:c.2", &provider)
+            .expect("single-position c. cross-reference should resolve");
+        assert_eq!(bases, "T");
+    }
+
+    #[test]
+    fn resolve_cross_reference_reduces_transcript_accession_for_noncoding_payload() {
+        // `n.` is transcript-relative like `c.` (it is classified `Direct` only
+        // because it needs no cds_start translation). A genomic-context compound
+        // payload addressed in `n.` must therefore also reduce to the transcript
+        // accession — `NM_000088.3` is "ATG…", so n.2 == "T". Without the
+        // reduction the lookup fails on the compound `NG_…(NM_…)` string.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NG_999999.9(NM_000088.3):n.2", &provider)
+            .expect("genomic-context compound n. cross-reference should resolve");
+        assert_eq!(bases, "T");
+    }
+
+    #[test]
+    fn resolve_cross_reference_accepts_a_single_position_direct_axis_payload() {
+        // A `Direct`-axis (here `n.`) single-position payload — exercises the
+        // single-position path on the Direct branch (no cds_start translation),
+        // complementing the `c.` single-position test above. n.2 == "T".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let bases = resolve_cross_reference_bases("NM_000088.3:n.2", &provider)
+            .expect("single-position n. cross-reference should resolve");
+        assert_eq!(bases, "T");
     }
 
     #[test]
