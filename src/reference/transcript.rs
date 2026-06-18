@@ -796,7 +796,14 @@ impl Transcript {
     /// # Returns
     /// The genomic position if the transcript has genomic coordinates
     pub fn intronic_to_genomic(&self, tx_boundary: u64, offset: i64) -> Option<u64> {
-        let intron = self.find_intron_at_tx_boundary(tx_boundary, offset)?;
+        let Some(intron) = self.find_intron_at_tx_boundary(tx_boundary, offset) else {
+            // No intron matches: the offset may point *past a transcript
+            // terminus* rather than into an interior intron (e.g. `c.*N+offset`
+            // 3' of the last exon, or `c.-N-offset` 5' of the first). There the
+            // genome continues contiguously past the terminal exon, so we extend
+            // the terminal exon's genomic coordinate linearly. #760.
+            return self.extend_past_terminus(tx_boundary, offset);
+        };
 
         // Get the genomic coordinates of the intron
         let (g_start, g_end) = (intron.genomic_start?, intron.genomic_end?);
@@ -826,6 +833,52 @@ impl Transcript {
                 }
             }
             Strand::Unknown => None,
+        }
+    }
+
+    /// Map an offset that points *past a transcript terminus* to a genomic
+    /// coordinate by extending the terminal exon's genomic position linearly.
+    ///
+    /// This handles intron-style offsets that have no enclosing intron because
+    /// they fall 3' of the last exon or 5' of the first exon — e.g.
+    /// `NG_012337.1(NM_003002.2):c.*824+10`, where `c.*824` is the final
+    /// transcript base and `+10` continues into the contiguous genome past the
+    /// 3' terminus (#760). The offset is only honored when `tx_boundary` is the
+    /// matching terminal exon edge and points *outward*:
+    /// - positive offset at the last transcript base → 3' of the transcript;
+    /// - negative offset at the first transcript base → 5' of the transcript.
+    ///
+    /// Any other (interior, non-terminal) boundary returns `None` so a genuinely
+    /// unmappable offset still fails rather than being silently extrapolated.
+    fn extend_past_terminus(&self, tx_boundary: u64, offset: i64) -> Option<u64> {
+        if offset == 0 || self.exons.is_empty() {
+            return None;
+        }
+        let first_exon = self.exons.iter().min_by_key(|e| e.start)?;
+        let last_exon = self.exons.iter().max_by_key(|e| e.end)?;
+
+        let (terminal_exon, beyond_three_prime) = if offset > 0 && tx_boundary == last_exon.end {
+            // 3' of the transcript terminus.
+            (last_exon, true)
+        } else if offset < 0 && tx_boundary == first_exon.start {
+            // 5' of the transcript terminus.
+            (first_exon, false)
+        } else {
+            return None;
+        };
+
+        let (g_start, g_end) = (terminal_exon.genomic_start?, terminal_exon.genomic_end?);
+        let distance = offset.unsigned_abs();
+
+        // The genomic anchor is the terminal exon edge nearest the terminus, and
+        // the direction we walk depends on strand. On the plus strand 3' is
+        // increasing genomic; on the minus strand 3' is decreasing genomic.
+        match (self.strand, beyond_three_prime) {
+            (Strand::Plus, true) => g_end.checked_add(distance),
+            (Strand::Plus, false) => g_start.checked_sub(distance),
+            (Strand::Minus, true) => g_start.checked_sub(distance),
+            (Strand::Minus, false) => g_end.checked_add(distance),
+            (Strand::Unknown, _) => None,
         }
     }
 
@@ -1462,5 +1515,75 @@ mod tests {
             "Should find intron when position is at upstream exon end with negative offset"
         );
         assert_eq!(result.unwrap().number, introns[0].number);
+    }
+
+    /// A minus-strand transcript whose terminal-exon boundaries we can extend
+    /// past for the beyond-terminus tests below.
+    ///
+    /// exon 1 (tx 1..5) sits at the higher genomic locus (the 5' end on the
+    /// minus strand); exon 2 (tx 6..10) sits at the lower genomic locus (the 3'
+    /// end). So tx 1 maps to g 204 and tx 10 maps to g 100.
+    fn make_minus_test_transcript() -> Transcript {
+        Transcript {
+            id: "NM_MINUS.1".to_string(),
+            strand: Strand::Minus,
+            cds_start: Some(2),
+            cds_end: Some(9),
+            exons: vec![
+                Exon::with_genomic(1, 1, 5, 200, 204),
+                Exon::with_genomic(2, 6, 10, 100, 104),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(100),
+            genomic_end: Some(204),
+            ..Default::default()
+        }
+    }
+
+    /// A positive offset anchored at the last transcript base (3' terminal exon
+    /// end) has no downstream intron — it extends linearly past the transcript
+    /// 3' terminus into the contiguous genome. On the plus strand the genomic
+    /// coordinate increases. Regression for #760 (`c.*N+offset` past the 3' end).
+    #[test]
+    fn intronic_to_genomic_extends_past_three_prime_terminus_plus_strand() {
+        let tx = make_test_transcript_with_genomic();
+        // exon 3 (the 3' terminal exon) ends at tx 20 / g 50190505.
+        // tx 20 + 3 bases downstream = g 50190505 + 3.
+        assert_eq!(tx.intronic_to_genomic(20, 3), Some(50190508));
+    }
+
+    /// A negative offset anchored at the first transcript base (5' terminal exon
+    /// start) extends linearly past the transcript 5' terminus. On the plus
+    /// strand the genomic coordinate decreases.
+    #[test]
+    fn intronic_to_genomic_extends_before_five_prime_terminus_plus_strand() {
+        let tx = make_test_transcript_with_genomic();
+        // exon 1 (the 5' terminal exon) starts at tx 1 / g 50189542.
+        // tx 1 - 3 bases upstream = g 50189542 - 3.
+        assert_eq!(tx.intronic_to_genomic(1, -3), Some(50189539));
+    }
+
+    /// Beyond-terminus extension on the minus strand: 3' downstream of the last
+    /// transcript base walks to *lower* genomic coordinates; 5' upstream of the
+    /// first base walks to *higher* ones.
+    #[test]
+    fn intronic_to_genomic_extends_past_termini_minus_strand() {
+        let tx = make_minus_test_transcript();
+        // 3' terminus: tx 10 maps to g 100 (exon 2 genomic_start); +3 downstream
+        // on the minus strand decreases the genomic coordinate.
+        assert_eq!(tx.intronic_to_genomic(10, 3), Some(97));
+        // 5' terminus: tx 1 maps to g 204 (exon 1 genomic_end); -3 upstream on
+        // the minus strand increases the genomic coordinate.
+        assert_eq!(tx.intronic_to_genomic(1, -3), Some(207));
+    }
+
+    /// A boundary that is neither an intron edge nor a transcript terminus must
+    /// still decline — the beyond-terminus fallback must not paper over a
+    /// genuinely unmappable interior offset.
+    #[test]
+    fn intronic_to_genomic_declines_unanchored_interior_offset() {
+        let tx = make_test_transcript_with_genomic();
+        // tx 12 is interior to exon 2 (tx 8..14), not an exon boundary.
+        assert_eq!(tx.intronic_to_genomic(12, 3), None);
     }
 }

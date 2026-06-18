@@ -647,6 +647,67 @@ impl<'a> CoordinateMapper<'a> {
             })
     }
 
+    /// Fold a UTR offset that has *no enclosing intron* into a plain
+    /// (non-intronic) CDS coordinate.
+    ///
+    /// A `+offset`/`-offset` is only meaningful when an intron spans the
+    /// boundary. In the UTRs that intron can be absent for two reasons:
+    /// - the boundary is the transcript terminus, so the offset points into the
+    ///   contiguous genome past the final/first exon (`c.*824+10` 3' of the last
+    ///   exon → `c.*834`); or
+    /// - the transcript model simply has no intron there (e.g. a single-exon
+    ///   supplemental transcript), so the offset is a spurious decoration.
+    ///
+    /// In both cases the offset is not intronic and folds linearly into the
+    /// base coordinate, matching the canonical interpretation and letting the
+    /// standard (non-intronic) machinery map and normalize the position instead
+    /// of the intron-window shuffle that has no intron to anchor on (#760).
+    ///
+    /// # Returns
+    /// The folded position, or `None` when it should keep its existing
+    /// handling: no offset, a position in the CDS proper (where a missing
+    /// intron means a genuinely invalid description, not an extended
+    /// coordinate), or a genuine enclosing intron.
+    pub fn fold_non_intronic_utr_offset(&self, pos: &CdsPos) -> Option<CdsPos> {
+        let offset = pos.offset?;
+        if offset == 0 {
+            return None;
+        }
+
+        // Only UTR offsets fold. A mid-CDS offset with no intron is invalid, not
+        // an extended coordinate, so it keeps erroring rather than folding.
+        let in_utr = pos.utr3 || pos.base < 0;
+        if !in_utr {
+            return None;
+        }
+
+        let tx = self.cds_to_tx(pos).ok()?;
+
+        // A negative tx base sits upstream of transcript base 1 (a deep 5'UTR
+        // offset, e.g. `c.-N` with N past the transcript start), so no interior
+        // intron can enclose it. Skip the intron probe — which is `u64`-indexed
+        // and cannot represent a pre-transcript base — and fold linearly below.
+        // A genuine enclosing intron only applies for a non-negative tx base.
+        if tx.base >= 0 {
+            let tx_base = tx.base as u64;
+            // A genuine intron encloses the offset → leave it to the intronic path.
+            if self
+                .transcript
+                .find_intron_at_tx_boundary(tx_base, offset)
+                .is_some()
+            {
+                return None;
+            }
+        }
+
+        // Transcript coordinates run 5'->3' regardless of strand, so a signed
+        // offset shifts the boundary directly; the (contiguous) sequence past
+        // the boundary maps back through the standard CDS conversion, which
+        // accepts coordinates beyond the transcript termini.
+        let folded_tx = tx.base.checked_add(offset)?;
+        self.tx_to_cds(&TxPos::new(folded_tx)).ok()
+    }
+
     /// Convert transcript position with intronic offset to genomic position
     pub fn tx_to_genomic_with_intron(&self, tx_pos: &TxPos) -> Result<u64, FerroError> {
         // If not intronic, use the standard method
@@ -797,6 +858,120 @@ mod tests {
         let result = mapper.tx_to_cds(&TxPos::new(37)).unwrap();
         assert_eq!(result.base, 2);
         assert!(result.utr3);
+    }
+
+    /// `c.*3+5` on a single-exon transcript whose 3'UTR ends at `*3` has no
+    /// enclosing intron — it is the extended 3'UTR coordinate `c.*8`. Folding
+    /// lets the standard (non-intronic) machinery map it. Regression for #760.
+    #[test]
+    fn fold_three_prime_utr_offset_at_terminus() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // cds_end=35, single exon ends at tx 38 → *3 is the final transcript base.
+        let pos = CdsPos {
+            base: 3,
+            offset: Some(5),
+            utr3: true,
+            special: None,
+        };
+        let folded = mapper
+            .fold_non_intronic_utr_offset(&pos)
+            .expect("should fold");
+        assert_eq!(folded.base, 8);
+        assert!(folded.utr3);
+        assert_eq!(folded.offset, None);
+    }
+
+    /// A 3'UTR offset *interior* to a single-exon transcript (no intron there at
+    /// all, the degenerate supplemental-transcript shape behind the #760 corpus
+    /// row) still folds: `c.*2+1` → `c.*3`.
+    #[test]
+    fn fold_three_prime_utr_offset_interior() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // *2 maps to tx 37, interior to the single exon (which ends at tx 38).
+        let pos = CdsPos {
+            base: 2,
+            offset: Some(1),
+            utr3: true,
+            special: None,
+        };
+        let folded = mapper
+            .fold_non_intronic_utr_offset(&pos)
+            .expect("should fold");
+        assert_eq!(folded.base, 3);
+        assert!(folded.utr3);
+        assert_eq!(folded.offset, None);
+    }
+
+    /// `c.-5-3` anchored at the first transcript base extends 5' past the
+    /// terminus to `c.-8`.
+    #[test]
+    fn fold_five_prime_utr_offset_at_terminus() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // cds_start=6 → c.-5 maps to tx 1, the first transcript base.
+        let pos = CdsPos {
+            base: -5,
+            offset: Some(-3),
+            utr3: false,
+            special: None,
+        };
+        let folded = mapper
+            .fold_non_intronic_utr_offset(&pos)
+            .expect("should fold");
+        assert_eq!(folded.base, -8);
+        assert!(!folded.utr3);
+        assert_eq!(folded.offset, None);
+    }
+
+    /// A deep 5'UTR offset whose anchor base already maps upstream of
+    /// transcript base 1 (a negative tx base) must still fold linearly rather
+    /// than short-circuit into the intronic path: `c.-7-2` (tx -1) → `c.-9`.
+    /// Regression for the negative-tx-base 5'UTR edge of #760.
+    #[test]
+    fn fold_five_prime_utr_offset_negative_tx_base() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // cds_start=6 → c.-7 maps to tx -1, upstream of transcript base 1.
+        let pos = CdsPos {
+            base: -7,
+            offset: Some(-2),
+            utr3: false,
+            special: None,
+        };
+        let folded = mapper
+            .fold_non_intronic_utr_offset(&pos)
+            .expect("should fold");
+        assert_eq!(folded.base, -9);
+        assert!(!folded.utr3);
+        assert_eq!(folded.offset, None);
+    }
+
+    /// A mid-CDS offset with no intron is a genuinely invalid description, not
+    /// an extended coordinate — it must not be folded.
+    #[test]
+    fn fold_offset_declines_cds_position() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // c.10+5 maps to tx 15, inside the CDS — not a UTR offset.
+        let pos = CdsPos {
+            base: 10,
+            offset: Some(5),
+            utr3: false,
+            special: None,
+        };
+        assert!(mapper.fold_non_intronic_utr_offset(&pos).is_none());
+    }
+
+    /// A non-intronic position (no offset) is never folded.
+    #[test]
+    fn fold_offset_declines_non_intronic_position() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        assert!(mapper
+            .fold_non_intronic_utr_offset(&CdsPos::utr3(2))
+            .is_none());
     }
 
     #[test]

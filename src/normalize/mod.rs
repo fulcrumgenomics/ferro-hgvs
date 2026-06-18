@@ -2109,6 +2109,44 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Cds(variant.clone()), vec![]));
         }
 
+        // #760: a UTR offset with no enclosing intron — past a transcript
+        // terminus (`c.*824+10`, 3' of the final exon → `c.*834`) or on a
+        // transcript whose model has no intron there at all — is not intronic.
+        // Fold it to a plain (non-intronic) position and recurse so the standard
+        // path maps it, instead of the intron-window shuffle that finds no
+        // intron to anchor on. The folded position carries no offset, so the
+        // recursion folds nothing and terminates.
+        {
+            use crate::hgvs::interval::UncertainBoundary;
+            let mapper = crate::convert::CoordinateMapper::new(&transcript);
+            let folded_start = mapper.fold_non_intronic_utr_offset(start_pos);
+            let folded_end = mapper.fold_non_intronic_utr_offset(end_pos);
+            if folded_start.is_some() || folded_end.is_some() {
+                // Replace each folded boundary while preserving its certainty.
+                let rebuild =
+                    |boundary: &UncertainBoundary<CdsPos>, folded: Option<CdsPos>| match folded {
+                        Some(p) => match boundary.as_single() {
+                            Some(mu) => UncertainBoundary::Single(mu.map_ref(|_| p)),
+                            None => UncertainBoundary::certain(p),
+                        },
+                        None => boundary.clone(),
+                    };
+                let new_location = Interval::with_complex_boundaries(
+                    rebuild(&variant.loc_edit.location.start, folded_start),
+                    rebuild(&variant.loc_edit.location.end, folded_end),
+                );
+                let new_variant = CdsVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: LocEdit::with_uncertainty(
+                        new_location,
+                        variant.loc_edit.edit.clone(),
+                    ),
+                };
+                return self.normalize_cds(&new_variant);
+            }
+        }
+
         // Handle intronic variants specially
         if start_pos.is_intronic() || end_pos.is_intronic() {
             // Switch to the accession-aware lookup so an NG/NC-parented input
