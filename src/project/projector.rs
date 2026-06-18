@@ -14,8 +14,9 @@ use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
-    affects_initiation_codon, build_initiator_unknown, cds_has_valid_start, predict_indel_protein,
-    predict_substitution_protein, read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
+    affects_initiation_codon, build_initiator_unknown, build_whole_protein_unknown,
+    cds_has_valid_start, predict_indel_protein, predict_substitution_protein, read_cds_start_codon,
+    whole_exon_deletion_span, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -1765,7 +1766,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ) -> Result<Option<HgvsVariant>, FerroError> {
         // An edit whose span reaches the translation initiation codon (CDS
         // 1–3) has an unpredictable protein consequence, reported as
-        // `p.(Met1?)` (HGVS recommendations/protein/{substitution.md:51,
+        // `p.(Met1?)` on a canonical-`ATG`-initiation transcript, or as `p.?`
+        // on a non-AUG-initiation transcript where residue 1 is not `Met`
+        // (#771; see the start-codon split at the `affects_init` branch below)
+        // (HGVS recommendations/protein/{substitution.md:51,
         // deletion.md:62}; #512). This holds even when the edit's 5' end lies
         // in the 5'UTR (CDS base ≤ 0) — e.g. a boundary-spanning insertion or
         // duplication like `c.-1_2dup` — so the coarse `is_utr` gate must not
@@ -1836,8 +1840,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // This is a deliberate over-approximation: a few RefSeq transcripts use
         // experimentally-supported non-AUG initiation (CUG/GUG with a
         // `transl_except`), whose CDS is consistent yet non-`ATG`; we decline
-        // those too rather than risk wrong-frame translation of the common
-        // inconsistent-annotation case.
+        // those too (for non-initiation edits) rather than risk wrong-frame
+        // translation of the common inconsistent-annotation case. An
+        // initiation-codon-affecting edit is the exception — it reports an
+        // unknown form (`p.?`) without translating, so it is handled below
+        // before this decline (#771).
         //
         // A failure to read the CDS (missing sequence, degenerate coords) is
         // left to the per-edit paths below, which already treat
@@ -1847,27 +1854,48 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // guard inspects.
         let tx_for_cds_check =
             self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
-        if let Ok(start_codon) = read_cds_start_codon(&tx_for_cds_check) {
-            if !cds_has_valid_start(&start_codon) {
-                log::trace!(
-                    "declining protein prediction for {transcript_id}: reference CDS does \
-                     not begin with an ATG start codon (cds_start is inconsistent with the \
-                     transcript FASTA); first codon = {start_codon:?}",
-                );
-                return Ok(None);
-            }
-        }
-        // An initiation-codon-affecting edit short-circuits to `p.(Met1?)`
-        // here, before edit-type dispatch, so boundary-spanning edits whose
+        // Read the start codon once; it drives both the initiation-codon-unknown
+        // form below and the #625 non-ATG decline. An unreadable CDS (missing
+        // sequence / degenerate coords) is left to the per-edit paths — treat it
+        // as "valid" here so we neither decline nor mis-pick the `p.?` form.
+        let start_is_atg = read_cds_start_codon(&tx_for_cds_check)
+            .map(|c| cds_has_valid_start(&c))
+            .unwrap_or(true);
+        // An initiation-codon-affecting edit short-circuits to an unknown-protein
+        // form here, before edit-type dispatch, so boundary-spanning edits whose
         // 5' end is in the 5'UTR (which the per-edit paths reject via their
-        // `cds base > 0` guards) are still reported. The in-CDS start-codon
-        // cases (e.g. `c.1A>G`) also funnel through here; the per-edit paths
-        // keep their own `affects_initiation_codon` guard as defense in depth
-        // for direct callers (#504, #512).
+        // `cds base > 0` guards) are still reported. The in-CDS start-codon cases
+        // (e.g. `c.1A>G`) also funnel through here; the per-edit paths keep their
+        // own `affects_initiation_codon` guard as defense in depth for direct
+        // callers (#504, #512). The consequence is reported WITHOUT translating,
+        // so the non-ATG #625 frame concern does not apply: a canonical ATG start
+        // gives `p.(Met1?)`; a non-AUG-initiation transcript (#625) gives the
+        // plain whole-protein unknown `p.?` (residue 1 is not `Met`, so the
+        // `Met1?` form would be wrong) — #771.
         if affects_init {
             let tx_for_codon =
                 self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
-            return Ok(Some(build_initiator_unknown(&prot_acc, &tx_for_codon)));
+            let prot = if start_is_atg {
+                build_initiator_unknown(&prot_acc, &tx_for_codon)
+            } else {
+                build_whole_protein_unknown(&prot_acc, &tx_for_codon)
+            };
+            return Ok(Some(prot));
+        }
+        // Issue #625 (non-initiation edits only — initiation-codon edits already
+        // returned an unknown form above). Decline to translate when the CDS does
+        // not begin with `ATG`: `cds_start` is then likely inconsistent with the
+        // FASTA and translation would read the wrong frame and fabricate a bogus
+        // consequence. This also conservatively declines the rare legitimate
+        // non-AUG-initiation transcript (CUG/GUG with a `transl_except`) for any
+        // non-initiation edit rather than risk the common inconsistent-annotation
+        // case.
+        if !start_is_atg {
+            log::trace!(
+                "declining protein prediction for {transcript_id}: reference CDS does not begin \
+                 with an ATG start codon (cds_start is inconsistent with the transcript FASTA)",
+            );
+            return Ok(None);
         }
         // Issue #332: route per-codon lookups through the variant-aware path
         // so an NG/NC-parented `cache_variant` picks the build-correct
@@ -3137,9 +3165,46 @@ mod tests {
                 exon_cigars: Vec::new(),
             },
         );
+        // A second transcript with a NON-ATG start codon ("CTG…"), for the #771
+        // initiation-codon-on-a-non-AUG-transcript path. Bare-NM_ direct
+        // projection needs only the provider transcript + cdot version check.
+        cdot.add_transcript(
+            "NM_NOATG.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("NOATGGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[2000, 2009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_NOATG.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
         let projector = Projector::new(cdot);
 
         let mut provider = MockProvider::new();
+        // Non-ATG transcript: "CTGCGCTAA" (CTG start), cds_start=1.
+        provider.add_transcript(Transcript {
+            id: "NM_NOATG.1".to_string(),
+            gene_symbol: Some("NOATGGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("CTGCGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(2000),
+            genomic_end: Some(2008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
         // Transcript: sequence "ATGCGCTAA", cds_start=1 (1-based, first base).
         provider.add_transcript(Transcript {
             id: "NM_TEST.1".to_string(),
@@ -7314,6 +7379,64 @@ mod tests {
         // c.4C>A: codon 2 CGC(Arg) → AGC(Ser) ⇒ p.(Arg2Ser).
         let protein = proj.protein.expect("protein should be predicted");
         assert_eq!(format!("{protein}"), "NP_TEST.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_nonaug_init_codon_reports_unknown_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // NM_NOATG.1 starts with CTG (non-AUG). c.1C>G affects the initiation
+        // codon → unknown consequence, reported as the spec-correct whole-protein
+        // p.? (not p.(Met1?), since residue 1 is not Met) without translating
+        // (#771). Before the fix this declined via the #625 non-ATG guard.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_NOATG.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("an initiation-codon variant must report p.?");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.?");
+    }
+
+    #[test]
+    fn project_nonaug_downstream_variant_has_no_protein() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A NON-initiation variant on the non-AUG transcript must still decline
+        // (the #625 guard: translating would risk the wrong frame).
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_NOATG.1")
+            .expect("projection should succeed");
+        assert!(
+            proj.protein.is_none(),
+            "non-initiation variant on a non-ATG transcript must decline (#625)"
+        );
     }
 
     #[test]

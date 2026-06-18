@@ -1510,7 +1510,13 @@
       ],
       "input": "NM_024426.4:c.1C>G",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro now reports the initiation-codon-affecting variant on this non-AUG-initiation transcript as the spec-correct whole-protein unknown p.? (#771); the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -1530,7 +1536,13 @@
       ],
       "input": "NM_024426.4:c.1C>A",
       "protein_description": "NM_024426.4(NP_077744.3):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro now reports the initiation-codon-affecting variant on this non-AUG-initiation transcript as the spec-correct whole-protein unknown p.? (#771); the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
