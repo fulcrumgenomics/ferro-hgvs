@@ -277,6 +277,16 @@ pub enum Policy {
     /// bug. (`p.0?` is arguably preferable as a future refinement.)
     #[serde(rename = "ferro-policy-whole-cds-del-met1")]
     WholeCdsDeletionMet1,
+    /// ferro renders a deletion inside a genomic homopolymer (mononucleotide
+    /// tandem tract) as the spec-valid repeat contraction `N[k]` (e.g.
+    /// `g.320802_320804T[1]`) — `deletion_to_repeat` makes the repeat nature
+    /// explicit; DNA `repeated.md` L5 allows a repeat unit of "one or more"
+    /// nucleotides. mutalyzer keeps a plain `del` for a contraction (while both
+    /// use repeat notation for an expansion). Both spec-defensible; ferro's
+    /// repeat form is deliberate (`test_deletion_to_repeat_homopolymer_two_removed`).
+    /// Accepted divergence per #745.
+    #[serde(rename = "ferro-policy-745-homopolymer-repeat-contraction")]
+    HomopolymerRepeatContraction745,
 }
 
 impl Policy {
@@ -289,6 +299,9 @@ impl Policy {
                 "ferro-policy-499-shuffle-applied-compound-allele"
             }
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
+            Policy::HomopolymerRepeatContraction745 => {
+                "ferro-policy-745-homopolymer-repeat-contraction"
+            }
         }
     }
 }

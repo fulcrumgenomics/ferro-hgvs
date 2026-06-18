@@ -2423,10 +2423,10 @@
       "input": "NG_008835.1(NM_022124.6):c.3304_3305del",
       "normalized": "NG_008835.1(NM_022124.6):c.3305_3306del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "known_bug": {
+      "accepted_divergence": {
         "axis": "genomic",
-        "tracking_issue": 745,
-        "note": "ferro re-expresses this deletion inside a genomic homopolymer run as a repeat contraction (g.320802_320804T[1]) instead of del; convergence to mutalyzer's del tracked in #745."
+        "policy": "ferro-policy-745-homopolymer-repeat-contraction",
+        "note": "ferro renders this deletion inside a genomic homopolymer run as the spec-valid repeat contraction (g.320802_320804T[1]); mutalyzer emits a plain del. DNA repeated.md L5 allows a unit of one or more nucleotides, and ferro's repeat rendering is deliberate, so both forms are spec-defensible (#745, working as intended)."
       },
       "to_test": true
     },
@@ -2456,10 +2456,10 @@
       "input": "NG_008835.1(NM_001168390.2):c.*3186_*3187del",
       "normalized": "NG_008835.1(NM_001168390.2):c.*3187_*3188del",
       "genomic": "NG_008835.1:g.320803_320804del",
-      "known_bug": {
+      "accepted_divergence": {
         "axis": "genomic",
-        "tracking_issue": 745,
-        "note": "ferro re-expresses this deletion inside a genomic homopolymer run as a repeat contraction (g.320802_320804T[1]) instead of del; convergence to mutalyzer's del tracked in #745."
+        "policy": "ferro-policy-745-homopolymer-repeat-contraction",
+        "note": "ferro renders this deletion inside a genomic homopolymer run as the spec-valid repeat contraction (g.320802_320804T[1]); mutalyzer emits a plain del. DNA repeated.md L5 allows a unit of one or more nucleotides, and ferro's repeat rendering is deliberate, so both forms are spec-defensible (#745, working as intended)."
       },
       "to_test": true
     },

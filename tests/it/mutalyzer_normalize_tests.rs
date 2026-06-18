@@ -1595,9 +1595,10 @@ fn genomic_coverable(input: &str) -> bool {
     // NG_008835.1 is a large (>400 KB) RefSeqGene with homopolymer runs where the
     // genomic 3' shift / repeat detection needs more flanking sequence than the
     // committed padded windows carry; serving it via windows truncates the shift
-    // (and a deletion that the full sequence renders as a repeat contraction —
-    // a tracked known_bug #745 — collapses to del). Those rows stay on the
-    // manifest-backed axis_genomic rather than being faithfully gateable here.
+    // (and a deletion that the full sequence renders as the spec-valid repeat
+    // contraction — an accepted divergence from mutalyzer's del, #745 — collapses
+    // to del). Those rows stay on the manifest-backed axis_genomic rather than
+    // being faithfully gateable here.
     if parent.starts_with("NG_008835.") {
         return false;
     }
