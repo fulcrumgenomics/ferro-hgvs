@@ -89,10 +89,14 @@ const FAIL_PRINT_LIMIT: usize = 10;
 /// is stripped from the human-facing diagnostic.
 const EMPTY_PROJECTION_SENTINEL: &str = "<empty-projection> ";
 
-/// Directory of committed per-axis empty-projection count baselines (one
-/// integer per `<axis>.count` file). A run with a manifest fails if an axis's
-/// `empty_got` rises above its baseline; regenerate with
-/// `BLESS_EMPTY_PROJECTION=1`. Absent file ⇒ baseline 0.
+/// Directory of committed per-axis empty-projection count baselines, one
+/// `<axis>.count` file per axis. Format: line 1 is the count; an optional line 2
+/// is the reference identity it was blessed against (#764). The count is
+/// reference-dependent, so the gate enforces a rise only when the live reference
+/// matches the blessed one — otherwise it skips with a notice rather than firing
+/// on reference drift (a single-line/legacy file is treated as unpinned → skip).
+/// An absent file means the axis expects zero empty projections (enforced,
+/// reference-independent). Regenerate with `BLESS_EMPTY_PROJECTION=1`.
 const EMPTY_PROJECTION_BASELINE_DIR: &str = "tests/fixtures/mutalyzer-normalize/empty-projection";
 
 /// Policy label recorded for `infos`-axis accepted divergences. The upstream
@@ -131,6 +135,130 @@ fn manifest_path() -> Option<PathBuf> {
         return Some(p.to_path_buf());
     }
     None
+}
+
+/// A stable identifier for the prepared reference behind the current manifest,
+/// used to pin the empty-projection baselines (#764).
+///
+/// The empty-projection *count* is reference-dependent — the same code yields a
+/// different number against a differently-prepared reference (cdot / genome /
+/// transcript snapshot), so a committed absolute count blessed on one reference
+/// fires the gate on another for drift, not regression. Pinning each baseline to
+/// the reference it was blessed against lets the gate enforce only when the live
+/// reference matches, and skip (with a notice) otherwise.
+///
+/// The identity is a FNV-1a hash of a canonical, path-independent *content*
+/// signature derived from the parsed manifest (see
+/// [`reference_identity_from_manifest`]): the `prepared_at` stamp (refreshed on
+/// every re-prepare, so it moves whenever the underlying data is regenerated even
+/// if nothing else does), the `transcript_count`, and the file *names* (basenames,
+/// not paths) of the content-bearing cdot / genome / transcript artifacts — whose
+/// names encode the source build/version (e.g. `cdot-0.2.32.refseq.GRCh38.json`).
+/// Hashing the basenames rather than the full paths keeps the identity invariant
+/// to machine-local absolute paths, so two byte-identical references on different
+/// hosts share one identity. FNV-1a is deterministic across platforms/toolchains
+/// (unlike `DefaultHasher`). Returns `None` when no manifest is available or it
+/// fails to parse (the gate then has nothing reference-specific to enforce).
+fn reference_identity() -> Option<String> {
+    static ID: OnceLock<Option<String>> = OnceLock::new();
+    ID.get_or_init(|| {
+        let path = manifest_path()?;
+        let bytes = fs::read(&path).ok()?;
+        let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(reference_identity_from_manifest(&manifest))
+    })
+    .clone()
+}
+
+/// Compute the reference identity (#764) from a parsed manifest value.
+///
+/// Builds a canonical, path-independent content signature and FNV-1a hashes it.
+/// The signature draws only on fields that move when the prepared-reference
+/// *content* changes and that are invariant to machine-local paths:
+/// - `prepared_at` — refreshed on every re-prepare, so it changes whenever the
+///   reference is regenerated even if every other field is unchanged;
+/// - `transcript_count` — content-derived;
+/// - the *basenames* (not full paths) of the content-bearing cdot / genome /
+///   transcript artifacts, whose names encode the source build/version.
+///
+/// Split out from [`reference_identity`] so it can be unit-tested without a live
+/// prepared reference.
+fn reference_identity_from_manifest(manifest: &serde_json::Value) -> String {
+    // Basename of a string-valued manifest field, if present.
+    let basename = |key: &str| -> Option<String> {
+        manifest
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(|p| {
+                Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string())
+            })
+    };
+    // Basenames of an array-valued manifest field, if present.
+    let basenames = |key: &str| -> Vec<String> {
+        manifest
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|p| {
+                        Path::new(p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| p.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // Collect the content signature components, then canonicalize: every entry is
+    // `key=value`, the multi-valued artifact lists are sorted, and the whole set
+    // is joined deterministically so the same content always yields the same
+    // signature regardless of manifest key ordering or host paths.
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(prepared_at) = manifest
+        .get("prepared_at")
+        .and_then(serde_json::Value::as_str)
+    {
+        parts.push(format!("prepared_at={prepared_at}"));
+    }
+    if let Some(count) = manifest
+        .get("transcript_count")
+        .and_then(serde_json::Value::as_u64)
+    {
+        parts.push(format!("transcript_count={count}"));
+    }
+    for key in [
+        "cdot_json",
+        "cdot_grch37_json",
+        "genome_fasta",
+        "genome_grch37_fasta",
+    ] {
+        if let Some(name) = basename(key) {
+            parts.push(format!("{key}={name}"));
+        }
+    }
+    for key in ["transcript_fastas", "ensembl_transcript_fastas"] {
+        let mut names = basenames(key);
+        names.sort();
+        if !names.is_empty() {
+            parts.push(format!("{key}=[{}]", names.join(",")));
+        }
+    }
+    parts.sort();
+    let signature = parts.join("\n");
+
+    // FNV-1a (64-bit) — small, dependency-free, and stable across builds.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in signature.as_bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn provider() -> Option<Arc<MultiFastaProvider>> {
@@ -637,28 +765,37 @@ impl AxisTally {
         let baseline_path = empty_projection_baseline_path(self.axis);
         if std::env::var("BLESS_EMPTY_PROJECTION").is_ok() {
             if self.empty_got > 0 {
+                // Pin the blessed count to the reference it was produced on, so
+                // the gate enforces only when re-run on the same reference (#764).
                 let _ = fs::create_dir_all(Path::new(EMPTY_PROJECTION_BASELINE_DIR));
-                fs::write(&baseline_path, format!("{}\n", self.empty_got))
+                let ref_id = reference_identity().unwrap_or_else(|| "unknown".to_string());
+                fs::write(&baseline_path, format!("{}\n{}\n", self.empty_got, ref_id))
                     .unwrap_or_else(|e| panic!("write {}: {e}", baseline_path.display()));
             } else {
                 // An axis with no empty projections needs no baseline file
-                // (load treats a missing file as 0); drop any stale one.
+                // (a missing file enforces the reference-independent "0 empties"
+                // claim below); drop any stale one.
                 let _ = fs::remove_file(&baseline_path);
             }
             eprintln!(
-                "blessed empty-projection baseline {} = {}",
-                self.axis, self.empty_got
+                "blessed empty-projection baseline {} = {} (reference {})",
+                self.axis,
+                self.empty_got,
+                reference_identity().as_deref().unwrap_or("unknown"),
             );
             return;
         }
+        // Reference-pinned enforcement (#764): see `empty_gate_outcome`.
         let baseline = load_empty_projection_baseline(self.axis);
-        if let Err(msg) = empty_budget_verdict(self.empty_got, baseline) {
-            panic!(
+        match empty_gate_outcome(self.empty_got, baseline, reference_identity().as_deref()) {
+            EmptyGateOutcome::WithinBudget => {}
+            EmptyGateOutcome::Regressed(msg) => panic!(
                 "{}: {msg} — a populated projection degraded to empty (output quality regressed \
                  even though the FAIL set may be unchanged). Investigate, or re-bless with \
                  BLESS_EMPTY_PROJECTION=1 if the increase is intentional.",
                 self.axis
-            );
+            ),
+            EmptyGateOutcome::Skipped(notice) => eprintln!("{}: {notice}", self.axis),
         }
 
         assert!(
@@ -676,19 +813,31 @@ fn empty_projection_baseline_path(axis: Axis) -> PathBuf {
     Path::new(EMPTY_PROJECTION_BASELINE_DIR).join(format!("{axis}.count"))
 }
 
-/// Load the committed empty-projection baseline count for `axis`. A missing file
-/// is treated as baseline `0` (no empty projections expected); an existing but
-/// unparseable file panics so corruption surfaces immediately rather than being
-/// silently read as `0` (which would lose the true baseline and misreport the
-/// regression as `0 -> N`).
-fn load_empty_projection_baseline(axis: Axis) -> usize {
+/// Load the committed empty-projection baseline for `axis`.
+///
+/// Format: line 1 is the count; an optional line 2 is the reference identity it
+/// was blessed against (#764). Returns:
+/// - `None` when the file is missing (no committed baseline);
+/// - `Some((count, Some(ref_id)))` for a reference-pinned baseline;
+/// - `Some((count, None))` for a legacy/unpinned single-line baseline.
+///
+/// An existing file whose first line is not a `usize` panics so corruption
+/// surfaces immediately rather than being silently mis-read.
+fn load_empty_projection_baseline(axis: Axis) -> Option<(usize, Option<String>)> {
     let path = empty_projection_baseline_path(axis);
-    match fs::read_to_string(&path) {
-        Ok(s) => s.trim().parse::<usize>().unwrap_or_else(|e| {
-            panic!("baseline file {} is not a valid usize: {e}", path.display())
-        }),
-        Err(_) => 0, // missing file -> baseline 0
-    }
+    let s = fs::read_to_string(&path).ok()?;
+    let mut lines = s.lines();
+    let count = lines
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse::<usize>()
+        .unwrap_or_else(|e| panic!("baseline file {} is not a valid usize: {e}", path.display()));
+    let reference_id = lines
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty());
+    Some((count, reference_id))
 }
 
 /// Verdict for the #651 empty-projection budget: `Ok` while the observed count
@@ -701,6 +850,66 @@ fn empty_budget_verdict(observed: usize, baseline: usize) -> Result<(), String> 
         ))
     } else {
         Ok(())
+    }
+}
+
+/// Outcome of the reference-pinned empty-projection gate (#764).
+#[derive(Debug, PartialEq, Eq)]
+enum EmptyGateOutcome {
+    /// Within budget (or an unenforceable, skipped reference) — no action.
+    WithinBudget,
+    /// A genuine populated→empty regression on the matching reference — panic.
+    Regressed(String),
+    /// The baseline was blessed against a different/no reference — skip with
+    /// this notice rather than fire on reference drift.
+    Skipped(String),
+}
+
+/// Decide the empty-projection gate, reference-pinned (#764). The absolute count
+/// is reference-dependent, so:
+/// - no committed baseline → the axis expects zero empty projections (a
+///   reference-independent claim) → enforce against 0;
+/// - baseline pinned to the *live* reference → enforce the committed count
+///   (catches a real populated→empty regression, the #651 intent);
+/// - baseline pinned to a *different* (or no) reference → skip with a notice,
+///   so a stale reference does not fire the gate on drift.
+fn empty_gate_outcome(
+    observed: usize,
+    baseline: Option<(usize, Option<String>)>,
+    live_id: Option<&str>,
+) -> EmptyGateOutcome {
+    let to_outcome = |verdict: Result<(), String>| match verdict {
+        Ok(()) => EmptyGateOutcome::WithinBudget,
+        Err(msg) => EmptyGateOutcome::Regressed(msg),
+    };
+    match baseline {
+        None => to_outcome(empty_budget_verdict(observed, 0)),
+        Some((count, blessed_id)) => match (blessed_id.as_deref(), live_id) {
+            (Some(blessed), Some(live)) if blessed == live => {
+                to_outcome(empty_budget_verdict(observed, count))
+            }
+            // Legacy/unpinned single-line baseline: it carries no reference id, so
+            // it cannot be verified against any live reference. The fix is to
+            // migrate the file to the pinned (two-line) format, not to investigate
+            // drift — say so explicitly.
+            (None, _) => EmptyGateOutcome::Skipped(format!(
+                "empty-projection gate SKIPPED (observed {observed}, committed {count}) — the \
+                 committed baseline is a legacy unpinned (single-line) file with no reference \
+                 identity, so the reference-dependent count cannot be verified (#764). Re-bless \
+                 with BLESS_EMPTY_PROJECTION=1 on a canonical reference to migrate it to the \
+                 pinned format and re-arm the gate."
+            )),
+            // Pinned baseline whose reference differs from (or is absent against)
+            // the live one: this is reference drift, not a regression. Re-blessing
+            // on the current reference is the action.
+            (Some(blessed), live) => EmptyGateOutcome::Skipped(format!(
+                "empty-projection gate SKIPPED (observed {observed}, committed {count}) — the \
+                 baseline was blessed against reference {blessed} but the live reference is {}; \
+                 the absolute count is reference-dependent (#764). Re-bless with \
+                 BLESS_EMPTY_PROJECTION=1 on this reference to re-arm.",
+                live.unwrap_or("<none>"),
+            )),
+        },
     }
 }
 
@@ -2978,6 +3187,167 @@ mod comparator_tests {
         assert!(empty_budget_verdict(3, 5).is_ok(), "below = improvement");
         let err = empty_budget_verdict(6, 5).expect_err("rise must fail");
         assert!(err.contains("5 -> 6"), "message names the rise: {err}");
+    }
+
+    // Reference-pinned empty-projection gate (#764).
+
+    #[test]
+    fn empty_gate_no_baseline_enforces_zero() {
+        // No committed file ⇒ expect zero empties (reference-independent).
+        assert_eq!(
+            empty_gate_outcome(0, None, Some("ref-a")),
+            EmptyGateOutcome::WithinBudget
+        );
+        assert!(matches!(
+            empty_gate_outcome(1, None, Some("ref-a")),
+            EmptyGateOutcome::Regressed(_)
+        ));
+    }
+
+    #[test]
+    fn empty_gate_matching_reference_enforces_count() {
+        let base = Some((5usize, Some("ref-a".to_string())));
+        // Same reference: enforce the committed count.
+        assert_eq!(
+            empty_gate_outcome(5, base.clone(), Some("ref-a")),
+            EmptyGateOutcome::WithinBudget
+        );
+        assert!(matches!(
+            empty_gate_outcome(6, base, Some("ref-a")),
+            EmptyGateOutcome::Regressed(_)
+        ));
+    }
+
+    #[test]
+    fn empty_gate_mismatched_reference_skips_not_panics() {
+        // A rise that would regress on the blessed reference must SKIP (not
+        // regress) when the live reference differs — the drift false positive.
+        let base = Some((5usize, Some("ref-a".to_string())));
+        assert!(matches!(
+            empty_gate_outcome(99, base, Some("ref-b")),
+            EmptyGateOutcome::Skipped(_)
+        ));
+    }
+
+    #[test]
+    fn empty_gate_unpinned_legacy_baseline_skips() {
+        // A legacy single-line baseline (no reference id) cannot be verified
+        // against the live reference → skip with a notice rather than enforce.
+        let base = Some((19usize, None));
+        assert!(matches!(
+            empty_gate_outcome(24, base, Some("ref-a")),
+            EmptyGateOutcome::Skipped(_)
+        ));
+    }
+
+    #[test]
+    fn empty_gate_skip_notices_distinguish_legacy_from_drift() {
+        // Legacy/unpinned baseline → notice directs the contributor to migrate.
+        let legacy = empty_gate_outcome(24, Some((19, None)), Some("ref-a"));
+        match legacy {
+            EmptyGateOutcome::Skipped(msg) => {
+                assert!(msg.contains("legacy unpinned"), "legacy notice: {msg}");
+                assert!(
+                    msg.contains("migrate"),
+                    "legacy notice mentions migrate: {msg}"
+                );
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+        // Pinned-but-mismatched baseline → notice names both references (drift).
+        let drift = empty_gate_outcome(99, Some((5, Some("ref-a".to_string()))), Some("ref-b"));
+        match drift {
+            EmptyGateOutcome::Skipped(msg) => {
+                assert!(
+                    msg.contains("ref-a"),
+                    "drift notice names blessed ref: {msg}"
+                );
+                assert!(msg.contains("ref-b"), "drift notice names live ref: {msg}");
+                assert!(
+                    !msg.contains("legacy unpinned"),
+                    "drift is not a legacy notice: {msg}"
+                );
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
+
+    // Reference identity from a parsed manifest (#764).
+
+    #[test]
+    fn reference_identity_is_deterministic_and_path_independent() {
+        // Two manifests with identical *content* but different absolute paths and
+        // a different manifest key order must yield the same identity.
+        let a = serde_json::json!({
+            "prepared_at": "2026-06-17T09:44:18.428902+00:00",
+            "transcript_count": 273423,
+            "cdot_json": "/host-a/ferro/cdot/cdot-0.2.32.refseq.GRCh38.json",
+            "genome_fasta": "/host-a/ferro/genome/GRCh38.fna",
+            "transcript_fastas": [
+                "/host-a/ferro/transcripts/human.2.rna.fna.gz",
+                "/host-a/ferro/transcripts/human.1.rna.fna.gz",
+            ],
+        });
+        let b = serde_json::json!({
+            // Different host paths, and the transcript list in a different order.
+            "transcript_fastas": [
+                "/elsewhere/data/transcripts/human.1.rna.fna.gz",
+                "/elsewhere/data/transcripts/human.2.rna.fna.gz",
+            ],
+            "genome_fasta": "/elsewhere/data/genome/GRCh38.fna",
+            "cdot_json": "/elsewhere/data/cdot/cdot-0.2.32.refseq.GRCh38.json",
+            "transcript_count": 273423,
+            "prepared_at": "2026-06-17T09:44:18.428902+00:00",
+        });
+        let id_a = reference_identity_from_manifest(&a);
+        // Deterministic: same input twice is the same identity.
+        assert_eq!(id_a, reference_identity_from_manifest(&a));
+        // Path-independent and order-independent: identical content matches.
+        assert_eq!(id_a, reference_identity_from_manifest(&b));
+        // Looks like a 16-hex-digit FNV-1a digest.
+        assert_eq!(id_a.len(), 16, "identity is a 64-bit hex digest: {id_a}");
+        assert!(
+            id_a.chars().all(|c| c.is_ascii_hexdigit()),
+            "hex digest: {id_a}"
+        );
+    }
+
+    #[test]
+    fn reference_identity_changes_when_content_changes() {
+        let base = serde_json::json!({
+            "prepared_at": "2026-06-17T09:44:18.428902+00:00",
+            "transcript_count": 273423,
+            "cdot_json": "cdot/cdot-0.2.32.refseq.GRCh38.json",
+            "genome_fasta": "genome/GRCh38.fna",
+        });
+        let id_base = reference_identity_from_manifest(&base);
+
+        // A re-prepare bumps `prepared_at` even with identical artifacts → drift.
+        let mut reprepared = base.clone();
+        reprepared["prepared_at"] = serde_json::json!("2026-06-18T00:00:00.000000+00:00");
+        assert_ne!(
+            id_base,
+            reference_identity_from_manifest(&reprepared),
+            "a re-prepare (new prepared_at) must change the identity"
+        );
+
+        // A different cdot version (encoded in the filename) → different identity.
+        let mut new_cdot = base.clone();
+        new_cdot["cdot_json"] = serde_json::json!("cdot/cdot-0.2.33.refseq.GRCh38.json");
+        assert_ne!(
+            id_base,
+            reference_identity_from_manifest(&new_cdot),
+            "a different cdot version must change the identity"
+        );
+
+        // A different transcript count → different identity.
+        let mut new_count = base.clone();
+        new_count["transcript_count"] = serde_json::json!(273424);
+        assert_ne!(
+            id_base,
+            reference_identity_from_manifest(&new_count),
+            "a different transcript_count must change the identity"
+        );
     }
 
     // ------------------------------------------------------------------------

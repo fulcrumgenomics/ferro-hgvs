@@ -19,7 +19,9 @@ tests/fixtures/<upstream>-normalize/
 ├── mock-pin/                  # ferro's current behavior under MockProvider
 │   └── normalized.txt         # one line per case: `<input>\t<ferro_output_or_error>`
 ├── empty-projection/          # per-axis empty/degenerate-projection count baseline (manifest runs)
-│   └── <axis>.count           # single integer; a rise above it fails the axis test (#651)
+│   └── <axis>.count           # line 1 = count, optional line 2 = the reference identity it
+│                              # was blessed against (#764); a rise fails the axis test (#651)
+│                              # only when the live reference matches, else it skips (see below)
 ├── failure-patterns.md        # GENERATED summary (cluster taxonomy + tallies); never hand-edit
 └── NOTICE                     # upstream attribution + pinned SHA + refresh
 
@@ -70,9 +72,17 @@ Each corpus's test binary runs **three** logical layers against the same
   to `[]`) stays in the same FAIL/annotated bucket and the membership diff
   reports "0 regressions". To catch this, each axis also counts rows where
   ferro produced an **empty/degenerate projection** (no protein predicted, or
-  `project_variant_all` yielded zero pairs) and fails if that count rises above
-  the committed `empty-projection/<axis>.count` baseline. Regenerate after an
-  intentional change with
+  `project_variant_all` yielded zero pairs) and gates a rise in that count
+  against the committed `empty-projection/<axis>.count` baseline. Because the
+  count is **reference-dependent** (a differently-prepared reference legitimately
+  yields a different number), each baseline is *pinned* to the reference it was
+  blessed against (#764): line 1 is the count, optional line 2 is the reference
+  identity. The gate enforces a rise (panics on a regression) only when the live
+  reference matches the pinned identity; on a mismatch — or for a legacy
+  single-line file with no identity — it **skips with a notice** instead of
+  firing on reference drift. An **absent** file is the reference-independent
+  "0 empty projections expected" claim and is always enforced. Regenerate (and
+  re-pin) after an intentional change with
   `BLESS_EMPTY_PROJECTION=1 cargo nextest run --features dev -E 'test(axis_)'`.
 
 The committed `baseline-failures/<axis>.txt` is the static ledger of
@@ -163,6 +173,36 @@ Informational (not read by the runner). One line per input that
 currently FAILs under `axis_<axis>` with a real manifest. Inputs in
 arbitrary order. Updated by burn-down PRs that demote inputs as ferro
 is fixed.
+
+### `empty-projection/<axis>.count`
+
+The reference-pinned output-quality budget (#651/#764) consumed by Layer 2
+manifest runs. Up to two lines:
+
+```text
+<count>            # line 1: empty/degenerate-projection count baseline
+<reference-id>     # line 2 (optional): the reference identity it was blessed against
+```
+
+- **Line 1** is the blessed count. An existing file whose first line is not a
+  `usize` is a hard error (corruption surfaces immediately).
+- **Line 2** is the reference identity (#764): a deterministic, path-independent
+  FNV-1a digest of a content signature of the live prepared reference
+  (`prepared_at`, `transcript_count`, and the basenames of the cdot / genome /
+  transcript artifacts). Blessed by `BLESS_EMPTY_PROJECTION=1`.
+
+Gate semantics:
+
+- **Absent file** → the axis expects zero empty projections (a
+  reference-independent claim) → enforced against `0`.
+- **Pinned baseline whose identity matches the live reference** → enforce the
+  committed count; a rise panics as a populated→empty regression.
+- **Pinned baseline whose identity differs** (reference drift), or a **legacy
+  single-line file with no identity** → the gate **skips with a notice** rather
+  than firing, since the absolute count is not comparable across references.
+  The skip notice distinguishes the two: drift → "re-bless on this reference";
+  legacy → "migrate to the pinned format". Re-bless with
+  `BLESS_EMPTY_PROJECTION=1 cargo nextest run --features dev -E 'test(axis_)'`.
 
 ### `failure-patterns.md`
 
