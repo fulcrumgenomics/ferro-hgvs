@@ -50,6 +50,9 @@ impl Fixture {
                 case.spec_citation
                     .as_ref()
                     .and_then(|d| d.cluster.as_deref()),
+                case.accepted_rejection
+                    .as_ref()
+                    .and_then(|d| d.cluster.as_deref()),
             ]
             .into_iter()
             .flatten()
@@ -118,6 +121,20 @@ impl Fixture {
                     input: input.to_string(),
                     axis: d.axis.as_str().to_string(),
                     kind: DispositionKind::SpecCitation,
+                    ferro_output: None,
+                    tracking_issue: None,
+                });
+            }
+            // `accepted_rejection` (ferro correctly errors; mutalyzer lenient) is
+            // an accepted, terminal divergence — aggregate it under the
+            // `AcceptedDivergence` summary column. The distinct, reviewable
+            // disposition lives in `cases.json`.
+            if let Some(d) = &case.accepted_rejection {
+                rows.push(MemberRow {
+                    cluster: d.cluster.clone(),
+                    input: input.to_string(),
+                    axis: d.axis.as_str().to_string(),
+                    kind: DispositionKind::AcceptedDivergence,
                     ferro_output: None,
                     tracking_issue: None,
                 });
@@ -196,6 +213,12 @@ pub struct Case {
     /// records the spec citation for review.
     #[serde(default)]
     pub spec_citation: Option<SpecCitation>,
+    /// Marks a non-panic `Err` on a specific axis as ferro *correctly rejecting*
+    /// an input mutalyzer leniently reinterprets (the only disposition that
+    /// covers an `Err` on a projection axis). Tallied into
+    /// `AxisTally::divergence_accepted`. See [`AcceptedRejection`].
+    #[serde(default)]
+    pub accepted_rejection: Option<AcceptedRejection>,
 }
 
 /// Closed enum of corpus-runner axes. Replaces the previous free-form
@@ -433,6 +456,62 @@ impl std::fmt::Display for ReferenceUnavailableReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// Closed enum of reasons ferro *correctly* emits an error for an input that
+/// mutalyzer leniently reinterprets. Like [`Policy`], adding a variant is a
+/// deliberate code change so every "ferro-correctly-rejects" claim is reviewed.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum RejectionReason {
+    /// ferro rejects a malformed / non-spec input — e.g. a substitution lacking
+    /// a reference base (`c.41>CA`), or a concatenated/duplicated accession
+    /// (`c.11LRG_199t1:c.11[10]`) — with a structured parse/normalize error,
+    /// while mutalyzer leniently reinterprets it and emits a normalized form.
+    /// ferro's rejection is the spec-correct behaviour (#654).
+    #[serde(rename = "ferro-policy-654-malformed-input-rejected")]
+    MalformedInputRejected654,
+}
+
+impl RejectionReason {
+    /// Stable identifier used in summary lines so reviewers can grep across runs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RejectionReason::MalformedInputRejected654 => {
+                "ferro-policy-654-malformed-input-rejected"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Accepted-**rejection** annotation. When attached to a `Case`, the corpus
+/// runner treats a non-panic `Err` on `axis` as a tracked-but-non-failing
+/// divergence: ferro *correctly* declines an input that mutalyzer leniently
+/// reinterprets. Distinct from [`AcceptedDivergence`] (which covers a string
+/// *mismatch* from a successful run) — this is the only disposition that
+/// buckets an `Err` on a projection axis. A genuine panic and the
+/// empty-projection sentinel still hard-FAIL, and if ferro *starts* producing
+/// output (the rejection is gone) the harness FAILs loudly (XPASS). Tallied
+/// into `AxisTally::divergence_accepted` alongside `accepted_divergence`.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct AcceptedRejection {
+    /// Axis this annotation applies to.
+    pub axis: Axis,
+    /// Closed reason identifier explaining why ferro's rejection is correct.
+    pub reason: RejectionReason,
+    /// Optional human-readable note expanding on the reason.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Root-cause cluster id (see the corpus `clusters` registry).
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 /// Accepted-divergence annotation. When attached to a `Case`, the
@@ -746,23 +825,26 @@ mod tests {
     fn cluster_refs_collects_every_disposition_kind() {
         let clusters = r#"
             {"id":"sel","title":"RefSeqGene selector","spec_section":"background/refseq.md"},
-            {"id":"np","title":"bare NP","spec_section":"protein"}
+            {"id":"np","title":"bare NP","spec_section":"protein"},
+            {"id":"rej","title":"malformed input rejected","spec_section":"DNA"}
         "#;
         let cases = r#"
             {"input":"A","improvement":{"axis":"normalized","tracking_issue":500,
               "section":"HGVS §RefSeqGene transcript selection","cluster":"sel"}},
             {"input":"B","spec_citation":{"axis":"protein_description",
-              "section":"HGVS protein reference (bare NP)","cluster":"np"}}
+              "section":"HGVS protein reference (bare NP)","cluster":"np"}},
+            {"input":"C","accepted_rejection":{"axis":"normalized",
+              "reason":"ferro-policy-654-malformed-input-rejected","cluster":"rej"}}
         "#;
         let fixture = parse(clusters, cases);
         let mut refs = fixture.cluster_refs();
         refs.sort();
-        assert_eq!(refs, vec![("A", "sel"), ("B", "np")]);
+        assert_eq!(refs, vec![("A", "sel"), ("B", "np"), ("C", "rej")]);
         assert!(fixture.validate_clusters().is_ok());
 
         let summary = fixture.to_summary();
         assert_eq!(summary.title, "mutalyzer-normalize");
-        assert_eq!(summary.rows.len(), 2);
+        assert_eq!(summary.rows.len(), 3);
         let imp = summary
             .rows
             .iter()
@@ -775,6 +857,17 @@ mod tests {
             .rows
             .iter()
             .any(|r| r.kind == DispositionKind::SpecCitation));
+        // `accepted_rejection` aggregates under the `AcceptedDivergence` summary
+        // column; its `cluster` must still be collected by `cluster_refs`.
+        let rej = summary
+            .rows
+            .iter()
+            .find(|r| r.kind == DispositionKind::AcceptedDivergence)
+            .expect("accepted_rejection row (mapped to AcceptedDivergence)");
+        assert_eq!(rej.input, "C");
+        assert_eq!(rej.axis, "normalized");
+        assert_eq!(rej.cluster.as_deref(), Some("rej"));
+        assert_eq!(rej.tracking_issue, None);
     }
 
     #[test]

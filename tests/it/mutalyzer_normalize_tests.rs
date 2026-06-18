@@ -34,8 +34,8 @@
 //!     `BLESS_MOCK_PIN=1 cargo nextest run --features dev -E 'test(regression_under_mock_normalized)'`
 
 use ferro_hgvs::conformance::mutalyzer::{
-    AcceptedDivergence, Axis, Case, Fixture, Improvement, KnownBug, Policy,
-    ReferenceUnavailableReason, SpecCitation, SpecSection,
+    AcceptedDivergence, AcceptedRejection, Axis, Case, Fixture, Improvement, KnownBug, Policy,
+    ReferenceUnavailableReason, RejectionReason, SpecCitation, SpecSection,
 };
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::error_handling::{ErrorOverride, ErrorType};
@@ -330,13 +330,25 @@ impl AxisTally {
     ///    reference, so ferro no-ops — not a ferro defect).
     /// 6. `spec_overridden` when the case carries a `spec_citation`
     ///    matching this tally's axis.
-    /// 7. FAIL otherwise.
+    /// 7. `divergence_accepted` when the case carries an `accepted_rejection`
+    ///    matching this tally's axis AND `actual` is a non-panic,
+    ///    non-empty-projection `Err` — ferro *correctly* rejecting an input
+    ///    mutalyzer leniently reinterprets. This is the only disposition that
+    ///    buckets an `Err` on a *projection* axis (XPASS-guarded: an `Ok` here
+    ///    means the rejection is gone, so a match XPASS-FAILs and a mismatch
+    ///    FAILs). A genuine `panic:` and the empty-projection sentinel still
+    ///    hard-FAIL.
+    /// 8. FAIL otherwise.
     ///
-    /// `accepted_divergence`, `known_bug`, `improvement`, `reference_unavailable`,
-    /// and `spec_citation` catch a *string mismatch* from a successful run on
-    /// the projection axes. On those axes an `Err` means ferro failed to produce
-    /// any result (panic, parse error, normalize failure) — a real bug that must
-    /// surface as FAIL even when an annotation is present.
+    /// The five *mismatch* dispositions — `accepted_divergence`, `known_bug`,
+    /// `improvement`, `reference_unavailable`, and `spec_citation` — catch a
+    /// *string mismatch* from a successful run on the projection axes. For those
+    /// five, on the projection axes an `Err` means ferro failed to produce any
+    /// result (panic, parse error, normalize failure) — a real bug that must
+    /// surface as FAIL even when an annotation is present. `accepted_rejection`
+    /// (item 7) is the deliberate exception: it is the one disposition that
+    /// buckets a non-panic, non-empty-projection `Err` on a projection axis into
+    /// `divergence_accepted` rather than FAIL.
     ///
     /// The **errors axis is the exception**: there a non-matching `Err` is the
     /// *expected* "ferro diverges" signal — ferro emitted no error, or a
@@ -411,8 +423,36 @@ impl AxisTally {
                     return;
                 }
             }
+            if let Some(ar) = &case.accepted_rejection {
+                if ar.axis == self.axis {
+                    self.fail.push((
+                        case.input.clone(),
+                        format!(
+                            "XPASS: accepted_rejection ({}) now matches mutalyzer; ferro no longer rejects this input — remove the annotation and demote the row",
+                            ar.reason
+                        ),
+                    ));
+                    return;
+                }
+            }
             self.pass += 1;
             return;
+        }
+        // `accepted_rejection`: a non-panic, non-empty-projection `Err` on the
+        // annotated axis is ferro *correctly rejecting* an input mutalyzer
+        // leniently reinterprets. It is the only disposition that buckets an
+        // `Err` on a projection axis; a genuine panic and the empty-projection
+        // sentinel (#651) still hard-FAIL below. Tallied alongside
+        // `accepted_divergence`. (An `Ok` here — ferro stopped rejecting — falls
+        // through: a match XPASS-FAILs above, a mismatch FAILs below.)
+        if let Some(ar) = &case.accepted_rejection {
+            if ar.axis == self.axis
+                && matches!(&actual, Err(e) if !e.starts_with("panic:") && !e.starts_with(EMPTY_PROJECTION_SENTINEL))
+            {
+                self.divergence_accepted
+                    .push((case.input.clone(), ar.reason.to_string()));
+                return;
+            }
         }
         // On the errors axis a non-panic `Err` is the expected "ferro diverges"
         // outcome, so annotations bucket it the same way an `Ok` mismatch is
@@ -1852,6 +1892,7 @@ mod comparator_tests {
             improvement: None,
             reference_unavailable: None,
             spec_citation,
+            accepted_rejection: None,
         }
     }
 
@@ -2226,6 +2267,78 @@ mod comparator_tests {
         assert!(t.divergence_accepted.is_empty());
         assert_eq!(t.fail.len(), 1);
         assert!(t.fail[0].1.contains("expected=\"X\" got=\"Y\""));
+    }
+
+    // (7r) A non-panic `Err` with `accepted_rejection` on the matching axis
+    // BUCKETS into `divergence_accepted` — ferro correctly rejects an input
+    // mutalyzer leniently reinterprets. This is the only disposition that
+    // covers an `Err` on a projection axis.
+    #[test]
+    fn tally_accepted_rejection_buckets_nonpanic_err() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = Case {
+            accepted_rejection: Some(AcceptedRejection {
+                axis: Axis::Normalized,
+                reason: RejectionReason::MalformedInputRejected654,
+                note: None,
+                cluster: None,
+            }),
+            ..make_case("in", None, None)
+        };
+        t.record(&case, "X", Err("parse: malformed substitution".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.fail.is_empty(),
+            "a non-panic Err with accepted_rejection must bucket"
+        );
+        assert_eq!(
+            t.divergence_accepted,
+            vec![(
+                "in".to_string(),
+                "ferro-policy-654-malformed-input-rejected".to_string()
+            )]
+        );
+    }
+
+    // (7r-panic) A genuine PANIC is STILL a hard FAIL even with an
+    // `accepted_rejection` — real crashes are never masked.
+    #[test]
+    fn tally_accepted_rejection_panic_still_fails() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = Case {
+            accepted_rejection: Some(AcceptedRejection {
+                axis: Axis::Normalized,
+                reason: RejectionReason::MalformedInputRejected654,
+                note: None,
+                cluster: None,
+            }),
+            ..make_case("in", None, None)
+        };
+        t.record(&case, "X", Err("panic: boom".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty(), "a panic must not bucket");
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7r-xpass) If ferro NOW produces output (the rejection is gone), the row
+    // is an XPASS and FAILs loudly so the stale annotation is cleaned up.
+    #[test]
+    fn tally_accepted_rejection_xpass_fails_when_ferro_no_longer_errors() {
+        let mut t = AxisTally::new(Axis::Normalized);
+        let case = Case {
+            accepted_rejection: Some(AcceptedRejection {
+                axis: Axis::Normalized,
+                reason: RejectionReason::MalformedInputRejected654,
+                note: None,
+                cluster: None,
+            }),
+            ..make_case("in", None, None)
+        };
+        t.record(&case, "X", Ok("X".to_string()));
+        assert_eq!(t.pass, 0);
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1, "ferro no longer rejecting must XPASS-FAIL");
+        assert!(t.fail[0].1.contains("XPASS"));
     }
 
     // (7c) `reference_unavailable` deserializes including its closed `reason`

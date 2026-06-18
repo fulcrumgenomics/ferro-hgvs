@@ -129,6 +129,8 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | `ENST00000375549:c.100del` | normalized | reference_unavailable | — | #671 |
 | `ENST00000452863.10:c.9del` | normalized | reference_unavailable | — | #671 |
 | `LRG_199t1:c.11LRG_199t1:c.11` | errors | accepted_divergence | — | — |
+| `LRG_199t1:c.11LRG_199t1:c.11[10]` | normalized | accepted_divergence | — | — |
+| `LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]` | normalized | accepted_divergence | — | — |
 | `LRG_199t1:c.235_237delinsTAT` | normalized | known_bug | — | #487 |
 | `LRG_1t1:52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]` | errors | accepted_divergence | — | — |
 | `LRG_303:g.4_5insGT[5]` | normalized | known_bug | — | #487 |
@@ -154,7 +156,9 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | normalized | known_bug | — | #480 |
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | normalized | spec_citation | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | normalized | known_bug | — | #487 |
+| `NG_009299.1(NM_017668.3):c.[250del;41>CA]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
+| `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
 | `NG_009497.1(USH2A_v001):c.8682-19dup` | normalized | known_bug | — | #500 |
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
@@ -191,5 +195,5 @@ _No seeded member rows yet (manifest-gated seeding, #325)._
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 14 | 20 | 15 | 5 | 8 |
+| normalized | 18 | 20 | 15 | 5 | 8 |
 | protein_description | 0 | 0 | 0 | 0 | 19 |

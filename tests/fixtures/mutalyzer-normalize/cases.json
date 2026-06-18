@@ -3050,7 +3050,12 @@
         "ICORRECTEDVARIANTTYPE",
         "ICORRECTEDPOINT"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "'41>CA' is a substitution lacking a reference base (malformed HGVS); ferro rejects it at parse time. mutalyzer leniently reinterprets the allele (-> c.[40dup;*189del])."
+      }
     },
     {
       "keywords": [
@@ -3063,7 +3068,12 @@
         "ICORRECTEDPOINT",
         "ISORTEDVARIANTS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Same malformed '41>CA' substitution (no reference base); ferro rejects at parse time, mutalyzer leniently reinterprets."
+      }
     },
     {
       "keywords": [
@@ -4100,7 +4110,12 @@
       ],
       "input": "LRG_199t1:c.11LRG_199t1:c.11[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Malformed input: a duplicated/concatenated accession+coordinate ('c.11LRG_199t1:c.11[10]'); ferro rejects at parse time. mutalyzer leniently reads it as the repeat c.11_13G[10]."
+      }
     },
     {
       "keywords": [
@@ -4108,7 +4123,12 @@
       ],
       "input": "LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]",
       "normalized": "LRG_199t1:c.11_13G[10]",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Malformed input: a concatenated second accession after 'c.11'; ferro rejects at parse time. mutalyzer leniently reads it as c.11_13G[10]."
+      }
     },
     {
       "keywords": [
