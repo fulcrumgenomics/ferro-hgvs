@@ -426,7 +426,14 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         run_case(&recorder, &cdot, &case.input);
     }
 
-    let captured_from = format!("{}", manifest.display());
+    // Record only the manifest's file name, not its absolute path: the committed
+    // fixture must be byte-identical regardless of where a contributor's manifest
+    // lives, or `--check` churns per-machine (and an absolute path would leak the
+    // local directory layout into the repo).
+    let captured_from = manifest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "manifest.json".to_string());
     let fixture = build_fixture(&recorder, captured_from);
     let json = fixture
         .to_json()
