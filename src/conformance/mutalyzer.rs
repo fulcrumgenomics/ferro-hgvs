@@ -494,6 +494,21 @@ pub enum RejectionReason {
     /// `spec_citation` rows and #537).
     #[serde(rename = "ferro-policy-758-transcript-flank-not-numberable-in-c")]
     TranscriptFlankNotNumberableInC758,
+    /// ferro rejects a c./n./r. input that names an explicit `accession.version`
+    /// the prepared manifest does not carry, where a lenient provider would
+    /// silently fall back to a *sibling* version and normalize against its
+    /// frame/sequence. A c./r. description is defined only against its named
+    /// version (versions differ in length/CDS offset, background/refseq.md), so
+    /// substituting a sibling's frame yields a result whose stated reference and
+    /// coordinate frame disagree. ferro declines with `TranscriptVersionNotExact`
+    /// rather than substitute; mutalyzer (which carries the pinned version)
+    /// normalizes it. ferro's decline is the spec-correct behaviour — a clean
+    /// reference-unavailable miss rather than a confidently-wrong substitution
+    /// (#785). Distinct from the `accession-version-absent` *no-op* disposition,
+    /// which covers an absent version with no sibling to substitute (ferro echoes
+    /// the input); here a sibling exists and the silent substitution is refused.
+    #[serde(rename = "ferro-policy-785-version-substitution-refused")]
+    VersionSubstitutionRefused785,
 }
 
 impl RejectionReason {
@@ -505,6 +520,9 @@ impl RejectionReason {
             }
             RejectionReason::TranscriptFlankNotNumberableInC758 => {
                 "ferro-policy-758-transcript-flank-not-numberable-in-c"
+            }
+            RejectionReason::VersionSubstitutionRefused785 => {
+                "ferro-policy-785-version-substitution-refused"
             }
         }
     }
