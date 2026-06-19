@@ -206,6 +206,14 @@ pub trait ReferenceProvider {
         self.genomic_placement(parent)
     }
 
+    /// Infer the genome build (`"GRCh37"`/`"GRCh38"`) for a chromosome
+    /// accession. The default is the bundled hardcoded heuristic; providers
+    /// that carry an assembly-report-derived table override this to consult it
+    /// first (#716).
+    fn infer_genome_build(&self, accession: &Accession) -> Option<&'static str> {
+        crate::liftover::aliases::infer_genome_build_from_accession(accession)
+    }
+
     /// Resolve a legacy LOVD gene-model selector (`GENE`, `GENE_v001`) on a
     /// genomic reference to a transcript accession (#500/#637).
     ///
@@ -490,6 +498,13 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         (**self).get_sequence_length(id)
     }
+
+    fn infer_genome_build(&self, accession: &Accession) -> Option<&'static str> {
+        // Forward so the wrapped provider's data-driven table (e.g.
+        // MultiFastaProvider's ContigAliases) survives an Arc wrapper; the
+        // trait default calls the hardcoded heuristic and would bypass it.
+        (**self).infer_genome_build(accession)
+    }
 }
 
 /// Blanket implementation for boxed trait objects.
@@ -581,6 +596,13 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         (**self).get_sequence_length(id)
+    }
+
+    fn infer_genome_build(&self, accession: &Accession) -> Option<&'static str> {
+        // Forward so the wrapped provider's data-driven table (e.g.
+        // MultiFastaProvider's ContigAliases) survives a Box wrapper; the
+        // trait default calls the hardcoded heuristic and would bypass it.
+        (**self).infer_genome_build(accession)
     }
 }
 
@@ -729,6 +751,13 @@ mod wrapper_forwarding_tests {
         fn resolve_legacy_gene_selector(&self, _selector: &str) -> Option<String> {
             Some("NM_999999.9".to_string())
         }
+
+        fn infer_genome_build(&self, _accession: &Accession) -> Option<&'static str> {
+            // Return a sentinel that the hardcoded heuristic would NOT return for
+            // an unknown accession (which produces `None`), so a forwarding test
+            // can distinguish the override path from trait-default fall-through.
+            Some("GRCh38")
+        }
     }
 
     /// Extract the `ReferenceNotFound` id, which carries the sentinel marking
@@ -755,6 +784,19 @@ mod wrapper_forwarding_tests {
             arc.resolve_legacy_gene_selector("GENE"),
             Some("NM_999999.9".to_string())
         );
+        // Use a bogus NC_ accession the hardcoded table doesn't know → None; the
+        // override returns Some("GRCh38"), so forwarding is distinguishable.
+        let unknown_nc = Accession::new("NC", "000999", Some(999));
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&unknown_nc),
+            None,
+            "hardcoded heuristic must return None for the sentinel accession"
+        );
+        assert_eq!(
+            arc.infer_genome_build(&unknown_nc),
+            Some("GRCh38"),
+            "Arc must forward infer_genome_build to the wrapped provider"
+        );
     }
 
     #[test]
@@ -768,6 +810,18 @@ mod wrapper_forwarding_tests {
         assert_eq!(
             boxed.resolve_legacy_gene_selector("GENE"),
             Some("NM_999999.9".to_string())
+        );
+        // Same forwarding check for Box.
+        let unknown_nc = Accession::new("NC", "000999", Some(999));
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&unknown_nc),
+            None,
+            "hardcoded heuristic must return None for the sentinel accession"
+        );
+        assert_eq!(
+            boxed.infer_genome_build(&unknown_nc),
+            Some("GRCh38"),
+            "Box must forward infer_genome_build to the wrapped provider"
         );
     }
 }

@@ -238,6 +238,10 @@ pub struct MultiFastaProvider {
     /// `LRG_RefSeqGene` table named by the manifest's `refseqgene_summary`
     /// (#500/#637). Empty when the manifest carries no summary file.
     legacy_gene_models: FxHashMap<String, String>,
+    /// Data-driven accession→build table from the prepared reference's own
+    /// assembly report(s) (#716). `None` when the manifest names no report, in
+    /// which case build inference uses only the hardcoded fallback.
+    contig_aliases: Option<crate::liftover::aliases::ContigAliases>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -338,6 +342,7 @@ impl MultiFastaProvider {
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
+            contig_aliases: None,
         })
     }
 
@@ -376,6 +381,7 @@ impl MultiFastaProvider {
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
+            contig_aliases: None,
         })
     }
 
@@ -575,6 +581,77 @@ impl MultiFastaProvider {
             .map(resolve_path)
             .and_then(|p| p.parent().map(Path::to_path_buf));
 
+        // Build the data-driven accession→build table from the assembly
+        // report(s) the manifest names (#716). Each report is paired with its
+        // build; a read/parse failure warns and is skipped (build inference
+        // then uses the hardcoded fallback). An empty table is treated as
+        // absent so it never shadows the fallback.
+        //
+        // This is built BEFORE placement ingestion so the same layered inferer
+        // drives both ingest and lookup: a report-only `NC_` accession (one the
+        // hardcoded heuristic cannot classify) is then retained and classified
+        // during parse/merge instead of being dropped before
+        // `select_placement_for_build` ever sees it.
+        use crate::reference::transcript::GenomeBuild;
+        let report_fields = [
+            ("assembly_report", GenomeBuild::GRCh38),
+            ("assembly_report_grch37", GenomeBuild::GRCh37),
+        ];
+        let mut parsed_reports: Vec<(
+            GenomeBuild,
+            crate::liftover::assembly_report::AssemblyReport,
+        )> = Vec::new();
+        for (field, build) in report_fields {
+            let Some(rel) = manifest.get(field).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let path = resolve_path(rel);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    parsed_reports.push((
+                        build,
+                        crate::liftover::assembly_report::parse_assembly_report(&text),
+                    ));
+                }
+                Err(e) => warn!(
+                    "Failed to read assembly report {}: {}; \
+                     build inference uses the hardcoded fallback for this build",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+        let contig_aliases = if parsed_reports.is_empty() {
+            None
+        } else {
+            let pairs: Vec<(
+                GenomeBuild,
+                &crate::liftover::assembly_report::AssemblyReport,
+            )> = parsed_reports.iter().map(|(b, r)| (*b, r)).collect();
+            let table = crate::liftover::aliases::ContigAliases::from_assembly_reports(&pairs);
+            // Empty parse (0 assembled-molecule rows) → treat as absent. Warn:
+            // a manifest named the report(s), so an empty table points at a
+            // corrupt/truncated report rather than an intentional absence.
+            if table.is_empty() {
+                warn!(
+                    "Assembly report(s) named by the manifest parsed to 0 assembled-molecule \
+                     rows; build inference falls back to the hardcoded version heuristic (the \
+                     report file may be corrupt or empty)"
+                );
+                None
+            } else {
+                Some(table)
+            }
+        };
+
+        // The layered inferer used everywhere below: the data-driven table first,
+        // the hardcoded heuristic as fallback (#716). Threading it into placement
+        // parse/merge keeps ingest consistent with lookup
+        // (`MultiFastaProvider::infer_genome_build`).
+        let infer_build = |acc: &crate::hgvs::variant::Accession| {
+            crate::liftover::aliases::infer_genome_build_layered(contig_aliases.as_ref(), acc)
+        };
+
         // Parse NG_ RefSeqGene→chromosome placements from the NCBI alignment
         // GFF3(s) the manifest names (#480). Two single-build snapshots are
         // merged so an NG_ resolves to its build-appropriate placement: the
@@ -592,7 +669,7 @@ impl MultiFastaProvider {
             let path = resolve_path(rel);
             match std::fs::read_to_string(&path) {
                 Ok(gff3) => {
-                    let placements = parse_refseqgene_alignments(&gff3);
+                    let placements = parse_refseqgene_alignments(&gff3, &infer_build);
                     if placements.is_empty() {
                         warn!(
                             "RefSeqGene alignments {} parsed to 0 placements \
@@ -600,7 +677,11 @@ impl MultiFastaProvider {
                             path.display()
                         );
                     }
-                    merge_refseqgene_placements(&mut refseqgene_placements, placements);
+                    merge_refseqgene_placements(
+                        &mut refseqgene_placements,
+                        placements,
+                        &infer_build,
+                    );
                 }
                 Err(e) => {
                     warn!(
@@ -629,7 +710,7 @@ impl MultiFastaProvider {
                     for (key, placement) in derived.to_placements() {
                         map.entry(key).or_default().push(placement);
                     }
-                    merge_refseqgene_placements(&mut refseqgene_placements, map);
+                    merge_refseqgene_placements(&mut refseqgene_placements, map, &infer_build);
                 }
                 Err(e) => {
                     warn!(
@@ -687,6 +768,7 @@ impl MultiFastaProvider {
         provider.lrg_xml_dir = lrg_xml_dir;
         provider.refseqgene_placements = refseqgene_placements;
         provider.legacy_gene_models = legacy_gene_models;
+        provider.contig_aliases = contig_aliases;
 
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
@@ -912,6 +994,7 @@ impl MultiFastaProvider {
             lrg_placement_cache: Mutex::new(FxHashMap::default()),
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
+            contig_aliases: None,
         })
     }
 
@@ -2080,15 +2163,21 @@ fn gff_attr<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
 /// (The GFF `match` strand in col 7 is always `+`; the real orientation is the
 /// Target strand.)
 ///
-/// Only **ungapped** (`gap_count=0`) alignments to a **GRCh37 or GRCh38 primary
-/// chromosome** are kept (the build is derivable from the `NC_` version), stored
-/// per build so the input's resolved build selects the right placement at lookup
-/// (#653). Alt-loci/patch contigs and gapped alignments — which a single affine
+/// Only **ungapped** (`gap_count=0`) alignments to a chromosome `infer_build`
+/// can classify to a build are kept, stored per build so the input's resolved
+/// build selects the right placement at lookup (#653). `infer_build` is the
+/// caller's layered inferer (data-driven assembly-report table first, hardcoded
+/// `NC_`-version heuristic as fallback, #716), so a report-only accession the
+/// heuristic alone cannot place is still retained here rather than dropped before
+/// lookup. Alt-loci/patch contigs and gapped alignments — which a single affine
 /// span cannot represent — are skipped, so the projector declines rather than
 /// emit a wrong `NG_` coordinate. At most one placement is kept per (NG version,
 /// build); see [`merge_refseqgene_placements`] for combining multiple alignment
 /// files (e.g. the separate GRCh38 and GRCh37 RefSeqGene snapshots, #713).
-fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlacement>> {
+fn parse_refseqgene_alignments(
+    gff3: &str,
+    infer_build: &impl Fn(&crate::hgvs::variant::Accession) -> Option<&'static str>,
+) -> FxHashMap<String, Vec<GenomicPlacement>> {
     let mut out: FxHashMap<String, Vec<GenomicPlacement>> = FxHashMap::default();
     for line in gff3.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -2132,15 +2221,16 @@ fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlace
         } else {
             crate::reference::transcript::Strand::Plus
         };
-        // Keep placements on a GRCh37 or GRCh38 PRIMARY chromosome (the build is
-        // derivable from the NC_ version). Alt-loci / fix-patch contigs return
-        // `None` and are skipped (a single affine span cannot anchor them).
-        // Both builds are retained and stored per-build; selection by the input's
-        // resolved build happens at lookup (#653).
+        // Keep placements whose build the layered inferer can classify (the
+        // data-driven assembly-report table first, the hardcoded NC_-version
+        // heuristic as fallback, #716). Alt-loci / fix-patch contigs the inferer
+        // cannot place return `None` and are skipped (a single affine span cannot
+        // anchor them). Both builds are retained and stored per-build; selection
+        // by the input's resolved build happens at lookup (#653).
         let Ok((_, nc)) = crate::hgvs::parser::accession::parse_accession(cols[0]) else {
             continue;
         };
-        let Some(build) = crate::liftover::aliases::infer_genome_build_from_accession(&nc) else {
+        let Some(build) = infer_build(&nc) else {
             continue;
         };
         let (nc_start, nc_end) = if a <= b { (a, b) } else { (b, a) };
@@ -2154,9 +2244,7 @@ fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlace
         // Keep at most one placement per (NG version, build): first wins if a
         // release lists the same alignment twice.
         let entry = out.entry(ng.to_string()).or_default();
-        let has_build = entry.iter().any(|p| {
-            crate::liftover::aliases::infer_genome_build_from_accession(&p.nc) == Some(build)
-        });
+        let has_build = entry.iter().any(|p| infer_build(&p.nc) == Some(build));
         if !has_build {
             entry.push(placement);
         }
@@ -2173,21 +2261,20 @@ fn parse_refseqgene_alignments(gff3: &str) -> FxHashMap<String, Vec<GenomicPlace
 /// (GRCh38 rows are on `NC_*.11`, GRCh37 on `NC_*.10`-era accessions), so merging
 /// them gives each `NG_` both builds, and [`select_placement_for_build`] picks
 /// the one matching the input's resolved build. The build is read back from each
-/// placement's `NC_` accession, mirroring `parse_refseqgene_alignments`'
-/// per-build de-duplication so a build already present from an earlier file is
-/// never overwritten.
+/// placement's `NC_` accession via the same injected `infer_build` (the layered
+/// inferer, #716), mirroring `parse_refseqgene_alignments`' per-build
+/// de-duplication so a build already present from an earlier file is never
+/// overwritten.
 fn merge_refseqgene_placements(
     acc: &mut FxHashMap<String, Vec<GenomicPlacement>>,
     addition: FxHashMap<String, Vec<GenomicPlacement>>,
+    infer_build: &impl Fn(&crate::hgvs::variant::Accession) -> Option<&'static str>,
 ) {
-    use crate::liftover::aliases::infer_genome_build_from_accession;
     for (ng, placements) in addition {
         let entry = acc.entry(ng).or_default();
         for placement in placements {
-            let build = infer_genome_build_from_accession(&placement.nc);
-            let has_build = entry
-                .iter()
-                .any(|p| infer_genome_build_from_accession(&p.nc) == build);
+            let build = infer_build(&placement.nc);
+            let has_build = entry.iter().any(|p| infer_build(&p.nc) == build);
             if !has_build {
                 entry.push(placement);
             }
@@ -2252,6 +2339,16 @@ impl ReferenceProvider for MultiFastaProvider {
         crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
             self.legacy_gene_models.get(g).cloned()
         })
+    }
+
+    fn infer_genome_build(
+        &self,
+        accession: &crate::hgvs::variant::Accession,
+    ) -> Option<&'static str> {
+        crate::liftover::aliases::infer_genome_build_layered(
+            self.contig_aliases.as_ref(),
+            accession,
+        )
     }
 
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
@@ -2623,6 +2720,13 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    /// The bundled hardcoded build inferer, matching what the placement parsers
+    /// used before the layered assembly-report table was threaded through (#716).
+    /// Tests pass it so their per-build expectations stay pinned to the heuristic.
+    fn heuristic_infer(acc: &crate::hgvs::variant::Accession) -> Option<&'static str> {
+        crate::liftover::aliases::infer_genome_build_from_accession(acc)
+    }
+
     // ----------------------------------------------------------------------
     // LRG placement parsing (#480)
     // ----------------------------------------------------------------------
@@ -2771,7 +2875,7 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
 
     #[test]
     fn parses_refseqgene_alignments_plus_and_minus() {
-        let m = parse_refseqgene_alignments(RSG_GFF3_SAMPLE);
+        let m = parse_refseqgene_alignments(RSG_GFF3_SAMPLE, &heuristic_infer);
 
         // GRCh37 is now KEPT (#653); only the gapped and non-`match` rows drop.
         assert_eq!(
@@ -2821,6 +2925,43 @@ NC_000001.11\tRefSeq\tcDNA_match\t4000\t4099\t100\t+\t.\tID=aln4;Target=NG_00500
         );
     }
 
+    /// Regression for #716: a "report-only" `NC_` accession — one whose version
+    /// the hardcoded heuristic cannot classify, but a data-driven assembly-report
+    /// table can — must be retained during alignment parsing, not dropped before
+    /// `select_placement_for_build` could ever see it. The placement parser honors
+    /// the injected layered inferer, so threading the table through ingest (not
+    /// just lookup) is what keeps the data-driven path reachable for these.
+    #[test]
+    fn parse_keeps_report_only_accession_via_injected_inferer() {
+        // `NC_000001.99` is an unknown version: the bundled heuristic declines it.
+        const REPORT_ONLY_GFF3: &str = "\
+##gff-version 3
+NC_000001.99\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=aln0;Target=NG_009000.1 1 100 +;gap_count=0\n";
+
+        // Heuristic-only ingest drops the row (build is unclassifiable) — this is
+        // exactly the gap the layering closes.
+        let heuristic_only = parse_refseqgene_alignments(REPORT_ONLY_GFF3, &heuristic_infer);
+        assert!(
+            heuristic_only.is_empty(),
+            "the hardcoded heuristic cannot classify NC_000001.99, so it is dropped: {heuristic_only:?}"
+        );
+
+        // A data-driven inferer that classifies NC_000001.99 keeps the placement.
+        let layered = |acc: &crate::hgvs::variant::Accession| {
+            if acc.full() == "NC_000001.99" {
+                Some("GRCh38")
+            } else {
+                heuristic_infer(acc)
+            }
+        };
+        let kept = parse_refseqgene_alignments(REPORT_ONLY_GFF3, &layered);
+        let list = kept
+            .get("NG_009000.1")
+            .expect("report-only NC_ placement must be retained under the injected inferer");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].nc.to_string(), "NC_000001.99");
+    }
+
     /// `ferro prepare` writes two single-build RefSeqGene alignment files; the
     /// provider merges them so each NG_ carries both builds and
     /// `genomic_placement_on_build` selects the right one (#713). The GRCh38
@@ -2835,8 +2976,12 @@ NC_000001.11\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=a0;Target=NG_007000.1 1 1
 NC_000001.10\tRefSeq\tmatch\t5000\t5099\t100\t+\t.\tID=a1;Target=NG_007000.1 1 100 +;gap_count=0\n";
 
         // Merge in prepare's order: GRCh38 first, then GRCh37.
-        let mut merged = parse_refseqgene_alignments(GRCH38_FILE);
-        merge_refseqgene_placements(&mut merged, parse_refseqgene_alignments(GRCH37_FILE));
+        let mut merged = parse_refseqgene_alignments(GRCH38_FILE, &heuristic_infer);
+        merge_refseqgene_placements(
+            &mut merged,
+            parse_refseqgene_alignments(GRCH37_FILE, &heuristic_infer),
+            &heuristic_infer,
+        );
 
         let list = merged.get("NG_007000.1").expect("NG_ present after merge");
         assert_eq!(list.len(), 2, "both builds retained: {list:?}");
@@ -2870,8 +3015,12 @@ NC_000001.11\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\tID=a0;Target=NG_008000.1 1 1
 ##gff-version 3
 NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 100 +;gap_count=0\n";
 
-        let mut merged = parse_refseqgene_alignments(FIRST);
-        merge_refseqgene_placements(&mut merged, parse_refseqgene_alignments(SECOND));
+        let mut merged = parse_refseqgene_alignments(FIRST, &heuristic_infer);
+        merge_refseqgene_placements(
+            &mut merged,
+            parse_refseqgene_alignments(SECOND, &heuristic_infer),
+            &heuristic_infer,
+        );
 
         let list = &merged["NG_008000.1"];
         assert_eq!(list.len(), 1, "only one placement per build is kept");
@@ -2905,7 +3054,8 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     #[test]
     fn provider_resolves_ng_placement_from_alignments() {
         let (mut provider, _dir) = build_provider_with_test_genome();
-        provider.refseqgene_placements = parse_refseqgene_alignments(RSG_GFF3_SAMPLE);
+        provider.refseqgene_placements =
+            parse_refseqgene_alignments(RSG_GFF3_SAMPLE, &heuristic_infer);
 
         let ng = crate::hgvs::variant::Accession::new("NG", "001000", Some(1));
         let p = provider
@@ -5139,6 +5289,136 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert_eq!(
             mapper.available_builds_for("NM_000088.3"),
             vec!["GRCh38".to_string()]
+        );
+    }
+
+    #[test]
+    fn from_manifest_loads_assembly_report_contig_aliases() {
+        // Prove that MultiFastaProvider::from_manifest ingests the assembly
+        // report and wires it into infer_genome_build via ContigAliases.
+        //
+        // We use NC_000017.99 — a version the hardcoded table does NOT know
+        // (the real table only knows .11 for chr17 GRCh38), so if this test
+        // passes it must come from the data-driven path, not the fallback.
+        use crate::hgvs::variant::Accession;
+        use crate::reference::ReferenceProvider;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A minimal transcript FASTA (required by from_manifest).
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        // Assembly report with a chr17 row using .99 — unknown to the hardcoded table.
+        // Format: 10 tab-separated columns matching NCBI's assembly_report layout.
+        let report_text = "# Assembly name:  GRCh38.test\n\
+            # Sequence-Name\tSequence-Role\tAssigned-Molecule\tAssigned-Molecule-Location/Type\t\
+            GenBank-Accn\tRelationship\tRefSeq-Accn\tAssembly-Unit\tSequence-Length\tUCSC-style-name\n\
+            17\tassembled-molecule\t17\tChromosome\tCM000679.9\t=\tNC_000017.99\t\
+            Primary Assembly\t83257441\tchr17\n";
+        fs::write(d.join("assembly_report.txt"), report_text).unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "assembly_report": "assembly_report.txt",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        // Sanity: hardcoded heuristic does not know .99.
+        let future_chr17 = Accession::new("NC", "000017", Some(99));
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&future_chr17),
+            None,
+            "hardcoded table must not know NC_000017.99 (test premise)"
+        );
+
+        // Data-driven path: the loaded ContigAliases table classifies it.
+        assert_eq!(
+            provider.infer_genome_build(&future_chr17),
+            Some("GRCh38"),
+            "from_manifest must load the assembly report and wire it into infer_genome_build"
+        );
+    }
+
+    /// End-to-end regression for #716: an `NG_` alignment placed on a
+    /// report-only `NC_` accession (one the hardcoded heuristic cannot classify)
+    /// must survive ingestion and resolve at lookup. This proves the assembly
+    /// report is loaded BEFORE placement ingestion and the layered inferer is
+    /// threaded through parse/merge — if the report load were still ordered after
+    /// ingestion (or parse used the hardcoded fn), the placement would be dropped
+    /// and `genomic_placement` would return `None`.
+    #[test]
+    fn from_manifest_retains_ng_placement_on_report_only_accession() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::ReferenceProvider;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A minimal transcript FASTA (required by from_manifest).
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        // Assembly report mapping chr17 to NC_000017.99 — a version the hardcoded
+        // heuristic does NOT know, so any retained placement on it must come from
+        // the data-driven path threaded through parse.
+        let report_text = "# Assembly name:  GRCh38.test\n\
+            # Sequence-Name\tSequence-Role\tAssigned-Molecule\tAssigned-Molecule-Location/Type\t\
+            GenBank-Accn\tRelationship\tRefSeq-Accn\tAssembly-Unit\tSequence-Length\tUCSC-style-name\n\
+            17\tassembled-molecule\t17\tChromosome\tCM000679.9\t=\tNC_000017.99\t\
+            Primary Assembly\t83257441\tchr17\n";
+        fs::write(d.join("assembly_report.txt"), report_text).unwrap();
+
+        // A RefSeqGene alignment placing NG_009000.1 on the report-only NC_000017.99.
+        let alignments = "##gff-version 3\n\
+            NC_000017.99\tRefSeq\tmatch\t1000\t1099\t100\t+\t.\t\
+            ID=aln0;Target=NG_009000.1 1 100 +;gap_count=0\n";
+        fs::write(d.join("refseqgene_alignments.gff3"), alignments).unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "assembly_report": "assembly_report.txt",
+                "refseqgene_alignments": "refseqgene_alignments.gff3",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        // The NG_ placement must resolve, anchored on the report-only accession —
+        // proof that ingestion retained it via the layered inferer.
+        let ng = Accession::new("NG", "009000", Some(1));
+        let placement = provider.genomic_placement(&ng).expect(
+            "NG_ placement on a report-only NC_ accession must be retained and resolve (#716)",
+        );
+        assert_eq!(placement.nc.to_string(), "NC_000017.99");
+    }
+
+    #[test]
+    fn trait_default_infer_genome_build_matches_hardcoded() {
+        use crate::hgvs::variant::Accession;
+        use crate::reference::provider::ReferenceProvider;
+        let provider = crate::reference::mock::MockProvider::new();
+        let grch38_chr17 = Accession::new("NC", "000017", Some(11));
+        assert_eq!(
+            provider.infer_genome_build(&grch38_chr17),
+            crate::liftover::aliases::infer_genome_build_from_accession(&grch38_chr17)
         );
     }
 }

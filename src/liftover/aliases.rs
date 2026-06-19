@@ -219,6 +219,11 @@ impl ContigAliases {
         }
     }
 
+    /// `true` when no `(name, build)` mappings are registered.
+    pub fn is_empty(&self) -> bool {
+        self.to_refseq.is_empty()
+    }
+
     /// Add an alias mapping.
     pub fn add_alias(&mut self, name: &str, build: GenomeBuild, refseq: &str) {
         self.to_refseq
