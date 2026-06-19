@@ -1941,12 +1941,15 @@ impl MultiFastaProvider {
 
     /// Infer the genome build for an `NC_*` parent accession.
     ///
-    /// Thin wrapper around the shared
-    /// [`crate::liftover::aliases::infer_genome_build_from_accession`] —
-    /// kept on the impl so existing call sites and tests stay terse;
-    /// see the free function for the canonical contract.
-    fn infer_build_from_parent(parent: &crate::hgvs::variant::Accession) -> Option<&'static str> {
-        crate::liftover::aliases::infer_genome_build_from_accession(parent)
+    /// Thin `&self` wrapper around [`ReferenceProvider::infer_genome_build`], so the
+    /// cdot build-probe path consults this reference's assembly-report-derived table
+    /// (when present) before the hardcoded fallback (#716). See
+    /// [`crate::liftover::aliases::infer_genome_build_layered`] for the layering contract.
+    fn infer_build_from_parent(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<&'static str> {
+        self.infer_genome_build(parent)
     }
 
     /// Whether `id` names a transcript whose bases are directly available at
@@ -2386,7 +2389,7 @@ impl ReferenceProvider for MultiFastaProvider {
         //   NG_*  : build-agnostic. Probe GRCh38 first (mutalyzer policy),
         //           then GRCh37.
         //   other : fall through to plain lookup (no extra information).
-        let probe_order: &[&str] = match Self::infer_build_from_parent(parent) {
+        let probe_order: &[&str] = match self.infer_build_from_parent(parent) {
             Some("GRCh38") => &["GRCh38", "GRCh37"],
             Some("GRCh37") => &["GRCh37", "GRCh38"],
             _ => {
@@ -3074,7 +3077,14 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     }
 
     // ----------------------------------------------------------------------
-    // infer_build_from_parent unit coverage (closes review gap on #332)
+    // Hardcoded-heuristic build inference (closes review gap on #332)
+    //
+    // These exercise the free function
+    // `crate::liftover::aliases::infer_genome_build_from_accession` directly —
+    // i.e. the version-aware hardcoded alias table, independent of any
+    // provider. The `&self` `infer_build_from_parent` method, which routes
+    // through the layered data-driven table, is covered separately by
+    // `infer_build_from_parent_uses_assembly_report_table` below.
     // ----------------------------------------------------------------------
 
     fn nc_accession(num: &str, version: u32) -> crate::hgvs::variant::Accession {
@@ -3089,7 +3099,9 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     fn infer_build_chr17_grch38() {
         // NC_000017.11 is chr17 on GRCh38.
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&nc_accession("000017", 11)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&nc_accession(
+                "000017", 11
+            )),
             Some("GRCh38")
         );
     }
@@ -3098,7 +3110,9 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     fn infer_build_chr17_grch37() {
         // NC_000017.10 is chr17 on GRCh37.
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&nc_accession("000017", 10)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&nc_accession(
+                "000017", 10
+            )),
             Some("GRCh37")
         );
     }
@@ -3108,11 +3122,11 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         // chr14 NC accessions are NC_000014.9 (GRCh38) / NC_000014.8 (GRCh37).
         // A naive ".11→GRCh38, .10→GRCh37" rule would mis-classify both.
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&nc_accession("000014", 9)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&nc_accession("000014", 9)),
             Some("GRCh38"),
         );
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&nc_accession("000014", 8)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&nc_accession("000014", 8)),
             Some("GRCh37"),
         );
     }
@@ -3121,7 +3135,9 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     fn infer_build_malformed_nc_returns_none() {
         // NC_000999.999 is not in the human alias table on any build.
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&nc_accession("000999", 999)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&nc_accession(
+                "000999", 999
+            )),
             None,
         );
     }
@@ -3130,7 +3146,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     fn infer_build_ng_parent_returns_none() {
         // NG accessions are build-agnostic; caller must probe builds.
         assert_eq!(
-            MultiFastaProvider::infer_build_from_parent(&ng_accession("012772", 1)),
+            crate::liftover::aliases::infer_genome_build_from_accession(&ng_accession("012772", 1)),
             None,
         );
     }
@@ -5352,6 +5368,64 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             provider.infer_genome_build(&future_chr17),
             Some("GRCh38"),
             "from_manifest must load the assembly report and wire it into infer_genome_build"
+        );
+    }
+
+    #[test]
+    fn infer_build_from_parent_uses_assembly_report_table() {
+        // Direct unit coverage of the `&self` `infer_build_from_parent` method
+        // (the probe-order caller at `get_transcript_for_accession`). It must
+        // route through the layered data-driven table, NOT the hardcoded
+        // heuristic. We again use NC_000017.99 — a version absent from the
+        // hardcoded table — so a `Some("GRCh38")` answer can only come from the
+        // assembly-report-derived ContigAliases.
+        use crate::hgvs::variant::Accession;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A minimal transcript FASTA (required by from_manifest).
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        // Assembly report with a chr17 row using .99 — unknown to the hardcoded table.
+        let report_text = "# Assembly name:  GRCh38.test\n\
+            # Sequence-Name\tSequence-Role\tAssigned-Molecule\tAssigned-Molecule-Location/Type\t\
+            GenBank-Accn\tRelationship\tRefSeq-Accn\tAssembly-Unit\tSequence-Length\tUCSC-style-name\n\
+            17\tassembled-molecule\t17\tChromosome\tCM000679.9\t=\tNC_000017.99\t\
+            Primary Assembly\t83257441\tchr17\n";
+        fs::write(d.join("assembly_report.txt"), report_text).unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "assembly_report": "assembly_report.txt",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        let future_chr17 = Accession::new("NC", "000017", Some(99));
+
+        // Test premise: the hardcoded heuristic does not know .99, so a hit here
+        // must come from the data-driven table the method routes through.
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&future_chr17),
+            None,
+            "hardcoded table must not know NC_000017.99 (test premise)"
+        );
+
+        // The `&self` method resolves the accession via the layered table.
+        assert_eq!(
+            provider.infer_build_from_parent(&future_chr17),
+            Some("GRCh38"),
+            "infer_build_from_parent must route through the assembly-report-derived table"
         );
     }
 

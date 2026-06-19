@@ -179,14 +179,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// consulted. Anything else returns `None` (e.g. a bare `NG_`/`LRG_`,
     /// which carries no build), so the caller falls back to the
     /// build-agnostic primary-cdot path (issue #389).
-    fn infer_input_build(variant: &HgvsVariant) -> Option<&'static str> {
-        use crate::liftover::aliases::infer_genome_build_from_accession;
+    fn infer_input_build(&self, variant: &HgvsVariant) -> Option<&'static str> {
         let acc = variant.accession()?;
-        if let Some(b) = infer_genome_build_from_accession(acc) {
+        if let Some(b) = self.provider.infer_genome_build(acc) {
             return Some(b);
         }
         if let Some(parent) = acc.genomic_context.as_deref() {
-            return infer_genome_build_from_accession(parent);
+            return self.provider.infer_genome_build(parent);
         }
         None
     }
@@ -201,7 +200,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `NC_*.10`/`.11` accession, which would emit wrong coordinates under a
     /// right-looking accession (the #655/#702 failure class).
     fn build_hint_for_variant(&self, variant: &HgvsVariant) -> Option<&'static str> {
-        Self::infer_input_build(variant).or(self.assembly_override)
+        self.infer_input_build(variant).or(self.assembly_override)
     }
 
     /// Emit a warning when an explicit `--assembly` override contradicts the
@@ -209,7 +208,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// only flags the ignored override. Called once per public projection entry.
     fn warn_assembly_conflict(&self, variant: &HgvsVariant) {
         if let (Some(override_build), Some(input_build)) =
-            (self.assembly_override, Self::infer_input_build(variant))
+            (self.assembly_override, self.infer_input_build(variant))
         {
             if override_build != input_build {
                 log::warn!(
@@ -1175,11 +1174,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let build_hint = self
             .build_hint_for_variant(variant)
             .or_else(|| {
-                self.provider.genomic_placement(&parent).and_then(|p| {
-                    crate::liftover::aliases::infer_genome_build_from_accession(&p.nc)
-                })
+                self.provider
+                    .genomic_placement(&parent)
+                    .and_then(|p| self.provider.infer_genome_build(&p.nc))
             })
-            .or_else(|| crate::liftover::aliases::infer_genome_build_from_accession(&parent));
+            .or_else(|| self.provider.infer_genome_build(&parent));
         let cdot_mapper = self.projector.mapper();
         let cdot_tx = match build_hint {
             Some(b) => cdot_mapper
@@ -2712,13 +2711,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 reason: "g. variant has no concrete edit".to_string(),
             })?;
 
-        // Look up the transcript in the cdot mapper. When the projected
-        // g. accession is NC_*, infer the genome build from its version
-        // (NC_*.10 → GRCh37, NC_*.11 → GRCh38, etc.) so multi-build cdot
-        // loads return the alignment matching the input chromosome rather
-        // than silently using the primary build's view (issue #389).
-        let build_hint =
-            crate::liftover::aliases::infer_genome_build_from_accession(&genome_variant.accession);
+        // Look up the transcript in the cdot mapper. Prefer the build the
+        // *input* carries — an explicit `NC_*.10`/`.11`, a `genomic_context`
+        // parent, or the `--assembly` override that `project_to_genomic_nc`
+        // already used to pick the placement (#716). Re-deriving the build
+        // solely from the projected NC_ accession loses that signal when the
+        // pivot anchored onto a contig whose version the heuristic does not
+        // recognize (it would fall back to cdot's primary view and reject or
+        // misproject the NC-frame pivot). Fall back to inferring from the
+        // projected accession only when the input is build-agnostic (issue
+        // #389: NC_*.10 → GRCh37, NC_*.11 → GRCh38).
+        let build_hint = self
+            .build_hint_for_variant(normalized)
+            .or_else(|| self.provider.infer_genome_build(&genome_variant.accession));
         let cdot_tx = match build_hint {
             Some(b) => self
                 .projector
@@ -7446,6 +7451,140 @@ mod tests {
                 "input-encoded GRCh38 (g.20005) must win over --assembly GRCh37 (g.10005), got: {s}"
             );
         }
+
+        /// Regression (#716): the downstream cdot lookup in `project_single_inner`
+        /// must reuse the build that `project_to_genomic_nc` used for the pivot,
+        /// not re-derive it from the projected `NC_` accession.
+        ///
+        /// Fixture: a bare `NG_` parent whose GRCh37 placement re-anchors onto a
+        /// contig (`NC_000001.99`) whose version the hardcoded heuristic does NOT
+        /// recognize — exactly the case the data-driven inference targets, and the
+        /// case where re-deriving from the accession yields `None`. Under
+        /// `--assembly GRCh37` the pivot correctly selects the GRCh37 alignment,
+        /// but pre-fix the protein/cdot lookup re-inferred `None` from
+        /// `NC_000001.99`, fell back to cdot's primary (GRCh38) view, and the
+        /// GRCh37-frame genomic position fell outside the GRCh38 exon →
+        /// `TranscriptNotOverlapping`. With the build hint preserved, the full
+        /// projection succeeds on GRCh37.
+        #[test]
+        fn assembly_override_survives_downstream_cdot_lookup_for_unrecognized_contig() {
+            use crate::reference::transcript::{
+                Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
+                Transcript as RefTranscript,
+            };
+            use std::sync::OnceLock;
+
+            // GRCh37 alignment lives on an accession the version heuristic cannot
+            // classify; GRCh38 on the canonical NC_000001.11.
+            const UR_PARENT: &str = "NG_000777.1";
+            let cdot_json = r#"
+            {
+                "transcripts": {
+                    "NM_UR_TEST.1": {
+                        "gene_name": "URTEST",
+                        "genome_builds": {
+                            "GRCh37": {
+                                "contig": "NC_000001.99",
+                                "strand": "+",
+                                "exons": [[10000, 10010, 1, 0, 10, "M10"]]
+                            },
+                            "GRCh38": {
+                                "contig": "NC_000001.11",
+                                "strand": "+",
+                                "exons": [[20000, 20010, 1, 0, 10, "M10"]]
+                            }
+                        },
+                        "start_codon": 0,
+                        "stop_codon": 10
+                    }
+                }
+            }
+            "#;
+
+            // Sanity-check the premise: the heuristic genuinely declines on the
+            // re-anchored GRCh37 contig, so a re-derive-from-accession path would
+            // lose the build and this test would distinguish the two.
+            assert_eq!(
+                crate::liftover::aliases::infer_genome_build_from_accession(&parse_accession(
+                    "NC_000001.99"
+                )),
+                None,
+                "premise: NC_000001.99 is unrecognized by the version heuristic",
+            );
+
+            let cdot = CdotMapper::from_reader_with_build(cdot_json.as_bytes(), "GRCh38")
+                .expect("multi-build cdot JSON should parse");
+            let projector = Projector::new(cdot);
+            let mut provider = MockProvider::new();
+            provider.add_transcript(RefTranscript {
+                id: "NM_UR_TEST.1".to_string(),
+                gene_symbol: Some("URTEST".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("ATGCGCTAATC".to_string()),
+                cds_start: Some(1),
+                cds_end: Some(10),
+                exons: vec![Exon::new(1, 1, 10)],
+                chromosome: Some("NC_000001.11".to_string()),
+                genomic_start: Some(20000),
+                genomic_end: Some(20009),
+                genome_build: RefGenomeBuild::GRCh38,
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            });
+            provider.add_genomic_placement(
+                UR_PARENT,
+                crate::reference::provider::GenomicPlacement {
+                    nc: parse_accession("NC_000001.11"),
+                    parent_start: 100,
+                    nc_start: 20000,
+                    nc_end: 20010,
+                    strand: crate::reference::transcript::Strand::Plus,
+                },
+            );
+            provider.add_genomic_placement(
+                UR_PARENT,
+                crate::reference::provider::GenomicPlacement {
+                    nc: parse_accession("NC_000001.99"),
+                    parent_start: 200,
+                    nc_start: 10000,
+                    nc_end: 10010,
+                    strand: crate::reference::transcript::Strand::Plus,
+                },
+            );
+            let vp = VariantProjector::new(projector, provider).with_assembly(Some("GRCh37"));
+
+            // c.5A>T on NM_UR_TEST.1 with a *bare* NG_ parent (build-agnostic).
+            let input = HgvsVariant::Cds(CdsVariant {
+                accession: parse_accession("NM_UR_TEST.1")
+                    .with_genomic_context(parse_accession(UR_PARENT)),
+                gene_symbol: Some("URTEST".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            });
+
+            let proj = vp.project_variant(&input, "NM_UR_TEST.1").expect(
+                "GRCh37 override must drive the downstream cdot lookup; pre-fix this errored \
+                 because the lookup re-inferred None from the unrecognized NC_000001.99 contig",
+            );
+            let coding = proj
+                .coding
+                .as_ref()
+                .expect("coding (c.) form must be present on the GRCh37 projection")
+                .to_string();
+            assert!(
+                coding.contains(":c.5A>T"),
+                "expected c.5A>T round-tripped via the GRCh37 alignment, got: {coding}",
+            );
+        }
     }
 
     #[test]
@@ -8574,5 +8713,73 @@ mod tests {
             matches!(err, FerroError::UnsupportedProjection { .. }),
             "transcript_id mismatch should be UnsupportedProjection, got {err:?}"
         );
+    }
+
+    /// Guard test: `MockProvider` (no assembly-report table) must return the same
+    /// build inference as the bare hardcoded free function for an NC_ accession —
+    /// i.e. routing through the provider is behavior-preserving (#716).
+    #[test]
+    fn infer_input_build_routes_through_provider() {
+        use crate::hgvs::variant::Accession;
+        let provider = crate::reference::mock::MockProvider::new();
+        let acc = Accession::new("NC", "000017", Some(11));
+        assert_eq!(
+            provider.infer_genome_build(&acc),
+            crate::liftover::aliases::infer_genome_build_from_accession(&acc)
+        );
+    }
+
+    /// A provider that delegates everything to an inner [`MockProvider`] but
+    /// reports a deliberately *different* build than the hardcoded heuristic for
+    /// one accession. Used to prove a projector path observes the provider's
+    /// `infer_genome_build` rather than the hardcoded free function (#716).
+    #[derive(Clone)]
+    struct BuildOverrideProvider {
+        inner: MockProvider,
+    }
+
+    impl ReferenceProvider for BuildOverrideProvider {
+        fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
+            self.inner.get_transcript(id)
+        }
+
+        fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+            self.inner.get_sequence(id, start, end)
+        }
+
+        fn infer_genome_build(&self, accession: &Accession) -> Option<&'static str> {
+            // NC_000017.11 is GRCh38 under the hardcoded heuristic; force GRCh37
+            // so a test can tell the provider's answer apart from the fallback.
+            if accession.full() == "NC_000017.11" {
+                Some("GRCh37")
+            } else {
+                self.inner.infer_genome_build(accession)
+            }
+        }
+    }
+
+    /// Override test: the projector must consult the provider's
+    /// `infer_genome_build`, not the hardcoded helper. With a provider that
+    /// deliberately classifies the `NC_000017.11` parent as GRCh37 (the heuristic
+    /// says GRCh38), `infer_input_build` must observe the provider's GRCh37 — if
+    /// it regressed to the hardcoded helper it would return GRCh38 and this would
+    /// fail (#716).
+    #[test]
+    fn infer_input_build_observes_provider_override() {
+        let parent = Accession::new("NC", "000017", Some(11));
+        // Sanity-check the premise: the hardcoded helper disagrees with the
+        // override, so the assertion below genuinely distinguishes the two paths.
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&parent),
+            Some("GRCh38"),
+        );
+        let provider = BuildOverrideProvider {
+            inner: MockProvider::new(),
+        };
+        let vp = VariantProjector::new(Projector::new(CdotMapper::new()), provider);
+        // A bare NM (no inherent build) whose genomic_context is the NC_ parent —
+        // `infer_input_build` falls through to consult the parent via the provider.
+        let variant = make_coding_variant("NM_TEST.1", Some(parent));
+        assert_eq!(vp.infer_input_build(&variant), Some("GRCh37"));
     }
 }
