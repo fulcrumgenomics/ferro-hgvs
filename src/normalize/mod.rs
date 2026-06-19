@@ -1221,6 +1221,58 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }
 
+    /// The requested transcript accession a transcript-coordinate variant would
+    /// be SILENTLY SUBSTITUTED for, if any — the #785 trigger.
+    ///
+    /// Returns `Some(requested_id)` only when ALL of the following hold:
+    /// - the variant is a transcript-coordinate axis (`c.`/`n.`/`r.`);
+    /// - the caller named an EXPLICIT version (bare references intentionally
+    ///   keep lenient "latest version" resolution and are not gated; LRG
+    ///   accessions never carry a version, so they are likewise unaffected);
+    /// - the named accession is a transcript ([`is_transcript_accession`], so a
+    ///   genomic/gene wrapper like an unrewritten `NG_(GENE):c.…` selector is
+    ///   not mistaken for a versioned transcript);
+    /// - the provider would NOT serve the bases of that exact version
+    ///   ([`ReferenceProvider::has_transcript_version_exact`] is false); and
+    /// - the provider nonetheless resolves the request — i.e. a sibling version
+    ///   is actually substituted.
+    ///
+    /// The version-exact predicate is the load-bearing signal: it answers "do
+    /// the bases the read path would serve correspond to the exact requested
+    /// version?" and so catches BOTH substitution paths — a FASTA version-strip
+    /// fallback (which serves the sibling's accession) AND a cdot-genome
+    /// reconstruction off a sibling record (which serves the *requested*
+    /// accession with the sibling's frame). A naive "served accession differs"
+    /// check would miss the latter. The `get_transcript(...).is_ok()` guard then
+    /// distinguishes a genuine substitution (a sibling is served) from a
+    /// transcript that is simply absent with no sibling to fall back to — the
+    /// latter is left to the existing missing-transcript handling (echoed
+    /// unchanged) rather than gated. The genomic-context wrapper is stripped, so
+    /// a compound `NC_…(NM_….3):c.…` is gated on its inner `NM_….3`.
+    fn silently_substituted_transcript(&self, variant: &HV) -> Option<String> {
+        let accession = match variant {
+            HV::Cds(v) => &v.accession,
+            HV::Tx(v) => &v.accession,
+            HV::Rna(v) => &v.accession,
+            _ => return None,
+        };
+        accession.version?; // explicit version only
+        let requested = accession.transcript_accession();
+        if !is_transcript_accession(&requested) {
+            return None;
+        }
+        if self.provider.has_transcript_version_exact(&requested) {
+            return None; // the exact version's bases are served — no substitution
+        }
+        // Not version-exact: a sibling would be served (substitution) — gate it —
+        // unless the transcript is simply absent with no sibling (Err), which is
+        // left to the existing missing-transcript path.
+        self.provider
+            .get_transcript(&requested)
+            .is_ok()
+            .then_some(requested)
+    }
+
     /// Core normalization: dispatch by variant kind and return the
     /// normalized variant plus warnings, WITHOUT computing the diagnostic
     /// `infos` axis. `normalize()` discards infos, so it calls this
@@ -1238,6 +1290,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // unchanged (#500).
         let rewritten = self.rewrite_legacy_gene_selector(variant);
         let variant = rewritten.as_ref().unwrap_or(variant);
+
+        // Silent version-substitution gate (#785). A c./n./r. description is
+        // defined only against its named `accession.version`: per HGVS, `c.1` is
+        // the first base of *that* version's start codon and a versioned
+        // identifier is required precisely because versions differ in length/CDS
+        // offset (background/numbering.md, background/refseq.md). When the caller
+        // names an EXPLICIT transcript version the reference does not carry, a
+        // lenient provider silently falls back to a *sibling* version and serves
+        // its frame/sequence — yielding a spec-invalid result whose stated
+        // reference and coordinate frame disagree, with no error. Decline with
+        // `TranscriptVersionNotExact` (a clean reference-unavailable miss the
+        // conformance mapping and `ferro project` CLI already treat as soft)
+        // rather than substitute. Projection inherits this because it normalizes
+        // first (#637), and `normalize_allele` recurses through `normalize_core`
+        // so each allele member is checked.
+        if let Some(requested) = self.silently_substituted_transcript(variant) {
+            return Err(FerroError::TranscriptVersionNotExact { requested });
+        }
 
         // EINTRONIC (#486): an intronic offset on a bare transcript reference
         // (NM_ c. / NR_ n., no NG_(…)/NC_(…) context) is a spec-invalid
@@ -7706,6 +7776,22 @@ fn normalize_t_u(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Whether `id` is a versioned **transcript** accession subject to the
+/// base→latest version substitution the #785 gate guards against.
+///
+/// RefSeq (`NM_`/`NR_`/`XM_`/`XR_`) and Ensembl (`ENST`) transcripts qualify.
+/// Genomic references (`NG_`/`NC_`/`NW_`) and Ensembl *gene* identifiers
+/// (`ENSG`) do **not**: they are not transcript reading frames, and a `c.`/`n.`
+/// input that resolves to one of those (e.g. an unrewritten gene-model selector
+/// `NG_(GENE):c.…`) must not be gated as if it named a transcript version.
+fn is_transcript_accession(id: &str) -> bool {
+    id.starts_with("NM_")
+        || id.starts_with("NR_")
+        || id.starts_with("XM_")
+        || id.starts_with("XR_")
+        || id.starts_with("ENST")
+}
+
 /// If `variants` has 1 element return it directly; if >1 wrap in a cis Allele.
 fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>) -> HgvsVariant {
     debug_assert!(!variants.is_empty(), "wrap_allele_if_split: empty input");
@@ -7760,6 +7846,146 @@ mod tests {
             format!("{}", variant),
             format!("{}", result.unwrap()),
             "Missing transcript should return variant unchanged"
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_versioned_request_on_silent_substitution() {
+        // #785: a c./n./r. description is defined only against its named
+        // accession.version (background/numbering.md, refseq.md). When the
+        // request names an EXPLICIT version the reference lacks, a lenient
+        // provider silently falls back to a sibling version and normalizes
+        // against *its* frame/sequence — a confidently-wrong result attributed
+        // to the requested version. Decline with TranscriptVersionNotExact
+        // instead — the clean "reference unavailable" miss the conformance
+        // mapping already understands.
+        let mut provider = MockProvider::with_test_data();
+        // The reference carries only NM_000088.3; a request for .2 is silently
+        // served the .3 bases/frame.
+        provider.mark_version_substitution("NM_000088.2", "NM_000088.3");
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.2:c.10del").unwrap();
+        let err = normalizer.normalize(&variant).expect_err(
+            "an explicitly-versioned request the provider would silently \
+             substitute must be rejected, not normalized against the sibling",
+        );
+        match err {
+            FerroError::TranscriptVersionNotExact { requested } => {
+                assert_eq!(requested, "NM_000088.2");
+            }
+            other => panic!("expected TranscriptVersionNotExact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_allows_bare_request_even_if_resolved_to_sibling() {
+        // #785: the gate applies ONLY to explicitly-versioned requests. A bare
+        // (unversioned) accession intentionally keeps lenient "latest version"
+        // resolution, so it must NOT be gated even though it resolves to a
+        // specific version under the hood.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088:c.10A>G").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "a bare (unversioned) request must not be gated, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_allows_versioned_request_served_at_exact_version() {
+        // #785: a versioned request the reference serves at the EXACT version
+        // (no substitution) must pass the gate unchanged (no false positive).
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.3:c.10A>G").unwrap();
+        assert!(
+            normalizer.normalize(&variant).is_ok(),
+            "an exact-version request must not be gated"
+        );
+    }
+
+    #[test]
+    fn normalize_allows_versioned_request_absent_without_sibling() {
+        // #785: the gate fires only on a silent SUBSTITUTION (a sibling is
+        // actually served), never on a genuinely-absent transcript with no
+        // sibling to fall back to. Even when the provider reports the version as
+        // not exact, an absent transcript (`get_transcript` errors) falls through
+        // to the existing missing-transcript path (echoed unchanged), not a
+        // TranscriptVersionNotExact rejection — this guards against over-gating
+        // absent Ensembl/RefSeq references.
+        let mut provider = MockProvider::with_test_data();
+        // Not version-exact AND not registered → no sibling is served.
+        provider.mark_non_version_exact("NM_ABSENT.2");
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_ABSENT.2:c.100del").unwrap();
+        let result = normalizer.normalize(&variant);
+        assert!(
+            result.is_ok(),
+            "an absent versioned transcript with no sibling must not be gated, got {result:?}"
+        );
+        assert_eq!(
+            format!("{}", variant),
+            format!("{}", result.unwrap()),
+            "an absent transcript should be echoed unchanged"
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_versioned_noncoding_request_on_silent_substitution() {
+        // #785 parity: the gate covers the non-coding (`n.`) axis, not just `c.`.
+        let mut provider = MockProvider::with_test_data();
+        provider.mark_version_substitution("NM_000088.2", "NM_000088.3");
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.2:n.10del").unwrap();
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("a versioned n. silent substitution must be rejected");
+        assert!(
+            matches!(err, FerroError::TranscriptVersionNotExact { ref requested } if requested == "NM_000088.2"),
+            "expected TranscriptVersionNotExact for NM_000088.2, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_versioned_rna_request_on_silent_substitution() {
+        // #785 parity: the gate covers the RNA (`r.`) axis too.
+        let mut provider = MockProvider::with_test_data();
+        provider.mark_version_substitution("NM_000088.2", "NM_000088.3");
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NM_000088.2:r.10del").unwrap();
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("a versioned r. silent substitution must be rejected");
+        assert!(
+            matches!(err, FerroError::TranscriptVersionNotExact { ref requested } if requested == "NM_000088.2"),
+            "expected TranscriptVersionNotExact for NM_000088.2, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_versioned_parented_request_on_silent_substitution() {
+        // #785: a genomic-context-wrapped request (`NC_…(NM_….v):c.…`) is gated on
+        // its inner transcript — `transcript_accession()` strips the wrapper, so
+        // the substituted inner NM is still caught.
+        let mut provider = MockProvider::with_test_data();
+        provider.mark_version_substitution("NM_000088.2", "NM_000088.3");
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("NC_000017.11(NM_000088.2):c.10del").unwrap();
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("a versioned parented silent substitution must be rejected");
+        assert!(
+            matches!(err, FerroError::TranscriptVersionNotExact { ref requested } if requested == "NM_000088.2"),
+            "expected TranscriptVersionNotExact for inner NM_000088.2, got {err:?}"
         );
     }
 
