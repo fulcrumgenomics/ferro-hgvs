@@ -455,7 +455,13 @@
       "input": "NG_012772.1(BRCA2_v001):c.632_681del",
       "normalized": "NG_012772.1(NM_000059.3):c.632_681del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -486,7 +492,13 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_674del",
       "genomic": "NG_012772.1:g.16125_19006del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208TyrfsTer3)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -507,7 +519,13 @@
       "normalized": "NG_012772.1(NM_000059.3):c.622_672del",
       "genomic": "NG_012772.1:g.16125_19004del",
       "protein_description": "NG_012772.1(NP_000050.2):p.(Val208_Asp224del)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -840,7 +858,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -852,7 +876,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -863,7 +893,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_157insGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5208insGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52_Arg53insValLeuCysSerLeuSerGly)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -1155,7 +1191,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -1167,7 +1209,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -1178,7 +1226,13 @@
       "normalized": "NG_008939.1(NM_000532.5):c.156_161delinsGTCCTGTGCTCATTATCTGGC",
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [

@@ -503,7 +503,40 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // construction time so we don't clone the (potentially heavy) provider
         // on every call.
         let normalized = self.normalizer.normalize(variant)?;
-        self.project_variant_inner(&normalized, transcript_id)
+        // 2. Reconcile the requested target against any selector resolution that
+        // normalization performed (#783). A legacy LOVD gene-model selector
+        // `NG_(GENE_v001):c.` keeps the genomic ref as its accession, so a
+        // self-projection caller (the CLI, the conformance harness) derives the
+        // target from `transcript_accession()` and gets the genomic ref, not a
+        // transcript. Normalization resolves the selector to `NG_(NM_):c.` (#637),
+        // so the requested target now names the variant's genomic-context wrapper
+        // rather than its transcript — re-point it at the resolved transcript.
+        let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
+        self.project_variant_inner(&normalized, &target)
+    }
+
+    /// Reconcile a self-projection target with a selector/context that
+    /// normalization may have rewritten (#783).
+    ///
+    /// Returns the variant's own (resolved) transcript accession when the
+    /// requested target names this variant's genomic-context wrapper rather than
+    /// its transcript — i.e. the caller asked to project a transcript-coordinate
+    /// variant "against itself" but derived the target from an accession whose
+    /// transcript slot was a genomic ref (an unresolved legacy gene-model
+    /// selector, now resolved). Otherwise returns the requested target unchanged,
+    /// so a genuine transcript_id mismatch (an unrelated target) still errors.
+    fn reconcile_self_projection_target(normalized: &HgvsVariant, requested: &str) -> String {
+        if let Some(acc) = normalized.accession() {
+            let resolved_tx = acc.transcript_accession();
+            if resolved_tx != requested {
+                if let Some(ctx) = &acc.genomic_context {
+                    if ctx.full() == requested {
+                        return resolved_tx;
+                    }
+                }
+            }
+        }
+        requested.to_string()
     }
 
     /// Project an already-normalized g. variant onto a transcript, skipping the
@@ -520,7 +553,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
         self.warn_assembly_conflict(variant);
-        self.project_variant_inner(variant, transcript_id)
+        // Reconcile the requested target against any selector resolution carried
+        // by the (already-normalized) variant, mirroring `project_variant` (#783).
+        // A caller that pre-normalizes a legacy `NG_(GENE_v001):c.` once and then
+        // projects against the raw-derived `NG_900.1` target would otherwise name
+        // the genomic-context wrapper rather than the resolved transcript and trip
+        // the mismatch guard. Reconciliation is a no-op for a genuine transcript
+        // target, so this keeps the two public entry points behaving identically.
+        let target = Self::reconcile_self_projection_target(variant, transcript_id);
+        self.project_variant_inner(variant, &target)
     }
 
     /// Parse, normalize, and project an HGVS string onto the *curated* set of
@@ -3552,6 +3593,52 @@ mod tests {
         let proj = vp
             .project("NG_900.1(GENE1_v001):c.4C>A", "NM_TX2.1")
             .expect("legacy gene-model selector must resolve and project, not error on NG_");
+        let coding = proj
+            .coding
+            .as_ref()
+            .expect("coding axis present")
+            .to_string();
+        assert!(
+            coding.contains("NM_TX2.1"),
+            "the GENE1_v001 selector must resolve to the transcript: {coding}"
+        );
+    }
+
+    #[test]
+    fn legacy_gene_model_selector_projects_against_self_derived_target() {
+        // Realistic CLI / conformance-harness path (#783): the projection target
+        // is derived from the *raw* input accession via `transcript_accession()`.
+        // For an `NG_(GENE_v001)` legacy selector the transcript slot is the
+        // genomic ref itself (`NG_900.1`), not a transcript — unlike `NG_(NM_)`,
+        // whose `transcript_accession()` already returns the inner `NM_`.
+        // Normalization resolves the selector to `NM_TX2.1` (#637); without
+        // reconciling the target against the resolved transcript, this
+        // self-projection tripped the transcript_id-mismatch guard.
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+            },
+        );
+        provider.add_legacy_gene_model("GENE1", "NM_TX2.1");
+        let vp = VariantProjector::new(projector, provider);
+
+        let variant = crate::parse_hgvs("NG_900.1(GENE1_v001):c.4C>A").unwrap();
+        // Derive the target exactly as the CLI and conformance harness do.
+        let target = variant.accession().unwrap().transcript_accession();
+        assert_eq!(
+            target, "NG_900.1",
+            "the raw LOVD selector form's transcript slot is the genomic ref"
+        );
+
+        let proj = vp
+            .project_variant(&variant, &target)
+            .expect("self-projection of a legacy selector must resolve, not mismatch");
         let coding = proj
             .coding
             .as_ref()
@@ -8463,6 +8550,26 @@ mod tests {
         let err = vp
             .project_normalized(&variant, "NM_OTHER.1")
             .expect_err("transcript_id mismatch must be rejected");
+        assert!(
+            matches!(err, FerroError::UnsupportedProjection { .. }),
+            "transcript_id mismatch should be UnsupportedProjection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn project_variant_unrelated_transcript_id_mismatch_is_rejected() {
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A bare `c.` input on NM_TEST.1 projected against an unrelated transcript
+        // must still error, exercising `reconcile_self_projection_target`'s
+        // fallthrough on the `project_variant` path: the variant carries no
+        // genomic_context, so reconciliation returns the requested target
+        // unchanged and the `project_coding_direct` guard rejects the genuine
+        // mismatch (#783).
+        let variant = make_coding_variant("NM_TEST.1", None);
+        let err = vp
+            .project_variant(&variant, "NM_NOATG.1")
+            .expect_err("unrelated transcript_id mismatch must be rejected");
         assert!(
             matches!(err, FerroError::UnsupportedProjection { .. }),
             "transcript_id mismatch should be UnsupportedProjection, got {err:?}"

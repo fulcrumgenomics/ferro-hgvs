@@ -47,6 +47,15 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_007485.1(NM_000077.4):c.161_163del` | protein_description | spec_citation | — | — |
 | `NG_007485.1(NM_058195.3):c.141_142del` | protein_description | spec_citation | — | — |
 | `NG_008835.1(NM_022153.2):c.568del` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157insGTCCTGTGCTCATTATCTGGC` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTC;ATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTCATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_012772.1(BRCA2_v001):c.622_672del` | protein_description | spec_citation | — | — |
+| `NG_012772.1(BRCA2_v001):c.622_674del` | protein_description | spec_citation | — | — |
+| `NG_012772.1(BRCA2_v001):c.632_681del` | protein_description | spec_citation | — | — |
 | `NM_000143.3:c.1531T>G` | protein_description | spec_citation | — | — |
 | `NM_000193.2:c.108_109del2insG` | protein_description | spec_citation | — | — |
 | `NM_001199.3:c.2188dup` | protein_description | spec_citation | — | — |
@@ -232,4 +241,4 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 23 | 21 | 15 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 22 |
+| protein_description | 0 | 0 | 0 | 0 | 31 |
