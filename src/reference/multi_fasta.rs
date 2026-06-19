@@ -2304,7 +2304,9 @@ impl ReferenceProvider for MultiFastaProvider {
         // (decline) rather than mis-anchor onto a different build's placement.
         if parent.prefix.as_ref() == "NG" {
             let list = self.refseqgene_placements.get(&parent.full())?;
-            return crate::reference::provider::select_placement_for_build(list, build);
+            return crate::reference::provider::select_placement_for_build(list, build, |a| {
+                self.infer_genome_build(a)
+            });
         }
         // LRG placement comes from the on-hand LRG XMLs (parsed on demand). LRG
         // carries a single main-assembly placement, so the build hint is not
@@ -2986,10 +2988,13 @@ NC_000001.10\tRefSeq\tmatch\t5000\t5099\t100\t+\t.\tID=a1;Target=NG_007000.1 1 1
         let list = merged.get("NG_007000.1").expect("NG_ present after merge");
         assert_eq!(list.len(), 2, "both builds retained: {list:?}");
 
-        let g38 = crate::reference::provider::select_placement_for_build(list, Some("GRCh38"))
-            .expect("GRCh38 placement selectable");
-        let g37 = crate::reference::provider::select_placement_for_build(list, Some("GRCh37"))
-            .expect("GRCh37 placement selectable");
+        let infer = crate::liftover::aliases::infer_genome_build_from_accession;
+        let g38 =
+            crate::reference::provider::select_placement_for_build(list, Some("GRCh38"), infer)
+                .expect("GRCh38 placement selectable");
+        let g37 =
+            crate::reference::provider::select_placement_for_build(list, Some("GRCh37"), infer)
+                .expect("GRCh37 placement selectable");
         assert_eq!(g38.nc.to_string(), "NC_000001.11");
         assert_eq!(g38.nc_start, 1000);
         assert_eq!(g37.nc.to_string(), "NC_000001.10");
@@ -2997,7 +3002,7 @@ NC_000001.10\tRefSeq\tmatch\t5000\t5099\t100\t+\t.\tID=a1;Target=NG_007000.1 1 1
 
         // Regression: adding the GRCh37 placement must NOT shift the
         // build-agnostic default away from GRCh38 (cdot primary / mutalyzer).
-        let default = crate::reference::provider::select_placement_for_build(list, None)
+        let default = crate::reference::provider::select_placement_for_build(list, None, infer)
             .expect("default placement selectable");
         assert_eq!(default.nc.to_string(), "NC_000001.11");
     }

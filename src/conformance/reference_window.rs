@@ -280,7 +280,11 @@ impl ReferenceProvider for WindowProvider {
         // resolved build (or GRCh38-preferred with no hint), declining rather
         // than mis-anchoring onto another build's placement.
         let list = self.placements.get(&parent.full())?;
-        select_placement_for_build(list, build)
+        select_placement_for_build(
+            list,
+            build,
+            crate::liftover::aliases::infer_genome_build_from_accession,
+        )
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {

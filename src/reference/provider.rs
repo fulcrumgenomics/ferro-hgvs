@@ -53,9 +53,9 @@ pub struct GenomicPlacement {
 pub(crate) fn select_placement_for_build(
     placements: &[GenomicPlacement],
     build: Option<&str>,
+    infer_build: impl Fn(&Accession) -> Option<&'static str>,
 ) -> Option<GenomicPlacement> {
-    let build_of =
-        |p: &GenomicPlacement| crate::liftover::aliases::infer_genome_build_from_accession(&p.nc);
+    let build_of = |p: &GenomicPlacement| infer_build(&p.nc);
     match build {
         Some(b) => placements.iter().find(|p| build_of(p) == Some(b)).cloned(),
         None => placements
@@ -655,28 +655,59 @@ mod placement_tests {
         let grch38 = placement_on(11); // NC_000001.11 → GRCh38
         let grch37 = placement_on(10); // NC_000001.10 → GRCh37
         let both = vec![grch38.clone(), grch37.clone()];
+        let infer = crate::liftover::aliases::infer_genome_build_from_accession;
 
         // Explicit build selects that build's placement.
         assert_eq!(
-            select_placement_for_build(&both, Some("GRCh38")),
+            select_placement_for_build(&both, Some("GRCh38"), infer),
             Some(grch38.clone())
         );
         assert_eq!(
-            select_placement_for_build(&both, Some("GRCh37")),
+            select_placement_for_build(&both, Some("GRCh37"), infer),
             Some(grch37.clone())
         );
         // No preference → GRCh38 even when listed second.
         assert_eq!(
-            select_placement_for_build(&[grch37.clone(), grch38.clone()], None),
+            select_placement_for_build(&[grch37.clone(), grch38.clone()], None, infer),
             Some(grch38.clone())
         );
         // Build-match guard: an explicit build with no matching placement declines
         // rather than substitute the other build (would mis-anchor).
         let only37 = vec![grch37.clone()];
-        assert_eq!(select_placement_for_build(&only37, Some("GRCh38")), None);
+        assert_eq!(
+            select_placement_for_build(&only37, Some("GRCh38"), infer),
+            None
+        );
         // No preference with only GRCh37 present → return it (never empty if data exists).
-        assert_eq!(select_placement_for_build(&only37, None), Some(grch37));
-        assert_eq!(select_placement_for_build(&[], Some("GRCh38")), None);
+        assert_eq!(
+            select_placement_for_build(&only37, None, infer),
+            Some(grch37)
+        );
+        assert_eq!(select_placement_for_build(&[], Some("GRCh38"), infer), None);
+    }
+
+    #[test]
+    fn select_placement_uses_injected_inference() {
+        let grch38 = placement_on(11); // NC_000001.11 → GRCh38 (per the hardcoded heuristic)
+        let grch37 = placement_on(10); // NC_000001.10 → GRCh37 (per the hardcoded heuristic)
+        let both = vec![grch37.clone(), grch38.clone()];
+        // Deliberately invert the heuristic: this closure calls NC_000001.10
+        // "GRCh38" and everything else `None`. If `select_placement_for_build`
+        // ignored the injected closure and reached for the hardcoded helper, it
+        // would return `grch38` (the .11 placement) and this assertion would
+        // fail — so the test now observes that the injected inferer truly drives
+        // selection.
+        let infer = |acc: &Accession| {
+            if acc.full() == "NC_000001.10" {
+                Some("GRCh38")
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            select_placement_for_build(&both, Some("GRCh38"), infer),
+            Some(grch37)
+        );
     }
 
     #[test]
