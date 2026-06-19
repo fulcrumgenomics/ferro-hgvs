@@ -110,6 +110,11 @@ pub mod urls {
     /// GRCh37 reference genome (with RefSeq accessions NC_000001.10, etc.)
     pub const GRCH37_GENOME: &str = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_genomic.fna.gz";
 
+    /// GRCh38 assembly report (RefSeq-accession → assembly map, #716).
+    pub const GRCH38_ASSEMBLY_REPORT: &str = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_report.txt";
+    /// GRCh37 assembly report (#716).
+    pub const GRCH37_ASSEMBLY_REPORT: &str = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_report.txt";
+
     /// RefSeqGene sequences (NG_* accessions) - 9 files
     pub const REFSEQGENE_BASE: &str = "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/RefSeqGene/";
     pub const REFSEQGENE_COUNT: usize = 9;
@@ -397,6 +402,17 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             index_fasta(&fasta_path)?;
         }
 
+        // Only overwrite the recorded path when a new one is produced: a
+        // transient download soft-fail returns `None`, and assigning that would
+        // erase a previously valid path and persist a degraded manifest.
+        if let Some(path) = record_assembly_report(
+            &genome_dir,
+            "GRCh38.assembly_report.txt",
+            urls::GRCH38_ASSEMBLY_REPORT,
+            config.skip_existing,
+        )? {
+            manifest.assembly_report = Some(path);
+        }
         manifest.genome_fasta = Some(fasta_path);
     }
 
@@ -429,6 +445,16 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             eprintln!("  Done.");
         }
 
+        // Preserve a previously valid path on a transient soft-fail (`None`);
+        // see the GRCh38 call above.
+        if let Some(path) = record_assembly_report(
+            &genome_dir,
+            "GRCh37.assembly_report.txt",
+            urls::GRCH37_ASSEMBLY_REPORT,
+            config.skip_existing,
+        )? {
+            manifest.assembly_report_grch37 = Some(path);
+        }
         manifest.genome_grch37_fasta = Some(fasta_path);
     }
 
@@ -1023,6 +1049,33 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
 
 // Helper functions
 // ============================================================================
+
+/// Download an NCBI assembly report into `genome_dir/<filename>` (unless it
+/// already exists and `skip_existing`), returning the path to record in the
+/// manifest. A download failure is a soft warning that yields `Ok(None)` — the
+/// report is strictly additive (build inference falls back to the hardcoded
+/// table), so it must never abort the genome download (#716).
+fn record_assembly_report(
+    genome_dir: &Path,
+    filename: &str,
+    url: &str,
+    skip_existing: bool,
+) -> Result<Option<PathBuf>, FerroError> {
+    let dest = genome_dir.join(filename);
+    if skip_existing && dest.exists() {
+        return Ok(Some(dest));
+    }
+    match download_file(url, &dest) {
+        Ok(()) => Ok(Some(dest)),
+        Err(e) => {
+            eprintln!(
+                "  Warning: failed to download assembly report {url}: {e}; \
+                 build inference will use the hardcoded fallback"
+            );
+            Ok(None)
+        }
+    }
+}
 
 /// Download a file from a URL.
 fn download_file(url: &str, output: &Path) -> Result<(), FerroError> {
@@ -1976,5 +2029,33 @@ mod tests {
         // placements for (the up-front guard rejects --derive-ng-placements
         // with this selection).
         assert!(builds_for_genome("none").is_empty());
+    }
+
+    #[test]
+    fn skip_existing_still_records_assembly_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let genome_dir = tmp.path().join("genome");
+        std::fs::create_dir_all(&genome_dir).unwrap();
+        // Pre-place a genome FASTA + its .fai and the assembly report so the
+        // skip_existing branch is taken (no network).
+        let fasta = genome_dir.join("GRCh38.fna");
+        std::fs::write(&fasta, ">NC_000001.11\nACGT\n").unwrap();
+        std::fs::write(
+            format!("{}.fai", fasta.display()),
+            "NC_000001.11\t4\t13\t4\t5\n",
+        )
+        .unwrap();
+        let report = genome_dir.join("GRCh38.assembly_report.txt");
+        std::fs::write(&report, "# Assembly name:  GRCh38.p14\n").unwrap();
+
+        let manifest = record_assembly_report(
+            genome_dir.as_path(),
+            "GRCh38.assembly_report.txt",
+            urls::GRCH38_ASSEMBLY_REPORT,
+            /* skip_existing */ true,
+        )
+        .unwrap();
+
+        assert_eq!(manifest, Some(report));
     }
 }
