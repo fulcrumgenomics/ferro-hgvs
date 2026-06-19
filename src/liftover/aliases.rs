@@ -341,6 +341,31 @@ pub fn infer_genome_build_from_accession_with(
     None
 }
 
+/// Infer the genome build for an accession, consulting a data-driven
+/// [`ContigAliases`] (from the prepared reference's own assembly report, #716)
+/// before falling back to the bundled hardcoded table.
+///
+/// `table` is `None` when the prepared reference carries no assembly report
+/// (old manifest, bare library use), in which case this is exactly
+/// [`infer_genome_build_from_accession`]. When `Some`, the data-driven table is
+/// authoritative for any accession it describes; accessions it omits still
+/// classify via the hardcoded fallback. Returns the first build found, so the
+/// data-driven layer wins on disagreement — safe because the two only overlap
+/// on accessions identical across builds (e.g. mtDNA), which the GRCh38-first
+/// check order in [`infer_genome_build_from_accession_with`] resolves the same
+/// way either source would.
+pub fn infer_genome_build_layered(
+    table: Option<&ContigAliases>,
+    accession: &crate::hgvs::variant::Accession,
+) -> Option<&'static str> {
+    if let Some(table) = table {
+        if let Some(build) = infer_genome_build_from_accession_with(table, accession) {
+            return Some(build);
+        }
+    }
+    infer_genome_build_from_accession(accession)
+}
+
 /// Normalize a user-supplied assembly name to ferro's canonical build string
 /// (`"GRCh37"` / `"GRCh38"`), or `None` if unrecognized (#715).
 ///
@@ -581,6 +606,54 @@ mod tests {
         assert_eq!(
             infer_genome_build_from_accession(&Accession::new("NG", "012337", Some(1))),
             None
+        );
+    }
+
+    /// A GRCh38-only report whose chr17 row carries a version (`.99`) the
+    /// hardcoded table does not know — proves the data-driven layer adds reach.
+    const GRCH38_FUTURE_SAMPLE: &str = "\
+# Assembly name:  GRCh38.future
+# Sequence-Name\tSequence-Role\tAssigned-Molecule\tAssigned-Molecule-Location/Type\tGenBank-Accn\tRelationship\tRefSeq-Accn\tAssembly-Unit\tSequence-Length\tUCSC-style-name
+17\tassembled-molecule\t17\tChromosome\tCM000679.9\t=\tNC_000017.99\tPrimary Assembly\t83257441\tchr17
+";
+
+    #[test]
+    fn layered_classifies_report_only_version() {
+        use crate::hgvs::variant::Accession;
+        let report = parse_assembly_report(GRCH38_FUTURE_SAMPLE);
+        let table = ContigAliases::from_assembly_reports(&[(GenomeBuild::GRCh38, &report)]);
+
+        let future = Accession::new("NC", "000017", Some(99));
+        // Hardcoded table has never seen .99 → None.
+        assert_eq!(infer_genome_build_from_accession(&future), None);
+        // Data-driven layer classifies it from the report.
+        assert_eq!(
+            infer_genome_build_layered(Some(&table), &future),
+            Some("GRCh38")
+        );
+    }
+
+    #[test]
+    fn layered_falls_back_to_hardcoded_when_absent_from_report() {
+        use crate::hgvs::variant::Accession;
+        let report = parse_assembly_report(GRCH38_FUTURE_SAMPLE);
+        let table = ContigAliases::from_assembly_reports(&[(GenomeBuild::GRCh38, &report)]);
+
+        // GRCh37 chr1 (.10) is not in this GRCh38-only report → hardcoded fallback.
+        let grch37_chr1 = Accession::new("NC", "000001", Some(10));
+        assert_eq!(
+            infer_genome_build_layered(Some(&table), &grch37_chr1),
+            Some("GRCh37")
+        );
+    }
+
+    #[test]
+    fn layered_with_no_table_matches_hardcoded() {
+        use crate::hgvs::variant::Accession;
+        let grch38_chr17 = Accession::new("NC", "000017", Some(11));
+        assert_eq!(
+            infer_genome_build_layered(None, &grch38_chr17),
+            infer_genome_build_from_accession(&grch38_chr17)
         );
     }
 }
