@@ -1916,10 +1916,24 @@ const GENOMIC_WINDOWS_PATH: &str = "tests/fixtures/mutalyzer-normalize/genomic-w
 /// selector**, excluding the classes the fixture/gate deliberately do not gate:
 /// - a gene-symbol / legacy locus selector (`(TIMM8B_v001)`, `(BRCA2)`) — the
 ///   #500-class selector-resolution divergence (ferro keeps the input selector);
-/// - intronic offset positions — need flanking the gate does cover, but the
-///   exon-junction coordinate convention is the deferred #742 fix;
 /// - compound (`[...;...]`) and coordinate-range / repeat / special (`pter`)
 ///   forms — rendering needs context out of this gate's scope.
+///
+/// Intronic-offset positions (`c.378-17`, `c.52+1`) — anchored at an exon
+/// junction — are now covered: #742 (PR #748) fixed the exon-junction
+/// coordinate convention they project through, so they are no longer the
+/// deferred exclusion they were (#751).
+///
+/// This predicate gates on the *input* shape, not on whether the committed
+/// fixture actually holds the parent's bases. A row whose `NG_`/`LRG_` parent
+/// appears only as a `placements` entry — with no committed `genomic` window or
+/// `contig_lengths` entry — passes this predicate but `project_to_genomic`
+/// declines out of the gate at runtime by design (a legitimate #655 outcome:
+/// the gate cannot re-anchor into a frame whose bases it does not hold). Such
+/// placement-only parents (e.g. `NG_009497.1`) are therefore *not* exercised by
+/// the hermetic gate; the manifest-backed `axis_genomic` retains their coverage.
+/// This is intentional — keeping the predicate input-shaped (rather than
+/// fixture-aware) avoids coupling it to which windows happen to be committed.
 ///
 /// Excluded rows stay on the manifest-backed `axis_genomic`.
 fn genomic_coverable(input: &str) -> bool {
@@ -1946,8 +1960,8 @@ fn genomic_coverable(input: &str) -> bool {
     if !(selector.starts_with("NM_") || selector.starts_with("NR_")) {
         return false;
     }
-    // Single exonic c. variant only (no compound, intronic, range-delins, repeat,
-    // or special position).
+    // A single c. variant (exonic or intronic-offset; no compound, range-delins,
+    // repeat, or special position). Intronic offsets are covered post-#742/#748.
     let Some((_, coord)) = input.split_once(":c.") else {
         return false;
     };
@@ -1958,7 +1972,7 @@ fn genomic_coverable(input: &str) -> bool {
     {
         return false;
     }
-    !has_intron_offset(coord) && !delins_coordinate_range(coord)
+    !delins_coordinate_range(coord)
 }
 
 /// True if the *expected* genomic output renders the edit against a coordinate
@@ -3618,10 +3632,22 @@ mod comparator_tests {
             "a gene-symbol selector lacks the required NM_/NR_ prefix"
         );
 
-        // Intronic offset → excluded.
+        // Intronic offset → now coverable post-#742/#748 (#751): the exon-junction
+        // coordinate convention it projects through is fixed, so it is no longer
+        // the deferred exclusion it was. (Whether a given row then projects or
+        // declines at runtime (#655) is the gate's concern, not this predicate's.)
         assert!(
-            !genomic_coverable("NG_012337.1(NM_003002.2):c.52+1del"),
-            "intronic offset positions are excluded"
+            genomic_coverable("NG_012337.1(NM_003002.2):c.52+1del"),
+            "intronic offset positions are coverable after #742/#748"
+        );
+
+        // The exon-junction row this PR's new NG_007107.2 window actually
+        // enables: an intronic `c.378-17` offset on an NM_ selector. Pinning it
+        // separately from `c.52+1del` (whose parent already had a window pre-PR)
+        // documents the new fixture entry's reason for existing.
+        assert!(
+            genomic_coverable("NG_007107.2(NM_004992.3):c.378-17delT"),
+            "the newly-served intronic c.378-17 row is coverable after #742/#748"
         );
 
         // Compound `[...;...]` → excluded.
