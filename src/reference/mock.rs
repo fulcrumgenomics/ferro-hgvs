@@ -407,7 +407,11 @@ impl ReferenceProvider for MockProvider {
         build: Option<&str>,
     ) -> Option<GenomicPlacement> {
         let list = self.genomic_placements.get(&parent.full())?;
-        crate::reference::provider::select_placement_for_build(list, build)
+        crate::reference::provider::select_placement_for_build(
+            list,
+            build,
+            crate::liftover::aliases::infer_genome_build_from_accession,
+        )
     }
 
     fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {

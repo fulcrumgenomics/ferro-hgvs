@@ -37,6 +37,15 @@ pub struct ReferenceManifest {
     /// the same way `genome_grch37_fasta`/`cdot_grch37_json` pair their GRCh38 fields.
     #[serde(default)]
     pub refseqgene_alignments_grch37: Option<PathBuf>,
+    /// Path to the GRCh38 NCBI `*_assembly_report.txt` (#716). Authoritative
+    /// RefSeq-accession → assembly map for build inference; absent on manifests
+    /// prepared before #716 (build inference then uses the hardcoded fallback).
+    #[serde(default)]
+    pub assembly_report: Option<PathBuf>,
+    /// Path to the GRCh37 NCBI `*_assembly_report.txt` (#716). Present only when
+    /// the GRCh37 genome was downloaded (`download_genome_grch37`).
+    #[serde(default)]
+    pub assembly_report_grch37: Option<PathBuf>,
     /// Derived `NG_`/`LRG_` placements (`derived_placement::DerivedPlacements`
     /// JSON) for versions absent from the alignment snapshots above — built at
     /// prepare time from each NG_'s GenBank record + cdot and validated by full
@@ -117,6 +126,8 @@ impl Default for ReferenceManifest {
             refseqgene_fastas: Vec::new(),
             refseqgene_alignments: None,
             refseqgene_alignments_grch37: None,
+            assembly_report: None,
+            assembly_report_grch37: None,
             derived_refseqgene_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
@@ -263,6 +274,8 @@ impl ReferenceManifest {
             &self.genome_grch37_fasta,
             &self.refseqgene_alignments,
             &self.refseqgene_alignments_grch37,
+            &self.assembly_report,
+            &self.assembly_report_grch37,
             &self.derived_refseqgene_placements,
             &self.refseqgene_summary,
             &self.lrg_refseq_mapping,
@@ -303,6 +316,8 @@ impl ReferenceManifest {
             &mut self.genome_grch37_fasta,
             &mut self.refseqgene_alignments,
             &mut self.refseqgene_alignments_grch37,
+            &mut self.assembly_report,
+            &mut self.assembly_report_grch37,
             &mut self.derived_refseqgene_placements,
             &mut self.refseqgene_summary,
             &mut self.lrg_refseq_mapping,
@@ -532,6 +547,8 @@ mod tests {
             refseqgene_fastas: vec![ref_dir.join("ng.fa")],
             refseqgene_alignments: Some(ref_dir.join("refseqgene_alignments.gff3")),
             refseqgene_alignments_grch37: Some(ref_dir.join("refseqgene_alignments_grch37.gff3")),
+            assembly_report: None,
+            assembly_report_grch37: None,
             derived_refseqgene_placements: None,
             refseqgene_summary: Some(ref_dir.join("LRG_RefSeqGene")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
@@ -734,6 +751,51 @@ mod tests {
             )),
             "derived_refseqgene_placements must be preserved across load_or_default/save"
         );
+    }
+
+    #[test]
+    fn assembly_report_paths_roundtrip_and_relativize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().to_path_buf();
+
+        let mut manifest = ReferenceManifest {
+            reference_dir: ref_dir.clone(),
+            assembly_report: Some(ref_dir.join("genome/GRCh38.assembly_report.txt")),
+            assembly_report_grch37: Some(ref_dir.join("genome/GRCh37.assembly_report.txt")),
+            ..Default::default()
+        };
+        manifest.save().unwrap();
+
+        // On-disk JSON must store the report paths relative to reference_dir.
+        let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
+        assert!(raw.contains("genome/GRCh38.assembly_report.txt"));
+        assert!(!raw.contains(ref_dir.to_str().unwrap()));
+
+        // Reloading absolutizes them back under reference_dir.
+        let loaded = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        assert_eq!(
+            loaded.assembly_report,
+            Some(ref_dir.join("genome/GRCh38.assembly_report.txt"))
+        );
+        assert_eq!(
+            loaded.assembly_report_grch37,
+            Some(ref_dir.join("genome/GRCh37.assembly_report.txt"))
+        );
+    }
+
+    #[test]
+    fn pre_716_manifest_without_report_fields_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path();
+        // A manifest JSON with NO assembly_report keys (pre-#716).
+        std::fs::write(
+            ref_dir.join("manifest.json"),
+            r#"{"prepared_at":"","transcript_fastas":[],"genome_fasta":null,"cdot_json":null,"transcript_count":0,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+        let m = ReferenceManifest::load_or_default(ref_dir).unwrap();
+        assert_eq!(m.assembly_report, None);
+        assert_eq!(m.assembly_report_grch37, None);
     }
 
     #[test]
