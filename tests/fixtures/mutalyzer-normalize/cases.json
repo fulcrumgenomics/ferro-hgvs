@@ -1336,10 +1336,10 @@
       "input": "NM_002001.2:c.1_3delinsATG",
       "normalized": "NM_002001.2:c.=",
       "to_test": true,
-      "accepted_divergence": {
+      "accepted_rejection": {
         "axis": "normalized",
-        "policy": "ferro-policy-654-explicit-identity-rendering",
-        "note": "reference-identical delins (ATG==ref at c.1_3): ferro renders the positional identity c.1_3=; mutalyzer collapses to whole-reference c.=. Both denote no change."
+        "reason": "ferro-policy-785-version-substitution-refused",
+        "note": "NM_002001.2 is absent from this manifest (only the sibling .4 is carried); ferro refuses to normalize against .4's frame and declines with TranscriptVersionNotExact (#785). mutalyzer carries .2 and renders c.=. Previously ferro silently substituted .4 and rendered the positional identity c.1_3= (the #654 accepted_divergence this replaces)."
       }
     },
     {
@@ -3249,7 +3249,12 @@
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "normalized",
+        "reason": "ferro-policy-785-version-substitution-refused",
+        "note": "NM_002001.2 is absent from this manifest (only the sibling .4 is carried); ferro refuses to normalize against .4's frame and declines with TranscriptVersionNotExact (#785). mutalyzer carries .2 and echoes c.=. Previously ferro silently substituted .4, which happened to echo c.= too."
+      }
     },
     {
       "keywords": [

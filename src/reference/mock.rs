@@ -33,6 +33,14 @@ pub struct MockProvider {
     /// `"NM_012459.4"`). Lets tests exercise the #500/#637 selector rewrite
     /// without ingesting NCBI's `LRG_RefSeqGene` table.
     legacy_gene_models: HashMap<String, String>,
+    /// Silent version-substitution map: requested transcript accession (e.g.
+    /// `"NM_002001.2"`) → the *different*-version accession the provider should
+    /// actually serve for it (e.g. `"NM_002001.4"`). Lets tests model the #785
+    /// silent version-strip substitution that a real `MultiFastaProvider`
+    /// performs via `resolve_name`'s base→latest fallback, which `MockProvider`
+    /// otherwise refuses by design. Empty by default, so an unconfigured mock
+    /// never substitutes a version.
+    version_substitutions: HashMap<String, String>,
 }
 
 impl MockProvider {
@@ -45,6 +53,7 @@ impl MockProvider {
             non_version_exact: HashSet::new(),
             genomic_placements: HashMap::new(),
             legacy_gene_models: HashMap::new(),
+            version_substitutions: HashMap::new(),
         }
     }
 
@@ -80,6 +89,27 @@ impl MockProvider {
     /// it. Simulates a reference that only carries a sibling version's bases.
     pub fn mark_non_version_exact(&mut self, id: impl Into<String>) {
         self.non_version_exact.insert(id.into());
+    }
+
+    /// Model a silent version-strip substitution (#785): a lookup of `requested`
+    /// resolves to (and serves the bases of) the *different*-version `served`
+    /// accession, which must already be registered. Mirrors a real
+    /// `MultiFastaProvider` that, lacking the requested version, falls back to a
+    /// sibling. Used to exercise the normalization version-substitution gate.
+    ///
+    /// A substitution inherently means the exact requested version is not served,
+    /// so this also marks `requested` as not version-exact (as
+    /// [`Self::mark_non_version_exact`] would) — keeping
+    /// [`ReferenceProvider::has_transcript_version_exact`] and
+    /// [`ReferenceProvider::get_transcript`] mutually consistent for the gate.
+    pub fn mark_version_substitution(
+        &mut self,
+        requested: impl Into<String>,
+        served: impl Into<String>,
+    ) {
+        let requested = requested.into();
+        self.non_version_exact.insert(requested.clone());
+        self.version_substitutions.insert(requested, served.into());
     }
 
     /// Load reference data from a JSON file.
@@ -138,6 +168,7 @@ impl MockProvider {
             non_version_exact: HashSet::new(),
             genomic_placements: HashMap::new(),
             legacy_gene_models: HashMap::new(),
+            version_substitutions: HashMap::new(),
         })
     }
 
@@ -389,6 +420,16 @@ impl ReferenceProvider for MockProvider {
         // Handle versioned and unversioned lookups
         if let Some(tx) = self.transcripts.get(id) {
             return Ok(Arc::clone(tx));
+        }
+
+        // Modeled silent version substitution (#785): serve a configured
+        // sibling version's record (whose own `id` differs from `id`), mirroring
+        // a real `MultiFastaProvider`'s base→latest fallback. Only fires when a
+        // test explicitly opts in via `mark_version_substitution`.
+        if let Some(served) = self.version_substitutions.get(id) {
+            if let Some(tx) = self.transcripts.get(served) {
+                return Ok(Arc::clone(tx));
+            }
         }
 
         // Try without version: only match a stored key whose base id (the

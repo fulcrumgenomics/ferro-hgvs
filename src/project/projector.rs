@@ -1181,6 +1181,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             })
             .or_else(|| crate::liftover::aliases::infer_genome_build_from_accession(&parent));
         let cdot_mapper = self.projector.mapper();
+        // Silent version-substitution gate (#785), c.→g. direction. Unlike
+        // `project_variant`/`project_variant_all`, this path does not normalize
+        // the original transcript-coordinate input first, so it would not inherit
+        // the gate the normalizer applies in `normalize_core`. Apply the same
+        // guarantee here: when the input names an EXPLICIT transcript version the
+        // reference does not carry exactly, the lenient `get_transcript[_on_build]`
+        // pivot below would silently fall back to a *sibling* version and project
+        // onto the genome using that sibling's exon/CDS frame — a spec-invalid
+        // result whose stated reference and coordinate frame disagree, with no
+        // error. Decline with `TranscriptVersionNotExact` instead of fuzzing the
+        // version. The predicate permits exact-version cdot-genome synthesis and
+        // rejects only cross-version substitution; an LRG transcript carries no
+        // version (`accession.version == None`), so its exact RefSeq alias path is
+        // untouched. A transcript that is simply absent with no sibling to
+        // substitute is left to the `ReferenceNotFound` miss below, unchanged.
+        if accession.version.is_some() && is_transcript_accession(&transcript_id) {
+            let exact = self.provider.has_transcript_version_exact(&transcript_id);
+            let resolves = match build_hint {
+                Some(b) => cdot_mapper
+                    .cdot()
+                    .get_transcript_on_build(&transcript_id, b)
+                    .is_some(),
+                None => cdot_mapper.cdot().get_transcript(&transcript_id).is_some(),
+            };
+            if !exact && resolves {
+                return Err(FerroError::TranscriptVersionNotExact {
+                    requested: transcript_id.to_string(),
+                });
+            }
+        }
         let cdot_tx = match build_hint {
             Some(b) => cdot_mapper
                 .cdot()
@@ -3090,6 +3120,20 @@ fn split_accession_version(id: &str) -> (&str, Option<u32>) {
 /// opposed to a curated `NM_`/`NR_` transcript.
 fn is_predicted_model(id: &str) -> bool {
     id.starts_with("XM_") || id.starts_with("XR_")
+}
+
+/// Whether `id` names a transcript reading frame (RefSeq `NM_`/`NR_`/`XM_`/`XR_`
+/// or Ensembl `ENST`), gating the #785 silent version-substitution refusal to
+/// genuine transcript versions. Mirrors the normalizer's predicate of the same
+/// name: a genomic/gene reference (`NG_`/`NC_`/`NW_`, `ENSG`) is *not* a
+/// transcript version and must not be gated as one (e.g. an unrewritten
+/// `NG_(GENE):c.…` selector).
+fn is_transcript_accession(id: &str) -> bool {
+    id.starts_with("NM_")
+        || id.starts_with("NR_")
+        || id.starts_with("XM_")
+        || id.starts_with("XR_")
+        || id.starts_with("ENST")
 }
 
 /// Apply the `project_*_all` enumeration policy (#656) to a priority-ordered
@@ -5599,6 +5643,78 @@ mod tests {
             );
         }
 
+        // -- 1b: versioned silent-substitution refusal in the c.→g. direction --
+
+        #[test]
+        fn project_to_genomic_declines_silent_version_substitution() {
+            // Issue #785, c.→g. direction. `project_to_genomic` does not normalize
+            // the original transcript-coordinate input first, so without an
+            // explicit gate it would resolve a versioned request through the
+            // *lenient* cdot pivot and silently project onto the genome using a
+            // *sibling* version's exon/CDS frame. Here the reference carries only
+            // `NM_TEST.1`; a request for the absent `NM_TEST.2` must DECLINE with
+            // `TranscriptVersionNotExact` rather than silently use `.1`'s frame —
+            // the same guarantee `project_variant`/`project_variant_all` inherit
+            // by normalizing first.
+            let (projector, mut provider) = make_test_provider_and_projector();
+            // NM_TEST.2 is absent; a lenient lookup serves the .1 bases/frame.
+            provider.mark_version_substitution("NM_TEST.2", "NM_TEST.1");
+            let vp = VariantProjector::new(projector, provider);
+
+            // NC_000001.11(NM_TEST.2):c.4C>A — explicitly versioned, sibling-only.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.2"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let input = HgvsVariant::Cds(cds);
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("a versioned silent substitution must decline in c.→g.");
+            assert!(
+                matches!(err, FerroError::TranscriptVersionNotExact { ref requested } if requested == "NM_TEST.2"),
+                "expected TranscriptVersionNotExact for NM_TEST.2, got {err:?}"
+            );
+        }
+
+        // -- 1c: exact-version request still projects (no over-decline) ---------
+
+        #[test]
+        fn project_to_genomic_allows_exact_version() {
+            // Guard against over-declining: when the EXACT requested version is
+            // served, the #785 gate must NOT fire. `NM_TEST.1` is present, so
+            // `NC_000001.11(NM_TEST.1):c.4C>A` projects to g. unchanged.
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_TEST.1"),
+                gene_symbol: Some("TESTGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(4)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let input = HgvsVariant::Cds(cds);
+            let out = vp
+                .project_to_genomic(&input)
+                .expect("exact-version c.→g. projection must not be declined");
+            assert!(
+                out.to_string().contains(":g.1003C>A"),
+                "expected NC_000001.11...:g.1003C>A, got: {out}"
+            );
+        }
+
         // -- 2: minus-strand substitution --------------------------------------
 
         #[test]
@@ -7737,32 +7853,56 @@ mod tests {
     }
 
     #[test]
-    fn project_declines_protein_when_transcript_not_version_exact() {
-        // Issue #505: the protein path reads the transcript's CDS bases
-        // directly. When the reference only carries a *different* version of
-        // the requested transcript (a silent version-strip substitution),
-        // translating those bases would emit a wrong protein attributed to the
-        // requested version. The protein path must decline to predict rather
-        // than lie. The non-protein axes (coding) are unaffected.
+    fn project_rejects_versioned_request_on_silent_substitution() {
+        // Issue #785: projection normalizes first (#637), and normalization now
+        // declines an EXPLICITLY-versioned c./n./r. request whose exact version
+        // the reference does not serve but a sibling does (a silent
+        // substitution). Every downstream axis — coding coordinates included —
+        // would otherwise be computed against the sibling's frame, a mapping
+        // whose stated reference and frame disagree. So the whole projection
+        // declines with `TranscriptVersionNotExact` rather than emit a
+        // confidently-wrong coding form. This extends the protein-only gate of
+        // #505 to the coordinate axes for versioned requests.
         let (projector, mut provider) = make_test_provider_and_projector();
-        // Same input as `project_bare_nm_substitution_predicts_protein_without_genome`,
-        // but the provider now reports NM_TEST.1 as not available at the exact
-        // requested version (e.g. only a sibling version's bases are present).
-        provider.mark_non_version_exact("NM_TEST.1");
+        // NM_TEST.2 is absent; a request for it is silently served the .1 bases.
+        provider.mark_version_substitution("NM_TEST.2", "NM_TEST.1");
         let vp = VariantProjector::new(projector, provider);
-        let variant = make_coding_variant("NM_TEST.1", None);
+        let variant = make_coding_variant("NM_TEST.2", None);
+        let err = vp
+            .project_variant(&variant, "NM_TEST.2")
+            .expect_err("an explicitly-versioned silent substitution must decline wholesale");
+        assert!(
+            matches!(err, FerroError::TranscriptVersionNotExact { ref requested } if requested == "NM_TEST.2"),
+            "expected TranscriptVersionNotExact for NM_TEST.2, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn project_declines_protein_but_keeps_coding_for_bare_non_version_exact() {
+        // Issue #505 (still in force for BARE requests): a bare (unversioned)
+        // accession keeps lenient "latest version" resolution, so the #785
+        // version-substitution gate does NOT apply — coding still projects
+        // against the resolved transcript. But the protein path reads the CDS
+        // bases directly, so when the resolved bases are not version-exact it
+        // must still decline to predict a protein rather than attribute a
+        // possibly-wrong product to the request. Protein is declined; the coding
+        // axis is unaffected.
+        let (projector, mut provider) = make_test_provider_and_projector();
+        provider.mark_non_version_exact("NM_TEST");
+        let vp = VariantProjector::new(projector, provider);
+        // Bare NM_TEST (no .version) — not gated by #785.
+        let variant = make_coding_variant("NM_TEST", None);
         let proj = vp
-            .project_variant(&variant, "NM_TEST.1")
-            .expect("projection should still succeed; only protein prediction declines");
+            .project_variant(&variant, "NM_TEST")
+            .expect("a bare request must still project; only protein prediction declines");
         assert!(
             proj.protein.is_none(),
             "protein must be declined for a non-version-exact transcript, got {:?}",
             proj.protein
         );
-        // The protein-only gate must not suppress the coding axis.
         assert!(
             proj.coding.is_some(),
-            "coding form should still be present despite the protein gate"
+            "coding form should still be present for a bare request despite the protein gate"
         );
     }
 
