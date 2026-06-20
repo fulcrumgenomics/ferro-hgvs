@@ -58,6 +58,12 @@ pub struct ReferenceManifest {
     /// #792), for NG_-parent-aware legacy `GENE_v001` selector resolution.
     #[serde(default)]
     pub ng_hosted_transcripts: Option<PathBuf>,
+    /// Derived exon→genome structures (JSON) for old transcript versions absent
+    /// from cdot — built at prepare time by sibling-anchoring + genome-readback
+    /// validation (#790). Injected into the cdot mapper at load; fills only
+    /// genuine version gaps (declines rather than mis-anchor).
+    #[serde(default)]
+    pub derived_transcript_placements: Option<PathBuf>,
     /// NCBI `LRG_RefSeqGene` association table, mapping each gene to its
     /// reference-standard transcript. Consumed to resolve legacy gene-model
     /// selectors (`NG_(GENE_v001):c.…`) to the transcript accession (#500/#637).
@@ -134,6 +140,7 @@ impl Default for ReferenceManifest {
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
             ng_hosted_transcripts: None,
+            derived_transcript_placements: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -283,6 +290,7 @@ impl ReferenceManifest {
             &self.assembly_report_grch37,
             &self.derived_refseqgene_placements,
             &self.ng_hosted_transcripts,
+            &self.derived_transcript_placements,
             &self.refseqgene_summary,
             &self.lrg_refseq_mapping,
             &self.cdot_json,
@@ -326,6 +334,7 @@ impl ReferenceManifest {
             &mut self.assembly_report_grch37,
             &mut self.derived_refseqgene_placements,
             &mut self.ng_hosted_transcripts,
+            &mut self.derived_transcript_placements,
             &mut self.refseqgene_summary,
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
@@ -558,6 +567,7 @@ mod tests {
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
             ng_hosted_transcripts: None,
+            derived_transcript_placements: None,
             refseqgene_summary: Some(ref_dir.join("LRG_RefSeqGene")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
             lrg_xmls: vec![ref_dir.join("lrg.xml")],
@@ -758,6 +768,30 @@ mod tests {
                 "derived_refseqgene_placements.json"
             )),
             "derived_refseqgene_placements must be preserved across load_or_default/save"
+        );
+    }
+
+    #[test]
+    fn save_preserves_derived_transcript_placements_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let placements = dir.path().join("derived_transcript_placements.json");
+        std::fs::write(&placements, "{}").unwrap();
+
+        // First run wires the field (as a hand-edit or a --derive-transcript-placements run would).
+        let mut m = ReferenceManifest::load_or_default(dir.path()).unwrap();
+        m.derived_transcript_placements = Some(placements.clone());
+        m.save().unwrap();
+
+        // A subsequent prepare loads the existing manifest — the field must survive.
+        let reloaded = ReferenceManifest::load_or_default(dir.path()).unwrap();
+        assert_eq!(
+            reloaded
+                .derived_transcript_placements
+                .map(|p| p.file_name().unwrap().to_owned()),
+            Some(std::ffi::OsString::from(
+                "derived_transcript_placements.json"
+            )),
+            "derived_transcript_placements must be preserved across load_or_default/save"
         );
     }
 
