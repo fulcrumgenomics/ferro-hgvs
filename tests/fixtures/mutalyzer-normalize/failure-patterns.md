@@ -18,17 +18,6 @@ On an `NG_/NC_/LRG_` reference ferro preserves the input's gene-symbol selector;
 | `NG_008939.1:c.155_157delAAC` | normalized | improvement | — | #500 |
 | `NG_008939.1:c.274_275inv` | normalized | improvement | — | #500 |
 | `NG_012337.1(10683):c.274G>T` | normalized | improvement | — | #500 |
-| `NG_012337.1(SDHD):c.274G>T` | normalized | improvement | — | #500 |
-| `NG_012337.1(SDHD_v001):c.274G>T` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12_15delCAGC` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12_15delCAGCinsTTT` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12_15dupCAGC` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12delC` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12delCinsAT` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B):c.12dupC` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B_v001):c.12_13insGATC` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B_v001):c.12_13ins[GATC]` | normalized | improvement | — | #500 |
-| `NG_012337.1(TIMM8B_v001):c.12_13ins[TTT;GATC]` | normalized | improvement | — | #500 |
 
 ### Bare NP_ protein reference
 
@@ -203,7 +192,6 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
 | `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
-| `NG_009497.1(USH2A_v001):c.8682-19dup` | normalized | known_bug | — | #500 |
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
@@ -241,5 +229,5 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
-| normalized | 24 | 21 | 15 | 5 | 9 |
+| normalized | 24 | 20 | 4 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 31 |
