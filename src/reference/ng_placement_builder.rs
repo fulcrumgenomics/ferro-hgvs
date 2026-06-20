@@ -11,24 +11,40 @@ use crate::data::cdot::CdotMapper;
 use crate::hgvs::parser::accession::parse_accession;
 use crate::hgvs::variant::Accession;
 use crate::reference::derived_placement::{
-    derive_ng_placement, DerivedPlacement, DerivedPlacements, GenomeSlice, NcExonSource,
+    derive_ng_placement, parse_ng_gene_transcripts, DerivedPlacement, DerivedPlacements,
+    GenomeSlice, NcExonSource,
 };
 use crate::reference::multi_fasta::MultiFastaProvider;
 use crate::reference::{GenomicPlacement, ReferenceProvider, Strand};
 use crate::FerroError;
 
+/// Output of [`build_placements`]: the validated placement records, the
+/// hosting map entries for `ng_hosted_transcripts.json` (#792), and a list of
+/// human-readable decline messages.
+pub struct BuildOutput {
+    /// Validated `DerivedPlacement` records, one per validated (NG_, build) pair.
+    pub placements: Vec<DerivedPlacement>,
+    /// Per-NG_ hosting records: `(ng_acc_version, [(gene_upper, transcript_id)])`.
+    /// Collected from the same GenBank fetch as the placements — no second fetch.
+    pub hosted: Vec<(String, Vec<(String, String)>)>,
+    /// Human-readable decline messages (fetch failures, no-build declines).
+    pub declined: Vec<String>,
+}
+
 /// Derive placements for `accessions` over `builds`, fetching record/sequence
 /// via `fetch(accession, rettype)` (`rettype` is `"gb"` or `"fasta"`) and
-/// deriving via `derive(genbank, seq, build)`. Returns the validated records
-/// and a list of human-readable decline messages. Never panics on a single
-/// accession's failure.
+/// deriving via `derive(genbank, seq, build)`. Returns a [`BuildOutput`]
+/// containing the validated records, per-NG_ hosting entries (#792), and
+/// human-readable decline messages. Never panics on a single accession's
+/// failure.
 pub fn build_placements(
     accessions: &[String],
     builds: &[String],
     fetch: impl Fn(&str, &str) -> Result<String, FerroError>,
     derive: impl Fn(&str, &[u8], &str) -> Option<GenomicPlacement>,
-) -> (Vec<DerivedPlacement>, Vec<String>) {
-    let mut records = Vec::new();
+) -> BuildOutput {
+    let mut placements = Vec::new();
+    let mut hosted = Vec::new();
     let mut declined = Vec::new();
     for ng in accessions {
         let genbank = match fetch(ng, "gb") {
@@ -38,6 +54,11 @@ pub fn build_placements(
                 continue;
             }
         };
+        // Collect hosted-transcript entries from this GenBank fetch (#792).
+        let gene_txs = parse_ng_gene_transcripts(&genbank);
+        if !gene_txs.is_empty() {
+            hosted.push((ng.clone(), gene_txs));
+        }
         let seq = match fetch(ng, "fasta") {
             Ok(fa) => fasta_bases(&fa),
             Err(e) => {
@@ -48,7 +69,7 @@ pub fn build_placements(
         let mut any_build = false;
         for build in builds {
             if let Some(p) = derive(&genbank, &seq, build) {
-                records.push(placement_to_record(ng, &p));
+                placements.push(placement_to_record(ng, &p));
                 any_build = true;
             }
         }
@@ -58,7 +79,11 @@ pub fn build_placements(
             ));
         }
     }
-    (records, declined)
+    BuildOutput {
+        placements,
+        hosted,
+        declined,
+    }
 }
 
 /// Serializable record from a derived placement. Validation already passed, so
@@ -178,18 +203,30 @@ impl GenomeSlice for ProviderGenomeSlice<'_> {
     }
 }
 
+/// Output of [`derive_placements_for_accessions`]: the validated placement
+/// artifact, the per-NG_ hosting records (#792), and the number of accessions
+/// that declined on every requested build.
+pub struct DeriveOutput {
+    /// Validated `DerivedPlacements` artifact ready to write to disk.
+    pub artifact: DerivedPlacements,
+    /// Per-NG_ hosting records: `(ng_acc_version, [(gene_upper, transcript_id)])`.
+    /// Collected from the same GenBank fetch as the placements — no second fetch.
+    pub hosted: Vec<(String, Vec<(String, String)>)>,
+    /// Number of accessions that declined on every requested build.
+    pub declined_count: usize,
+}
+
 /// Derive validated placements for `accessions` over `builds` using `provider`
 /// (cdot + genome) and live NCBI EFetch. Declines are logged via `warn!`.
-/// Derives NG_/LRG_ placements for `accessions` over `builds`, returning the
-/// validated artifact and the number of accessions that declined on every
-/// requested build (so callers can surface an all-declined run rather than
-/// reporting a bare success).
+/// Returns a [`DeriveOutput`] containing the validated artifact, per-NG_
+/// hosting records (#792), and the number of declined accessions — so callers
+/// can surface an all-declined run rather than reporting a bare success.
 pub fn derive_placements_for_accessions(
     provider: &MultiFastaProvider,
     accessions: &[String],
     builds: &[String],
     description: String,
-) -> Result<(DerivedPlacements, usize), FerroError> {
+) -> Result<DeriveOutput, FerroError> {
     let cdot = provider.cdot_mapper().ok_or_else(|| FerroError::Io {
         msg: "manifest has no cdot; cannot derive NG_ placements".to_string(),
     })?;
@@ -198,18 +235,19 @@ pub fn derive_placements_for_accessions(
         let nc_source = CdotNcExons { cdot, build };
         derive_ng_placement(genbank, seq, &nc_source, &genome)
     };
-    let (placements, declined) = build_placements(accessions, builds, efetch_text, derive);
-    for d in &declined {
+    let out = build_placements(accessions, builds, efetch_text, derive);
+    for d in &out.declined {
         log::warn!("derive NG_ placement declined: {d}");
     }
-    let declined_count = declined.len();
-    Ok((
-        DerivedPlacements {
+    let declined_count = out.declined.len();
+    Ok(DeriveOutput {
+        artifact: DerivedPlacements {
             description,
-            placements,
+            placements: out.placements,
         },
+        hosted: out.hosted,
         declined_count,
-    ))
+    })
 }
 
 #[cfg(test)]
@@ -257,19 +295,19 @@ mod tests {
             }
         };
 
-        let (records, declined) = build_placements(&accessions, &builds, fetch, derive);
+        let out = build_placements(&accessions, &builds, fetch, derive);
 
         assert_eq!(
-            records.len(),
+            out.placements.len(),
             1,
             "one validated placement (NG_aaa on GRCh38)"
         );
-        assert_eq!(records[0].parent, "NG_aaa.1");
-        assert_eq!(records[0].nc_start, 100);
-        assert_eq!(records[0].strand, "+");
+        assert_eq!(out.placements[0].parent, "NG_aaa.1");
+        assert_eq!(out.placements[0].nc_start, 100);
+        assert_eq!(out.placements[0].strand, "+");
         // NG_bad declined (fetch failure); NG_aaa not fully declined (had a build).
-        assert_eq!(declined.len(), 1);
-        assert!(declined[0].contains("NG_bad.1"));
+        assert_eq!(out.declined.len(), 1);
+        assert!(out.declined[0].contains("NG_bad.1"));
     }
 
     #[test]
@@ -284,10 +322,11 @@ mod tests {
             })
         };
         let derive = |_gb: &str, _seq: &[u8], _b: &str| -> Option<GenomicPlacement> { None };
-        let (records, declined) = build_placements(&accessions, &builds, fetch, derive);
-        assert!(records.is_empty());
-        assert_eq!(declined.len(), 1);
-        assert!(declined[0].contains("no validated placement"));
+        let out = build_placements(&accessions, &builds, fetch, derive);
+        assert!(out.placements.is_empty());
+        assert_eq!(out.declined.len(), 1);
+        assert!(out.declined[0].contains("no validated placement"));
+        assert!(out.hosted.is_empty());
     }
 
     #[test]
@@ -316,10 +355,9 @@ mod tests {
             .expect("load manifest");
         let accs = vec!["NG_012337.3".to_string()];
         let builds = vec!["GRCh38".to_string()];
-        let (artifact, _declined) =
-            super::derive_placements_for_accessions(&provider, &accs, &builds, "test".into())
-                .expect("derive");
+        let out = super::derive_placements_for_accessions(&provider, &accs, &builds, "test".into())
+            .expect("derive");
         // Either a validated placement or a principled decline (no panic, valid artifact).
-        assert!(artifact.placements.len() <= 1);
+        assert!(out.artifact.placements.len() <= 1);
     }
 }

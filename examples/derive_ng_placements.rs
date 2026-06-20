@@ -109,20 +109,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
          Source manifest: {}.",
         cli.manifest.display()
     );
-    let (artifact, declined) =
-        derive_placements_for_accessions(&provider, &accessions, &builds, description)
-            .map_err(|e| anyhow::anyhow!("derive: {e}"))?;
+    let out = derive_placements_for_accessions(&provider, &accessions, &builds, description)
+        .map_err(|e| anyhow::anyhow!("derive: {e}"))?;
 
-    let json = artifact
+    let json = out
+        .artifact
         .to_json()
         .map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
     std::fs::write(&cli.out, &json)
         .map_err(|e| anyhow::anyhow!("write {}: {e}", cli.out.display()))?;
     println!(
         "Derived {} placement(s) for {} accession(s), {} declined. Wrote {}.",
-        artifact.placements.len(),
+        out.artifact.placements.len(),
         accessions.len(),
-        declined,
+        out.declined_count,
         cli.out.display()
     );
     Ok(())

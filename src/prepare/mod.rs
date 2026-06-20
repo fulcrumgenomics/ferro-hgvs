@@ -808,9 +808,21 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             );
         } else {
             let out_path = config.output_dir.join("derived_refseqgene_placements.json");
+            let hosted_out_path = config.output_dir.join("ng_hosted_transcripts.json");
             if config.skip_existing && out_path.exists() {
+                // Caveat: if this is a pre-#792 reference (derived_refseqgene_placements.json
+                // exists but ng_hosted_transcripts.json does not), manifest.ng_hosted_transcripts
+                // will remain unset. Re-run with --force to regenerate both artifacts.
                 eprintln!("  Skipping NG_ placement derivation (exists)");
                 manifest.derived_refseqgene_placements = Some(out_path);
+                if hosted_out_path.exists() {
+                    manifest.ng_hosted_transcripts = Some(hosted_out_path);
+                } else {
+                    eprintln!(
+                        "  Note: ng_hosted_transcripts.json is absent (pre-#792 reference); \
+                         re-run with --force to derive it."
+                    );
+                }
                 manifest.save()?;
             } else {
                 eprintln!("  Deriving NG_ placements from {}...", acc_file.display());
@@ -825,22 +837,28 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                      --derive-ng-placements {}`.",
                     acc_file.display()
                 );
-                let (artifact, declined) =
+                let derive_out =
                     crate::reference::ng_placement_builder::derive_placements_for_accessions(
                         &provider,
                         &accessions,
                         &builds,
                         description,
                     )?;
-                std::fs::write(&out_path, artifact.to_json()?).map_err(|e| FerroError::Io {
-                    msg: format!("write {}: {e}", out_path.display()),
+                std::fs::write(&out_path, derive_out.artifact.to_json()?).map_err(|e| {
+                    FerroError::Io {
+                        msg: format!("write {}: {e}", out_path.display()),
+                    }
                 })?;
                 eprintln!(
                     "  Derived {} placement(s), {} declined.",
-                    artifact.placements.len(),
-                    declined
+                    derive_out.artifact.placements.len(),
+                    derive_out.declined_count
                 );
                 manifest.derived_refseqgene_placements = Some(out_path);
+                // Co-emit ng_hosted_transcripts.json from the same GenBank fetch (#792).
+                let hosted_path =
+                    write_ng_hosted_transcripts(&derive_out.hosted, &hosted_out_path)?;
+                manifest.ng_hosted_transcripts = Some(hosted_path);
                 manifest.save()?;
             }
         }
@@ -866,6 +884,24 @@ fn builds_for_genome(genome: &str) -> Vec<String> {
         // a selection; returning empty keeps this consistent if reached otherwise.
         _ => Vec::new(),
     }
+}
+
+/// Build [`NgHostedTranscripts`](crate::reference::ng_hosted_transcripts::NgHostedTranscripts)
+/// from `(NG_acc.version, [(gene, transcript_id)])` records and write it as
+/// JSON to `out`, returning the written path (#792).
+fn write_ng_hosted_transcripts(
+    records: &[(String, Vec<(String, String)>)],
+    out: &Path,
+) -> Result<PathBuf, FerroError> {
+    use crate::reference::ng_hosted_transcripts::NgHostedTranscripts;
+    let nh = NgHostedTranscripts::from_records(records.iter().cloned());
+    let json = nh.to_json().map_err(|e| FerroError::Io {
+        msg: format!("serialize ng_hosted_transcripts: {e}"),
+    })?;
+    std::fs::write(out, json).map_err(|e| FerroError::Io {
+        msg: format!("write {}: {e}", out.display()),
+    })?;
+    Ok(out.to_path_buf())
 }
 
 /// Fetch supplemental data from ClinVar/patterns (benchmark feature only)
@@ -2057,5 +2093,25 @@ mod tests {
         .unwrap();
 
         assert_eq!(manifest, Some(report));
+    }
+
+    #[test]
+    fn build_and_write_ng_hosted_writes_artifact_and_returns_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("ng_hosted_transcripts.json");
+        let recs = vec![(
+            "NG_012337.1".to_string(),
+            vec![("TIMM8B".to_string(), "NM_012459.2".to_string())],
+        )];
+        let p = write_ng_hosted_transcripts(&recs, &out).unwrap();
+        assert_eq!(p, out);
+        let loaded = crate::reference::ng_hosted_transcripts::NgHostedTranscripts::from_json(
+            &std::fs::read_to_string(&out).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.hosted_unique("NG_012337.1", "TIMM8B"),
+            Some("NM_012459.2")
+        );
     }
 }
