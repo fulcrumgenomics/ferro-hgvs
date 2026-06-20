@@ -950,9 +950,41 @@ impl MultiFastaProvider {
             }
         }
 
+        // Derived transcript structures (#790): inject exon→genome maps for
+        // old versions cdot lacks, so projection resolves them with real exons.
+        // This runs *before* canonical-override reconciliation so a `#520`
+        // override keyed to a now-provisioned old version (e.g. `NM_003002.2`)
+        // sees the injected record and applies. Injection only gap-fills records
+        // absent from cdot (`has_transcript_exact == false`) and reconcile only
+        // corrects records present exactly (`has_transcript_exact == true`), so
+        // the two are independent except for this ordering.
+        if let Some(rel) = manifest
+            .get("derived_transcript_placements")
+            .and_then(|v| v.as_str())
+        {
+            let path = resolve_path(rel);
+            match crate::reference::derived_tx_structure::DerivedTxStructures::from_json_path(&path)
+            {
+                Ok(derived) => {
+                    eprintln!(
+                        "Loaded {} derived transcript structures",
+                        derived.structures.len()
+                    );
+                    provider.inject_derived_tx_structures(&derived);
+                }
+                Err(e) => eprintln!(
+                    "Warning: Failed to load derived transcript placements {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+
         // Canonical overrides (issue #520): load the authoritative-overrides
         // file and reconcile it into the cdot metadata so both the served
         // transcript and the projection path see the corrected CDS/protein.
+        // Runs after derived-structure injection so an override targeting a
+        // derived old version is applied to the injected record.
         if let Some(overrides_ref) = manifest.get("canonical_overrides").and_then(|v| v.as_str()) {
             let path = resolve_path(overrides_ref);
             match std::fs::read_to_string(&path) {
@@ -1684,6 +1716,47 @@ impl MultiFastaProvider {
         let cdot = self.cdot_mapper.as_mut().unwrap();
         for (acc, rec) in corrections {
             cdot.add_transcript(acc, rec);
+        }
+    }
+
+    /// Inject build-time–derived exon→genome structures into the cdot mapper so
+    /// the unchanged projection path resolves cdot-absent old versions with real
+    /// exons (#790). No-op when the cdot mapper is absent. Uses `add_transcript`,
+    /// the same lever `reconcile_cdot_with_overrides` uses.
+    fn inject_derived_tx_structures(
+        &mut self,
+        derived: &crate::reference::derived_tx_structure::DerivedTxStructures,
+    ) {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::Strand;
+        let Some(cdot) = self.cdot_mapper.as_mut() else {
+            return;
+        };
+        for s in &derived.structures {
+            let strand = match s.strand.as_str() {
+                "+" => Strand::Plus,
+                "-" => Strand::Minus,
+                _ => continue, // never mis-place on an unparseable strand
+            };
+            // Don't overwrite a real cdot record if one exists for this exact
+            // version (derived structures fill gaps only).
+            if cdot.has_transcript_exact(&s.accession) {
+                continue;
+            }
+            cdot.add_transcript(
+                s.accession.clone(),
+                CdotTranscript {
+                    gene_name: s.gene_name.clone(),
+                    contig: s.contig.clone(),
+                    strand,
+                    exons: s.exons.clone(),
+                    cds_start: s.cds_start,
+                    cds_end: s.cds_end,
+                    exon_cigars: vec![None; s.exons.len()],
+                    gene_id: None,
+                    protein: s.protein.clone(),
+                },
+            );
         }
     }
 
@@ -5588,5 +5661,120 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             p.ng_hosted_unique("NG_012337.1", "TIMM8B"),
             Some("NM_012459.2".to_string())
         );
+    }
+
+    // --- inject_derived_tx_structures (issue #790) ---------------------------
+
+    #[test]
+    fn injects_derived_tx_structure_into_cdot() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::derived_tx_structure::{DerivedTxStructure, DerivedTxStructures};
+        use crate::reference::Strand;
+        // Build a provider with an empty cdot mapper; inject a derived structure
+        // and confirm it is now resolvable at the exact accession.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("DUMMY.1", "A")]);
+        provider.cdot_mapper = Some(CdotMapper::new());
+        let derived = DerivedTxStructures {
+            description: String::new(),
+            structures: vec![DerivedTxStructure {
+                accession: "NM_TEST.2".to_string(),
+                contig: "NC_000011.10".to_string(),
+                strand: "+".to_string(),
+                exons: vec![[100, 110, 0, 10], [200, 210, 10, 20]],
+                cds_start: Some(2),
+                cds_end: Some(18),
+                gene_name: Some("T".to_string()),
+                protein: Some("NP_TEST.1".to_string()),
+                anchored_by: "NM_TEST.3".to_string(),
+                mismatch_fraction: 0.0,
+            }],
+        };
+        provider.inject_derived_tx_structures(&derived);
+        let cdot = provider.cdot_mapper().expect("cdot mapper present");
+        assert!(cdot.has_transcript_exact("NM_TEST.2"));
+        let t = cdot.get_transcript("NM_TEST.2").unwrap();
+        assert_eq!(t.exons, vec![[100, 110, 0, 10], [200, 210, 10, 20]]);
+        assert!(matches!(t.strand, Strand::Plus));
+        assert_eq!(t.cds_start, Some(2));
+        assert_eq!(t.cds_end, Some(18));
+        assert_eq!(t.protein.as_deref(), Some("NP_TEST.1"));
+    }
+
+    #[test]
+    fn inject_skips_unparseable_strand() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::derived_tx_structure::{DerivedTxStructure, DerivedTxStructures};
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("DUMMY.1", "A")]);
+        provider.cdot_mapper = Some(CdotMapper::new());
+        let derived = DerivedTxStructures {
+            description: String::new(),
+            structures: vec![DerivedTxStructure {
+                accession: "NM_BAD.1".to_string(),
+                contig: "NC_000001.1".to_string(),
+                strand: "?".to_string(), // unparseable
+                exons: vec![[1, 10, 0, 9]],
+                cds_start: None,
+                cds_end: None,
+                gene_name: None,
+                protein: None,
+                anchored_by: "NM_BAD.2".to_string(),
+                mismatch_fraction: 0.0,
+            }],
+        };
+        provider.inject_derived_tx_structures(&derived);
+        let cdot = provider.cdot_mapper().expect("cdot mapper present");
+        // Must be absent — bad strand must not be injected.
+        assert!(!cdot.has_transcript_exact("NM_BAD.1"));
+    }
+
+    #[test]
+    fn inject_does_not_overwrite_existing_cdot_record() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::derived_tx_structure::{DerivedTxStructure, DerivedTxStructures};
+        use crate::reference::Strand;
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("DUMMY.1", "A")]);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_REAL.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("REAL".to_string()),
+                contig: "NC_000001.1".to_string(),
+                strand: Strand::Minus,
+                exons: vec![[50, 60, 0, 10]],
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exon_cigars: Vec::new(),
+                gene_id: None,
+                protein: Some("NP_REAL.1".to_string()),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        let derived = DerivedTxStructures {
+            description: String::new(),
+            structures: vec![DerivedTxStructure {
+                accession: "NM_REAL.1".to_string(), // already in cdot
+                contig: "NC_000011.10".to_string(),
+                strand: "+".to_string(),
+                exons: vec![[100, 110, 0, 10]],
+                cds_start: Some(2),
+                cds_end: Some(8),
+                gene_name: Some("DERIVED".to_string()),
+                protein: Some("NP_DERIVED.1".to_string()),
+                anchored_by: "NM_REAL.2".to_string(),
+                mismatch_fraction: 0.0,
+            }],
+        };
+        provider.inject_derived_tx_structures(&derived);
+        // The real cdot record must not be overwritten.
+        let t = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_REAL.1")
+            .unwrap();
+        assert!(
+            matches!(t.strand, Strand::Minus),
+            "real cdot record must not be overwritten by derived structure"
+        );
+        assert_eq!(t.gene_name.as_deref(), Some("REAL"));
     }
 }
