@@ -67,6 +67,33 @@ pub struct AffineCandidate {
     pub strand: Strand,
 }
 
+/// Parse the `mRNA` features of an `NG_` GenBank record into ordered
+/// `(gene_upper, transcript_id)` pairs for the hosting map (#792).
+///
+/// Unlike [`parse_ng_hosted_transcripts`] (which skips partial `<`/`>` features
+/// because their exon coordinates can't anchor an affine), this **includes**
+/// partial features: a partial mRNA still authoritatively states "this `NG_`
+/// hosts this transcript for this gene." Only features carrying BOTH a `/gene`
+/// and a `/transcript_id` are kept. Order is the GenBank feature order.
+pub fn parse_ng_gene_transcripts(genbank: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let bytes = genbank.as_bytes();
+    let mut search_from = 0;
+    while let Some(rel) = genbank[search_from..].find("     mRNA ") {
+        let feat_start = search_from + rel;
+        let block_end = next_feature_offset(bytes, feat_start + 1);
+        let block = &genbank[feat_start..block_end];
+        search_from = block_end;
+        if let (Some(gene), Some(tx)) = (
+            extract_qualifier(block, "gene"),
+            extract_qualifier(block, "transcript_id"),
+        ) {
+            out.push((gene.to_ascii_uppercase(), tx));
+        }
+    }
+    out
+}
+
 /// Parse the `mRNA` features of an `NG_` GenBank record into hosted transcripts.
 ///
 /// Each `mRNA` feature carries an exon join in `NG_` coordinates and a
@@ -489,6 +516,32 @@ impl DerivedPlacements {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- parse_ng_gene_transcripts ----
+
+    const NG_GENE_SAMPLE: &str = concat!(
+        "     mRNA            join(1..100,200..300)\n",
+        "                     /gene=\"TIMM8B\"\n",
+        "                     /transcript_id=\"NM_012459.2\"\n",
+        "     mRNA            join(<136..200,400..500)\n",
+        "                     /gene=\"C11orf57\"\n",
+        "                     /transcript_id=\"NM_001321072.1\"\n",
+        "     CDS             join(50..100,200..280)\n",
+        "                     /gene=\"TIMM8B\"\n",
+    );
+
+    #[test]
+    fn parse_ng_gene_transcripts_captures_gene_and_includes_partials() {
+        let got = parse_ng_gene_transcripts(NG_GENE_SAMPLE);
+        assert_eq!(
+            got,
+            vec![
+                ("TIMM8B".to_string(), "NM_012459.2".to_string()),
+                // partial (`<136`) feature is INCLUDED for hosting membership:
+                ("C11ORF57".to_string(), "NM_001321072.1".to_string()),
+            ]
+        );
+    }
 
     // ---- GenBank mRNA parsing ----
 
