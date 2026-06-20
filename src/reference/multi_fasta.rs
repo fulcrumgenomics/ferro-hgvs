@@ -1229,8 +1229,6 @@ impl MultiFastaProvider {
     /// `ng_hosted_transcripts` artifact (#792), or `None` when the artifact is
     /// absent, the `(ng, gene)` pair is unknown, or the gene is hosted by more
     /// than one transcript (ambiguous).
-    // T6 will call this from the resolver; allow until then.
-    #[allow(dead_code)]
     pub(crate) fn ng_hosted_unique(&self, ng: &str, gene: &str) -> Option<String> {
         self.ng_hosted
             .as_ref()?
@@ -2399,10 +2397,18 @@ impl ReferenceProvider for MultiFastaProvider {
         placement
     }
 
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
-        crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
-            self.legacy_gene_models.get(g).cloned()
-        })
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&crate::hgvs::variant::Accession>,
+    ) -> Option<String> {
+        let ng = ng_parent.map(|a| a.full());
+        crate::reference::legacy_selector::resolve_legacy_selector_with_parent(
+            selector,
+            ng.as_deref(),
+            |ng, g| self.ng_hosted_unique(ng, g),
+            |g| self.legacy_gene_models.get(g).cloned(),
+        )
     }
 
     fn infer_genome_build(

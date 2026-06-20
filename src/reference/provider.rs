@@ -218,12 +218,21 @@ pub trait ReferenceProvider {
     /// genomic reference to a transcript accession (#500/#637).
     ///
     /// `selector` is the gene-symbol selector verbatim (e.g. `"TIMM8B_v001"`).
-    /// Returns the gene's reference-standard transcript accession (e.g.
-    /// `"NM_012459.4"`) for a bare gene or `_v001`, or `None` to decline (an
-    /// unknown gene, a higher locus version `_v002…`, or a provider with no
-    /// gene-model summary ingested). Declining preserves the input selector
-    /// rather than emitting a guessed transcript.
-    fn resolve_legacy_gene_selector(&self, _selector: &str) -> Option<String> {
+    /// `ng_parent` is the versioned `NG_` accession the selector sits on, when
+    /// known. When `ng_parent` is `Some` and that exact `NG_` version uniquely
+    /// hosts the gene, the hosted transcript takes precedence over the global
+    /// reference-standard map (#792); otherwise resolution falls back to that
+    /// global map.
+    /// Returns the resolved transcript accession (e.g. `"NM_012459.4"`) for a
+    /// bare gene or `_v001`, or `None` to decline (an unknown gene, a higher
+    /// locus version `_v002…`, or a provider with no gene-model summary
+    /// ingested). Declining preserves the input selector rather than emitting a
+    /// guessed transcript.
+    fn resolve_legacy_gene_selector(
+        &self,
+        _selector: &str,
+        _ng_parent: Option<&Accession>,
+    ) -> Option<String> {
         None
     }
 
@@ -472,10 +481,14 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).genomic_placement_on_build(parent, build)
     }
 
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&Accession>,
+    ) -> Option<String> {
         // Forward so legacy gene-model resolution survives an Arc wrapper; the
         // default declines (`None`) and would bypass the wrapped provider.
-        (**self).resolve_legacy_gene_selector(selector)
+        (**self).resolve_legacy_gene_selector(selector, ng_parent)
     }
 
     fn get_protein_sequence(
@@ -571,10 +584,14 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
         (**self).genomic_placement_on_build(parent, build)
     }
 
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&Accession>,
+    ) -> Option<String> {
         // Forward so legacy gene-model resolution survives a Box wrapper; the
         // default declines (`None`) and would bypass the wrapped provider.
-        (**self).resolve_legacy_gene_selector(selector)
+        (**self).resolve_legacy_gene_selector(selector, ng_parent)
     }
 
     fn get_protein_sequence(
@@ -779,7 +796,11 @@ mod wrapper_forwarding_tests {
             })
         }
 
-        fn resolve_legacy_gene_selector(&self, _selector: &str) -> Option<String> {
+        fn resolve_legacy_gene_selector(
+            &self,
+            _selector: &str,
+            _ng_parent: Option<&Accession>,
+        ) -> Option<String> {
             Some("NM_999999.9".to_string())
         }
 
@@ -812,7 +833,7 @@ mod wrapper_forwarding_tests {
         );
         // Without the forward, this drops to the trait default (`None`).
         assert_eq!(
-            arc.resolve_legacy_gene_selector("GENE"),
+            arc.resolve_legacy_gene_selector("GENE", None),
             Some("NM_999999.9".to_string())
         );
         // Use a bogus NC_ accession the hardcoded table doesn't know → None; the
@@ -839,7 +860,7 @@ mod wrapper_forwarding_tests {
             "override-marker"
         );
         assert_eq!(
-            boxed.resolve_legacy_gene_selector("GENE"),
+            boxed.resolve_legacy_gene_selector("GENE", None),
             Some("NM_999999.9".to_string())
         );
         // Same forwarding check for Box.

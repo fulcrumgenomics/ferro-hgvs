@@ -414,7 +414,11 @@ impl ReferenceProvider for MockProvider {
         )
     }
 
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        _ng_parent: Option<&crate::hgvs::variant::Accession>,
+    ) -> Option<String> {
         crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
             self.legacy_gene_models.get(g).cloned()
         })
