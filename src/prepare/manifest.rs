@@ -54,6 +54,10 @@ pub struct ReferenceManifest {
     /// overridden); fills only genuine version gaps.
     #[serde(default)]
     pub derived_refseqgene_placements: Option<PathBuf>,
+    /// Per-`NG_`-version hosted-transcript map (`ng_hosted_transcripts.json`,
+    /// #792), for NG_-parent-aware legacy `GENE_v001` selector resolution.
+    #[serde(default)]
+    pub ng_hosted_transcripts: Option<PathBuf>,
     /// NCBI `LRG_RefSeqGene` association table, mapping each gene to its
     /// reference-standard transcript. Consumed to resolve legacy gene-model
     /// selectors (`NG_(GENE_v001):c.…`) to the transcript accession (#500/#637).
@@ -129,6 +133,7 @@ impl Default for ReferenceManifest {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -277,6 +282,7 @@ impl ReferenceManifest {
             &self.assembly_report,
             &self.assembly_report_grch37,
             &self.derived_refseqgene_placements,
+            &self.ng_hosted_transcripts,
             &self.refseqgene_summary,
             &self.lrg_refseq_mapping,
             &self.cdot_json,
@@ -319,6 +325,7 @@ impl ReferenceManifest {
             &mut self.assembly_report,
             &mut self.assembly_report_grch37,
             &mut self.derived_refseqgene_placements,
+            &mut self.ng_hosted_transcripts,
             &mut self.refseqgene_summary,
             &mut self.lrg_refseq_mapping,
             &mut self.cdot_json,
@@ -550,6 +557,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: Some(ref_dir.join("LRG_RefSeqGene")),
             lrg_fastas: vec![ref_dir.join("lrg.fa")],
             lrg_xmls: vec![ref_dir.join("lrg.xml")],
@@ -780,6 +788,26 @@ mod tests {
         assert_eq!(
             loaded.assembly_report_grch37,
             Some(ref_dir.join("genome/GRCh37.assembly_report.txt"))
+        );
+    }
+
+    #[test]
+    fn ng_hosted_transcripts_path_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().to_path_buf();
+        let mut m = ReferenceManifest {
+            reference_dir: ref_dir.clone(),
+            ng_hosted_transcripts: Some(ref_dir.join("ng_hosted_transcripts.json")),
+            ..Default::default()
+        };
+        m.save().unwrap();
+        let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
+        assert!(raw.contains("ng_hosted_transcripts.json"));
+        assert!(!raw.contains(ref_dir.to_str().unwrap()));
+        let loaded = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        assert_eq!(
+            loaded.ng_hosted_transcripts,
+            Some(ref_dir.join("ng_hosted_transcripts.json"))
         );
     }
 

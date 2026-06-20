@@ -3267,9 +3267,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Rewrite a legacy LOVD gene-model selector on a genomic reference —
     /// `NG_/NC_/LRG(GENE[_v001]):c.…` — to the spec-preferred transcript-accession
     /// form `NG_/NC_/LRG(NM_):c.…`, when the provider resolves the gene's
-    /// reference-standard transcript (#500/#637). `_v001` and the bare gene name
-    /// both resolve to that transcript; the `c.` coordinates are unchanged (the
-    /// gene-model selector *is* that transcript).
+    /// transcript (#500/#637). `_v001` and the bare gene name resolve identically;
+    /// the `c.` coordinates are unchanged (the gene-model selector *is* that
+    /// transcript).
+    ///
+    /// Resolution is parent-relative-first (#792): the `NG_` parent accession is
+    /// passed through (`Some(accession)` below), so when that exact `NG_` version
+    /// uniquely hosts the gene, its hosted transcript wins; only otherwise does
+    /// resolution fall back to the global reference-standard map.
     ///
     /// Returns `None` (preserve the input selector unchanged) when there is no
     /// gene-symbol selector, the reference is not genomic (`NM_(GENE)` keeps the
@@ -3298,7 +3303,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !is_genomic_ref || accession.genomic_context.is_some() {
             return None;
         }
-        let nm = self.provider.resolve_legacy_gene_selector(gene_symbol)?;
+        let nm = self
+            .provider
+            .resolve_legacy_gene_selector(gene_symbol, Some(accession))?;
         let (rest, nm_accession) = parse_accession(&nm).ok()?;
         // The resolver yields a reference-standard `NM_` coding transcript
         // (`parse_refseqgene_summary` keeps only `NM_` rows); reject anything else

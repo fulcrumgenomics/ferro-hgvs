@@ -7,23 +7,19 @@
 //! gene-model selector — `NG_012337.1(TIMM8B_v001):c.…` — should resolve to the
 //! gene's transcript.
 //!
-//! The `_v00N` numbering is positional on the RefSeqGene record. NCBI's
-//! `LRG_RefSeqGene` association table flags each gene's *reference standard*
-//! transcript (`Category == "reference standard"`); for the ~96% of genes with
-//! a single reference-standard `NM_`, that transcript is the LOVD `_v001`, so a
-//! gene-symbol → reference-standard `NM_` map resolves `_v001`/bare selectors
-//! authoritatively.
+//! The `_v00N` numbering is a LOVD-internal gene-model registry; there is no
+//! authoritative rule mapping it to the `NG_` GenBank mRNA feature order (the
+//! spec submodule and NCBI docs define none, and e.g. `SDHD_v002` has only one
+//! SDHD mRNA on NG_012337). So ferro does NOT resolve `_vNNN` positionally.
 //!
-//! It does **not** resolve everything: ~4.3% of genes (e.g. APC, ABL1, BCL2)
-//! carry *multiple* reference-standard transcripts on one record, and the table
-//! does not encode the LOVD `_v` ordering (its row order is neither the `_v`
-//! order nor accession-numeric). So a gene with more than one reference-standard
-//! `NM_` is **excluded from the map** — it declines (preserves the input)
-//! rather than guess a transcript that could shift the `c.` numbering. Higher
-//! locus versions (`_v002`…), which name the 2nd/3rd transcript on exactly those
-//! multi-transcript records, are likewise declined. Reliable `_vNNN` resolution
-//! for multi-transcript genes needs the `NG_` GenBank feature order (the
-//! definitional `_v` source) — a future enhancement.
+//! Resolution is parent-relative and unambiguous-only: a bare / `_v001`
+//! selector on an `NG_` parent resolves to the transcript that exact parent
+//! version uniquely hosts ([`resolve_legacy_selector_with_parent`], #792);
+//! failing that, to the gene's single reference-standard `NM_` from the
+//! `LRG_RefSeqGene` table. `_v002+`, genes with multiple
+//! hosted/reference-standard transcripts, and genes absent from both sources
+//! decline (preserve the input) rather than guess a transcript that could shift
+//! the `c.` numbering.
 
 use rustc_hash::FxHashMap;
 
@@ -104,6 +100,34 @@ where
         return None;
     }
     lookup(&gene.to_ascii_uppercase())
+}
+
+/// Parent-aware legacy selector resolution (#792). For a bare/`_v001` selector
+/// on an `NG_` parent, prefer the transcript that exact parent uniquely hosts;
+/// otherwise (no parent, gene not uniquely hosted there, or `_v002+`) fall back
+/// to the global reference-standard `lookup`. `_v002+` still declines via the
+/// existing rule.
+pub fn resolve_legacy_selector_with_parent<H, G>(
+    selector: &str,
+    ng_parent: Option<&str>,
+    hosted_unique: H,
+    lookup: G,
+) -> Option<String>
+where
+    H: Fn(&str, &str) -> Option<String>,
+    G: Fn(&str) -> Option<String>,
+{
+    let (gene, version) = split_legacy_gene_selector(selector);
+    if version.is_some_and(|n| n != 1) {
+        return None;
+    }
+    let gene_upper = gene.to_ascii_uppercase();
+    if let Some(ng) = ng_parent {
+        if let Some(tx) = hosted_unique(ng, &gene_upper) {
+            return Some(tx);
+        }
+    }
+    lookup(&gene_upper)
 }
 
 #[cfg(test)]
@@ -189,5 +213,37 @@ mod tests {
         assert_eq!(resolve_legacy_selector_in("SDHD_v002", lookup), None);
         // Unknown gene → decline.
         assert_eq!(resolve_legacy_selector_in("NOTAGENE_v001", lookup), None);
+    }
+
+    #[test]
+    fn ng_parent_hosted_wins_over_global_for_v001() {
+        // hosted: NG_012337.1 hosts TIMM8B → NM_012459.2 (the parent-relative answer)
+        let hosted = |ng: &str, g: &str| -> Option<String> {
+            (ng == "NG_012337.1" && g == "TIMM8B").then(|| "NM_012459.2".to_string())
+        };
+        // global reference-standard map would say NM_012459.4 (the bug)
+        let global =
+            |g: &str| -> Option<String> { (g == "TIMM8B").then(|| "NM_012459.4".to_string()) };
+        // _v001 on the NG parent → hosted wins
+        assert_eq!(
+            resolve_legacy_selector_with_parent("TIMM8B_v001", Some("NG_012337.1"), hosted, global),
+            Some("NM_012459.2".to_string())
+        );
+        // _v002 → still declines (no positional)
+        assert_eq!(
+            resolve_legacy_selector_with_parent("TIMM8B_v002", Some("NG_012337.1"), hosted, global),
+            None
+        );
+        // no NG parent → falls back to global
+        assert_eq!(
+            resolve_legacy_selector_with_parent("TIMM8B", None, hosted, global),
+            Some("NM_012459.4".to_string())
+        );
+        // NG parent present but gene not hosted there → falls back to global
+        let nohost = |_: &str, _: &str| None;
+        assert_eq!(
+            resolve_legacy_selector_with_parent("TIMM8B", Some("NG_999999.9"), nohost, global),
+            Some("NM_012459.4".to_string())
+        );
     }
 }

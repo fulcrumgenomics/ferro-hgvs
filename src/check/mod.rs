@@ -223,6 +223,19 @@ pub fn check_reference(reference_dir: &Path) -> CheckResult {
         }
     }
 
+    // A missing NG_ hosted-transcripts map silently drops parent-relative legacy
+    // selector resolution at load (#792) — every NG_-parent legacy selector then
+    // falls back to the global reference-standard map — so surface it like the
+    // other optional inputs above.
+    if let Some(ref ng_hosted) = manifest.ng_hosted_transcripts {
+        if !ng_hosted.exists() {
+            result.warnings.push(format!(
+                "NG_ hosted-transcripts map not found: {}",
+                ng_hosted.display()
+            ));
+        }
+    }
+
     result
 }
 
@@ -356,6 +369,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -410,6 +424,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -466,6 +481,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -522,6 +538,7 @@ mod tests {
             assembly_report: Some(missing_report.clone()),
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -578,6 +595,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: Some(missing_report.clone()),
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -634,6 +652,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: None,
+            ng_hosted_transcripts: None,
             refseqgene_summary: Some(missing_summary.clone()),
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -690,6 +709,7 @@ mod tests {
             assembly_report: None,
             assembly_report_grch37: None,
             derived_refseqgene_placements: Some(missing_placements.clone()),
+            ng_hosted_transcripts: None,
             refseqgene_summary: None,
             lrg_fastas: Vec::new(),
             lrg_xmls: Vec::new(),
@@ -719,6 +739,63 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("Derived RefSeqGene placements not found")),
             "Expected a warning for the missing derived placements file, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_check_warns_on_missing_ng_hosted_transcripts() {
+        let dir = TempDir::new().unwrap();
+
+        // A real transcript FASTA so the manifest is otherwise valid.
+        let transcript_fasta = dir.path().join("example.fna");
+        File::create(&transcript_fasta).unwrap();
+
+        // Point ng_hosted_transcripts at a file that does not exist.
+        let missing_ng_hosted = dir.path().join("missing_ng_hosted_transcripts.json");
+
+        let mut manifest = ReferenceManifest {
+            prepared_at: "2024-01-01T00:00:00Z".to_string(),
+            transcript_fastas: vec![transcript_fasta],
+            protein_fastas: Vec::new(),
+            genome_fasta: None,
+            genome_grch37_fasta: None,
+            refseqgene_fastas: Vec::new(),
+            refseqgene_alignments: None,
+            refseqgene_alignments_grch37: None,
+            assembly_report: None,
+            assembly_report_grch37: None,
+            derived_refseqgene_placements: None,
+            ng_hosted_transcripts: Some(missing_ng_hosted.clone()),
+            refseqgene_summary: None,
+            lrg_fastas: Vec::new(),
+            lrg_xmls: Vec::new(),
+            lrg_refseq_mapping: None,
+            cdot_json: None,
+            cdot_grch37_json: None,
+            ensembl_cdot_json: None,
+            ensembl_cdot_grch37_json: None,
+            ensembl_transcript_fastas: Vec::new(),
+            supplemental_fasta: None,
+            legacy_transcripts_fasta: None,
+            legacy_transcripts_metadata: None,
+            legacy_genbank_fasta: None,
+            legacy_genbank_metadata: None,
+            canonical_overrides: None,
+            transcript_count: 1,
+            available_prefixes: vec!["NM".to_string()],
+            reference_dir: dir.path().to_path_buf(),
+        };
+
+        manifest.save().unwrap();
+
+        let result = check_reference(dir.path());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("NG_ hosted-transcripts map not found")),
+            "Expected a warning for the missing NG_ hosted-transcripts map, got {:?}",
             result.warnings
         );
     }

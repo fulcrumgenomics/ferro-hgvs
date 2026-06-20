@@ -197,8 +197,12 @@ impl ReferenceProvider for ArcProvider {
     ) -> Option<ferro_hgvs::reference::GenomicPlacement> {
         self.0.genomic_placement_on_build(parent, build)
     }
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
-        self.0.resolve_legacy_gene_selector(selector)
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&ferro_hgvs::hgvs::variant::Accession>,
+    ) -> Option<String> {
+        self.0.resolve_legacy_gene_selector(selector, ng_parent)
     }
     fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
         self.0.get_protein_length(accession)

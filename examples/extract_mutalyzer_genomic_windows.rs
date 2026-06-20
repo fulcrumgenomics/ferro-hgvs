@@ -187,8 +187,12 @@ impl ReferenceProvider for RecordingProvider {
         Some(p)
     }
 
-    fn resolve_legacy_gene_selector(&self, selector: &str) -> Option<String> {
-        self.inner.resolve_legacy_gene_selector(selector)
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&ferro_hgvs::hgvs::variant::Accession>,
+    ) -> Option<String> {
+        self.inner.resolve_legacy_gene_selector(selector, ng_parent)
     }
 
     fn has_transcript(&self, id: &str) -> bool {

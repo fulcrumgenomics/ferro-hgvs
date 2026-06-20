@@ -610,14 +610,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -676,14 +669,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -744,14 +730,7 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insTTTGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCAAAG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5PhefsTer22)",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2014,14 +1993,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12delC",
       "normalized": "NG_012337.1(NM_012459.2):c.12del",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2030,14 +2002,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12_15delCAGC",
       "normalized": "NG_012337.1(NM_012459.2):c.12_15del",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2046,14 +2011,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12delCinsAT",
       "normalized": "NG_012337.1(NM_012459.2):c.12delinsAT",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2062,14 +2020,7 @@
       ],
       "input": "NG_012337.1(TIMM8B):c.12_15delCAGCinsTTT",
       "normalized": "NG_012337.1(NM_012459.2):c.12_15delinsTTT",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's gene-symbol selector on an NG_ reference; HGVS refseq.md:38-42 says gene symbols should not be used as the transcript specification (mutalyzer emits the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500. The NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2095,13 +2046,6 @@
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5GlnfsTer20)",
       "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      },
       "accepted_divergence": {
         "axis": "coding_protein_descriptions",
         "policy": "ferro-policy-763-transcript-set-enumeration",
@@ -2133,13 +2077,6 @@
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6GlnfsTer20)",
       "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      },
       "accepted_divergence": {
         "axis": "coding_protein_descriptions",
         "policy": "ferro-policy-763-transcript-set-enumeration",
@@ -2672,12 +2609,7 @@
       "input": "NG_009497.1(USH2A_v001):c.8682-19dup",
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "note": "ferro resolves the legacy selector USH2A_v001 to the current reference-standard NM_206933.4; the corpus pins NM_206933.2. The variant body is identical (c.8682-19dup); only the resolved transcript version differs. Selector version-selection tracked in #500."
-      }
+      "to_test": true
     },
     {
       "keywords": [],
@@ -2860,14 +2792,7 @@
       "input": "NG_012337.1(SDHD_v001):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -2876,14 +2801,7 @@
       "input": "NG_012337.1(SDHD):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 500,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
-        "cluster": "refseqgene-selector"
-      }
+      "to_test": true
     },
     {
       "keywords": [
