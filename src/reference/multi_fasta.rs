@@ -242,6 +242,9 @@ pub struct MultiFastaProvider {
     /// assembly report(s) (#716). `None` when the manifest names no report, in
     /// which case build inference uses only the hardcoded fallback.
     contig_aliases: Option<crate::liftover::aliases::ContigAliases>,
+    /// Per-`NG_`-version hosted-transcript map (#792); `None` when the manifest
+    /// names no artifact (resolution falls back to the global reference map).
+    ng_hosted: Option<crate::reference::ng_hosted_transcripts::NgHostedTranscripts>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -343,6 +346,7 @@ impl MultiFastaProvider {
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
             contig_aliases: None,
+            ng_hosted: None,
         })
     }
 
@@ -382,6 +386,7 @@ impl MultiFastaProvider {
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
             contig_aliases: None,
+            ng_hosted: None,
         })
     }
 
@@ -770,6 +775,46 @@ impl MultiFastaProvider {
         provider.legacy_gene_models = legacy_gene_models;
         provider.contig_aliases = contig_aliases;
 
+        // Load NG_-hosted transcript map (#792). A read/parse failure is warned
+        // (not silently swallowed); an absent field or empty artifact is fine
+        // (NG_-parent selector resolution falls back to the global reference map).
+        let ng_hosted = match manifest
+            .get("ng_hosted_transcripts")
+            .and_then(|v| v.as_str())
+        {
+            None => None,
+            Some(rel) => {
+                let path = resolve_path(rel);
+                match std::fs::read_to_string(&path) {
+                    Ok(s) => {
+                        match crate::reference::ng_hosted_transcripts::NgHostedTranscripts::from_json(&s) {
+                            Ok(nh) if !nh.is_empty() => Some(nh),
+                            Ok(_) => None,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to parse ng_hosted_transcripts {}: {}; \
+                                     NG_-parent selector resolution falls back to the global map",
+                                    path.display(),
+                                    e
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to read ng_hosted_transcripts {}: {}; \
+                             falling back to the global map",
+                            path.display(),
+                            e
+                        );
+                        None
+                    }
+                }
+            }
+        };
+        provider.ng_hosted = ng_hosted;
+
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
             let cdot_path = resolve_path(cdot_path_str);
@@ -995,6 +1040,7 @@ impl MultiFastaProvider {
             refseqgene_placements: FxHashMap::default(),
             legacy_gene_models: FxHashMap::default(),
             contig_aliases: None,
+            ng_hosted: None,
         })
     }
 
@@ -1177,6 +1223,19 @@ impl MultiFastaProvider {
     /// Get the cdot mapper if one was loaded with this provider.
     pub fn cdot_mapper(&self) -> Option<&CdotMapper> {
         self.cdot_mapper.as_ref()
+    }
+
+    /// Return the single transcript `ng` hosts for `gene` from the loaded
+    /// `ng_hosted_transcripts` artifact (#792), or `None` when the artifact is
+    /// absent, the `(ng, gene)` pair is unknown, or the gene is hosted by more
+    /// than one transcript (ambiguous).
+    // T6 will call this from the resolver; allow until then.
+    #[allow(dead_code)]
+    pub(crate) fn ng_hosted_unique(&self, ng: &str, gene: &str) -> Option<String> {
+        self.ng_hosted
+            .as_ref()?
+            .hosted_unique(ng, gene)
+            .map(str::to_string)
     }
 
     /// Get CDS info from supplemental metadata for old/superseded transcripts.
@@ -5498,6 +5557,30 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert_eq!(
             provider.infer_genome_build(&grch38_chr17),
             crate::liftover::aliases::infer_genome_build_from_accession(&grch38_chr17)
+        );
+    }
+
+    #[test]
+    fn from_manifest_loads_ng_hosted_transcripts() {
+        use std::fs;
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+        fs::write(
+            d.join("ngh.json"),
+            r#"{"schema_version":1,"records":{"NG_012337.1":{"TIMM8B":["NM_012459.2"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            d.join("manifest.json"),
+            r#"{"prepared_at":"t","transcript_fastas":["tx.fna"],"ng_hosted_transcripts":"ngh.json","transcript_count":1,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+        let p = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+        assert_eq!(
+            p.ng_hosted_unique("NG_012337.1", "TIMM8B"),
+            Some("NM_012459.2".to_string())
         );
     }
 }
