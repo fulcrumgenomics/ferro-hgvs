@@ -2,170 +2,15 @@
 
 use std::sync::Arc;
 
-use crate::benchmark::types::{ParseResult, ParsedVariantDetails, PositionDetails};
+use crate::benchmark::types::ParseResult;
 use crate::error_handling::{ErrorConfig, ErrorMode};
-use crate::hgvs::edit::NaEdit;
-use crate::hgvs::variant::HgvsVariant;
 use crate::normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
 use crate::reference::MultiFastaProvider;
 use crate::service::{
     config::FerroConfig,
     tools::HgvsToolService,
-    types::{health_check::HealthCheckResult, ServiceError, ToolName},
+    types::{extract_variant_details, health_check::HealthCheckResult, ServiceError, ToolName},
 };
-
-/// Extract parsed variant details from an HgvsVariant
-fn extract_variant_details(variant: &HgvsVariant) -> Option<ParsedVariantDetails> {
-    match variant {
-        HgvsVariant::Cds(v) => {
-            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
-                extract_na_edit_info(edit)
-            } else {
-                ("unknown".to_string(), None, None)
-            };
-            Some(ParsedVariantDetails {
-                reference: v.accession.to_string(),
-                coordinate_system: "c".to_string(),
-                variant_type,
-                position: PositionDetails {
-                    start: 0, // Position encoded in display string
-                    end: None,
-                    offset: None,
-                    display: v.loc_edit.location.to_string(),
-                },
-                deleted,
-                inserted,
-                was_shifted: None,
-                original_position: None,
-            })
-        }
-        HgvsVariant::Genome(v) => {
-            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
-                extract_na_edit_info(edit)
-            } else {
-                ("unknown".to_string(), None, None)
-            };
-            Some(ParsedVariantDetails {
-                reference: v.accession.to_string(),
-                coordinate_system: "g".to_string(),
-                variant_type,
-                position: PositionDetails {
-                    start: 0, // Position encoded in display string
-                    end: None,
-                    offset: None,
-                    display: v.loc_edit.location.to_string(),
-                },
-                deleted,
-                inserted,
-                was_shifted: None,
-                original_position: None,
-            })
-        }
-        HgvsVariant::Tx(v) => {
-            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
-                extract_na_edit_info(edit)
-            } else {
-                ("unknown".to_string(), None, None)
-            };
-            Some(ParsedVariantDetails {
-                reference: v.accession.to_string(),
-                coordinate_system: "n".to_string(),
-                variant_type,
-                position: PositionDetails {
-                    start: 0, // Position encoded in display string
-                    end: None,
-                    offset: None,
-                    display: v.loc_edit.location.to_string(),
-                },
-                deleted,
-                inserted,
-                was_shifted: None,
-                original_position: None,
-            })
-        }
-        HgvsVariant::Protein(v) => Some(ParsedVariantDetails {
-            reference: v.accession.to_string(),
-            coordinate_system: "p".to_string(),
-            variant_type: "protein_change".to_string(),
-            position: PositionDetails {
-                start: 0,
-                end: None,
-                offset: None,
-                display: v.loc_edit.location.to_string(),
-            },
-            deleted: None,
-            inserted: None,
-            was_shifted: None,
-            original_position: None,
-        }),
-        _ => None, // For alleles, RNA fusions, etc. - skip for now
-    }
-}
-
-/// Extract edit type and sequences from NaEdit
-fn extract_na_edit_info(edit: &NaEdit) -> (String, Option<String>, Option<String>) {
-    match edit {
-        NaEdit::Substitution {
-            reference,
-            alternative,
-        } => (
-            "substitution".to_string(),
-            Some(reference.to_string()),
-            Some(alternative.to_string()),
-        ),
-        NaEdit::SubstitutionNoRef { alternative } => (
-            "substitution".to_string(),
-            None,
-            Some(alternative.to_string()),
-        ),
-        NaEdit::Deletion { sequence, length } => {
-            let deleted = sequence
-                .as_ref()
-                .map(|s| s.to_string())
-                .or_else(|| length.map(|l| format!("{} bp", l)));
-            ("deletion".to_string(), deleted, None)
-        }
-        NaEdit::Insertion { sequence } => {
-            ("insertion".to_string(), None, Some(sequence.to_string()))
-        }
-        NaEdit::Delins {
-            sequence,
-            deleted,
-            deleted_length,
-        } => {
-            let deleted = deleted
-                .as_ref()
-                .map(|s| s.to_string())
-                .or_else(|| deleted_length.map(|l| format!("{} bp", l)));
-            ("delins".to_string(), deleted, Some(sequence.to_string()))
-        }
-        NaEdit::Duplication {
-            sequence, length, ..
-        } => {
-            let deleted = sequence
-                .as_ref()
-                .map(|s| s.to_string())
-                .or_else(|| length.map(|l| format!("{} bp", l)));
-            ("duplication".to_string(), deleted, None)
-        }
-        NaEdit::Inversion { sequence, length } => {
-            let deleted = sequence
-                .as_ref()
-                .map(|s| s.to_string())
-                .or_else(|| length.map(|l| format!("{} bp", l)));
-            ("inversion".to_string(), deleted, None)
-        }
-        NaEdit::Repeat {
-            sequence, count, ..
-        } => {
-            let seq = sequence.as_ref().map(|s| s.to_string());
-            ("repeat".to_string(), seq, Some(format!("{}", count)))
-        }
-        NaEdit::Identity { .. } => ("identity".to_string(), None, None),
-        NaEdit::Unknown { .. } => ("unknown".to_string(), None, None),
-        _ => ("other".to_string(), None, None),
-    }
-}
 
 /// Ferro tool service
 pub struct FerroService {
@@ -442,6 +287,11 @@ mod tests {
             assert!(matches!(e, ServiceError::ConfigError(_)));
         }
     }
+
+    // Per-arm coverage of the shared `extract_variant_details` helper (including
+    // the RNA/Mt/Circular arms and the `Allele -> None` path) lives alongside the
+    // function in `crate::service::types`. The service exercises it end-to-end via
+    // `parse`/`normalize`, which populate `ParseResult::details`.
 
     #[test]
     fn test_invalid_config() {
