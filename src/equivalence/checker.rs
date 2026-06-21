@@ -211,10 +211,17 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
         str1: &str,
         str2: &str,
     ) -> Option<EquivalenceResult> {
-        // Get accessions (handle allele and null/unknown cases gracefully)
+        // This helper only detects whether two variants are the *same change on
+        // different accession versions*. `None` here means "not an accession-version
+        // difference" — it is not an "unsupported" signal. For compound/null/unknown
+        // alleles there is no single accession version to compare (an allele's
+        // `accession()` reports only its first member, which would be misleading), so
+        // we decline. The caller (`check`) then falls through to the normalizer, which
+        // handles alleles directly, so allele equivalence is fully determined — just
+        // not via this version-comparison path.
         let acc1 = match v1 {
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => return None,
-            HgvsVariant::Allele(_) => return None, // Complex case, skip for now
+            HgvsVariant::Allele(_) => return None,
             _ => v1.accession()?,
         };
         let acc2 = match v2 {
@@ -371,6 +378,47 @@ mod tests {
         let result = checker.check(&v1, &v2).unwrap();
         assert_eq!(result.level, EquivalenceLevel::NotEquivalent);
         assert!(!result.is_equivalent());
+    }
+
+    #[test]
+    fn test_identical_compound_alleles_are_equivalent() {
+        // Regression: `check_accession_version_difference` declines (returns None) for
+        // alleles, and `check()` must fall through to the normalizer, which handles
+        // alleles. Two identical compound alleles must compare as Identical, proving
+        // there is no silent "unsupported" gap for alleles.
+        let checker = checker();
+        let v1 = parse_hgvs("NM_000088.3:c.[10A>G;20C>T]").unwrap();
+        let v2 = parse_hgvs("NM_000088.3:c.[10A>G;20C>T]").unwrap();
+        assert!(matches!(v1, HgvsVariant::Allele(_)));
+
+        let result = checker.check(&v1, &v2).unwrap();
+        assert_eq!(result.level, EquivalenceLevel::Identical);
+        assert!(result.is_equivalent());
+    }
+
+    #[test]
+    fn test_differing_alleles_do_not_error() {
+        // A pair of non-identical alleles must still flow through `check()` without
+        // erroring. The version-difference helper declines for alleles (returns None,
+        // not an error), so these resolve via normalization rather than being reported
+        // as an accession-version match — confirming the helper's None is
+        // "not-applicable", never a silent unsupported failure.
+        //
+        // Both alleles use `NM_000088.3` (present in the MockProvider fixture) so the
+        // test exercises real normalization and its correctness does not hinge on how
+        // the normalizer treats an unknown accession. The members differ in
+        // coordinates, so the alleles are not identical.
+        let checker = checker();
+        let v1 = parse_hgvs("NM_000088.3:c.[10A>G;20C>T]").unwrap();
+        let v2 = parse_hgvs("NM_000088.3:c.[11A>G;21C>T]").unwrap();
+        assert!(matches!(v1, HgvsVariant::Allele(_)));
+        assert!(matches!(v2, HgvsVariant::Allele(_)));
+
+        // The contract under test: `check()` returns Ok for every allele pair.
+        let result = checker.check(&v1, &v2).unwrap();
+        // The differing member coordinates do not normalize equal, so they compare as
+        // NotEquivalent — the point is the Ok, not the level.
+        assert_eq!(result.level, EquivalenceLevel::NotEquivalent);
     }
 
     #[test]

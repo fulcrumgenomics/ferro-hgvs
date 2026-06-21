@@ -6,6 +6,268 @@ use std::collections::HashMap;
 // Re-export parsed variant types from benchmark module
 pub use crate::benchmark::types::{ParsedVariantDetails, PositionDetails};
 
+use crate::hgvs::edit::NaEdit;
+use crate::hgvs::variant::HgvsVariant;
+
+/// Extract parsed variant details from an [`HgvsVariant`].
+///
+/// Returns `Some` with a flattened [`ParsedVariantDetails`] for the seven
+/// variant classes that map onto a single coordinate/position (`c`/`g`/`n`/`p`/
+/// `r`/`m`/`o`). Returns `None` for the complex classes (allele lists, fusions,
+/// genome rings, supernumerary contigs, null/unknown alleles) which have no
+/// single coordinate/position to flatten into the [`ParsedVariantDetails`]
+/// shape; this `None` is a "no structured breakdown" signal, not an error.
+///
+/// The complex classes are listed explicitly (no `_` arm) so that adding a new
+/// [`HgvsVariant`] arm fails to compile here rather than being silently dropped.
+///
+/// This is the single shared implementation used by both the validate HTTP
+/// handler and the ferro MCP tool so the two surfaces stay in lockstep.
+pub(crate) fn extract_variant_details(variant: &HgvsVariant) -> Option<ParsedVariantDetails> {
+    match variant {
+        HgvsVariant::Cds(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "c".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Genome(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "g".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Tx(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "n".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Protein(v) => Some(ParsedVariantDetails {
+            reference: v.accession.to_string(),
+            coordinate_system: "p".to_string(),
+            variant_type: "protein_change".to_string(),
+            position: PositionDetails {
+                start: 0,
+                end: None,
+                offset: None,
+                display: v.loc_edit.location.to_string(),
+            },
+            deleted: None,
+            inserted: None,
+            was_shifted: None,
+            original_position: None,
+        }),
+        HgvsVariant::Rna(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "r".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Mt(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "m".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        HgvsVariant::Circular(v) => {
+            let (variant_type, deleted, inserted) = if let Some(edit) = v.loc_edit.edit.inner() {
+                extract_na_edit_info(edit)
+            } else {
+                ("unknown".to_string(), None, None)
+            };
+            Some(ParsedVariantDetails {
+                reference: v.accession.to_string(),
+                coordinate_system: "o".to_string(),
+                variant_type,
+                position: PositionDetails {
+                    start: 0, // Position encoded in display string
+                    end: None,
+                    offset: None,
+                    display: v.loc_edit.location.to_string(),
+                },
+                deleted,
+                inserted,
+                was_shifted: None,
+                original_position: None,
+            })
+        }
+        // These classes have no single coordinate/position to flatten into the
+        // ParsedVariantDetails shape, so they intentionally have no structured
+        // breakdown. Listed explicitly (no `_`) so a future HgvsVariant arm fails to
+        // compile here rather than being silently dropped.
+        HgvsVariant::RnaFusion(_)
+        | HgvsVariant::GenomeRing(_)
+        | HgvsVariant::Supernumerary(_)
+        | HgvsVariant::Allele(_)
+        | HgvsVariant::NullAllele
+        | HgvsVariant::UnknownAllele => None,
+    }
+}
+
+/// Extract the edit type label and the deleted/inserted sequences from a
+/// [`NaEdit`], returning `(variant_type, deleted, inserted)`.
+pub(crate) fn extract_na_edit_info(edit: &NaEdit) -> (String, Option<String>, Option<String>) {
+    match edit {
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => (
+            "substitution".to_string(),
+            Some(reference.to_string()),
+            Some(alternative.to_string()),
+        ),
+        NaEdit::SubstitutionNoRef { alternative } => (
+            "substitution".to_string(),
+            None,
+            Some(alternative.to_string()),
+        ),
+        NaEdit::Deletion { sequence, length } => {
+            let deleted = sequence
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| length.map(|l| format!("{} bp", l)));
+            ("deletion".to_string(), deleted, None)
+        }
+        NaEdit::Insertion { sequence } => {
+            ("insertion".to_string(), None, Some(sequence.to_string()))
+        }
+        NaEdit::Delins {
+            sequence,
+            deleted,
+            deleted_length,
+        } => {
+            let deleted = deleted
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| deleted_length.map(|l| format!("{} bp", l)));
+            ("delins".to_string(), deleted, Some(sequence.to_string()))
+        }
+        NaEdit::Duplication {
+            sequence, length, ..
+        } => {
+            let deleted = sequence
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| length.map(|l| format!("{} bp", l)));
+            ("duplication".to_string(), deleted, None)
+        }
+        NaEdit::Inversion { sequence, length } => {
+            let deleted = sequence
+                .as_ref()
+                .map(|s| s.to_string())
+                .or_else(|| length.map(|l| format!("{} bp", l)));
+            ("inversion".to_string(), deleted, None)
+        }
+        NaEdit::Repeat {
+            sequence, count, ..
+        } => {
+            let seq = sequence.as_ref().map(|s| s.to_string());
+            ("repeat".to_string(), seq, Some(format!("{}", count)))
+        }
+        NaEdit::Identity { .. } => ("identity".to_string(), None, None),
+        NaEdit::Unknown { .. } => ("unknown".to_string(), None, None),
+        // The remaining edit classes either carry no flat sequence to surface or
+        // are non-standard/structural forms without a single deleted/inserted
+        // pair. They are listed explicitly (no `_`) so a future `NaEdit` arm
+        // fails to compile here rather than being silently mapped to "other".
+        NaEdit::NPaddedDeletion { count } => {
+            ("deletion".to_string(), Some(format!("N[{}]", count)), None)
+        }
+        NaEdit::BreakpointInsertion { sequence } => {
+            ("insertion".to_string(), None, Some(sequence.to_string()))
+        }
+        NaEdit::DupIns { sequence } => ("dupins".to_string(), None, Some(sequence.to_string())),
+        NaEdit::MultiRepeat { .. } => ("repeat".to_string(), None, None),
+        NaEdit::Conversion { .. } => ("conversion".to_string(), None, None),
+        NaEdit::Methylation { .. } => ("methylation".to_string(), None, None),
+        NaEdit::CopyNumber { .. } => ("copy_number".to_string(), None, None),
+        NaEdit::Splice { .. } => ("splice".to_string(), None, None),
+        NaEdit::NoProduct => ("no_product".to_string(), None, None),
+        NaEdit::PositionOnly => ("position_only".to_string(), None, None),
+    }
+}
+
 /// Strongly-typed tool names to prevent injection attacks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ToolName {
@@ -1041,5 +1303,142 @@ pub mod health_check {
                 ],
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract(hgvs: &str) -> Option<ParsedVariantDetails> {
+        let result = crate::hgvs::parser::parse_hgvs_lenient(hgvs).unwrap();
+        extract_variant_details(&result.result)
+    }
+
+    #[test]
+    fn test_extract_variant_details_cds() {
+        let d = extract("NM_000249.4:c.350C>T").expect("cds details");
+        assert_eq!(d.coordinate_system, "c");
+        assert_eq!(d.variant_type, "substitution");
+        assert_eq!(d.reference, "NM_000249.4");
+    }
+
+    #[test]
+    fn test_extract_variant_details_genomic() {
+        let d = extract("NC_000007.14:g.117559593G>A").expect("genomic details");
+        assert_eq!(d.coordinate_system, "g");
+        assert_eq!(d.variant_type, "substitution");
+    }
+
+    #[test]
+    fn test_extract_variant_details_noncoding() {
+        let d = extract("NR_000001.1:n.100A>G").expect("noncoding details");
+        assert_eq!(d.coordinate_system, "n");
+    }
+
+    #[test]
+    fn test_extract_variant_details_protein() {
+        let d = extract("NP_000240.1:p.Val600Glu").expect("protein details");
+        assert_eq!(d.coordinate_system, "p");
+        assert_eq!(d.variant_type, "protein_change");
+    }
+
+    #[test]
+    fn test_extract_variant_details_rna() {
+        let d = extract("NR_000001.1:r.100a>g").expect("rna details should be populated");
+        assert_eq!(d.coordinate_system, "r");
+    }
+
+    #[test]
+    fn test_extract_variant_details_mitochondrial() {
+        let d =
+            extract("NC_012920.1:m.8993T>G").expect("mitochondrial details should be populated");
+        assert_eq!(d.coordinate_system, "m");
+    }
+
+    #[test]
+    fn test_extract_variant_details_circular() {
+        let d = extract("J01749.1:o.100A>G").expect("circular details should be populated");
+        assert_eq!(d.coordinate_system, "o");
+    }
+
+    #[test]
+    fn test_extract_variant_details_allele_returns_none() {
+        // Compound alleles have no single coordinate/position to flatten into the
+        // ParsedVariantDetails shape, so they intentionally return None.
+        let result =
+            crate::hgvs::parser::parse_hgvs_lenient("NM_000088.3:c.[10A>G;20C>T]").unwrap();
+        assert!(matches!(result.result, HgvsVariant::Allele(_)));
+        assert!(extract_variant_details(&result.result).is_none());
+    }
+
+    fn edit_info(hgvs: &str) -> (String, Option<String>, Option<String>) {
+        let result = crate::hgvs::parser::parse_hgvs_lenient(hgvs).unwrap();
+        match &result.result {
+            HgvsVariant::Cds(v) => {
+                let edit = v.loc_edit.edit.inner().expect("inner edit");
+                extract_na_edit_info(edit)
+            }
+            other => panic!("expected a CDS variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_substitution() {
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350C>T");
+        assert_eq!(vtype, "substitution");
+        assert_eq!(deleted, Some("C".to_string()));
+        assert_eq!(inserted, Some("T".to_string()));
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_deletion() {
+        // W3025 (DelExplicitSeq) strips the explicit sequence in lenient mode,
+        // so the parsed NaEdit::Deletion has sequence=None after preprocessing.
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350delC");
+        assert_eq!(vtype, "deletion");
+        assert_eq!(deleted, None);
+        assert!(inserted.is_none());
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_insertion() {
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350_351insATG");
+        assert_eq!(vtype, "insertion");
+        assert!(deleted.is_none());
+        assert_eq!(inserted, Some("ATG".to_string()));
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_delins() {
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350delinsATG");
+        assert_eq!(vtype, "delins");
+        assert_eq!(deleted, None, "short form has no explicit deleted");
+        assert_eq!(inserted, Some("ATG".to_string()));
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_delins_with_explicit_deleted_seq() {
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350_352delATGinsTTCC");
+        assert_eq!(vtype, "delins");
+        assert_eq!(deleted, Some("ATG".to_string()));
+        assert_eq!(inserted, Some("TTCC".to_string()));
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_delins_with_explicit_deleted_length() {
+        let (vtype, deleted, inserted) = edit_info("NM_000249.4:c.350_352del3insTA");
+        assert_eq!(vtype, "delins");
+        assert_eq!(deleted, Some("3 bp".to_string()));
+        assert_eq!(inserted, Some("TA".to_string()));
+    }
+
+    #[test]
+    fn test_extract_na_edit_info_duplication() {
+        // W3024 (DupExplicitSeq) strips the explicit sequence in lenient mode,
+        // so the parsed NaEdit::Duplication has sequence=None after preprocessing.
+        let (vtype, deleted, _inserted) = edit_info("NM_000249.4:c.350dupC");
+        assert_eq!(vtype, "duplication");
+        assert_eq!(deleted, None);
     }
 }
