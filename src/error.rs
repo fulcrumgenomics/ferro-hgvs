@@ -44,6 +44,8 @@ pub enum ErrorCode {
     SequenceNotFound = 2002,
     /// Chromosome/contig not found
     ChromosomeNotFound = 2003,
+    /// Exact transcript version unavailable under strict resolution
+    TranscriptVersionNotExact = 2004,
 
     // Validation errors (E3xxx)
     /// Position out of bounds
@@ -125,6 +127,9 @@ impl ErrorCode {
             ErrorCode::ReferenceNotFound => "reference not found",
             ErrorCode::SequenceNotFound => "sequence not available",
             ErrorCode::ChromosomeNotFound => "chromosome not found",
+            ErrorCode::TranscriptVersionNotExact => {
+                "transcript not available at the exact requested version (strict resolution)"
+            }
             ErrorCode::PositionOutOfBounds => "position out of bounds",
             ErrorCode::ReferenceMismatch => "reference sequence mismatch",
             ErrorCode::InvalidRange => "invalid coordinate range",
@@ -477,7 +482,9 @@ impl FerroError {
                 ..
             } => d.code,
             FerroError::ReferenceNotFound { .. } => Some(ErrorCode::ReferenceNotFound),
-            FerroError::TranscriptVersionNotExact { .. } => Some(ErrorCode::ReferenceNotFound),
+            FerroError::TranscriptVersionNotExact { .. } => {
+                Some(ErrorCode::TranscriptVersionNotExact)
+            }
             FerroError::ExonIntronBoundary { .. } => Some(ErrorCode::ExonIntronBoundary),
             FerroError::UtrCdsBoundary { .. } => Some(ErrorCode::UtrCdsBoundary),
             FerroError::InvalidCoordinates { .. } => Some(ErrorCode::InvalidRange),
@@ -604,6 +611,18 @@ mod tests {
         assert_eq!(ErrorCode::IntronicVariant.as_str(), "E4001");
         assert_eq!(ErrorCode::ConversionFailed.as_str(), "E5001");
         assert_eq!(ErrorCode::IoError.as_str(), "E9001");
+    }
+
+    #[test]
+    fn transcript_version_not_exact_has_code_2004_and_description() {
+        // #809: distinct from ReferenceNotFound (E2001) so callers can tell
+        // "exact version unavailable under strict resolution" apart from
+        // "accession not found at all".
+        assert_eq!(ErrorCode::TranscriptVersionNotExact as u16, 2004);
+        assert_eq!(ErrorCode::TranscriptVersionNotExact.as_str(), "E2004");
+        assert!(!ErrorCode::TranscriptVersionNotExact
+            .description()
+            .is_empty());
     }
 
     #[test]
@@ -817,11 +836,12 @@ mod tests {
         };
         assert_eq!(err.code(), Some(ErrorCode::ReferenceNotFound));
 
-        // Strict exact-version refusal currently shares the ReferenceNotFound code.
+        // TranscriptVersionNotExact has its own code, distinct from ReferenceNotFound (#809).
         let err = FerroError::TranscriptVersionNotExact {
             requested: "NM_000088.4".to_string(),
         };
-        assert_eq!(err.code(), Some(ErrorCode::ReferenceNotFound));
+        assert_eq!(err.code(), Some(ErrorCode::TranscriptVersionNotExact));
+        assert_ne!(err.code(), Some(ErrorCode::ReferenceNotFound));
 
         let err = FerroError::ExonIntronBoundary {
             exon: 3,
