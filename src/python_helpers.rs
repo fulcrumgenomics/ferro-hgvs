@@ -386,6 +386,7 @@ fn compute_span(variant: &HgvsVariant) -> Option<i64> {
 /// - Insertion: +(inserted length), or None if length is unknowable
 /// - Delins: inserted_length - span, or None if inserted length is unknowable
 /// - Duplication: +(span)
+/// - DupIns: +(span + inserted_length), or None if inserted length is unknowable
 /// - Inversion: 0
 /// - Identity: 0
 ///
@@ -406,6 +407,13 @@ pub fn get_indel_length(variant: &HgvsVariant) -> Option<i64> {
         NaEdit::BreakpointInsertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span(variant)?)
+        }
+        // DupIns is a duplication of the interval span followed by an
+        // insertion: net = duplicated span + inserted length, when both are
+        // deterministic (the inserted length is unknown for non-literal
+        // payloads, so `inserted_sequence_len` returns None there).
+        NaEdit::DupIns { sequence } => {
+            Some(compute_span(variant)? + inserted_sequence_len(sequence)?)
         }
         _ => None,
     }
@@ -461,6 +469,12 @@ pub fn get_indel_length_with_provider<P: ReferenceProvider + ?Sized>(
         NaEdit::BreakpointInsertion { sequence } => inserted_sequence_len(sequence),
         NaEdit::Delins { sequence, .. } => {
             Some(inserted_sequence_len(sequence)? - compute_span_with_provider(variant, provider)?)
+        }
+        // DupIns is a duplication of the interval span followed by an
+        // insertion: net = duplicated span + inserted length, when both are
+        // deterministic.
+        NaEdit::DupIns { sequence } => {
+            Some(compute_span_with_provider(variant, provider)? + inserted_sequence_len(sequence)?)
         }
         _ => None,
     }
@@ -1031,6 +1045,45 @@ mod tests {
     fn test_indel_length_inversion() {
         let variant = parse_hgvs("NC_000001.11:g.12345_12350inv").unwrap();
         assert_eq!(get_indel_length(&variant), Some(0));
+    }
+
+    /// Build a coding variant whose interval spans `c.100_102` (span 3) carrying
+    /// the given `DupIns` inserted sequence. `dupins` cannot be parsed (the
+    /// parser rejects it via `validate_no_dupins`), and it is only ever
+    /// constructed internally as a normalization intermediate — so we parse a
+    /// real coding `dup` over the same interval and swap in the `DupIns` edit.
+    fn make_cds_dupins(inserted: &str) -> HgvsVariant {
+        use crate::hgvs::edit::Sequence;
+        use crate::hgvs::uncertainty::Mu;
+        use std::str::FromStr;
+
+        let mut variant = parse_hgvs("NM_000088.3:c.100_102dup").unwrap();
+        let edit = NaEdit::DupIns {
+            sequence: InsertedSequence::Literal(Sequence::from_str(inserted).unwrap()),
+        };
+        match &mut variant {
+            HgvsVariant::Cds(v) => v.loc_edit.edit = Mu::Certain(edit),
+            _ => panic!("expected a coding variant"),
+        }
+        variant
+    }
+
+    #[test]
+    fn test_indel_length_dupins_frameshift() {
+        // DupIns net length = duplicated interval span (3) + inserted length (2)
+        // = 5, which is not a multiple of 3 → frameshift.
+        let variant = make_cds_dupins("AT");
+        assert_eq!(get_indel_length(&variant), Some(5));
+        assert!(is_frameshift(&variant));
+    }
+
+    #[test]
+    fn test_indel_length_dupins_inframe() {
+        // DupIns net length = duplicated interval span (3) + inserted length (3)
+        // = 6, a multiple of 3 → in-frame (not a frameshift).
+        let variant = make_cds_dupins("ATG");
+        assert_eq!(get_indel_length(&variant), Some(6));
+        assert!(!is_frameshift(&variant));
     }
 
     #[test]
