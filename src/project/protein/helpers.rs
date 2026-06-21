@@ -98,20 +98,17 @@ pub(crate) fn build_whole_protein_unknown(
 
 /// Does the reference CDS begin with a canonical `ATG` start codon?
 ///
-/// The protein-consequence path translates a transcript's CDS bases directly,
-/// trusting that `Transcript.cds_start` points at the first base of the
-/// initiation codon. When the cdot CDS annotation is inconsistent with the
-/// transcript FASTA (cds_start lands mid-frame, not on an `ATG`), translation
-/// reads the wrong frame and fabricates a garbage protein (issue #625). A
-/// non-`ATG` first codon is the dominant signal of that inconsistency, so
-/// callers decline protein prediction when this returns `false`.
+/// This is the **strict** start-codon test. It drives the initiation-codon
+/// **form choice**: an init-codon-affecting edit reports `p.(Met1?)` on an `ATG`
+/// start (residue 1 is the initiator `Met`) but the whole-protein-unknown `p.?`
+/// on a non-`ATG` start (residue 1 is not `Met`, so `Met1?` would be wrong; #771).
+/// A CUG-start init-codon variant must therefore stay `p.?`, which is why this
+/// predicate keeps the exact-`ATG` comparison.
 ///
-/// This is a deliberate over-approximation: RefSeq does annotate a small number
-/// of transcripts with experimentally-supported non-AUG initiation (CUG/GUG
-/// starts carried with a `transl_except` exception), whose `cds_start` *is*
-/// consistent with the FASTA. Keying on `ATG` declines protein on those too. We
-/// accept that rare false-decline rather than translate the common
-/// inconsistent-annotation case from the wrong frame.
+/// It is **not** the #625 decline gate — that uses the wider
+/// [`cds_has_recognized_start`], which also admits the near-cognate initiators
+/// `CTG`/`GTG`/`TTG` so a downstream variant on a legitimate non-AUG-initiation
+/// transcript translates rather than declining (#780).
 ///
 /// The check keys on the **start codon only**. It deliberately does *not*
 /// inspect internal codons: selenoproteins (e.g. SELENON / NM_020451.2)
@@ -125,6 +122,29 @@ pub(crate) fn build_whole_protein_unknown(
 /// `false` (no start codon is possible), so callers correctly decline on it.
 pub(crate) fn cds_has_valid_start(ref_cds: &str) -> bool {
     ref_cds.as_bytes().get(..3) == Some(b"ATG")
+}
+
+/// Does the reference CDS begin with a **recognized** translation initiation
+/// codon — the canonical `ATG` or a near-cognate initiator (`CTG`/`GTG`/`TTG`)?
+///
+/// The #625 decline gate uses this (not the stricter [`cds_has_valid_start`]) to
+/// decide whether to translate a **downstream** (non-initiation) edit. RefSeq
+/// annotates a small set of legitimate non-AUG-initiation transcripts (CUG/GUG,
+/// e.g. WT1 `NM_024426.4`) whose `cds_start` *is* consistent with the FASTA and
+/// whose reading frame is correct (the initiator `Met` is still installed); for
+/// a downstream variant the start-codon identity is irrelevant to the frame, so
+/// declining those is the #625 over-approximation #780 removes. A start codon
+/// that is neither `ATG` nor a recognized near-cognate (genuine off-the-start
+/// drift, e.g. `AGT`) still returns `false`, preserving #625's protection.
+///
+/// The near-cognate set mirrors [`crate::reference::validate::is_alternative_start_codon`]
+/// — the same classification the data-side CDS-start validator already applies.
+pub(crate) fn cds_has_recognized_start(ref_cds: &str) -> bool {
+    cds_has_valid_start(ref_cds)
+        || ref_cds
+            .as_bytes()
+            .get(..3)
+            .is_some_and(crate::reference::validate::is_alternative_start_codon)
 }
 
 // ── CDS sequence readers ──────────────────────────────────────────────────────
@@ -1080,6 +1100,24 @@ mod tests {
             length: None,
         };
         assert_eq!(net_length_change(&edit, 3), Some(-3));
+    }
+
+    #[test]
+    fn recognized_start_accepts_atg_and_near_cognates_but_not_drift() {
+        // Canonical and recognized near-cognate initiators (#780).
+        for cds in ["ATGAAA", "CTGAAA", "GTGAAA", "TTGAAA"] {
+            assert!(cds_has_recognized_start(cds), "{cds} should be recognized");
+        }
+        // Genuine off-the-start drift and a too-short CDS still decline (#625).
+        for cds in ["AGTAAA", "GATAAA", "CAGAAA", "AT"] {
+            assert!(
+                !cds_has_recognized_start(cds),
+                "{cds} must not be recognized"
+            );
+        }
+        // The stricter ATG-only predicate is unchanged: it accepts only ATG.
+        assert!(cds_has_valid_start("ATGAAA"));
+        assert!(!cds_has_valid_start("CTGAAA"));
     }
 
     #[test]
