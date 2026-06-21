@@ -5,6 +5,7 @@
 pub mod annotation;
 pub mod authoritative;
 pub mod derived_placement;
+pub mod derived_tx_structure;
 pub mod fasta;
 pub mod legacy_selector;
 pub mod loader;
