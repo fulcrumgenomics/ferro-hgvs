@@ -91,6 +91,14 @@
       "spec_section_notes": "Infrastructure."
     },
     {
+      "code": "E2004",
+      "description": "TranscriptVersionNotExact — exact transcript version unavailable under strict resolution.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure: strict version-pinning policy, reference-state dependent."
+    },
+    {
       "code": "E3001",
       "description": "PositionOutOfBounds — position beyond the length of the reference sequence.",
       "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",

@@ -193,7 +193,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             good_examples: &["NM_000088.3:c.100A>G"],
             mode_behavior: None,
             hgvs_spec_url: None,
-            related_codes: &["E2002", "E2003"],
+            related_codes: &["E2002", "E2003", "E2004"],
         },
     );
 
@@ -226,6 +226,25 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             category: CodeCategory::Reference,
             bad_examples: &["NC_999999.1:g.100A>G"],
             good_examples: &["NC_000001.11:g.100A>G"],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["E2001"],
+        },
+    );
+
+    map.insert(
+        "E2004",
+        CodeInfo {
+            code: "E2004",
+            name: "TranscriptVersionNotExact",
+            summary: "Exact transcript version not available under strict resolution.",
+            explanation:
+                "The requested transcript was found only at a different version (or via cdot \
+                reconstruction); strict resolution refuses to substitute. Request an available \
+                version or relax strict version pinning.",
+            category: CodeCategory::Reference,
+            bad_examples: &[],
+            good_examples: &[],
             mode_behavior: None,
             hgvs_spec_url: None,
             related_codes: &["E2001"],
@@ -1955,6 +1974,15 @@ mod tests {
         assert!(get_code_info("E-LOAD-001").is_some());
         assert!(get_code_info("E-LOAD-002").is_some());
         assert!(get_code_info("E-LOAD-103").is_some());
+    }
+
+    #[test]
+    fn transcript_version_not_exact_is_registered() {
+        // #809: E2004 must resolve so `ferro explain E2004` works (it shares
+        // the engine's `code()` mapping but is a separate reference-family code).
+        let info = get_code_info("E2004").expect("E2004 registered");
+        assert_eq!(info.name, "TranscriptVersionNotExact");
+        assert_eq!(info.category, CodeCategory::Reference);
     }
 
     #[test]
