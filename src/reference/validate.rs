@@ -986,7 +986,7 @@ fn is_start_codon(codon: &[u8]) -> bool {
 /// the initiator Met is still installed, so they are legitimate non-`ATG`
 /// starts, not the off-the-start drift #629 looks for. This matches the
 /// canonical-start set used by the GFF loader's `W-LOAD-201` check.
-fn is_alternative_start_codon(codon: &[u8]) -> bool {
+pub(crate) fn is_alternative_start_codon(codon: &[u8]) -> bool {
     codon.eq_ignore_ascii_case(b"CTG")
         || codon.eq_ignore_ascii_case(b"GTG")
         || codon.eq_ignore_ascii_case(b"TTG")

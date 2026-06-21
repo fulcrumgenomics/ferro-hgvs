@@ -15,9 +15,9 @@ use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
-    build_initiator_unknown, build_whole_protein_unknown, cds_has_valid_start,
-    edit_reaches_initiation_codon, predict_indel_protein, predict_substitution_protein,
-    read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
+    build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
+    cds_has_valid_start, edit_reaches_initiation_codon, predict_indel_protein,
+    predict_substitution_protein, read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -1950,12 +1950,33 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // guard inspects.
         let tx_for_cds_check =
             self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
-        // Read the start codon once; it drives both the initiation-codon-unknown
-        // form below and the #625 non-ATG decline. An unreadable CDS (missing
-        // sequence / degenerate coords) is left to the per-edit paths — treat it
-        // as "valid" here so we neither decline nor mis-pick the `p.?` form.
-        let start_is_atg = read_cds_start_codon(&tx_for_cds_check)
-            .map(|c| cds_has_valid_start(&c))
+        // Read the start codon once; it drives two independent decisions below,
+        // with deliberately *different* defaults when the CDS is unreadable
+        // (missing sequence / degenerate coords): the strict ATG form-choice
+        // defaults conservative (`false` → `p.?`), the downstream decline gate
+        // defaults permissive (`true` → translate). Each default is documented at
+        // its assignment.
+        let start_codon = read_cds_start_codon(&tx_for_cds_check);
+        // Strict `ATG`: drives the initiation-codon-unknown form choice (#771) —
+        // an init-codon edit yields `p.(Met1?)` on an `ATG` start, `p.?` on a
+        // non-AUG start (residue 1 is not `Met`). A CUG-start init-codon variant
+        // must stay `p.?`, so the form choice keeps the strict `ATG` test.
+        // Unreadable start ⇒ default `false`: no `ATG` was observed, so emitting
+        // `p.(Met1?)` would assert a `Met1` start that was never seen. Fall to the
+        // conservative whole-protein-unknown `p.?` instead.
+        let start_is_atg = start_codon
+            .as_deref()
+            .map(cds_has_valid_start)
+            .unwrap_or(false);
+        // Recognized initiator (`ATG` or a near-cognate `CTG`/`GTG`/`TTG`): drives
+        // the #625 decline gate for a *downstream* edit. A near-cognate start
+        // translates in the correct frame with the initiator `Met` installed, so
+        // a downstream variant on a legitimate non-AUG-initiation transcript (e.g.
+        // WT1 `NM_024426.4`) is translated rather than declined (#780). Genuine
+        // off-the-start drift (neither `ATG` nor near-cognate) still declines.
+        let start_is_recognized_initiator = start_codon
+            .as_deref()
+            .map(cds_has_recognized_start)
             .unwrap_or(true);
         // An initiation-codon-affecting edit short-circuits to an unknown-protein
         // form here, before edit-type dispatch, so boundary-spanning edits whose
@@ -1980,16 +2001,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
         // Issue #625 (non-initiation edits only — initiation-codon edits already
         // returned an unknown form above). Decline to translate when the CDS does
-        // not begin with `ATG`: `cds_start` is then likely inconsistent with the
-        // FASTA and translation would read the wrong frame and fabricate a bogus
-        // consequence. This also conservatively declines the rare legitimate
-        // non-AUG-initiation transcript (CUG/GUG with a `transl_except`) for any
-        // non-initiation edit rather than risk the common inconsistent-annotation
-        // case.
-        if !start_is_atg {
+        // not begin with a recognized initiator (`ATG` or a near-cognate
+        // `CTG`/`GTG`/`TTG`): a start codon outside that set means `cds_start` is
+        // likely inconsistent with the FASTA (off-the-start drift), so translation
+        // would read the wrong frame and fabricate a bogus consequence. A
+        // legitimate non-AUG-initiation transcript (CUG/GUG) keeps a correct frame
+        // with the initiator `Met` installed, so its downstream variants now
+        // translate (#780) — only genuine drift is declined.
+        if !start_is_recognized_initiator {
             log::trace!(
                 "declining protein prediction for {transcript_id}: reference CDS does not begin \
-                 with an ATG start codon (cds_start is inconsistent with the transcript FASTA)",
+                 with a recognized initiator (ATG/CTG/GTG/TTG); cds_start is inconsistent with \
+                 the transcript FASTA",
             );
             return Ok(None);
         }
@@ -3303,9 +3326,68 @@ mod tests {
                 exon_cigars: Vec::new(),
             },
         );
+        // A third transcript with a genuine off-the-start drift codon ("AGT…",
+        // not a recognized near-cognate initiator), for the #625/#780 boundary:
+        // a downstream variant on this must STILL decline.
+        cdot.add_transcript(
+            "NM_DRIFT.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("DRIFTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[3000, 3009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_DRIFT.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        // A fourth transcript whose CDS start codon is UNREADABLE: the provider
+        // copy carries no sequence (`sequence: None`), so `read_cds_start_codon`
+        // returns an error rather than three bases. Used to pin the #780/#771
+        // strict-form-choice default: an init-codon edit on an unreadable start
+        // must fall to the conservative `p.?`, not `p.(Met1?)`.
+        cdot.add_transcript(
+            "NM_NOSEQ.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("NOSEQGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[4000, 4009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_NOSEQ.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
         let projector = Projector::new(cdot);
 
         let mut provider = MockProvider::new();
+        // Unreadable start codon: a transcript whose sequence is absent
+        // (`sequence: None`), so `read_cds_start_codon` returns
+        // `ProteinSequenceUnavailable` and the start codon cannot be observed.
+        // The CDS coords are otherwise well-formed (matching the cdot copy).
+        provider.add_transcript(Transcript {
+            id: "NM_NOSEQ.1".to_string(),
+            gene_symbol: Some("NOSEQGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(4000),
+            genomic_end: Some(4008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
         // Non-ATG transcript: "CTGCGCTAA" (CTG start), cds_start=1.
         provider.add_transcript(Transcript {
             id: "NM_NOATG.1".to_string(),
@@ -3318,6 +3400,28 @@ mod tests {
             chromosome: Some("chr1".to_string()),
             genomic_start: Some(2000),
             genomic_end: Some(2008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // Genuine off-the-start drift: "AGTCGCTAA" (AGT start — not ATG and not a
+        // recognized near-cognate initiator), cds_start=1. A downstream variant
+        // on this must still decline under #780 (the #625 protection).
+        provider.add_transcript(Transcript {
+            id: "NM_DRIFT.1".to_string(),
+            gene_symbol: Some("DRIFTGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("AGTCGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(3000),
+            genomic_end: Some(3008),
             genome_build: Default::default(),
             mane_status: ManeStatus::default(),
             refseq_match: None,
@@ -7786,13 +7890,48 @@ mod tests {
     }
 
     #[test]
-    fn project_nonaug_downstream_variant_has_no_protein() {
+    fn project_unreadable_start_init_codon_reports_whole_protein_unknown() {
         use crate::hgvs::edit::{Base, NaEdit};
         use crate::hgvs::variant::{CdsVariant, LocEdit};
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
-        // A NON-initiation variant on the non-AUG transcript must still decline
-        // (the #625 guard: translating would risk the wrong frame).
+        // NM_NOSEQ.1 has no transcript sequence, so `read_cds_start_codon`
+        // cannot observe the start codon (returns `ProteinSequenceUnavailable`).
+        // An initiation-codon edit (`c.1A>G`) must NOT assume a canonical `ATG`
+        // start and emit `p.(Met1?)`: with no observed `ATG`, the strict
+        // form-choice falls to the conservative whole-protein unknown `p.?`.
+        // (Pins the `start_is_atg` default; the downstream decline gate is
+        // unaffected and keeps its permissive default.)
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOSEQ.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_NOSEQ.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("an initiation-codon variant must report a protein consequence");
+        assert_eq!(format!("{protein}"), "NP_NOSEQ.1:p.?");
+    }
+
+    #[test]
+    fn project_nonaug_downstream_variant_translates() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A DOWNSTREAM variant on a legitimate non-AUG (CTG) transcript now
+        // translates (#780): the near-cognate start keeps the frame, and the
+        // start-codon identity is irrelevant to a downstream consequence.
+        // NM_NOATG.1 = "CTGCGCTAA": codon 2 CGC (Arg); c.4C>A → AGC (Ser).
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: parse_accession("NM_NOATG.1"),
             gene_symbol: None,
@@ -7807,10 +7946,105 @@ mod tests {
         let proj = vp
             .project_variant(&variant, "NM_NOATG.1")
             .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("a downstream variant on a non-AUG transcript must now translate (#780)");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.(Arg2Ser)");
+    }
+
+    #[test]
+    fn project_drift_start_downstream_variant_declines() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A downstream variant on a GENUINE off-the-start drift codon (AGT, not a
+        // recognized initiator) must STILL decline — #780 widens the guard only to
+        // recognized near-cognate initiators (CTG/GTG/TTG), preserving #625's
+        // protection against an inconsistent cds_start. NM_DRIFT.1 = "AGTCGCTAA".
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_DRIFT.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_DRIFT.1")
+            .expect("projection should succeed");
         assert!(
             proj.protein.is_none(),
-            "non-initiation variant on a non-ATG transcript must decline (#625)"
+            "a downstream variant on a genuine drift start must decline (#625 preserved)"
         );
+    }
+
+    #[test]
+    fn project_nonaug_downstream_indel_translates() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // A DOWNSTREAM *indel* on a legitimate non-AUG (CTG) transcript now
+        // translates (#780) via `predict_indel_protein` — the sibling of the
+        // substitution path covered by `project_nonaug_downstream_variant_translates`.
+        // NM_NOATG.1 = "CTG|CGC|TAA": `c.4_6del` removes codon 2 (CGC = Arg), an
+        // in-frame single-residue deletion strictly downstream of the CTG start ⇒
+        // p.(Arg2del). Before #780 the #625 non-ATG guard declined this.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(4), CdsPos::new(6)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_NOATG.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("a downstream indel on a non-AUG transcript must now translate (#780)");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.(Arg2del)");
+    }
+
+    #[test]
+    fn project_nonaug_init_codon_indel_reports_unknown_protein() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // Companion to the indel-translates case: an indel OVERLAPPING the
+        // initiation codon on the same non-AUG (CTG) transcript still yields the
+        // spec-correct whole-protein `p.?` (consistent with #771/#772), without
+        // translating. NM_NOATG.1 = "CTG|CGC|TAA": `c.1_3del` deletes the CTG
+        // start codon, so the consequence is unknown — `p.?` (residue 1 is not
+        // Met, so the `Met1?` form would be wrong). The `affects_init`
+        // short-circuit returns this before the indel path is reached.
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_NOATG.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(1), CdsPos::new(3)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let proj = vp
+            .project_variant(&variant, "NM_NOATG.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("an initiation-codon indel must report p.?");
+        assert_eq!(format!("{protein}"), "NP_NOATG.1:p.?");
     }
 
     #[test]
@@ -7908,32 +8142,35 @@ mod tests {
         let (projector, provider) = make_test_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
         // Pins the `allele.phase == AllelePhase::Cis` guard at the init-codon
-        // collapse (projector.rs ~1672). The same members as the non-AUG cis
-        // test — `c.1C>G` (initiation codon) and `c.4C>A` (codon 2) on the
-        // non-AUG NM_NOATG.1 — are assembled here as a *trans* allele instead.
-        // The init-codon collapse is cis-only: trans members are independent
-        // alleles, so they fall through to the all-or-nothing protein rule. The
-        // downstream member declines under the #625 non-ATG guard, so the
+        // collapse (projector.rs ~1672). Members `c.1C>G` (initiation codon) and
+        // `c.4C>A` (codon 2) on the genuine-drift NM_DRIFT.1 (a non-recognized
+        // `AGT` start) are assembled here as a *trans* allele. The init-codon
+        // collapse is cis-only: trans members are independent alleles, so they
+        // fall through to the all-or-nothing protein rule. The downstream member
+        // declines under the #625 guard (an `AGT` start is genuine drift, not a
+        // recognized near-cognate initiator — #780 does not translate it), so the
         // all-or-nothing rule yields no whole-allele protein (`None`) — i.e. the
         // `p.?` collapse is NOT applied. Dropping the `== Cis` guard (or widening
         // it to `!= Trans`) would start collapsing this case and fail here.
+        // (NM_NOATG.1's CTG start now translates its downstream member, so the
+        // drift transcript is used to keep a declining member here.)
         //
         // The five other non-cis phases (`Unknown`, `Mosaic`, `Chimeric`,
         // `AndOr`, `Products`) take the same non-cis fall-through path; `Trans`
         // is the representative negative case.
         let member_init = HgvsVariant::Cds(CdsVariant {
-            accession: parse_accession("NM_NOATG.1"),
+            accession: parse_accession("NM_DRIFT.1"),
             gene_symbol: None,
             loc_edit: LocEdit::new(
                 CdsInterval::point(CdsPos::new(1)),
                 NaEdit::Substitution {
-                    reference: Base::C,
+                    reference: Base::A,
                     alternative: Base::G,
                 },
             ),
         });
         let member_downstream = HgvsVariant::Cds(CdsVariant {
-            accession: parse_accession("NM_NOATG.1"),
+            accession: parse_accession("NM_DRIFT.1"),
             gene_symbol: None,
             loc_edit: LocEdit::new(
                 CdsInterval::point(CdsPos::new(4)),
@@ -7946,7 +8183,7 @@ mod tests {
         let allele =
             HgvsVariant::Allele(AlleleVariant::trans(vec![member_init, member_downstream]));
         let proj = vp
-            .project_variant(&allele, "NM_NOATG.1")
+            .project_variant(&allele, "NM_DRIFT.1")
             .expect("projection should succeed");
         assert!(
             proj.protein.is_none(),
