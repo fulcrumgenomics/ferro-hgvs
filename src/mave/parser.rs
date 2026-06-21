@@ -350,16 +350,22 @@ mod tests {
     #[test]
     fn test_allele_variant() {
         let ctx = test_context();
-        // Alleles like c.[32T>C;39G>A] should work with context
-        let result = parse_mave_hgvs("c.[32T>C;39G>A]", &ctx);
-        // Note: this may fail depending on allele support, but we test the context injection
-        if let Err(e) = &result {
-            // Should not be a MissingAccession error
-            assert!(
-                !matches!(e, MaveParseError::MissingAccession { .. }),
-                "Should have injected accession"
-            );
-        }
+        // A short-form coding allele must parse with the context's coding
+        // accession (NM_000518.5) injected, yielding a full HGVS allele.
+        let variant = parse_mave_hgvs("c.[32T>C;39G>A]", &ctx)
+            .expect("short-form coding allele should parse");
+        // Assert the parsed structure directly (independent of Display): a
+        // two-member allele carrying the injected coding accession.
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 2);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NM_000518.5")
+        );
+        // And pin the exact deterministic compact-form round-trip.
+        assert_eq!(variant.to_string(), "NM_000518.5:c.[32T>C;39G>A]");
     }
 
     #[test]
@@ -382,96 +388,94 @@ mod tests {
     fn test_allele_simple_coding() {
         let ctx = test_context();
         // Simple two-variant allele
-        let result = parse_mave_hgvs("c.[20A>T;30G>C]", &ctx);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-        let variant = result.unwrap();
-        let output = variant.to_string();
-        assert!(
-            output.contains("NM_000518.5"),
-            "Output should contain accession: {}",
-            output
+        let variant =
+            parse_mave_hgvs("c.[20A>T;30G>C]", &ctx).expect("two-variant allele should parse");
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 2);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NM_000518.5")
         );
-        assert!(
-            output.contains("c.[") || output.contains("c.20"),
-            "Output should contain allele notation: {}",
-            output
-        );
+        assert_eq!(variant.to_string(), "NM_000518.5:c.[20A>T;30G>C]");
     }
 
     #[test]
     fn test_allele_multiple_variants() {
         let ctx = test_context();
         // MaveDB style: c.[32T>C;39G>A;42A>G;81C>T]
-        let result = parse_mave_hgvs("c.[32T>C;39G>A;42A>G]", &ctx);
-        assert!(result.is_ok(), "Failed to parse multi-variant allele");
+        let variant = parse_mave_hgvs("c.[32T>C;39G>A;42A>G]", &ctx)
+            .expect("multi-variant allele should parse");
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 3);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NM_000518.5")
+        );
+        assert_eq!(variant.to_string(), "NM_000518.5:c.[32T>C;39G>A;42A>G]");
     }
 
     #[test]
     fn test_allele_protein() {
         let ctx = test_context();
-        // Protein allele
-        let result = parse_mave_hgvs("p.[Glu6Val;Lys17Arg]", &ctx);
-        if let Ok(variant) = result {
-            let output = variant.to_string();
-            assert!(
-                output.contains("NP_000509.1"),
-                "Output should contain protein accession: {}",
-                output
-            );
-        }
-        // Note: Some allele formats may not be fully supported
+        // A short-form protein allele must parse with the context's protein
+        // accession (NP_000509.1) injected.
+        let variant = parse_mave_hgvs("p.[Glu6Val;Lys17Arg]", &ctx)
+            .expect("short-form protein allele should parse");
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 2);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NP_000509.1")
+        );
+        assert_eq!(variant.to_string(), "NP_000509.1:p.[Glu6Val;Lys17Arg]");
     }
 
     #[test]
     fn test_allele_genomic() {
         let ctx = test_context();
-        // Genomic allele
-        let result = parse_mave_hgvs("g.[12345A>G;12350C>T]", &ctx);
-        // Genomic alleles may not be fully supported, check accession injection
-        if let Err(e) = &result {
-            // Should not be a MissingAccession error - accession should be injected
-            assert!(
-                !matches!(e, MaveParseError::MissingAccession { .. }),
-                "Accession should be injected: {:?}",
-                e
-            );
-        } else {
-            let variant = result.unwrap();
-            let output = variant.to_string();
-            assert!(
-                output.contains("NC_000011.10"),
-                "Output should contain genomic accession: {}",
-                output
-            );
-        }
+        // A short-form genomic allele must parse with the context's genomic
+        // accession (NC_000011.10) injected.
+        let variant = parse_mave_hgvs("g.[12345A>G;12350C>T]", &ctx)
+            .expect("short-form genomic allele should parse");
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 2);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NC_000011.10")
+        );
+        assert_eq!(variant.to_string(), "NC_000011.10:g.[12345A>G;12350C>T]");
     }
 
     #[test]
     fn test_allele_roundtrip_structure() {
         let ctx = test_context();
 
-        // Test that parsing produces a variant we can re-serialize
+        // Parsing produces a full HGVS allele that survives a serialize → reparse
+        // round-trip unchanged.
         let input = "c.[20A>T;30G>C]";
-        let result = parse_mave_hgvs(input, &ctx);
-        if let Ok(variant) = result {
-            let output = variant.to_string();
-            // The accession should be included in the output
-            // Note: Allele output format may include accession on each part:
-            // "[NM_000518.5:c.20A>T;NM_000518.5:c.30G>C]"
-            // Or may keep the structure: "NM_000518.5:c.[20A>T;30G>C]"
-            assert!(
-                output.contains("NM_000518.5"),
-                "Should contain accession: {}",
-                output
-            );
-            // Should still be parseable (even if format differs)
-            let reparsed = crate::hgvs::parser::parse_hgvs(&output);
-            assert!(
-                reparsed.is_ok(),
-                "Reparsed variant should be valid HGVS: {}",
-                output
-            );
-        }
+        let variant = parse_mave_hgvs(input, &ctx).expect("short-form allele should parse");
+        let HgvsVariant::Allele(allele) = &variant else {
+            panic!("expected an allele variant, got: {variant:?}");
+        };
+        assert_eq!(allele.variants.len(), 2);
+        assert_eq!(
+            variant.accession().map(|a| a.to_string()).as_deref(),
+            Some("NM_000518.5")
+        );
+        let output = variant.to_string();
+        assert_eq!(output, "NM_000518.5:c.[20A>T;30G>C]");
+        // Reparsing the serialized form yields a structurally identical variant.
+        let reparsed = crate::hgvs::parser::parse_hgvs(&output)
+            .expect("serialized allele should reparse as valid HGVS");
+        assert_eq!(reparsed, variant);
     }
 
     #[test]
