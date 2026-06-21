@@ -1139,15 +1139,19 @@ fn derive_proteins_for_ferro(ferro_dir: &Path) -> Result<(), ferro_hgvs::FerroEr
         let (cds_start, cds_end, protein_id) = if let Some(tx) = cdot.get_transcript(tx_id) {
             let start = tx.cds_start.unwrap_or(0) as usize;
             let end = tx.cds_end.unwrap_or(seq.len() as u64) as usize;
-            let prot_id = tx
-                .protein
-                .clone()
-                .unwrap_or_else(|| tx_id.replace("NM_", "NP_").replace("XM_", "XP_"));
+            // Key the derived-protein FASTA by the authoritative cdot protein
+            // accession if present, else the transcript id — matching the
+            // projector's `p.` accession (#808). We do NOT fabricate an NP_/XP_
+            // by preserving the number: RefSeq does not guarantee the NM and NP
+            // numbers match.
+            let prot_id = tx.protein.clone().unwrap_or_else(|| tx_id.clone());
             (start, end, prot_id)
         } else if let Some((start, end, _gene)) = supplemental_cds.get(tx_id) {
             let start = start.map(|s| (s - 1) as usize).unwrap_or(0);
             let end = end.map(|e| e as usize).unwrap_or(seq.len());
-            let prot_id = tx_id.replace("NM_", "NP_").replace("XM_", "XP_");
+            // No authoritative protein accession; key by the transcript id
+            // rather than a fabricated NP_/XP_ (#808).
+            let prot_id = tx_id.clone();
             (start, end, prot_id)
         } else {
             continue;

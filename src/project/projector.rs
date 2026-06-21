@@ -1884,26 +1884,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if (is_intronic && whole_exon.is_none()) || !is_coding || (is_utr && !affects_init) {
             return Ok(None);
         }
-        // Resolve the protein accession: explicit cdot/reference value, else
-        // RefSeq inference (NM_*→NP_*, XM_*→XP_*), else the transcript id
-        // itself (the HGVS p. grammar requires a sequence identifier; see
-        // #310). Substring stripping avoids mangling accessions whose suffix
-        // contains `NM_`.
-        let prot_acc: Option<String> = cdot_protein
-            .or_else(|| {
-                transcript_id
-                    .strip_prefix("NM_")
-                    .map(|rest| format!("NP_{rest}"))
-            })
-            .or_else(|| {
-                transcript_id
-                    .strip_prefix("XM_")
-                    .map(|rest| format!("XP_{rest}"))
-            })
-            .or_else(|| Some(transcript_id.to_string()));
-        let Some(prot_acc) = prot_acc else {
-            return Ok(None);
-        };
+        // Resolve the protein accession: the authoritative cdot/reference value
+        // if present, else the transcript id itself as the `p.` accession (the
+        // HGVS p. grammar requires a sequence identifier; see #310).
+        //
+        // We deliberately do NOT infer `NP_*`/`XP_*` from `NM_*`/`XM_*` by
+        // preserving the number: RefSeq does not guarantee the NM and NP
+        // numbers match (e.g. `NM_000077.4` ↔ `NP_000068.1`), so that inference
+        // is frequently wrong and would attach a real, translated prediction to
+        // a non-existent protein accession (#808). Falling back to the
+        // transcript id keeps the output honest — the identifier names the
+        // transcript whose CDS we actually translated — and still satisfies the
+        // grammar.
+        let prot_acc = cdot_protein.unwrap_or_else(|| transcript_id.to_string());
         // Issue #505: protein prediction below reads this transcript's CDS
         // bases directly and translates them. If the reference only carries a
         // *different* version of the transcript (a silent version-strip
@@ -5071,6 +5064,105 @@ mod tests {
             .expect("p. should be present via transcript-id fallback")
             .to_string();
         assert_eq!(p, "ENST00000000001.1:p.(Arg2Ser)");
+    }
+
+    /// Build a coding transcript on chr1 (plus strand, "ATGCGCTAA" = Met-Arg-Stop)
+    /// keyed by an arbitrary accession with **no** authoritative protein
+    /// accession (cdot `protein` and `Transcript.protein_id` both `None`), so
+    /// the projector's protein-accession resolution must fall through to the
+    /// transcript-id fallback rather than fabricate one. Mirrors
+    /// `make_test_provider_and_projector` otherwise.
+    #[cfg(test)]
+    fn make_protein_less_provider_and_projector(tx_id: &str) -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            tx_id.to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: tx_id.to_string(),
+            gene_symbol: Some("TESTGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGCGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let prefix = "N".repeat(999);
+        let suffix = "N".repeat(100);
+        provider.add_genomic_sequence("chr1", format!("{prefix}ATGCGCTAA{suffix}"));
+        (projector, provider)
+    }
+
+    #[test]
+    fn project_substitution_nm_without_protein_uses_transcript_id_not_inferred_np() {
+        // #808: a coding `NM_` transcript with no authoritative protein
+        // accession must NOT have one fabricated by number-preserving
+        // substitution (`NM_000077`→`NP_000077`), which is frequently wrong
+        // (RefSeq does not guarantee the NM and NP numbers match). Instead the
+        // projector falls back to the transcript id itself (#310) — honest, and
+        // still grammar-valid. The bug here would emit `NP_NOPROT.1:...`.
+        let (projector, provider) = make_protein_less_provider_and_projector("NM_NOPROT.1");
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "NM_NOPROT.1")
+            .expect("projection should succeed");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. should be present via transcript-id fallback")
+            .to_string();
+        assert_eq!(
+            p, "NM_NOPROT.1:p.(Arg2Ser)",
+            "must use the transcript id, never a fabricated NP_"
+        );
+        assert!(
+            !p.starts_with("NP_"),
+            "must not fabricate a number-preserving NP_ accession: {p}"
+        );
+    }
+
+    #[test]
+    fn project_substitution_xm_without_protein_uses_transcript_id_not_inferred_xp() {
+        // #808, XM_/XP_ arm: same rule for predicted-model RefSeq transcripts.
+        let (projector, provider) = make_protein_less_provider_and_projector("XM_NOPROT.1");
+        let vp = VariantProjector::new(projector, provider);
+        let result = vp
+            .project("chr1:g.1003C>A", "XM_NOPROT.1")
+            .expect("projection should succeed");
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. should be present via transcript-id fallback")
+            .to_string();
+        assert_eq!(p, "XM_NOPROT.1:p.(Arg2Ser)");
+        assert!(
+            !p.starts_with("XP_"),
+            "must not fabricate a number-preserving XP_ accession: {p}"
+        );
     }
 
     // -------------------------------------------------------------------------

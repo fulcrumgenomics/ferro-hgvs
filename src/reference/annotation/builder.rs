@@ -1048,8 +1048,9 @@ mod tests {
     #[test]
     fn protein_id_absent_when_no_attribute() {
         // No `protein_id` attribute anywhere → `None`, and the projector's
-        // fallback chain (NM_ → NP_ inference, then transcript-id) takes
-        // over downstream. See #310.
+        // transcript-id fallback takes over downstream (the `NM_ → NP_`
+        // number-preserving inference was removed as frequently wrong, #808).
+        // See #310.
         let lines = &[
             "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1",
             "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",

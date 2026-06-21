@@ -1512,15 +1512,24 @@ pub fn load_sequences_to_seqrepo(
                 if let Some(tx) = cdot.get_transcript(tx_id) {
                     let start = tx.cds_start.unwrap_or(0) as usize;
                     let end = tx.cds_end.unwrap_or(seq.len() as u64) as usize;
-                    let prot_id = tx
-                        .protein
-                        .clone()
-                        .unwrap_or_else(|| tx_id.replace("NM_", "NP_").replace("XM_", "XP_"));
+                    // Key the derived-protein FASTA by the authoritative cdot
+                    // protein accession if present, else the transcript id —
+                    // matching the projector's `p.` accession (#808). We do NOT
+                    // fabricate an NP_/XP_ by preserving the number: RefSeq does
+                    // not guarantee the NM and NP numbers match. The transcript-id
+                    // fallback is safe here because derived proteins are loaded
+                    // into a distinct `NCBI_protein` namespace (see below), so it
+                    // does not collide with the nucleotide transcript's `NCBI`
+                    // key.
+                    let prot_id = tx.protein.clone().unwrap_or_else(|| tx_id.clone());
                     (start, end, prot_id)
                 } else if let Some((start, end, _gene)) = supplemental_cds.get(tx_id) {
                     let start = start.map(|s| (s - 1) as usize).unwrap_or(0);
                     let end = end.map(|e| e as usize).unwrap_or(seq.len());
-                    let prot_id = tx_id.replace("NM_", "NP_").replace("XM_", "XP_");
+                    // No authoritative protein accession; key by the transcript
+                    // id rather than a fabricated NP_/XP_ (#808). Safe because
+                    // derived proteins load into the `NCBI_protein` namespace.
+                    let prot_id = tx_id.clone();
                     (start, end, prot_id)
                 } else {
                     continue;
@@ -1528,7 +1537,10 @@ pub fn load_sequences_to_seqrepo(
             } else if let Some((start, end, _gene)) = supplemental_cds.get(tx_id) {
                 let start = start.map(|s| (s - 1) as usize).unwrap_or(0);
                 let end = end.map(|e| e as usize).unwrap_or(seq.len());
-                let prot_id = tx_id.replace("NM_", "NP_").replace("XM_", "XP_");
+                // No authoritative protein accession; key by the transcript id
+                // rather than a fabricated NP_/XP_ (#808). Safe because derived
+                // proteins load into the distinct `NCBI_protein` namespace.
+                let prot_id = tx_id.clone();
                 (start, end, prot_id)
             } else {
                 continue;
@@ -1553,13 +1565,20 @@ pub fn load_sequences_to_seqrepo(
         }
     }
 
-    // Load derived proteins into SeqRepo
+    // Load derived proteins into SeqRepo under a distinct `NCBI_protein`
+    // namespace — NOT the `NCBI` namespace the nucleotide transcripts are loaded
+    // into above. A transcript that lacks an authoritative protein falls back to
+    // its transcript id for the protein FASTA header, so loading the derived
+    // protein into `NCBI` would create a duplicate `{tx_id}` key (the nucleotide
+    // transcript and its derived protein), yielding an ambiguous/rejected
+    // SeqRepo alias. Keeping proteins in their own namespace avoids the
+    // collision; consumers look up derived proteins via `NCBI_protein`.
     if proteins_derived > 0 {
         eprintln!(
             "  Loading {} derived protein sequences...",
             proteins_derived
         );
-        match load_fasta(std::slice::from_ref(&protein_fasta_path), "NCBI") {
+        match load_fasta(std::slice::from_ref(&protein_fasta_path), "NCBI_protein") {
             Ok(_) => {
                 eprintln!("  Loaded {} derived protein sequences", proteins_derived);
             }

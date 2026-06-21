@@ -355,17 +355,31 @@ pub fn populate_mutalyzer_cache<P: AsRef<Path>>(
             // cdot CDS coordinates are 0-based, half-open
             let start = tx.cds_start.unwrap_or(0) as usize;
             let end = tx.cds_end.unwrap_or(seq.len() as u64) as usize;
+            // Key the derived-protein cache by the authoritative cdot protein
+            // accession if present, else a `protein:`-prefixed transcript id
+            // (see #808). We do NOT fabricate an `NP_`/`XP_` by preserving the
+            // number: RefSeq does not guarantee the NM and NP numbers match, so
+            // that key would be frequently wrong. The fallback MUST be prefixed
+            // so the derived protein lands in its own cache namespace — a bare
+            // `{tx_id}.sequence` would collide with (and be shadowed by) the
+            // transcript nucleotide cache entry created above, leaving the
+            // derived protein silently unwritten.
             let prot_id = tx
                 .protein
                 .clone()
-                .unwrap_or_else(|| tx_id.replace("NM_", "NP_").replace("XM_", "XP_"));
+                .unwrap_or_else(|| format!("protein:{}", tx_id));
             (start, end, prot_id)
         } else if let Some((start, end, _gene)) = supplemental_cds.get(tx_id) {
             // Supplemental metadata CDS coordinates are 1-based, inclusive
             // Convert to 0-based, half-open
             let start = start.map(|s| (s - 1) as usize).unwrap_or(0);
             let end = end.map(|e| e as usize).unwrap_or(seq.len());
-            let prot_id = tx_id.replace("NM_", "NP_").replace("XM_", "XP_");
+            // No authoritative protein accession available here; key by a
+            // `protein:`-prefixed transcript id rather than a fabricated
+            // NP_/XP_ (#808). The prefix keeps the derived protein out of the
+            // transcript cache namespace so it is not shadowed by the
+            // `{tx_id}.sequence` transcript entry.
+            let prot_id = format!("protein:{}", tx_id);
             (start, end, prot_id)
         } else {
             continue; // No CDS info available

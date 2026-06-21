@@ -288,15 +288,27 @@ fn convert_to_transcript_notation(
         Some(CdsPosition::Cds(base)) if *base > 0 => {
             // Calculate protein position: (cds_pos - 1) / 3 + 1
             let prot_position = ((*base - 1) / 3 + 1) as u64;
-            let prot_acc = transcript_id.replace("NM_", "NP_").replace("XM_", "XP_");
-
-            if prot_acc.starts_with("NP_") || prot_acc.starts_with("XP_") {
-                Some(format!("{}:p.{}", prot_acc, prot_position))
-            } else {
-                None // Non-coding transcript
-            }
+            // Reaching this arm already proves the variant is in the CDS:
+            // `tx_to_cds` returns `Some(CdsPosition::Cds(_))` only for a
+            // transcript that has CDS bounds (`cds_start`/`cds_end` present) and
+            // a position inside them. A non-coding transcript (no `cds_start`)
+            // yields `None` and falls through to the `_ => None` arm below, so no
+            // prefix gate is needed to suppress its `p.`.
+            //
+            // Protein accession: the authoritative cdot value if present, else
+            // the transcript accession itself. We do NOT infer `NP_*`/`XP_*`
+            // from `NM_*`/`XM_*` by preserving the number — RefSeq does not
+            // guarantee the NM and NP numbers match, so that is frequently
+            // wrong (#808). Emitting unconditionally here also keeps the `p.`
+            // for coding `ENST_`/custom transcripts that have CDS bounds but no
+            // authoritative `cdot.protein`.
+            let prot_acc = cdot_tx
+                .protein
+                .clone()
+                .unwrap_or_else(|| transcript_id.to_string());
+            Some(format!("{}:p.{}", prot_acc, prot_position))
         }
-        _ => None, // UTR or intronic variant
+        _ => None, // UTR, intronic, or non-coding (no CDS) variant
     };
 
     (hgvs_c, hgvs_p, None)
@@ -867,5 +879,141 @@ mod tests {
         assert!(hgvs_p.is_none());
         assert!(error.is_some());
         assert!(error.unwrap().contains("cdot"));
+    }
+
+    /// Build a single-transcript cdot mapper on a `chr1`-style contig with the
+    /// canonical projector test layout: genome [1000, 1009) (0-based excl) /
+    /// tx [0, 9), CDS = whole transcript. `protein` is the authoritative
+    /// protein accession or `None`. With this layout genome position 1003
+    /// maps to CDS base 4 (protein codon 2).
+    #[cfg(test)]
+    fn coding_cdot(tx_id: &str, contig: &str, protein: Option<&str>) -> Arc<CdotMapper> {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::Strand;
+        let mut mapper = CdotMapper::new();
+        mapper.add_transcript(
+            tx_id.to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: contig.to_string(),
+                strand: Strand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: protein.map(str::to_string),
+                exon_cigars: Vec::new(),
+            },
+        );
+        Arc::new(mapper)
+    }
+
+    /// Build a CdotMapper for a non-coding transcript: same exon span as
+    /// `coding_cdot` but with NO CDS bounds (`cds_start`/`cds_end` are `None`).
+    /// `tx_to_cds` returns `None` for such a transcript, so no `p.` is produced —
+    /// modeling "non-coding" by the absence of a CDS rather than by accession
+    /// prefix (#808).
+    fn noncoding_cdot(tx_id: &str, contig: &str) -> Arc<CdotMapper> {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::Strand;
+        let mut mapper = CdotMapper::new();
+        mapper.add_transcript(
+            tx_id.to_string(),
+            CdotTranscript {
+                gene_name: Some("TESTGENE".to_string()),
+                contig: contig.to_string(),
+                strand: Strand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: None,
+                cds_end: None,
+                gene_id: None,
+                protein: None,
+                exon_cigars: Vec::new(),
+            },
+        );
+        Arc::new(mapper)
+    }
+
+    #[test]
+    fn vcf_convert_p_prefers_authoritative_protein() {
+        // When cdot carries the authoritative protein accession, the p. uses
+        // it (here NP_000068.1, whose number differs from the NM_).
+        let cdot = coding_cdot("NM_000077.4", "chr1", Some("NP_000068.1"));
+        let (_c, p, err) = convert_to_transcript_notation(
+            1003,
+            "C",
+            "A",
+            "NM_000077.4",
+            Some(&cdot),
+            &VariantType::Substitution,
+        );
+        assert!(err.is_none(), "unexpected error: {err:?}");
+        assert_eq!(p.as_deref(), Some("NP_000068.1:p.2"));
+    }
+
+    #[test]
+    fn vcf_convert_p_coding_nm_without_protein_uses_transcript_id_not_inferred_np() {
+        // #808: a coding NM_ transcript with no authoritative protein must
+        // still emit a p. (it is coding), keyed off the transcript id — NOT a
+        // fabricated number-preserving NP_. The old prefix-proxy gate would
+        // have emitted NP_000077.4; the rework must not.
+        let cdot = coding_cdot("NM_000077.4", "chr1", None);
+        let (_c, p, err) = convert_to_transcript_notation(
+            1003,
+            "C",
+            "A",
+            "NM_000077.4",
+            Some(&cdot),
+            &VariantType::Substitution,
+        );
+        assert!(err.is_none(), "unexpected error: {err:?}");
+        assert_eq!(p.as_deref(), Some("NM_000077.4:p.2"));
+        assert!(
+            !p.as_deref().unwrap().starts_with("NP_"),
+            "must not fabricate an NP_: {p:?}"
+        );
+    }
+
+    #[test]
+    fn vcf_convert_p_noncoding_transcript_without_cds_drops_p() {
+        // A non-coding transcript — modeled by the ABSENCE of CDS bounds, not by
+        // an accession prefix — has no protein product. `tx_to_cds` returns
+        // `None`, so no `p.` is emitted. The NR_ accession here is incidental;
+        // the suppression is driven by the missing CDS, which is the correct
+        // signal (#808).
+        let cdot = noncoding_cdot("NR_000077.4", "chr1");
+        let (_c, p, err) = convert_to_transcript_notation(
+            1003,
+            "C",
+            "A",
+            "NR_000077.4",
+            Some(&cdot),
+            &VariantType::Substitution,
+        );
+        assert!(err.is_none(), "unexpected error: {err:?}");
+        assert!(
+            p.is_none(),
+            "transcript without CDS bounds must not emit a p.: {p:?}"
+        );
+    }
+
+    #[test]
+    fn vcf_convert_p_coding_non_nm_transcript_without_protein_emits_p() {
+        // A coding transcript whose accession is NOT an NM_/XM_ RefSeq mRNA
+        // (e.g. an Ensembl ENST_ or a custom id) but which HAS CDS bounds and no
+        // authoritative `cdot.protein` must still emit a `p.`, keyed off the
+        // transcript id. The old NM_/XM_ prefix gate wrongly dropped this valid
+        // coding `p.` (#808); removing the gate restores it.
+        let cdot = coding_cdot("ENST00000367770.5", "chr1", None);
+        let (_c, p, err) = convert_to_transcript_notation(
+            1003,
+            "C",
+            "A",
+            "ENST00000367770.5",
+            Some(&cdot),
+            &VariantType::Substitution,
+        );
+        assert!(err.is_none(), "unexpected error: {err:?}");
+        assert_eq!(p.as_deref(), Some("ENST00000367770.5:p.2"));
     }
 }
