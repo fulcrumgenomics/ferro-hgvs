@@ -734,11 +734,14 @@ fn predict_protein_consequence(
     // kept in the signature for symmetry with `ref_len`.
     let is_frameshift = is_frameshift && edit_type != "substitution";
 
-    // Get protein accession - prefer transcript's protein field if available
+    // Get the protein accession: the authoritative cdot value if present, else
+    // the transcript accession itself. We do NOT infer `NP_*`/`XP_*` from
+    // `NM_*`/`XM_*` by preserving the number — RefSeq does not guarantee the NM
+    // and NP numbers match, so that inference is frequently wrong (#808).
     let prot_acc = cdot_tx
         .protein
         .clone()
-        .unwrap_or_else(|| accession.replace("NM_", "NP_").replace("XM_", "XP_"));
+        .unwrap_or_else(|| accession.to_string());
 
     // Build HGVS protein notation
     // Without sequence data, we use position-based notation with uncertainty markers

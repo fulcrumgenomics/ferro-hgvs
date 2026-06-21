@@ -208,7 +208,16 @@ fn perform_conversion(
                     // Calculate protein position: (cds_pos - 1) / 3 + 1
                     if cds_base > 0 {
                         let codon_num = ((cds_base - 1) / 3 + 1) as u64;
-                        let prot_acc = accession.replace("NM_", "NP_").replace("XM_", "XP_");
+                        // Protein accession: the authoritative cdot value if
+                        // present, else the transcript accession itself. We do
+                        // NOT infer `NP_*`/`XP_*` from `NM_*`/`XM_*` by
+                        // preserving the number — RefSeq does not guarantee the
+                        // NM and NP numbers match, so that is frequently wrong
+                        // (#808).
+                        let prot_acc = cdot_tx
+                            .protein
+                            .clone()
+                            .unwrap_or_else(|| accession.to_string());
                         let converted = format!("{}:p.{}", prot_acc, codon_num);
 
                         let all = if include_all {

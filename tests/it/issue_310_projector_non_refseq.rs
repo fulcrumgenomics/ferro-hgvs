@@ -7,8 +7,12 @@
 //! 2. Without `protein_id`, the projector falls back to using the
 //!    transcript ID as the `p.` accession — never silently drops the
 //!    prediction just because of an ID format.
-//! 3. RefSeq `NM_*` transcripts still infer `NP_*` and now omit the
-//!    gene-symbol selector from Display.
+//! 3. RefSeq `NM_*`/`XM_*` transcripts WITHOUT an authoritative protein
+//!    accession fall back to the transcript ID for the `p.` accession and
+//!    omit the gene-symbol selector from Display. Per #808 they no longer
+//!    infer `NP_*`/`XP_*` by preserving the number — RefSeq does not
+//!    guarantee the NM/NP numbers match, so that inference was frequently
+//!    wrong (e.g. `NM_000077.4` ↔ `NP_000068.1`).
 //! 4. The parser still accepts the legacy `NP_*(GENE):p.` form and
 //!    preserves the selector text in `gene_symbol` for callers that
 //!    read it programmatically.
@@ -84,28 +88,41 @@ fn non_refseq_id_without_protein_id_falls_back_to_transcript_id() {
 }
 
 #[test]
-fn refseq_nm_prefix_still_infers_np_and_omits_gene_selector() {
+fn refseq_nm_prefix_without_protein_falls_back_to_transcript_id() {
+    // #808: an `NM_` transcript with no authoritative protein accession must
+    // NOT have one fabricated by number-preserving substitution
+    // (`NM_TEST.1`→`NP_TEST.1`), which is frequently wrong. It falls back to
+    // the transcript id itself (#310) — honest and still grammar-valid.
     let provider = make_provider("NM_TEST.1", None);
     let result = project(provider, "chr1:g.1003C>A", "NM_TEST.1");
     let p = result
         .protein
         .as_ref()
-        .expect("p. should be set via NM_ → NP_ inference")
+        .expect("p. should be set via transcript-id fallback")
         .to_string();
-    assert_eq!(p, "NP_TEST.1:p.(Arg2Ser)");
+    assert_eq!(p, "NM_TEST.1:p.(Arg2Ser)");
+    assert!(
+        !p.starts_with("NP_"),
+        "must not fabricate a number-preserving NP_ accession: {p}"
+    );
     assert!(!p.contains("(MYGENE)"), "no (GENE) selector on p.: {p}");
 }
 
 #[test]
-fn refseq_xm_prefix_still_infers_xp_and_omits_gene_selector() {
+fn refseq_xm_prefix_without_protein_falls_back_to_transcript_id() {
+    // #808, XM_/XP_ arm: same rule for predicted-model RefSeq transcripts.
     let provider = make_provider("XM_TEST.1", None);
     let result = project(provider, "chr1:g.1003C>A", "XM_TEST.1");
     let p = result
         .protein
         .as_ref()
-        .expect("p. should be set via XM_ → XP_ inference")
+        .expect("p. should be set via transcript-id fallback")
         .to_string();
-    assert_eq!(p, "XP_TEST.1:p.(Arg2Ser)");
+    assert_eq!(p, "XM_TEST.1:p.(Arg2Ser)");
+    assert!(
+        !p.starts_with("XP_"),
+        "must not fabricate a number-preserving XP_ accession: {p}"
+    );
     assert!(!p.contains("(MYGENE)"), "no (GENE) selector on p.: {p}");
 }
 

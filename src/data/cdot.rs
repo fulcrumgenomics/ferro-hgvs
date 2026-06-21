@@ -425,8 +425,10 @@ struct RawCdotTranscript {
     biotype: Option<Vec<String>>,
     /// Protein accession for the transcript's CDS (e.g. `NP_000068.1`). cdot
     /// records this per-transcript; plumbing it through lets the projector
-    /// emit the correct `p.` accession instead of falling back to the
-    /// (frequently wrong) `NM_*` → `NP_*` number-preserving inference.
+    /// emit the correct `p.` accession. When it is absent the projector falls
+    /// back to the transcript id itself, never the (frequently wrong) `NM_*` →
+    /// `NP_*` number-preserving inference, which was removed in #808 because
+    /// RefSeq does not guarantee the NM and NP numbers match.
     #[serde(default)]
     protein: Option<String>,
     #[serde(default)]
@@ -5333,9 +5335,10 @@ mod tests {
     fn test_protein_accession_parsed_from_cdot() {
         // cdot records the CDS protein accession per transcript. The loader
         // must surface it on `CdotTranscript.protein` so the projector emits
-        // the correct `p.` accession (here NP_000068.1) instead of falling
-        // back to the NM_* -> NP_* number-preserving inference (NP_000077.4),
-        // which is wrong whenever the NP number differs from the NM number.
+        // the correct `p.` accession (here NP_000068.1). Without it the
+        // projector falls back to the transcript id (#310); it never infers
+        // NP_000077.4 from NM_000077.4 by preserving the number, which is wrong
+        // whenever the NP number differs from the NM number (#808).
         let json = r#"
         {
             "transcripts": {
