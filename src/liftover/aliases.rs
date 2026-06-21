@@ -270,7 +270,12 @@ impl ContigAliases {
 /// Lazily-constructed singleton of [`ContigAliases::default_human`] so
 /// repeated build inference (per projection) does not rebuild the
 /// ~150-entry alias table every call.
-fn default_human_aliases() -> &'static ContigAliases {
+///
+/// `pub(crate)` so other modules that need the bundled human chromosome↔RefSeq
+/// table (e.g. the VCF→HGVS converter resolving a chromosome name to its
+/// build-appropriate `NC_` accession, #804) share this one cached instance
+/// rather than constructing a second copy.
+pub(crate) fn default_human_aliases() -> &'static ContigAliases {
     use std::sync::OnceLock;
     static ALIASES: OnceLock<ContigAliases> = OnceLock::new();
     ALIASES.get_or_init(ContigAliases::default_human)

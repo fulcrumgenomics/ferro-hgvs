@@ -11,7 +11,9 @@ use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
 use crate::hgvs::interval::{CdsInterval, GenomeInterval, TxInterval};
 use crate::hgvs::location::GenomePos;
 use crate::hgvs::variant::{Accession, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, TxVariant};
-use crate::reference::transcript::{IntronPosition, ManeStatus, Transcript};
+use crate::liftover::aliases::default_human_aliases;
+use crate::project::accession::parse_accession;
+use crate::reference::transcript::{GenomeBuild, IntronPosition, ManeStatus, Transcript};
 
 use super::record::VcfRecord;
 
@@ -353,8 +355,9 @@ impl<'a> VcfToHgvsConverter<'a> {
             GenomeInterval::new(GenomePos::new(genomic_start), GenomePos::new(genomic_end))
         };
 
-        // Build a genomic accession from chromosome
-        let accession = Accession::new("NC", vcf.normalized_chrom(), None);
+        // Build the genomic accession from the chromosome name and the record's
+        // genome build, e.g. chr1 + GRCh38 → NC_000001.11 (#804).
+        let accession = genomic_accession_for(&vcf.chrom, vcf.genome_build)?;
 
         let variant = HgvsVariant::Genome(GenomeVariant {
             accession,
@@ -511,6 +514,32 @@ fn trim_common_bases<'a>(reference: &'a str, alt: &'a str) -> (&'a str, &'a str,
     (ref_trimmed, alt_trimmed, prefix_len, suffix_len)
 }
 
+/// Resolve a VCF chromosome name plus genome build to its RefSeq genomic
+/// accession (e.g. `chr1` + GRCh38 → `NC_000001.11`, `chr1` + GRCh37 →
+/// `NC_000001.10`).
+///
+/// Routes through the bundled, build-aware `ContigAliases::default_human`
+/// table (the same source of truth as build inference) rather than a bespoke
+/// chromosome→accession table. `resolve_to_refseq` accepts UCSC (`chr1`),
+/// Ensembl (`1`), and RefSeq (`NC_000001.11`) spellings, so the raw VCF
+/// chromosome name can be passed through unchanged. `chrM`/`MT` resolve to the
+/// rCRS accession `NC_012920.1` (shared across builds); the resulting variant
+/// is emitted on the `g.` axis here — coercion to the `m.` coordinate system is
+/// a normalization concern handled by `normalize()`, consistent with how the
+/// rest of the crate treats mitochondrial genomic variants.
+///
+/// Declines (`Err`) for any contig the human alias table does not cover
+/// (unplaced/alt scaffolds, unknown names) rather than emitting a malformed
+/// `NC_<name>` accession.
+fn genomic_accession_for(chrom: &str, build: GenomeBuild) -> Result<Accession, FerroError> {
+    match default_human_aliases().resolve_to_refseq(chrom, build) {
+        Some(refseq) => Ok(parse_accession(refseq)),
+        None => Err(FerroError::ConversionError {
+            msg: format!("no RefSeq genomic accession for contig '{chrom}' on {build}"),
+        }),
+    }
+}
+
 /// Convert a VCF record to a genomic HGVS variant (g. notation)
 ///
 /// This is a simple conversion that doesn't require transcript information.
@@ -593,10 +622,9 @@ pub fn vcf_to_genomic_hgvs(vcf: &VcfRecord, alt_index: usize) -> Result<GenomeVa
         GenomeInterval::new(GenomePos::new(start_pos), GenomePos::new(end_pos))
     };
 
-    // Build accession from chromosome
-    // Use bare chrom for now - a more complete implementation would
-    // map to RefSeq assembly accessions (NC_000001.11 for chr1, etc.)
-    let accession = Accession::new("NC", vcf.bare_chrom(), None);
+    // Build the genomic accession from the chromosome name and the record's
+    // genome build, e.g. chr1 + GRCh38 → NC_000001.11 (#804).
+    let accession = genomic_accession_for(&vcf.chrom, vcf.genome_build)?;
 
     Ok(GenomeVariant {
         accession,
@@ -661,23 +689,93 @@ mod tests {
 
     #[test]
     fn test_vcf_to_genomic_snv() {
+        // Default genome build is GRCh38, so chr1 → NC_000001.11 (#804).
         let vcf = VcfRecord::snv("chr1", 12345, 'A', 'G');
         let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
-        assert_eq!(variant.to_string(), "NC_1:g.12345A>G");
+        assert_eq!(variant.to_string(), "NC_000001.11:g.12345A>G");
     }
 
     #[test]
     fn test_vcf_to_genomic_deletion() {
         let vcf = VcfRecord::deletion("chr1", 12345, "ATG");
         let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
-        assert_eq!(variant.to_string(), "NC_1:g.12346_12347delTG");
+        assert_eq!(variant.to_string(), "NC_000001.11:g.12346_12347delTG");
     }
 
     #[test]
     fn test_vcf_to_genomic_insertion() {
         let vcf = VcfRecord::insertion("chr1", 12345, 'A', "TG");
         let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
-        assert_eq!(variant.to_string(), "NC_1:g.12346insTG");
+        assert_eq!(variant.to_string(), "NC_000001.11:g.12346insTG");
+    }
+
+    // ----- #804: genomic axis emits build-appropriate RefSeq NC_ accessions -----
+
+    #[test]
+    fn test_genomic_accession_grch38() {
+        // chr1 on GRCh38 (the default) → NC_000001.11.
+        let vcf = VcfRecord::snv("chr1", 12345, 'A', 'G');
+        let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
+        assert_eq!(variant.to_string(), "NC_000001.11:g.12345A>G");
+    }
+
+    #[test]
+    fn test_genomic_accession_grch37() {
+        // Same chromosome, GRCh37 → the older NC version NC_000001.10.
+        let vcf = VcfRecord::snv("chr1", 12345, 'A', 'G').with_genome_build(GenomeBuild::GRCh37);
+        let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
+        assert_eq!(variant.to_string(), "NC_000001.10:g.12345A>G");
+    }
+
+    #[test]
+    fn test_genomic_accession_ensembl_style_name() {
+        // A bare Ensembl-style chromosome name (no "chr" prefix) resolves too.
+        let vcf = VcfRecord::snv("1", 12345, 'A', 'G');
+        let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
+        assert_eq!(variant.to_string(), "NC_000001.11:g.12345A>G");
+    }
+
+    #[test]
+    fn test_genomic_accession_sex_chromosomes() {
+        let x38 = VcfRecord::snv("chrX", 100, 'A', 'G');
+        assert_eq!(
+            vcf_to_genomic_hgvs(&x38, 0).unwrap().to_string(),
+            "NC_000023.11:g.100A>G"
+        );
+        let y37 = VcfRecord::snv("chrY", 100, 'A', 'G').with_genome_build(GenomeBuild::GRCh37);
+        assert_eq!(
+            vcf_to_genomic_hgvs(&y37, 0).unwrap().to_string(),
+            "NC_000024.9:g.100A>G"
+        );
+    }
+
+    #[test]
+    fn test_genomic_accession_mitochondrial() {
+        // chrM → the rCRS accession NC_012920.1, emitted on the g. axis. The
+        // g.→m. coordinate-system coercion is left to normalize() (#804).
+        let vcf = VcfRecord::snv("chrM", 100, 'A', 'G');
+        let variant = vcf_to_genomic_hgvs(&vcf, 0).unwrap();
+        assert_eq!(variant.to_string(), "NC_012920.1:g.100A>G");
+        assert!(variant.accession.is_mitochondrial());
+
+        // The common VCF/Ensembl `MT` spelling resolves to the same rCRS
+        // accession (shared across builds), so guard it against regression too.
+        let mt = VcfRecord::snv("MT", 100, 'A', 'G').with_genome_build(GenomeBuild::GRCh37);
+        let mt_variant = vcf_to_genomic_hgvs(&mt, 0).unwrap();
+        assert_eq!(mt_variant.to_string(), "NC_012920.1:g.100A>G");
+        assert!(mt_variant.accession.is_mitochondrial());
+    }
+
+    #[test]
+    fn test_genomic_accession_unmapped_contig_declines() {
+        // An alt/unplaced contig the human alias table does not cover must
+        // decline rather than emit a malformed NC_<name> accession.
+        let vcf = VcfRecord::snv("chr1_GL383518v1_alt", 100, 'A', 'G');
+        let result = vcf_to_genomic_hgvs(&vcf, 0);
+        assert!(
+            result.is_err(),
+            "unmapped contig must decline, got {result:?}"
+        );
     }
 
     #[test]
@@ -962,6 +1060,35 @@ mod tests {
         assert!(ann.affects_splice_site());
         assert_eq!(ann.intronic_impact(), Some("HIGH"));
         assert_eq!(ann.intronic_so_term(), Some("splice_donor_variant"));
+    }
+
+    #[test]
+    fn test_convert_genomic_only_emits_nc_accession() {
+        // When the transcript carries no genomic coordinates the converter
+        // falls back to the genomic-only path. It must emit a real RefSeq
+        // accession (NC_000001.11), not the old NC_chr1 garbage (#804).
+        let mut transcript = create_test_transcript();
+        transcript.chromosome = None;
+        transcript.genomic_start = None;
+        transcript.genomic_end = None;
+        assert!(!transcript.has_genomic_coords());
+
+        let converter = VcfToHgvsConverter::new(&transcript);
+        let vcf = VcfRecord::snv("chr1", 12345, 'A', 'G');
+        let annotations = converter.convert(&vcf).unwrap();
+        assert_eq!(annotations.len(), 1);
+        let hgvs = annotations[0].hgvs_string();
+        // The genomic-only path attaches the transcript's gene symbol, so the
+        // accession renders as NC_000001.11(COL1A1). The point of the test is
+        // that it is a real NC_ accession, not the old NC_chr1 garbage (#804).
+        assert!(
+            hgvs.starts_with("NC_000001.11"),
+            "expected NC_000001.11 genomic accession, got {hgvs}"
+        );
+        assert!(
+            !hgvs.contains("chr1"),
+            "must not emit the bare chromosome name, got {hgvs}"
+        );
     }
 
     #[test]

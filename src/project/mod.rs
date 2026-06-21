@@ -1,6 +1,6 @@
 //! Variant-level projection: g. variants → c./p. equivalents on a target transcript.
 
-mod accession;
+pub(crate) mod accession;
 pub mod edit;
 mod projector;
 mod protein;
