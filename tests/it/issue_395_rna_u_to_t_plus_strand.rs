@@ -18,7 +18,7 @@
 //! `T`. A round-trip r.→g. projection must therefore translate `u`
 //! to `t` regardless of strand orientation.
 
-use ferro_hgvs::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
+use ferro_hgvs::hgvs::edit::{Base, InsertedSequence, NaEdit, RepeatCount, Sequence};
 use ferro_hgvs::project::edit::transform_edit_for_strand;
 use ferro_hgvs::reference::Strand;
 
@@ -138,6 +138,46 @@ fn plus_strand_delins_u_in_both_translates_both() {
             assert_eq!(ins, expected_ins, "delins inserted U→T");
         }
         other => panic!("expected Delins, got {other:?}"),
+    }
+}
+
+#[test]
+fn plus_strand_repeat_u_in_sequence_and_trailing_translates_to_t() {
+    // r.100AU[3]U — a tandem repeat whose unit (`AU`) and trailing base
+    // (`U`) both carry RNA uracil. Plus-strand projection to the genomic
+    // (DNA) axis must translate U→T in both the repeat unit and the
+    // trailing sequence while leaving the counts untouched: unit `AT`,
+    // trailing `T`, count `[3]` preserved.
+    let r_edit = NaEdit::Repeat {
+        sequence: Some("AU".parse::<Sequence>().unwrap()),
+        count: RepeatCount::Exact(3),
+        additional_counts: vec![RepeatCount::Exact(1)],
+        trailing: Some("U".parse::<Sequence>().unwrap()),
+    };
+    let g_edit = transform_edit_for_strand(&r_edit, Strand::Plus);
+    let expected_unit: Sequence = "AT".parse().unwrap();
+    let expected_trailing: Sequence = "T".parse().unwrap();
+    match g_edit {
+        NaEdit::Repeat {
+            sequence: Some(unit),
+            count,
+            additional_counts,
+            trailing: Some(trail),
+        } => {
+            assert_eq!(unit, expected_unit, "plus-strand repeat unit U→T");
+            assert_eq!(trail, expected_trailing, "plus-strand repeat trailing U→T");
+            assert_eq!(
+                count,
+                RepeatCount::Exact(3),
+                "repeat count must be preserved"
+            );
+            assert_eq!(
+                additional_counts,
+                vec![RepeatCount::Exact(1)],
+                "additional repeat counts must be preserved",
+            );
+        }
+        other => panic!("expected Repeat with sequence and trailing, got {other:?}"),
     }
 }
 
