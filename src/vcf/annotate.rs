@@ -4,9 +4,9 @@
 //! following conventions similar to VEP and SnpEff.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::ProteinEdit;
+use crate::hgvs::edit::{NaEdit, ProteinEdit};
 use crate::hgvs::location::AminoAcid;
-use crate::hgvs::variant::HgvsVariant;
+use crate::hgvs::variant::{is_frameshift, HgvsVariant};
 use crate::reference::loader::TranscriptDb;
 
 use super::annotator::MultiIsoformAnnotator;
@@ -196,25 +196,75 @@ pub fn determine_consequence(ann: &HgvsAnnotation) -> Consequence {
     // Look at the edit type from the variant
     match &ann.variant {
         HgvsVariant::Cds(v) => {
-            let edit_str = format!("{:?}", v.loc_edit.edit);
-
-            // Check for frameshift-causing edits (indels not divisible by 3)
-            if edit_str.contains("Deletion") || edit_str.contains("Insertion") {
-                // For a simple approximation, single base indels cause frameshifts
-                // A more complete implementation would analyze the exact length
-                if edit_str.contains("Insertion") {
-                    return Consequence::InframeInsertion;
+            // Classify the coding indel by matching the parsed `NaEdit` enum
+            // directly, then split each indel category into frameshift vs
+            // in-frame using the crate-wide `is_frameshift` rule (net indel
+            // length known, nonzero, and not divisible by 3). The prior
+            // implementation matched substrings on the `Debug` rendering of the
+            // edit, which never emitted `Frameshift` (length was never checked)
+            // and was order-dependent and brittle — the same anti-pattern that
+            // caused the protein-arm bug fixed in #228.
+            //
+            // `is_frameshift` delegates to `get_indel_length`, which returns
+            // `None` when the net length is non-deterministic (uncertain/ranged
+            // inserted length, named/reference insertion, N-padded deletion).
+            // In that case `is_frameshift` is `false`, so the variant stays in
+            // its in-frame category rather than being asserted a frameshift —
+            // the conservative choice, since we never claim a frameshift we
+            // cannot prove.
+            //
+            // The edit is wrapped in `Mu<NaEdit>` (predicted-vs-confirmed paren
+            // distinction); classification is identical for both, so we unwrap
+            // and dispatch on the inner edit. `Mu::Unknown` (a `c.?` shape) and
+            // non-indel edits (substitution, inversion, repeat, conversion,
+            // etc.) have no frame change we can classify here without protein
+            // prediction, so they fall through to `Unknown`.
+            match v.loc_edit.edit.inner() {
+                Some(NaEdit::Insertion { .. }) | Some(NaEdit::BreakpointInsertion { .. }) => {
+                    if is_frameshift(&ann.variant) {
+                        Consequence::Frameshift
+                    } else {
+                        Consequence::InframeInsertion
+                    }
                 }
-                return Consequence::InframeDeletion;
+                Some(NaEdit::Deletion { .. }) | Some(NaEdit::NPaddedDeletion { .. }) => {
+                    if is_frameshift(&ann.variant) {
+                        Consequence::Frameshift
+                    } else {
+                        Consequence::InframeDeletion
+                    }
+                }
+                // A delins is a replacement; its net length is
+                // `inserted_len - deleted_interval_span` (the span is read from
+                // the interval positions, not the edit's `deleted_length`
+                // field). In-frame net lengths (0 or a
+                // multiple of 3) keep the pre-existing delins→InframeDeletion
+                // convention (a delins is bucketed under deletion).
+                Some(NaEdit::Delins { .. }) => {
+                    if is_frameshift(&ann.variant) {
+                        Consequence::Frameshift
+                    } else {
+                        Consequence::InframeDeletion
+                    }
+                }
+                // A duplication is an insertion of the copied span; a
+                // non-standard dup-ins additionally inserts a sequence, so its
+                // net length is the duplicated span plus the inserted length.
+                // Both have deterministic net lengths in `get_indel_length`, so
+                // the frameshift branch is live for each (a non-3n net length
+                // yields `Frameshift`). Previously `dup` fell through to
+                // `Unknown`; classifying it here is a strict improvement.
+                Some(NaEdit::Duplication { .. }) | Some(NaEdit::DupIns { .. }) => {
+                    if is_frameshift(&ann.variant) {
+                        Consequence::Frameshift
+                    } else {
+                        Consequence::InframeInsertion
+                    }
+                }
+                // Substitution, inversion, identity, repeat, conversion, etc.:
+                // no classifiable frame change without protein prediction.
+                _ => Consequence::Unknown,
             }
-
-            if edit_str.contains("Delins") {
-                return Consequence::InframeDeletion;
-            }
-
-            // Substitution - could be synonymous, missense, or nonsense
-            // Without protein prediction, default to unknown for coding changes
-            Consequence::Unknown
         }
         HgvsVariant::Genome(_) => Consequence::Unknown,
         HgvsVariant::Tx(_) => Consequence::NonCoding,
@@ -961,5 +1011,181 @@ mod tests {
 
         let consequence = determine_consequence(&ann);
         assert_eq!(consequence, Consequence::StopLoss);
+    }
+
+    /// Build a coding (`c.`) annotation for a parsed HGVS string and return its
+    /// classified consequence. Centralizes the 9-field `HgvsAnnotation` literal
+    /// so the coding-indel frame tests below stay focused on input → verdict.
+    fn coding_consequence(hgvs: &str) -> Consequence {
+        use crate::hgvs::parser::parse_hgvs;
+
+        let variant = parse_hgvs(hgvs).unwrap();
+        let ann = HgvsAnnotation {
+            variant,
+            gene_symbol: Some("COL1A1".to_string()),
+            transcript_accession: Some("NM_000088.3".to_string()),
+            is_coding: true,
+            is_intronic: false,
+            mane_status: ManeStatus::None,
+            intron_number: None,
+            intron_position: None,
+            intronic_consequence: None,
+        };
+        determine_consequence(&ann)
+    }
+
+    #[test]
+    fn test_coding_insertion_frameshift() {
+        // Net inserted length not divisible by 3 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101insA"),
+            Consequence::Frameshift
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101insAC"),
+            Consequence::Frameshift
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101insACGT"),
+            Consequence::Frameshift
+        );
+    }
+
+    #[test]
+    fn test_coding_insertion_inframe() {
+        // Net inserted length divisible by 3 → in-frame insertion.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101insACG"),
+            Consequence::InframeInsertion
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101insACGGTA"),
+            Consequence::InframeInsertion
+        );
+    }
+
+    #[test]
+    fn test_coding_deletion_frameshift() {
+        // Deletion span not divisible by 3 → frameshift. The 1 bp case
+        // (`c.100del`) is the canonical pre-fix regression: the old
+        // Debug-string classifier returned `InframeDeletion` here.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100del"),
+            Consequence::Frameshift
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101del"),
+            Consequence::Frameshift
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_103del"),
+            Consequence::Frameshift
+        );
+    }
+
+    #[test]
+    fn test_coding_deletion_inframe() {
+        // Deletion span divisible by 3 → in-frame deletion.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_102del"),
+            Consequence::InframeDeletion
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_105del"),
+            Consequence::InframeDeletion
+        );
+    }
+
+    #[test]
+    fn test_coding_delins_net_frame() {
+        // delins net length = inserted_len - deleted_span; frameshift iff net % 3 != 0.
+        // del 3, ins 1, net -2 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_102delinsA"),
+            Consequence::Frameshift
+        );
+        // del 1, ins 3, net +2 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100delinsACG"),
+            Consequence::Frameshift
+        );
+        // del 1, ins 2, net +1 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100delinsAC"),
+            Consequence::Frameshift
+        );
+        // del 4, ins 3, net -1 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_103delinsACG"),
+            Consequence::Frameshift
+        );
+        // del 4, ins 6, net +2 → frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_103delinsACGTAC"),
+            Consequence::Frameshift
+        );
+        // del 3, ins 3, net 0 → in-frame (replacement, bucketed under deletion).
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_102delinsACG"),
+            Consequence::InframeDeletion
+        );
+        // del 6, ins 3, net -3 → in-frame.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_105delinsACG"),
+            Consequence::InframeDeletion
+        );
+    }
+
+    #[test]
+    fn test_coding_duplication() {
+        // A duplication is an insertion of the copied span; frameshift iff
+        // span % 3 != 0. Previously `dup` fell through to `Unknown`.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100dup"),
+            Consequence::Frameshift
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_102dup"),
+            Consequence::InframeInsertion
+        );
+    }
+
+    #[test]
+    fn test_coding_unknown_length_insertion_not_frameshift() {
+        // When the inserted length is unknowable (`ins(10_20)`), we cannot
+        // prove a frameshift, so the variant stays in its non-frameshift
+        // category rather than being asserted as a frameshift.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_101ins(10_20)"),
+            Consequence::InframeInsertion
+        );
+    }
+
+    #[test]
+    fn test_coding_npadded_deletion_inframe() {
+        // An N-padded deletion (`delN[k]`) reports only a count of unknown
+        // bases, so its net length is non-deterministic: `get_indel_length`
+        // returns `None` and `is_frameshift` is `false` regardless of the
+        // count. It therefore classifies as `InframeDeletion` (its in-frame
+        // category) rather than being asserted a frameshift, even when the
+        // count is not a multiple of 3.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.(100_102)delN[5]"),
+            Consequence::InframeDeletion
+        );
+    }
+
+    #[test]
+    fn test_coding_non_indel_unknown() {
+        // Substitutions and inversions carry no length change and have no
+        // protein prediction in this path → Unknown.
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100A>G"),
+            Consequence::Unknown
+        );
+        assert_eq!(
+            coding_consequence("NM_000088.3:c.100_105inv"),
+            Consequence::Unknown
+        );
     }
 }
