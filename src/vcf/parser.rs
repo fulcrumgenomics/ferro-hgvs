@@ -236,8 +236,7 @@ fn convert_record(
         }
     }
 
-    // FORMAT and samples - simplified: just capture format keys
-    // Full sample parsing can be added later if needed
+    // FORMAT keys (e.g. "GT:DP:GQ") and per-sample values.
     let samples_buf = record.samples();
     let format_keys: Vec<String> = samples_buf
         .keys()
@@ -252,12 +251,26 @@ fn convert_record(
         Some(format_keys.join(":"))
     };
 
-    // For now, skip sample value extraction (complex API)
-    // Just create empty maps for each sample
-    let samples: Vec<std::collections::HashMap<String, String>> = header
-        .samples
-        .iter()
-        .map(|_| std::collections::HashMap::new())
+    // One map per sample column, in sample-column order (matching the header's
+    // `sample_names()`), keyed by FORMAT field name. A field whose value is
+    // missing (`.`) or absent from a short sample column is omitted from the
+    // map; `VcfRecord`'s `Display` renders any absent FORMAT key as `.`, so the
+    // omission round-trips correctly and keeps the maps minimal.
+    let samples: Vec<std::collections::HashMap<String, String>> = samples_buf
+        .values()
+        .map(|sample| {
+            sample
+                .keys()
+                .as_ref()
+                .iter()
+                .zip(sample.values())
+                .filter_map(|(key, value)| {
+                    value
+                        .as_ref()
+                        .map(|v| (key.to_string(), format_sample_value(v)))
+                })
+                .collect()
+        })
         .collect();
 
     Ok(VcfRecord {
@@ -311,6 +324,71 @@ fn convert_info_value(value: &nvcf::variant::record_buf::info::field::Value) -> 
             }
         }
     }
+}
+
+/// Format a per-sample FORMAT field value as canonical VCF text.
+///
+/// Mirrors noodles' own sample-value writer: scalars use their natural string
+/// form, arrays are comma-joined with missing elements rendered as `.`, and
+/// genotypes are rendered VCF 4.0/4.3-style (see [`format_genotype`]).
+fn format_sample_value(value: &nvcf::variant::record_buf::samples::sample::Value) -> String {
+    use nvcf::variant::record_buf::samples::sample::value::Array;
+    use nvcf::variant::record_buf::samples::sample::Value;
+
+    /// Render an array of optional scalars, joining with `,` and rendering
+    /// missing elements as `.`.
+    fn join_array<T: std::fmt::Display>(values: &[Option<T>]) -> String {
+        values
+            .iter()
+            .map(|v| {
+                v.as_ref()
+                    .map_or_else(|| ".".to_string(), |x| x.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    match value {
+        Value::Integer(v) => v.to_string(),
+        Value::Float(v) => v.to_string(),
+        Value::Character(v) => v.to_string(),
+        Value::String(v) => v.clone(),
+        Value::Genotype(genotype) => format_genotype(genotype),
+        Value::Array(array) => match array {
+            Array::Integer(values) => join_array(values),
+            Array::Float(values) => join_array(values),
+            Array::Character(values) => join_array(values),
+            Array::String(values) => join_array(values),
+        },
+    }
+}
+
+/// Render a genotype value as VCF 4.0/4.3-style text (e.g. `0/1`, `0|1`,
+/// `./.`, `0|1|2`).
+///
+/// The first allele contributes only its position (a missing position is `.`);
+/// each subsequent allele contributes its phasing separator (`|` phased, `/`
+/// unphased) followed by its position. This matches noodles' `write_genotype`
+/// for file formats below VCF 4.4 (the project emits VCF 4.3).
+fn format_genotype(
+    genotype: &nvcf::variant::record_buf::samples::sample::value::Genotype,
+) -> String {
+    use nvcf::variant::record::samples::series::value::genotype::Phasing;
+
+    let mut rendered = String::new();
+    for (i, allele) in genotype.as_ref().iter().enumerate() {
+        if i > 0 {
+            rendered.push(match allele.phasing() {
+                Phasing::Phased => '|',
+                Phasing::Unphased => '/',
+            });
+        }
+        match allele.position() {
+            Some(position) => rendered.push_str(&position.to_string()),
+            None => rendered.push('.'),
+        }
+    }
+    rendered
 }
 
 /// Split a multi-allelic VCF record into multiple bi-allelic records
@@ -433,5 +511,113 @@ chr1	12347	.	A	G,T	40	PASS	DP=50
 
         // Second record should have empty INFO
         assert!(records[1].info.is_empty() || !records[1].info.contains_key("DP"));
+    }
+
+    /// VCF with FORMAT and per-sample genotype columns for sample-value tests.
+    const SAMPLE_VCF: &str = r#"##fileformat=VCFv4.3
+##contig=<ID=chr1,length=249250621>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read Depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1	S2
+chr1	100	.	A	G	30	PASS	.	GT:DP:GQ	0/1:35:99	1|1:40:50
+chr1	200	.	C	T	30	PASS	.	GT:DP:GQ	./.:.:.	0|1:12:88
+chr1	300	.	G	A	30	PASS	.	GT:DP:GQ	1/1	0/0:20:40
+"#;
+
+    #[test]
+    fn test_parse_single_sample_format_values() {
+        // A single record's first sample carries each FORMAT field, keyed by name.
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+
+        assert_eq!(record.format.as_deref(), Some("GT:DP:GQ"));
+        assert_eq!(record.samples.len(), 2);
+
+        let s1 = &record.samples[0];
+        assert_eq!(s1.get("GT").map(String::as_str), Some("0/1"));
+        assert_eq!(s1.get("DP").map(String::as_str), Some("35"));
+        assert_eq!(s1.get("GQ").map(String::as_str), Some("99"));
+    }
+
+    #[test]
+    fn test_parse_multi_sample_values() {
+        // Per-sample maps are populated in sample-column order (S1 then S2),
+        // and phased genotypes (`|`) are preserved verbatim.
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+
+        let s2 = &record.samples[1];
+        assert_eq!(s2.get("GT").map(String::as_str), Some("1|1"));
+        assert_eq!(s2.get("DP").map(String::as_str), Some("40"));
+        assert_eq!(s2.get("GQ").map(String::as_str), Some("50"));
+
+        // The two columns must not be conflated.
+        assert_ne!(record.samples[0].get("GT"), record.samples[1].get("GT"));
+    }
+
+    #[test]
+    fn test_parse_missing_sample_values() {
+        // Missing field values (`.`) are omitted from the map; a missing-allele
+        // genotype (`./.`) is a present GT value and is rendered as such.
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        reader.read_record().unwrap().unwrap(); // skip record 1
+        let record = reader.read_record().unwrap().unwrap();
+
+        let s1 = &record.samples[0];
+        assert_eq!(s1.get("GT").map(String::as_str), Some("./."));
+        assert!(!s1.contains_key("DP"), "missing DP should be omitted");
+        assert!(!s1.contains_key("GQ"), "missing GQ should be omitted");
+
+        let s2 = &record.samples[1];
+        assert_eq!(s2.get("GT").map(String::as_str), Some("0|1"));
+        assert_eq!(s2.get("DP").map(String::as_str), Some("12"));
+    }
+
+    #[test]
+    fn test_parse_ragged_sample_columns() {
+        // A sample column with fewer fields than FORMAT declares: trailing keys
+        // are simply absent from the map (and Display renders them as `.`).
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        for _ in 0..2 {
+            reader.read_record().unwrap().unwrap();
+        }
+        let record = reader.read_record().unwrap().unwrap();
+
+        // S1 has only "1/1" (GT), no DP/GQ columns.
+        let s1 = &record.samples[0];
+        assert_eq!(s1.get("GT").map(String::as_str), Some("1/1"));
+        assert!(!s1.contains_key("DP"));
+        assert!(!s1.contains_key("GQ"));
+
+        // S2 is fully populated.
+        let s2 = &record.samples[1];
+        assert_eq!(s2.get("GT").map(String::as_str), Some("0/0"));
+        assert_eq!(s2.get("DP").map(String::as_str), Some("20"));
+    }
+
+    #[test]
+    fn test_sites_only_still_parses() {
+        // A VCF with no FORMAT/sample columns parses with no format and no
+        // sample maps.
+        let mut reader = parse_vcf_string(MINIMAL_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+        assert!(record.format.is_none());
+        assert!(record.samples.is_empty());
+    }
+
+    #[test]
+    fn test_sample_roundtrip_display() {
+        // FORMAT and sample columns survive a parse -> Display round-trip. Uses
+        // only integer/GT fields to avoid float text-formatting ambiguity.
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+
+        let rendered = format!("{}", record);
+        let columns: Vec<&str> = rendered.split('\t').collect();
+        // CHROM POS ID REF ALT QUAL FILTER INFO FORMAT S1 S2
+        assert_eq!(columns[8], "GT:DP:GQ");
+        assert_eq!(columns[9], "0/1:35:99");
+        assert_eq!(columns[10], "1|1:40:50");
     }
 }
