@@ -1522,8 +1522,14 @@
         "Synonymous mutation should yield a p.(=) description, also with an alternative start codon."
       ],
       "input": "NM_024426.4:c.1107A>G",
-      "protein_description": "NM_024426.4(NP_077744.3):p.(=)",
-      "to_test": true
+      "protein_description": "NP_077744.3:p.(Arg369=)",
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "WT1 (NM_024426.4) is a legitimate CUG-initiation transcript; ferro translates downstream variants on it after #780. The synonymous change at codon 369 is described residue-specifically as p.(Arg369=) per HGVS substitution.md (silent change, e.g. p.(Lys874=)); mutalyzer's bare p.(=) (whole-protein-unchanged) is non-standard for a single synonymous codon. The reference is the bare NP_ (HGVS general.md §147/§148); mutalyzer's NM_x(NP_y):p. wrapper is non-standard. ferro's value is spec-correct on both.",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
