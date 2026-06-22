@@ -103,6 +103,32 @@ fn fixture_transcript_minus() -> Transcript {
     )
 }
 
+/// Single-exon NON-coding transcript on chr1, plus strand:
+///   - tx [1, 100] → genome [1000, 1099]
+///   - no CDS (cds_start/cds_end = None), so `is_coding() == false` and
+///     `r.` numbering is plain transcript-relative (== n.).
+///
+/// Used to exercise `convert_rna`'s non-coding branch (including its
+/// `utr3`/`base < 1` decline guard) through the provider-backed matrix.
+fn fixture_transcript_non_coding() -> Transcript {
+    Transcript::new(
+        "NR_TEST.1".to_string(),
+        Some("TEST".to_string()),
+        Strand::Plus,
+        Some("ATGCATGC".repeat(20)),
+        None,
+        None,
+        vec![Exon::with_genomic(1, 1, 100, 1000, 1099)],
+        Some("chr1".to_string()),
+        Some(1000),
+        Some(1099),
+        GenomeBuild::GRCh38,
+        ManeStatus::Select,
+        None,
+        None,
+    )
+}
+
 /// Single-exon transcript on chr2 — used to verify the m. routing
 /// (chrM) is independent of the bound transcript's chromosome.
 fn fixture_transcript_chr2() -> Transcript {
@@ -468,8 +494,12 @@ mod rejected_axes {
     use ferro_hgvs::hgvs::location::{AminoAcid, ProtPos};
     use ferro_hgvs::hgvs::variant::{ProteinVariant, RnaVariant};
 
+    /// On a coding transcript, `r.` numbering is CDS-relative (== c.), so
+    /// `r.1A>G` lowers through CDS 1 → tx 50 → genomic 1049 (cds_start=50,
+    /// exon1 tx 1 → genomic 1000) and converts like the c. path. The
+    /// substitution carries its own REF base.
     #[test]
-    fn r_axis_returns_not_yet_supported_error() {
+    fn r_axis_converts_via_cds_numbering() {
         let tx = fixture_transcript();
         let provider = fixture_provider();
         let converter = HgvsToVcfConverter::new(&tx, &provider);
@@ -481,12 +511,68 @@ mod rejected_axes {
                 substitution(Base::A, Base::G),
             ),
         };
+        let result = converter
+            .convert(&HgvsVariant::Rna(variant))
+            .expect("r. on a coding transcript converts via CDS numbering");
+        assert_eq!(result.record.pos, 1049);
+        assert_eq!(result.record.reference, "A");
+        assert_eq!(result.record.alternate, vec!["G".to_string()]);
+    }
+
+    /// On a NON-coding transcript there is no CDS, so `r.` numbering is plain
+    /// transcript-relative (== n.). `r.1A>G` lowers through tx 1 → genomic 1000
+    /// (tx [1,100] → genome [1000,1099]) — the non-coding branch of
+    /// `convert_rna`, exercised here through the provider-backed matrix rather
+    /// than only the in-module unit tests.
+    #[test]
+    fn r_axis_non_coding_converts_via_transcript_numbering() {
+        let tx = fixture_transcript_non_coding();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        let variant = RnaVariant {
+            accession: Accession::new("NR", "TEST", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(1)),
+                substitution(Base::A, Base::G),
+            ),
+        };
+        let result = converter
+            .convert(&HgvsVariant::Rna(variant))
+            .expect("r. on a non-coding transcript converts via transcript numbering");
+        assert_eq!(result.record.pos, 1000);
+        assert_eq!(result.record.reference, "A");
+        assert_eq!(result.record.alternate, vec!["G".to_string()]);
+    }
+
+    /// A `*N` (3'-UTR) position is meaningless on a non-coding transcript (no
+    /// CDS frame), so the non-coding branch declines rather than silently
+    /// mapping `*N` as `N`. Pins that `convert_rna`'s `utr3`/`base < 1` guard
+    /// fires through the provider-backed matrix.
+    #[test]
+    fn r_axis_non_coding_utr3_declines() {
+        let tx = fixture_transcript_non_coding();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        let variant = RnaVariant {
+            accession: Accession::new("NR", "TEST", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::utr3(5)),
+                substitution(Base::A, Base::G),
+            ),
+        };
         let err = converter
             .convert(&HgvsVariant::Rna(variant))
-            .expect_err("r. axis is documented as unsupported in HgvsToVcfConverter");
+            .expect_err("*N has no meaning on a non-coding transcript; converter declines");
         assert!(
-            matches!(err, FerroError::ConversionError { ref msg } if msg.to_lowercase().contains("rna")),
-            "expected ConversionError mentioning RNA, got: {err}"
+            matches!(
+                err,
+                FerroError::ConversionError { ref msg }
+                    if msg.contains("no meaning on a non-coding transcript")
+                        && msg.contains("cannot convert to VCF")
+            ),
+            "expected non-coding r.*N decline reason, got: {err}"
         );
     }
 

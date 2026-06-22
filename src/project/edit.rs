@@ -111,11 +111,13 @@ fn revcomp_inserted(ins: &InsertedSequence) -> InsertedSequence {
     }
 }
 
-/// U→T translation for an edit, used by `transform_edit_for_strand` on
-/// `Strand::Plus`. Translates RNA `U` to DNA `T` in single bases and
-/// embedded sequences without reversing or complementing other bases.
-/// Closes #395 item 4.
-fn u_to_t_edit(edit: &NaEdit) -> NaEdit {
+/// U→T translation for an edit. Translates RNA `U` to DNA `T` in single bases
+/// and embedded sequences without reversing or complementing other bases.
+///
+/// Used by `transform_edit_for_strand` on `Strand::Plus` (closes #395 item 4)
+/// and by the RNA→VCF converter, which lowers `r.` edits onto DNA-coordinate
+/// records and must not leak uracil into the VCF REF/ALT.
+pub(crate) fn u_to_t_edit(edit: &NaEdit) -> NaEdit {
     match edit {
         NaEdit::Substitution {
             reference,
@@ -158,6 +160,17 @@ fn u_to_t_edit(edit: &NaEdit) -> NaEdit {
         NaEdit::Inversion { sequence, length } => NaEdit::Inversion {
             sequence: sequence.as_ref().map(u_to_t_sequence),
             length: *length,
+        },
+        NaEdit::Repeat {
+            sequence,
+            count,
+            additional_counts,
+            trailing,
+        } => NaEdit::Repeat {
+            sequence: sequence.as_ref().map(u_to_t_sequence),
+            count: count.clone(),
+            additional_counts: additional_counts.clone(),
+            trailing: trailing.as_ref().map(u_to_t_sequence),
         },
         // Other edit shapes have no embedded sequence to translate.
         other => other.clone(),

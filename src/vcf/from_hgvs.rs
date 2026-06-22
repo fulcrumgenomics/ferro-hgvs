@@ -19,8 +19,9 @@ use crate::convert::mapper::CoordinateMapper;
 use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::interval_is_wraparound;
-use crate::hgvs::location::CdsPos;
-use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, TxVariant};
+use crate::hgvs::location::{CdsPos, RnaPos, TxPos};
+use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, RnaVariant, TxVariant};
+use crate::project::edit::u_to_t_edit;
 use crate::reference::transcript::{GenomeBuild, Transcript};
 use crate::reference::ReferenceProvider;
 
@@ -70,9 +71,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
             HgvsVariant::Cds(cds) => self.convert_cds(cds),
             HgvsVariant::Tx(tx) => self.convert_tx(tx),
             HgvsVariant::Genome(genome) => self.convert_genome(genome),
-            HgvsVariant::Rna(_) => Err(FerroError::ConversionError {
-                msg: "RNA variant conversion to VCF not yet supported".to_string(),
-            }),
+            HgvsVariant::Rna(rna) => self.convert_rna(rna),
             HgvsVariant::Protein(_) => Err(FerroError::ConversionError {
                 msg: "Protein variant conversion to VCF not supported (requires back-translation)"
                     .to_string(),
@@ -110,12 +109,15 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                     return self.convert(&allele.variants[0]);
                 }
 
-                // Multiple variants in allele - try to convert each and combine
-                // This is complex because they may be at different positions
-                // For now, return an error suggesting decomposition
+                // Multiple variants in allele: each maps to its own VCF record,
+                // so a single `VcfConversionResult` cannot represent them.
+                // Direct callers to `convert_all`, which decomposes the allele
+                // into one result per member, rather than silently dropping all
+                // but one.
                 Err(FerroError::ConversionError {
                     msg: format!(
-                        "Complex allele with {} variants should be decomposed into separate VCF records",
+                        "Complex allele with {} variants maps to multiple VCF records; \
+                         use `convert_all` to decompose it into per-member records",
                         allele.variants.len()
                     ),
                 })
@@ -159,6 +161,56 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                       (complex structural variant)"
                     .to_string(),
             }),
+        }
+    }
+
+    /// Convert an HGVS variant to one VCF record per genomic event.
+    ///
+    /// This is the decomposition-aware entry point. For every variant that
+    /// [`Self::convert`] supports, it returns a single-element vector wrapping
+    /// the same result. For a multi-member allele (`var.[a;b;...]`) — which
+    /// maps to multiple, independently-positioned VCF records and therefore
+    /// cannot be expressed as one [`VcfConversionResult`] — it decomposes the
+    /// allele into its member variants and converts each, returning one result
+    /// per member in declaration order.
+    ///
+    /// Decomposition is recursive: a member that is itself an allele is
+    /// flattened, so a nested `[[a;b];c]` yields `[a, b, c]`. The allele's
+    /// phase relationship (cis/trans/mosaic/…) is not encoded in the per-record
+    /// output — VCF has no phase column at the record level — so this lowers
+    /// every member to its own record regardless of phase.
+    ///
+    /// A member whose shape cannot be lowered to VCF (e.g. `[0]`, an RNA
+    /// whole-entity edit, or a structural arm) fails the whole call with a
+    /// clear error naming the offending member's 0-based index and HGVS string,
+    /// rather than silently dropping it. An empty allele is rejected.
+    pub fn convert_all(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Vec<VcfConversionResult>, FerroError> {
+        match variant {
+            HgvsVariant::Allele(allele) => {
+                if allele.variants.is_empty() {
+                    return Err(FerroError::ConversionError {
+                        msg: "Empty allele variant cannot be converted to VCF".to_string(),
+                    });
+                }
+
+                let mut results = Vec::new();
+                for (index, member) in allele.variants.iter().enumerate() {
+                    let member_results =
+                        self.convert_all(member)
+                            .map_err(|err| FerroError::ConversionError {
+                                msg: format!(
+                                    "Could not convert allele member {} ({}): {}",
+                                    index, member, err
+                                ),
+                            })?;
+                    results.extend(member_results);
+                }
+                Ok(results)
+            }
+            other => Ok(vec![self.convert(other)?]),
         }
     }
 
@@ -240,6 +292,140 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
         let record =
             self.build_vcf_record(&chrom, genomic_start, genomic_end, edit, &hgvs_string)?;
+
+        Ok(VcfConversionResult {
+            record,
+            hgvs_string,
+            warnings,
+        })
+    }
+
+    /// Convert an RNA (`r.`) variant to VCF.
+    ///
+    /// HGVS RNA numbering mirrors the matching DNA reference's numbering:
+    /// - on a **coding** transcript ([`Transcript::is_coding`]), `r.` is
+    ///   CDS-relative — identical to `c.` (negative base in the 5' UTR, `*N` in
+    ///   the 3' UTR) — so each [`RnaPos`] lowers to the corresponding [`CdsPos`]
+    ///   and reuses the same CDS→genomic mapping as [`Self::convert_cds`];
+    /// - on a **non-coding** transcript, `r.` is transcript-relative —
+    ///   identical to `n.` — so each [`RnaPos`] base lowers to a [`TxPos`] and
+    ///   reuses the transcript→genomic mapping of [`Self::convert_tx`].
+    ///
+    /// Either way the genomic coordinates feed the shared
+    /// [`Self::build_vcf_record`], so REF/ALT/anchor handling is identical to
+    /// the c./n. paths.
+    ///
+    /// RNA-only shapes with no single-locus genomic representation are declined
+    /// rather than mapped to wrong coordinates: whole-entity edits (`r.=`,
+    /// `r.?`, `r.spl`, `r.0`) are caught by the [`NaEdit::is_whole_entity`]
+    /// guard before any coordinate mapping (`r.=` in particular would otherwise
+    /// emit a spurious no-op record at the parser's placeholder position), and
+    /// an unknown edit (`Mu::Unknown`) is declined instead of panicking.
+    fn convert_rna(&self, variant: &RnaVariant) -> Result<VcfConversionResult, FerroError> {
+        let hgvs_string = variant.to_string();
+        let mut warnings = Vec::new();
+
+        // Decline unknown/whole-entity RNA edits up front. These carry no
+        // genomic single-locus representation; mapping their (placeholder)
+        // coordinates would emit a wrong record.
+        let edit = variant
+            .loc_edit
+            .edit
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "RNA variant with unknown edit (r.?) cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
+        if edit.is_whole_entity() {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "RNA whole-entity edit (r.=/r.?/r.spl/r.0) has no single-locus \
+                     genomic VCF representation: {}",
+                    hgvs_string
+                ),
+            });
+        }
+
+        let interval = &variant.loc_edit.location;
+        let start_rna = interval
+            .start
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "RNA variant with unknown start position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
+        let end_rna = interval
+            .end
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "RNA variant with unknown end position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
+
+        // Map RNA positions to genomic, choosing the numbering frame by whether
+        // the transcript is coding (CDS-relative, like c.) or non-coding
+        // (transcript-relative, like n.).
+        let (genomic_start, genomic_end) = if self.transcript.is_coding() {
+            (
+                self.cds_to_genomic(&rna_pos_to_cds(start_rna))?,
+                self.cds_to_genomic(&rna_pos_to_cds(end_rna))?,
+            )
+        } else {
+            let map_tx = |pos: &RnaPos| -> Result<u64, FerroError> {
+                // A non-coding transcript has no CDS, so it has no `*N` 3'-UTR
+                // frame and no `-N` 5'-UTR frame: `r.` numbering is plain
+                // transcript-relative (== n.). A `utr3`/negative position here
+                // is meaningless and `rna_pos_to_tx` would silently drop the
+                // `utr3` flag, mapping `*N` as `N`. Decline instead, matching
+                // the non-coding guard in `normalize::rna_pos_to_txpos`.
+                if pos.utr3 || pos.base < 1 {
+                    return Err(FerroError::ConversionError {
+                        msg: format!(
+                            "RNA UTR position {} has no meaning on a non-coding transcript \
+                             (no CDS frame); cannot convert to VCF",
+                            pos
+                        ),
+                    });
+                }
+                self.mapper
+                    .tx_to_genomic(&rna_pos_to_tx(pos))?
+                    .ok_or_else(|| FerroError::ConversionError {
+                        msg: format!("Could not map RNA position {} to genomic", pos),
+                    })
+            };
+            (map_tx(start_rna)?, map_tx(end_rna)?)
+        };
+
+        let chrom = self
+            .transcript
+            .chromosome
+            .as_ref()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: "Transcript has no chromosome information".to_string(),
+            })?
+            .clone();
+
+        if start_rna.is_intronic() || end_rna.is_intronic() {
+            warnings.push("Variant includes intronic positions".to_string());
+        }
+
+        // The VCF record lives on the genomic (DNA) axis, so any RNA `u`/`U`
+        // bases the edit carries (substitution ref/alt, inserted/deleted
+        // sequences, repeat units) must be translated to `T` before they reach
+        // `build_vcf_record` — otherwise they would be emitted verbatim as the
+        // invalid DNA letter `U`. This mirrors the SPDI path's `apply_alphabet`
+        // (`'U' => 'T'`). Bases recovered from the genomic provider are already
+        // DNA and are untouched.
+        let dna_edit = u_to_t_edit(edit);
+
+        let record =
+            self.build_vcf_record(&chrom, genomic_start, genomic_end, &dna_edit, &hgvs_string)?;
 
         Ok(VcfConversionResult {
             record,
@@ -621,10 +807,17 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
         // The genomic accession is the contig name; prefer the dedicated
         // genomic path and fall back to `get_sequence` for providers that
-        // store contigs under the generic sequence map.
+        // store contigs under the generic sequence map. Only the "no genomic
+        // data" decline (`GenomicReferenceNotAvailable`) triggers the fallback;
+        // any other genomic error (e.g. an out-of-range fetch from a provider
+        // that *does* serve this contig) is propagated as-is rather than masked
+        // by whatever the generic path returns.
         let bases = match self.provider.get_genomic_sequence(chrom, zb_start, zb_end) {
             Ok(seq) => seq,
-            Err(_) => self.provider.get_sequence(chrom, zb_start, zb_end)?,
+            Err(FerroError::GenomicReferenceNotAvailable { .. }) => {
+                self.provider.get_sequence(chrom, zb_start, zb_end)?
+            }
+            Err(other) => return Err(other),
         };
 
         if bases.len() != expected_len {
@@ -739,6 +932,38 @@ fn accession_to_chromosome(accession: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Lower an [`RnaPos`] to the equivalent [`CdsPos`] for a coding transcript.
+///
+/// HGVS `r.` numbering on a coding transcript is identical to `c.` numbering:
+/// `base` is relative to the start codon (negative in the 5' UTR), `offset` is
+/// the intronic offset, and `utr3` marks `*N` 3'-UTR positions. `RnaPos` has no
+/// `special` (pter/qter/cen) component, so it maps to `special: None`.
+fn rna_pos_to_cds(pos: &RnaPos) -> CdsPos {
+    CdsPos {
+        base: pos.base,
+        offset: pos.offset,
+        utr3: pos.utr3,
+        special: None,
+    }
+}
+
+/// Lower an [`RnaPos`] to the equivalent [`TxPos`] for a non-coding transcript.
+///
+/// On a non-coding transcript HGVS `r.` numbering is transcript-relative
+/// (identical to `n.`): `base` is the transcript coordinate and `offset` is the
+/// intronic offset. There is no 3'-UTR `*N` frame on a non-coding transcript,
+/// so `utr3` cannot be represented in `TxPos` (`downstream` stays `false`).
+/// Callers MUST reject `utr3`/negative-`base` positions before calling this —
+/// `convert_rna`'s non-coding branch does so — otherwise the dropped `utr3`
+/// flag would map `*N` as the unrelated transcript position `N`.
+fn rna_pos_to_tx(pos: &RnaPos) -> TxPos {
+    TxPos {
+        base: pos.base,
+        offset: pos.offset,
+        downstream: false,
+    }
 }
 
 /// Compute reverse complement of a DNA sequence
@@ -1185,17 +1410,22 @@ mod tests {
         assert!(matches!(err, FerroError::ConversionError { .. }));
     }
 
+    /// On a coding transcript, `r.` numbering is CDS-relative (== c.), so
+    /// `r.1` maps through CDS 1 → tx 50 → genomic 1049 (cds_start=50, exon1 tx
+    /// 1→genomic 1000). The substitution carries its own REF base.
     #[test]
-    fn test_converter_rna_not_supported() {
+    fn test_converter_rna_substitution_coding() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        // chr1 sequence long enough to cover genomic position 1049.
+        let seq = "ACGT".repeat(400); // 1600 bases
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Rna(RnaVariant {
             accession: Accession::new("NM", "000088", Some(3)),
             gene_symbol: None,
             loc_edit: LocEdit::new(
-                RnaInterval::point(RnaPos::new(100)),
+                RnaInterval::point(RnaPos::new(1)),
                 NaEdit::Substitution {
                     reference: Base::A,
                     alternative: Base::G,
@@ -1203,8 +1433,306 @@ mod tests {
             ),
         });
 
-        let result = converter.convert(&variant);
-        assert!(result.is_err());
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["G"]);
+    }
+
+    /// SubstitutionNoRef reads the REF base from the genomic provider at the
+    /// mapped position, exercising the same provider-read path as the cds/tx
+    /// arms. genomic 1049 = 0-based index 1048; seq "ACGT" repeated → index
+    /// 1048 % 4 == 0 → 'A'.
+    #[test]
+    fn test_converter_rna_substitution_no_ref_reads_provider() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(1)),
+                NaEdit::SubstitutionNoRef {
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["T"]);
+    }
+
+    /// RNA deletion reuses anchor-base recovery: `r.2_3del` maps to genomic
+    /// 1050..1051; the anchor is the base at 1049. REF = anchor + deleted, ALT
+    /// = anchor, POS = anchor (start - 1).
+    #[test]
+    fn test_converter_rna_deletion_recovers_anchor() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::new(RnaPos::new(2), RnaPos::new(3)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        // CDS 2 → genomic 1050; CDS 3 → genomic 1051. Anchor at 1049.
+        assert_eq!(record.pos, 1049);
+        // anchor base (index 1048 % 4 == 0 → 'A') + deleted bases (1050,1051).
+        // index 1049 % 4 == 1 → 'C'; index 1050 % 4 == 2 → 'G'. So deleted = "CG".
+        assert_eq!(record.reference, "ACG");
+        assert_eq!(record.alternate, vec!["A"]);
+    }
+
+    /// RNA insertion reuses anchor-base recovery: `r.2_3ins` anchors at the
+    /// start position's genomic base. ALT = anchor + inserted.
+    #[test]
+    fn test_converter_rna_insertion_recovers_anchor() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::new(RnaPos::new(2), RnaPos::new(3)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::from_str("TTT").unwrap()),
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        // Insertion anchors at start (CDS 2 → genomic 1050; index 1049 → 'C').
+        assert_eq!(record.pos, 1050);
+        assert_eq!(record.reference, "C");
+        assert_eq!(record.alternate, vec!["CTTT"]);
+    }
+
+    /// An RNA substitution carrying a uracil ALT (`r.1A>U`) must be lowered to
+    /// the DNA alphabet: the emitted VCF ALT is `T`, never the invalid `U`.
+    /// (REF `A` is already DNA-valid and unchanged.)
+    #[test]
+    fn test_converter_rna_substitution_u_to_t() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::U,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["T"]);
+    }
+
+    /// An RNA insertion whose inserted sequence carries uracil
+    /// (`r.2_3insUUU`) must be lowered to the DNA alphabet: the inserted bases
+    /// appear as `T`, so ALT is `CTTT` rather than leaking `U`.
+    #[test]
+    fn test_converter_rna_insertion_u_to_t() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::new(RnaPos::new(2), RnaPos::new(3)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::from_str("UUU").unwrap()),
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1050);
+        assert_eq!(record.reference, "C");
+        assert_eq!(record.alternate, vec!["CTTT"]);
+    }
+
+    /// An RNA delins whose inserted sequence carries uracil (`r.2_3delinsUU`)
+    /// must lower the inserted bases U→T while the provider-recovered deleted
+    /// (REF) bases stay DNA. Genomic 1050..1051 deletes "CG" (len 2), inserts
+    /// "UU"→"TT" (len 2); equal lengths so no anchor is added.
+    #[test]
+    fn test_converter_rna_delins_u_to_t() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::new(RnaPos::new(2), RnaPos::new(3)),
+                NaEdit::Delins {
+                    sequence: InsertedSequence::Literal(Sequence::from_str("UU").unwrap()),
+                    deleted: None,
+                    deleted_length: None,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1050);
+        // Deleted REF bases come from the provider (DNA): indexes 1049,1050 → "CG".
+        assert_eq!(record.reference, "CG");
+        // Inserted ALT bases are lowered U→T.
+        assert_eq!(record.alternate, vec!["TT"]);
+    }
+
+    /// `r.=` (whole-entity identity) has no single-locus genomic representation
+    /// and must decline rather than emit a spurious no-op record at the
+    /// parser's placeholder position. This is the regression
+    /// `build_vcf_record`'s Identity arm would otherwise miss.
+    #[test]
+    fn test_converter_rna_whole_entity_identity_declines() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(1)),
+                NaEdit::Identity {
+                    sequence: None,
+                    whole_entity: true,
+                },
+            ),
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// `r.spl` and `r.0` are RNA-only effects with no genomic representation.
+    #[test]
+    fn test_converter_rna_splice_and_no_product_decline() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        for edit in [NaEdit::Splice { unknown: false }, NaEdit::NoProduct] {
+            let variant = HgvsVariant::Rna(RnaVariant {
+                accession: Accession::new("NM", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(RnaInterval::point(RnaPos::new(1)), edit),
+            });
+            assert!(converter.convert(&variant).is_err());
+        }
+    }
+
+    /// An unknown RNA edit (`Mu::Unknown`, `r.?`) must decline cleanly, not
+    /// panic on the `inner()` unwrap.
+    #[test]
+    fn test_converter_rna_unknown_edit_declines() {
+        use crate::hgvs::uncertainty::Mu;
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit {
+                location: RnaInterval::point(RnaPos::new(1)),
+                edit: Mu::Unknown,
+            },
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// On a non-coding transcript (no CDS), `r.` numbering is
+    /// transcript-relative (== n.). `r.1` maps through tx 1 → genomic 1000.
+    #[test]
+    fn test_converter_rna_substitution_non_coding() {
+        let mut transcript = create_test_transcript();
+        transcript.cds_start = None;
+        transcript.cds_end = None;
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NR", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::new(1)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1000);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["G"]);
+    }
+
+    /// A non-coding transcript has no CDS frame, so an `r.*N` (3'-UTR) position
+    /// is meaningless there. It must decline rather than silently drop the
+    /// `utr3` flag and map `*N` as transcript position `N`.
+    #[test]
+    fn test_converter_rna_utr3_on_non_coding_declines() {
+        let mut transcript = create_test_transcript();
+        transcript.cds_start = None;
+        transcript.cds_end = None;
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NR", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::utr3(5)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
     }
 
     #[test]
@@ -1297,6 +1825,165 @@ mod tests {
 
         let result = converter.convert(&variant);
         assert!(result.is_err());
+    }
+
+    /// Build a coding-transcript CDS substitution member (carries its own REF
+    /// base, so no provider read is needed). `c.1` → genomic 1049, `c.2` →
+    /// 1050, etc.
+    fn cds_sub_member(cds_base: i64, ref_b: Base, alt_b: Base) -> HgvsVariant {
+        HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(cds_base)),
+                NaEdit::Substitution {
+                    reference: ref_b,
+                    alternative: alt_b,
+                },
+            ),
+        })
+    }
+
+    /// `convert_all` decomposes a 2-member allele into two records, one per
+    /// member, at the members' respective positions.
+    #[test]
+    fn test_convert_all_two_member_allele() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Allele(AlleleVariant::new(
+            vec![
+                cds_sub_member(1, Base::A, Base::G),
+                cds_sub_member(2, Base::C, Base::T),
+            ],
+            AllelePhase::Cis,
+        ));
+
+        let results = converter.convert_all(&variant).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].record.pos, 1049); // c.1 → genomic 1049
+        assert_eq!(results[0].record.alternate, vec!["G"]);
+        assert_eq!(results[1].record.pos, 1050); // c.2 → genomic 1050
+        assert_eq!(results[1].record.alternate, vec!["T"]);
+    }
+
+    /// `convert_all` decomposes a 3-member allele into three records.
+    #[test]
+    fn test_convert_all_three_member_allele() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Allele(AlleleVariant::new(
+            vec![
+                cds_sub_member(1, Base::A, Base::G),
+                cds_sub_member(2, Base::C, Base::T),
+                cds_sub_member(3, Base::G, Base::A),
+            ],
+            AllelePhase::Cis,
+        ));
+
+        let results = converter.convert_all(&variant).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].record.pos, 1049);
+        assert_eq!(results[1].record.pos, 1050);
+        assert_eq!(results[2].record.pos, 1051);
+    }
+
+    /// `convert_all` on a single-member allele returns one record (and the
+    /// `convert` single-record path remains unregressed — covered separately by
+    /// `test_converter_single_variant_allele`).
+    #[test]
+    fn test_convert_all_single_member_allele() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Allele(AlleleVariant::new(
+            vec![cds_sub_member(1, Base::A, Base::G)],
+            AllelePhase::Cis,
+        ));
+
+        let results = converter.convert_all(&variant).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].record.pos, 1049);
+    }
+
+    /// `convert_all` on a scalar (non-allele) variant returns a 1-element vec.
+    #[test]
+    fn test_convert_all_scalar_variant() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = cds_sub_member(1, Base::A, Base::G);
+        let results = converter.convert_all(&variant).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].record.pos, 1049);
+    }
+
+    /// `convert_all` recursively flattens nested alleles into a flat record
+    /// list in declaration order.
+    #[test]
+    fn test_convert_all_flattens_nested_allele() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let nested = HgvsVariant::Allele(AlleleVariant::new(
+            vec![
+                cds_sub_member(1, Base::A, Base::G),
+                cds_sub_member(2, Base::C, Base::T),
+            ],
+            AllelePhase::Cis,
+        ));
+        let outer = HgvsVariant::Allele(AlleleVariant::new(
+            vec![nested, cds_sub_member(3, Base::G, Base::A)],
+            AllelePhase::Cis,
+        ));
+
+        let results = converter.convert_all(&outer).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].record.pos, 1049);
+        assert_eq!(results[1].record.pos, 1050);
+        assert_eq!(results[2].record.pos, 1051);
+    }
+
+    /// A member whose shape cannot be lowered to VCF (here `[0]` / NullAllele)
+    /// fails the whole `convert_all` call with a clear per-member error rather
+    /// than silently dropping it.
+    #[test]
+    fn test_convert_all_unsupported_member_errors() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Allele(AlleleVariant::new(
+            vec![cds_sub_member(1, Base::A, Base::G), HgvsVariant::NullAllele],
+            AllelePhase::Cis,
+        ));
+
+        let err = converter.convert_all(&variant).unwrap_err();
+        match err {
+            FerroError::ConversionError { msg } => {
+                // Names the offending member index (1) so the failure is
+                // diagnosable, not silent.
+                assert!(msg.contains("allele member 1"), "got: {msg}");
+            }
+            other => panic!("expected ConversionError, got {other:?}"),
+        }
+    }
+
+    /// `convert_all` rejects an empty allele.
+    #[test]
+    fn test_convert_all_empty_allele_errors() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Allele(AlleleVariant::new(vec![], AllelePhase::Cis));
+        assert!(converter.convert_all(&variant).is_err());
     }
 
     #[test]
@@ -1433,11 +2120,15 @@ mod tests {
         assert_eq!(result.record.chrom, "chr1");
     }
 
+    /// `c.1_3delinsTTT`: CDS 1..3 → genomic 1049..1051. The deleted span and the
+    /// replacement are both 3 bases, so no anchor base is added — REF is the
+    /// deleted genomic bases, ALT is the literal replacement, POS is the start.
     #[test]
     fn test_build_vcf_record_delins_same_length() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1452,15 +2143,22 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        // genomic 1049..1051 = indices 1048..1050 of "ACGT".repeat → "ACG".
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "ACG");
+        assert_eq!(record.alternate, vec!["TTT"]);
     }
 
+    /// `c.1_3dup` of "ATG": a duplication is an insertion of the duplicated
+    /// sequence anchored on the base at the end of the duplicated region (CDS 3
+    /// → genomic 1051). REF is that anchor base, ALT is anchor + duplicated unit.
     #[test]
     fn test_build_vcf_record_duplication() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1475,15 +2173,23 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        // anchor = genomic 1051 = index 1050 of "ACGT".repeat → 'G'.
+        assert_eq!(record.pos, 1051);
+        assert_eq!(record.reference, "G");
+        assert_eq!(record.alternate, vec!["GATG"]);
     }
 
+    /// `c.1_4inv`: CDS 1..4 → genomic 1049..1052. REF is the original genomic
+    /// span, ALT is its reverse complement. A non-palindromic seed is used so
+    /// REF != ALT (a palindrome would make the assertion vacuous).
     #[test]
     fn test_build_vcf_record_inversion() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        // "AACCGGTT" tiled: genomic 1049..1052 = indices 1048..1051 = "AACC".
+        let seq = "AACCGGTT".repeat(200);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1497,15 +2203,22 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "AACC");
+        // reverse_complement("AACC") == "GGTT".
+        assert_eq!(record.alternate, vec!["GGTT"]);
     }
 
+    /// `c.1 CAG[5]`: a repeat expansion is an insertion anchored on the base at
+    /// the start position (CDS 1 → genomic 1049). REF is the anchor base, ALT is
+    /// anchor + the unit repeated `count` times.
     #[test]
     fn test_build_vcf_record_repeat() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1521,15 +2234,21 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        // anchor = genomic 1049 = index 1048 of "ACGT".repeat → 'A'.
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec![format!("A{}", "CAG".repeat(5))]);
     }
 
+    /// `c.1 CAG[5];[10]`: additional counts emit one ALT per count, sorted and
+    /// deduped. The x5 ALT is a string prefix of the x10 ALT, so it sorts first.
     #[test]
     fn test_build_vcf_record_repeat_with_additional_counts() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1545,8 +2264,16 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(
+            record.alternate,
+            vec![
+                format!("A{}", "CAG".repeat(5)),
+                format!("A{}", "CAG".repeat(10)),
+            ]
+        );
     }
 
     #[test]
@@ -1597,11 +2324,15 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// `c.1=` (locus identity, not whole-entity): a no-op record whose REF and
+    /// ALT are both the reference base at the mapped position (CDS 1 → genomic
+    /// 1049). REF must equal ALT and equal the provider's base there.
     #[test]
     fn test_build_vcf_record_identity() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1615,8 +2346,11 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        // genomic 1049 = index 1048 of "ACGT".repeat → 'A'; identity REF == ALT.
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["A"]);
     }
 
     #[test]
@@ -1682,11 +2416,19 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// `c.1_100` copy number 3: emitted as a symbolic `<CNV>` structural record.
+    /// POS/REF come from the start base (CDS 1 = tx 50 in exon1 → genomic 1049);
+    /// INFO carries SVTYPE=CNV, CN=count, END=genomic end. CDS 100 = tx 149,
+    /// which falls in exon2 (tx 101..200 → genomic 2000..2099), so it maps to
+    /// genomic 2000 + (149 - 101) = 2048 — the exon boundary is crossed.
     #[test]
     fn test_build_vcf_record_copy_number() {
+        use crate::vcf::record::InfoValue;
+
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1697,8 +2439,18 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        // genomic 1049 = index 1048 of "ACGT".repeat → 'A'.
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec!["<CNV>"]);
+        assert_eq!(
+            record.info.get("SVTYPE"),
+            Some(&InfoValue::String("CNV".to_string()))
+        );
+        assert_eq!(record.info.get("CN"), Some(&InfoValue::Integer(3)));
+        // CDS 100 = tx 149 → exon2 → genomic 2048.
+        assert_eq!(record.info.get("END"), Some(&InfoValue::Integer(2048)));
     }
 
     #[test]
@@ -1726,11 +2478,14 @@ mod tests {
         assert!(vcf.warnings[0].contains("intronic"));
     }
 
+    /// `c.1 CAG[(5_10)]`: a bounded range collapses to its lower bound (5) for
+    /// VCF, so the ALT is anchor + unit repeated 5 times.
     #[test]
     fn test_repeat_count_range() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1746,15 +2501,21 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        // Range lower bound (5) drives the expansion.
+        assert_eq!(record.alternate, vec![format!("A{}", "CAG".repeat(5))]);
     }
 
+    /// `c.1 CAG[(5_?)]`: a min-uncertain count uses its known lower bound (5),
+    /// so the ALT is anchor + unit repeated 5 times.
     #[test]
     fn test_repeat_count_min_uncertain() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1770,8 +2531,10 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        assert_eq!(record.alternate, vec![format!("A{}", "CAG".repeat(5))]);
     }
 
     #[test]
@@ -1798,11 +2561,14 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// `c.1 CAG[5]` with a trailing "T": the trailing bases are appended to the
+    /// repeat unit before expansion, so the unit is "CAGT" repeated 5 times.
     #[test]
     fn test_repeat_with_trailing() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1818,15 +2584,21 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        // unit = "CAG" + trailing "T" = "CAGT", repeated 5 times.
+        assert_eq!(record.alternate, vec![format!("A{}", "CAGT".repeat(5))]);
     }
 
+    /// `c.1` repeat with no primary sequence but a trailing "T": the trailing
+    /// bases alone form the repeat unit, so the unit is "T" repeated 5 times.
     #[test]
     fn test_repeat_trailing_only() {
         let transcript = create_test_transcript();
-        let provider = MockProvider::new();
-        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
 
         let variant = HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "000088", Some(3)),
@@ -1842,7 +2614,10 @@ mod tests {
             ),
         });
 
-        // Test exercises the conversion code path - may fail due to mock provider limitations
-        let _result = converter.convert(&variant);
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 1049);
+        assert_eq!(record.reference, "A");
+        // unit = trailing "T" only, repeated 5 times.
+        assert_eq!(record.alternate, vec![format!("A{}", "T".repeat(5))]);
     }
 }
