@@ -47,9 +47,6 @@ impl Fixture {
                 case.reference_unavailable
                     .as_ref()
                     .and_then(|d| d.cluster.as_deref()),
-                case.spec_citation
-                    .as_ref()
-                    .and_then(|d| d.cluster.as_deref()),
                 case.accepted_rejection
                     .as_ref()
                     .and_then(|d| d.cluster.as_deref()),
@@ -59,14 +56,48 @@ impl Fixture {
             {
                 refs.push((input, cluster));
             }
+            // A `Case` may carry multiple per-axis spec citations (#827); collect
+            // the cluster ref of each.
+            for citation in &case.spec_citations {
+                if let Some(cluster) = citation.cluster.as_deref() {
+                    refs.push((input, cluster));
+                }
+            }
         }
         refs
     }
 
     /// Validate that every disposition `cluster` ref resolves to a registry
-    /// entry (orphan clusters are allowed). See [`validate_cluster_refs`].
+    /// entry (orphan clusters are allowed, see [`validate_cluster_refs`]) AND
+    /// that no `Case` carries more than one `spec_citation` for the same axis.
+    /// The matcher keys at most one citation per axis (it `find`s the first
+    /// matching one), so a duplicate-axis citation would be silently ignored;
+    /// surfacing it here turns an authoring mistake into a hard error at
+    /// fixture-validation time (#827).
     pub fn validate_clusters(&self) -> Result<(), String> {
-        validate_cluster_refs(&self.clusters, self.cluster_refs())
+        validate_cluster_refs(&self.clusters, self.cluster_refs())?;
+        self.validate_spec_citation_axes()
+    }
+
+    /// Reject any `Case` whose `spec_citations` cite the same axis more than once
+    /// (the matcher would silently honor only the first). See
+    /// [`validate_clusters`](Self::validate_clusters).
+    fn validate_spec_citation_axes(&self) -> Result<(), String> {
+        for case in &self.cases {
+            let mut seen: Vec<Axis> = Vec::new();
+            for citation in &case.spec_citations {
+                if seen.contains(&citation.axis) {
+                    return Err(format!(
+                        "case {:?} has more than one spec_citation for axis {:?}; \
+                         the matcher honors only one citation per axis",
+                        case.input,
+                        citation.axis.as_str(),
+                    ));
+                }
+                seen.push(citation.axis);
+            }
+        }
+        Ok(())
     }
 
     /// Flatten this corpus into the corpus-agnostic summary model. mutalyzer
@@ -115,7 +146,9 @@ impl Fixture {
                     tracking_issue: Some(d.tracking_issue),
                 });
             }
-            if let Some(d) = &case.spec_citation {
+            // One summary row per per-axis spec citation (#827): a multi-axis
+            // row contributes a `SpecCitation` row for each axis it cites.
+            for d in &case.spec_citations {
                 rows.push(MemberRow {
                     cluster: d.cluster.clone(),
                     input: input.to_string(),
@@ -206,13 +239,25 @@ pub struct Case {
     /// `known_bug` (ferro is *wrong* on a reference it *can* resolve).
     #[serde(default)]
     pub reference_unavailable: Option<ReferenceUnavailable>,
-    /// Documentary annotation for cases where mutalyzer's expected output
-    /// has been corrected in `cases.json` to ferro's spec-correct value.
-    /// Has NO effect on tally bucketing — the corrected expected string
-    /// makes the case PASS by the usual match check; this field only
-    /// records the spec citation for review.
-    #[serde(default)]
-    pub spec_citation: Option<SpecCitation>,
+    /// Per-axis spec-citation annotations. A mismatch on an axis that carries a
+    /// citation for that axis routes to `AxisTally::spec_overridden` (ferro's
+    /// value is the spec-correct one; mutalyzer's expectation is non-preferred).
+    ///
+    /// A `Case` may carry MORE THAN ONE citation, each scoped to a different
+    /// axis (#827) — e.g. a `normalized`-axis citation AND a
+    /// `protein_description`-axis citation on the same row. The matcher keys each
+    /// citation to its axis, so at most one citation per axis takes effect.
+    ///
+    /// The wire (`cases.json`) key is `spec_citation` and accepts either a single
+    /// citation object (the common case, deserialized to a one-element vec) or an
+    /// array of citation objects (a multi-axis row). Absent → empty vec. See
+    /// [`de_spec_citations`].
+    #[serde(
+        default,
+        rename = "spec_citation",
+        deserialize_with = "de_spec_citations"
+    )]
+    pub spec_citations: Vec<SpecCitation>,
     /// Marks a non-panic `Err` on a specific axis as ferro *correctly rejecting*
     /// an input mutalyzer leniently reinterprets (the only disposition that
     /// covers an `Err` on a projection axis). Tallied into
@@ -864,6 +909,35 @@ fn default_true() -> bool {
     true
 }
 
+/// Deserialize the `cases.json` `spec_citation` field, accepting either a single
+/// citation object or an array of citation objects, normalizing both to a
+/// `Vec<SpecCitation>` (#827). The single-object form (the common case)
+/// deserializes to a one-element vec, so existing single-citation rows need no
+/// JSON change; a row that needs citations on more than one axis uses the array
+/// form. An explicit `null` (like an absent field, and like the prior
+/// `Option<SpecCitation>` shape this replaced) yields an empty vec. Each element
+/// is still validated against the closed [`Axis`]/[`SpecSection`] enums, so a
+/// typo in either form is a hard parse error.
+fn de_spec_citations<'de, D>(deserializer: D) -> Result<Vec<SpecCitation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Untagged helper: serde tries `One` first, then `Many`, accepting whichever
+    /// wire shape the field carries.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(SpecCitation),
+        Many(Vec<SpecCitation>),
+    }
+
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(citation)) => vec![citation],
+        Some(OneOrMany::Many(citations)) => citations,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,5 +1019,96 @@ mod tests {
         let fixture = parse("", cases);
         assert!(fixture.cluster_refs().is_empty());
         assert!(fixture.validate_clusters().is_ok());
+    }
+
+    // #827: a single `spec_citation` object deserializes to a one-element vec
+    // (backward compat) and an array deserializes to a multi-element vec, with
+    // both `cluster_refs` and `to_summary` enumerating every citation.
+    #[test]
+    fn spec_citation_single_object_and_array_both_parse() {
+        // Single-object form (unchanged wire shape) -> one citation.
+        let one = r#"{"input":"S","spec_citation":{"axis":"normalized",
+            "section":"HGVS §Prioritization"}}"#;
+        let fixture = parse("", one);
+        assert_eq!(fixture.cases[0].spec_citations.len(), 1);
+        assert_eq!(fixture.cases[0].spec_citations[0].axis, Axis::Normalized);
+
+        // Array form -> two citations on two axes, each with its own cluster.
+        let clusters = r#"
+            {"id":"cre","title":"coding repeat","spec_section":"DNA"},
+            {"id":"np","title":"bare NP","spec_section":"protein"}
+        "#;
+        let many = r#"{"input":"M","spec_citation":[
+            {"axis":"normalized","section":"HGVS §Repeated (coding codon exception)","cluster":"cre"},
+            {"axis":"protein_description","section":"HGVS protein reference (bare NP)","cluster":"np"}
+        ]}"#;
+        let fixture = parse(clusters, many);
+        let case = &fixture.cases[0];
+        assert_eq!(case.spec_citations.len(), 2);
+        assert_eq!(case.spec_citations[0].axis, Axis::Normalized);
+        assert_eq!(case.spec_citations[1].axis, Axis::ProteinDescription);
+
+        // Both citations contribute a cluster ref and a summary row.
+        let mut refs = fixture.cluster_refs();
+        refs.sort();
+        assert_eq!(refs, vec![("M", "cre"), ("M", "np")]);
+        assert!(fixture.validate_clusters().is_ok());
+        let spec_rows = fixture
+            .to_summary()
+            .rows
+            .into_iter()
+            .filter(|r| r.kind == DispositionKind::SpecCitation)
+            .count();
+        assert_eq!(spec_rows, 2);
+    }
+
+    // #827: an explicit `"spec_citation": null` deserializes to an empty vec,
+    // matching both the absent case and the prior `Option<SpecCitation>`
+    // null-handling (null is semantically "no citation"), rather than erroring.
+    #[test]
+    fn spec_citation_explicit_null_is_empty() {
+        let fixture = parse("", r#"{"input":"N","spec_citation":null}"#);
+        assert!(fixture.cases[0].spec_citations.is_empty());
+    }
+
+    // #827: two spec citations for the SAME axis on one case are rejected by
+    // `validate_clusters` — the matcher honors only one per axis, so a duplicate
+    // is an authoring mistake that must surface loudly.
+    #[test]
+    fn duplicate_spec_citation_axis_is_rejected() {
+        let cases = r#"{"input":"D","spec_citation":[
+            {"axis":"normalized","section":"HGVS §Prioritization"},
+            {"axis":"normalized","section":"HGVS §Repeated (coding codon exception)"}
+        ]}"#;
+        let err = parse("", cases)
+            .validate_clusters()
+            .expect_err("two citations on the same axis must be rejected");
+        assert!(err.contains("normalized"), "{err}");
+
+        // Two citations on DIFFERENT axes are fine (the #827 use case).
+        let ok = r#"{"input":"O","spec_citation":[
+            {"axis":"normalized","section":"HGVS §Prioritization"},
+            {"axis":"protein_description","section":"HGVS protein reference (bare NP)"}
+        ]}"#;
+        assert!(parse("", ok).validate_clusters().is_ok());
+    }
+
+    // #827: a typo in any element of the array form is still a hard parse error
+    // (the closed `Axis`/`SpecSection` enums apply per element).
+    #[test]
+    fn spec_citation_array_element_typo_rejected() {
+        let json = format!(
+            "{{{BASE},\"cases\":[{}]}}",
+            r#"{"input":"x","spec_citation":[
+                {"axis":"normalized","section":"HGVS §Prioritization"},
+                {"axis":"protein_description","section":"not a real section"}
+            ]}"#
+        );
+        let result: Result<Fixture, _> = serde_json::from_str(&json);
+        assert!(
+            result.is_err(),
+            "expected a typo'd section in an array element to be rejected; got {:?}",
+            result.ok(),
+        );
     }
 }

@@ -49,8 +49,10 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_012337.1(NM_012459.2):c.130G>A` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.3GC[5]` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.4_5insGTA` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.5_6delinsTAG` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.6C[4]` | protein_description | spec_citation | — | — |
 | `NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_672del` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_674del` | protein_description | spec_citation | — | — |
@@ -242,4 +244,4 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 45 |
+| protein_description | 0 | 0 | 0 | 0 | 47 |
