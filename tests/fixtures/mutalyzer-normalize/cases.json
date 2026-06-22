@@ -1494,7 +1494,13 @@
       ],
       "input": "NM_000193.2:c.1388G>C",
       "protein_description": "NM_000193.2(NP_000184.1):p.(Ter463SerextTer?)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -1504,7 +1510,13 @@
       ],
       "input": "NM_000193.2:c.1388_1389insC",
       "protein_description": "NM_000193.2(NP_000184.1):p.(Ter463CysextTer?)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -2122,7 +2134,13 @@
       ],
       "input": "NG_012337.1(NM_012459.2):c.4_5insGTA",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insSer)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -2644,7 +2662,13 @@
       "genomic": "NG_012337.1:g.6127T>A",
       "protein_description": "NG_012337.1(NP_002993.1):p.(Ser57Thr)",
       "rna_description": "NG_012337.1(NM_003002.2):r.(169u>a)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -2879,7 +2903,13 @@
       "genomic": "NG_012337.1:g.4917_4918delinsCTA",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2LeufsTer23)",
       "rna_description": "NG_012337.1(NM_012459.2):r.(5_6delinsuag)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [],
@@ -3884,7 +3914,13 @@
         ]
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6TrpfsTer13)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -3914,6 +3950,12 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
       }
     },
     {
@@ -3944,6 +3986,12 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
       }
     },
     {
@@ -3995,7 +4043,13 @@
       "normalized": "NG_008835.1(NM_022153.2):c.677-18_704+65del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -4005,7 +4059,13 @@
       "normalized": "NG_008835.1(NM_022153.2):c.677-20_704+62del",
       "rna_description": "NG_008835.1(NM_022153.2):r.(677_704del)",
       "protein_description": "NG_008835.1(NP_071436.1):p.(Arg226ProfsTer102)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -4044,7 +4104,13 @@
       "normalized": "NG_012337.3(NM_003002.4):c.274delinsCTGA",
       "rna_description": "NG_012337.3(NM_003002.4):r.(274delinscuga)",
       "protein_description": "NG_012337.3(NP_002993.1):p.(Asp92delinsLeuAsn)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -4054,7 +4120,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.274delinsCTAG",
       "rna_description": "NG_012337.1(NM_012459.2):r.(274delinscuag)",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ile92delinsLeuVal)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -4109,6 +4181,12 @@
         "axis": "normalized",
         "policy": "ferro-policy-654-transcript-coordinate-preserved",
         "note": "ferro preserves the input n. numbering (n.206_210del); mutalyzer renumbers to CDS-relative c. (c.171_175del). Same position."
+      },
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
+        "cluster": "bare-np-protein"
       }
     },
     {

@@ -36,22 +36,35 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_007485.1(NM_000077.4):c.161_163del` | protein_description | spec_citation | — | — |
 | `NG_007485.1(NM_058195.3):c.141_142del` | protein_description | spec_citation | — | — |
 | `NG_008835.1(NM_022153.2):c.568del` | protein_description | spec_citation | — | — |
+| `NG_008835.1(NM_022153.2):c.677-20_704+62del` | protein_description | spec_citation | — | — |
+| `NG_008835.1(NM_022153.2):c.677-21_704+62del` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157insGTCCTGTGCTCATTATCTGGC` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTC;ATTATCTGGC]` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTCATTATCTGGC]` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_003002.2):c.169T>A` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.129G>T` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.130G>A` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.4_5insGTA` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.5_6delinsTAG` | protein_description | spec_citation | — | — |
+| `NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_672del` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_674del` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.632_681del` | protein_description | spec_citation | — | — |
 | `NM_000143.3:c.1531T>G` | protein_description | spec_citation | — | — |
 | `NM_000193.2:c.108_109del2insG` | protein_description | spec_citation | — | — |
+| `NM_000193.2:c.1388G>C` | protein_description | spec_citation | — | — |
+| `NM_000193.2:c.1388_1389insC` | protein_description | spec_citation | — | — |
 | `NM_001199.3:c.2188dup` | protein_description | spec_citation | — | — |
 | `NM_003002.2:c.273del` | protein_description | spec_citation | — | — |
 | `NM_003002.2:c.274del` | protein_description | spec_citation | — | — |
 | `NM_003002.4:c.169_170insATA` | protein_description | spec_citation | — | — |
 | `NM_003002.4:c.206_210delins190_220inv` | protein_description | spec_citation | — | — |
+| `NM_003002.4:n.206_210del` | protein_description | spec_citation | — | — |
 | `NM_024426.4:c.1107A>G` | protein_description | spec_citation | — | — |
 | `NM_024426.4:c.1C>A` | protein_description | spec_citation | — | — |
 | `NM_024426.4:c.1C>G` | protein_description | spec_citation | — | — |
@@ -229,4 +242,4 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 32 |
+| protein_description | 0 | 0 | 0 | 0 | 45 |
