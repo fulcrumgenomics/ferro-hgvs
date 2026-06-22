@@ -803,6 +803,63 @@ impl CdotTranscript {
         }
     }
 
+    /// Like [`Self::tx_to_genome`], but additionally maps a transcript position
+    /// that falls **past the 3'-terminal exon** (the transcript's poly-A region)
+    /// to the contiguous downstream genome coordinate.
+    ///
+    /// Some derived transcript structures (#790) strip the post-transcriptional
+    /// poly-A tail from their exon→genome map, so a `c.*` 3'UTR position landing
+    /// in that tail has no exon and [`Self::tx_to_genome`] returns `None`.
+    /// mutalyzer maps such positions by a base-agnostic coordinate walk into
+    /// contiguous downstream genome using the transcript's own 3'-terminal exon
+    /// anchor (#797). This reproduces that walk:
+    /// - plus:  `genome_end + (tx_pos - tx_end)` (exon `genome_end` is exclusive,
+    ///   so it is already the first downstream base);
+    /// - minus: `genome_start - 1 - (tx_pos - tx_end)`.
+    ///
+    /// An in-exon `tx_pos` delegates to [`Self::tx_to_genome`] unchanged. Only a
+    /// `tx_pos` past the **3'-terminal** exon extends: exons are stored
+    /// contiguously in transcript order, so a `tx_pos` past a non-terminal exon's
+    /// end is inside the next exon and is served by the in-exon path. Returns
+    /// `None` for an unknown strand, an exon-less transcript, or a minus-strand
+    /// walk that would underflow to an invalid (`< 1`, genome is 1-based)
+    /// coordinate — never a wrong coordinate.
+    ///
+    /// This primitive is geometry-only: it does **not** bound the walk to the
+    /// real poly-A tail length (the stripped tail length is not recoverable from
+    /// the exon map alone). Callers that know the transcript's true length must
+    /// gate the call to `tx_pos < true_tx_length` so the walk cannot run past the
+    /// transcript end into genomic sequence that is not part of the transcript.
+    pub fn tx_to_genome_extending_polya(&self, tx_pos: u64) -> Option<u64> {
+        if let Some(g) = self.tx_to_genome(tx_pos) {
+            return Some(g);
+        }
+        // No containing exon. Only extend past the 3'-terminal exon (the last in
+        // transcript order); anything else is intronic/off-transcript.
+        let last = self.exons.last()?;
+        let (genome_start, genome_end, tx_end) = (last[0], last[1], last[3]);
+        if tx_pos < tx_end {
+            // Falls before the terminal exon's end but had no exon — a gap/hole,
+            // not the poly-A region. Decline rather than guess.
+            return None;
+        }
+        let delta = tx_pos - tx_end;
+        match self.strand {
+            Strand::Plus => genome_end.checked_add(delta),
+            Strand::Minus => {
+                // genome_start - 1 - delta, declining on 1-based underflow.
+                let base = genome_start.checked_sub(1)?;
+                let pos = base.checked_sub(delta)?;
+                if pos < 1 {
+                    None
+                } else {
+                    Some(pos)
+                }
+            }
+            Strand::Unknown => None,
+        }
+    }
+
     /// Convert genomic position to transcript position.
     pub fn genome_to_tx(&self, genome_pos: u64) -> Option<u64> {
         let exon = self.exon_for_genome_pos(genome_pos)?;
@@ -3329,6 +3386,111 @@ mod tests {
 
         // Second exon
         assert_eq!(tx.tx_to_genome(150), Some(2199));
+    }
+
+    #[test]
+    fn test_tx_to_genome_extending_polya_plus_strand() {
+        let tx = sample_transcript(); // last exon [3000, 3150, 300, 450]
+
+        // In-exon positions delegate to the unchanged `tx_to_genome`.
+        assert_eq!(tx.tx_to_genome_extending_polya(300), Some(3000));
+        assert_eq!(tx.tx_to_genome_extending_polya(449), Some(3149));
+
+        // Poly-A region (past the 3'-terminal exon end): contiguous downstream
+        // genome walk. `genome_end` (3150) is exclusive, so it is already the
+        // first downstream base.
+        assert_eq!(tx.tx_to_genome_extending_polya(450), Some(3150));
+        assert_eq!(tx.tx_to_genome_extending_polya(460), Some(3160));
+    }
+
+    #[test]
+    fn test_tx_to_genome_extending_polya_minus_strand() {
+        let tx = minus_strand_transcript(); // last exon [1000, 1100, 350, 450]
+
+        // In-exon positions delegate to `tx_to_genome` (genome_end-1-offset).
+        assert_eq!(tx.tx_to_genome_extending_polya(350), Some(1099));
+        assert_eq!(tx.tx_to_genome_extending_polya(449), Some(1000));
+
+        // Poly-A region: walk *down* in genome from genome_start - 1.
+        assert_eq!(tx.tx_to_genome_extending_polya(450), Some(999));
+        assert_eq!(tx.tx_to_genome_extending_polya(460), Some(989));
+    }
+
+    #[test]
+    fn test_tx_to_genome_extending_polya_minus_underflow_declines() {
+        // A minus-strand transcript whose 3'-terminal exon abuts genome
+        // position 1 — extending into the poly-A region would underflow below
+        // the 1-based genome origin, so it must decline rather than emit g.0.
+        let tx = CdotTranscript {
+            gene_name: Some("EDGE".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Minus,
+            exons: vec![[1, 6, 0, 5]], // genome_start = 1, tx_end = 5
+            cds_start: Some(0),
+            cds_end: Some(3),
+            exon_cigars: Vec::new(),
+            gene_id: None,
+            protein: None,
+        };
+        // tx 5 → genome_start - 1 - 0 = 0 → invalid (1-based) → None.
+        assert_eq!(tx.tx_to_genome_extending_polya(5), None);
+        // tx 6 would be even further below → None.
+        assert_eq!(tx.tx_to_genome_extending_polya(6), None);
+        // In-exon position still maps fine.
+        assert_eq!(tx.tx_to_genome_extending_polya(0), Some(5));
+    }
+
+    #[test]
+    fn test_tx_to_genome_extending_polya_plus_overflow_declines() {
+        // A plus-strand transcript whose 3'-terminal exon abuts the very top of
+        // the u64 coordinate range — extending into the poly-A region would
+        // overflow `genome_end + delta`, so it must decline (via `checked_add`)
+        // rather than wrap/panic before the caller's contig-bound check.
+        let tx = CdotTranscript {
+            gene_name: Some("EDGE".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Plus,
+            // genome_end == u64::MAX, tx_end == 5.
+            exons: vec![[u64::MAX - 5, u64::MAX, 0, 5]],
+            cds_start: Some(0),
+            cds_end: Some(3),
+            exon_cigars: Vec::new(),
+            gene_id: None,
+            protein: None,
+        };
+        // tx 5 → genome_end + 0 == u64::MAX (no overflow): still a coordinate.
+        assert_eq!(tx.tx_to_genome_extending_polya(5), Some(u64::MAX));
+        // tx 6 → genome_end + 1 overflows → None (declines, no panic/wrap).
+        assert_eq!(tx.tx_to_genome_extending_polya(6), None);
+        // In-exon position still maps fine.
+        assert_eq!(tx.tx_to_genome_extending_polya(0), Some(u64::MAX - 5));
+    }
+
+    #[test]
+    fn test_tx_to_genome_extending_polya_intronic_hole_declines() {
+        // A `tx_pos` that has no exon but is BEFORE the terminal exon's end is a
+        // gap/hole, not the poly-A region — must not be extended. Construct a tx
+        // with a transcript-coordinate gap between exons (non-contiguous tx),
+        // which never occurs in real cdot but guards the branch.
+        let tx = CdotTranscript {
+            gene_name: Some("GAP".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Plus,
+            exons: vec![
+                [1000, 1100, 0, 100],
+                // tx gap: 100..200 has no exon; next exon starts at tx 200.
+                [2000, 2100, 200, 300],
+            ],
+            cds_start: Some(10),
+            cds_end: Some(250),
+            exon_cigars: Vec::new(),
+            gene_id: None,
+            protein: None,
+        };
+        // tx 150 falls in the tx-coordinate hole (< terminal tx_end 300) → None.
+        assert_eq!(tx.tx_to_genome_extending_polya(150), None);
+        // tx 300 is past the terminal exon end → poly-A extension applies.
+        assert_eq!(tx.tx_to_genome_extending_polya(300), Some(2100));
     }
 
     #[test]
