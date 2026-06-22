@@ -5033,6 +5033,157 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert_eq!(tx.protein_id.as_deref(), Some("NP_OV.2"));
     }
 
+    // --- canonical-sequence reingestion through the provider (issue #791) -----
+    //
+    // The metadata-only override class (`sequence: None`) is covered above; these
+    // exercise the **wrong-sequence** class end-to-end through the provider: an
+    // override that carries the canonical bases must cause `get_transcript` to
+    // serve those bases (not the wrong served FASTA sequence), and the cdot side
+    // must reconcile even when the served length disagrees with the
+    // authoritative length. The base-level behavior of `apply_canonical_overrides`
+    // is unit-tested in `validate.rs`; this proves the wiring at the provider
+    // chokepoint and the no-regression contract for normal / metadata-only paths.
+
+    #[test]
+    fn get_transcript_replaces_served_sequence_when_override_carries_canonical_bases() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        // Served FASTA carries a WRONG, longer sequence (24 nt); the canonical
+        // record is 9 nt. The override carries the canonical bases, so the served
+        // sequence must be REPLACED on read with the 9 nt canonical sequence
+        // (the NM_000193.2 wrong-sequence class, scaled down).
+        let served_wrong = "ATGAAATAACCCGGGTTTAAACCCG"; // 25 nt, not canonical
+        let canonical = "ATGAAATAA"; // 9 nt canonical
+        let (mut provider, _kept) =
+            build_provider_with_transcripts(&[("NM_REING.2", served_wrong)]);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_REING.2".to_string(),
+            tx_length: canonical.len() as u64,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_REING.2".to_string()),
+            sequence: Some(canonical.to_string()),
+        });
+        provider.canonical_overrides = ov;
+
+        let tx = provider.get_transcript("NM_REING.2").unwrap();
+        assert_eq!(
+            tx.sequence.as_deref(),
+            Some(canonical),
+            "the served sequence must be replaced with the canonical bases"
+        );
+        assert_eq!(
+            tx.sequence.as_deref().map(str::len),
+            Some(9),
+            "served at the canonical 9 nt, not the wrong 25 nt"
+        );
+        // The CDS/protein metadata are corrected together with the sequence.
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_REING.2"));
+        // A length-changing replacement must collapse the exon structure to a
+        // single span so the corrected record does not trip the offline
+        // `LengthMismatch` check (served-shorter-than-exon-extent).
+        let anomalies = crate::reference::validate::validate_transcript_record(&tx);
+        assert!(
+            anomalies.is_empty(),
+            "sequence-corrected transcript must have no self-inflicted anomalies: {anomalies:?}"
+        );
+    }
+
+    #[test]
+    fn metadata_only_override_does_not_alter_served_sequence() {
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        // A `sequence: None` override corrects only CDS/protein; the served bases
+        // must be byte-for-byte unchanged (no-regression for the metadata class).
+        let served = "ATGAAATAA";
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_META.2", served)]);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_META.2".to_string(),
+            tx_length: 9,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            protein_id: Some("NP_META.2".to_string()),
+            sequence: None,
+        });
+        provider.canonical_overrides = ov;
+
+        let tx = provider.get_transcript("NM_META.2").unwrap();
+        assert_eq!(
+            tx.sequence.as_deref(),
+            Some(served),
+            "a metadata-only override must not touch the served sequence"
+        );
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(1), Some(9)));
+        assert_eq!(tx.protein_id.as_deref(), Some("NP_META.2"));
+    }
+
+    #[test]
+    fn no_override_serves_transcript_unchanged() {
+        // Regression guard: with no override loaded, the served sequence is
+        // exactly the FASTA bases.
+        let served = "ATGCCCGGGTAA";
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_PLAIN.1", served)]);
+        let tx = provider.get_transcript("NM_PLAIN.1").unwrap();
+        assert_eq!(tx.sequence.as_deref(), Some(served));
+    }
+
+    #[test]
+    fn reconcile_cdot_proceeds_with_sequence_despite_length_mismatch() {
+        use crate::data::cdot::{CdotMapper, CdotTranscript};
+        use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
+        use crate::reference::Strand;
+        // Served FASTA is 9 nt but the authoritative length is 99 — a length
+        // mismatch that, for a `sequence: None` override, makes reconcile SKIP
+        // (see `reconcile_cdot_skips_on_length_mismatch`). When the override
+        // carries the canonical bases, reconcile must PROCEED instead (the
+        // wrong-sequence class): the served bases will be replaced on read, so
+        // the cdot CDS/protein must be reconciled to the canonical values.
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("NM_OV.2", "ATGAAATAA")]);
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_OV.2".to_string(),
+            CdotTranscript {
+                gene_name: None,
+                contig: "chr1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[0, 9, 0, 9]],
+                cds_start: Some(2), // wrong
+                cds_end: Some(6),   // wrong
+                gene_id: None,
+                protein: Some("NP_WRONG.9".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+        let mut ov = CanonicalOverrides::default();
+        ov.insert(AuthoritativeRecord {
+            accession: "NM_OV.2".to_string(),
+            tx_length: 99,      // length mismatch vs served 9 nt
+            cds_start: Some(1), // authoritative 1-based
+            cds_end: Some(99),  // within tx_length
+            protein_id: Some("NP_OV.2".to_string()),
+            sequence: Some("A".repeat(99)), // override carries canonical bases
+        });
+        provider.canonical_overrides = ov;
+
+        provider.reconcile_cdot_with_overrides();
+
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_OV.2")
+            .unwrap();
+        // 1-based start 1 → cdot 0-based 0; end 99 unchanged (0-based exclusive).
+        assert_eq!(
+            rec.cds_start,
+            Some(0),
+            "carrying canonical bases must reconcile cdot despite the length mismatch"
+        );
+        assert_eq!(rec.cds_end, Some(99));
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
     // --- get_transcript_for_accession (issue #582) ---------------------------
 
     #[test]
