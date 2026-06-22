@@ -8,7 +8,7 @@ Utility scripts for generating and updating test fixtures used by ferro-hgvs.
 |--------|-------------|----------------|
 | `extract_hgvs_spec_examples.py` | Scrapes HGVS examples from [hgvs-nomenclature.org](https://hgvs-nomenclature.org) | `tests/fixtures/grammar/hgvs_spec_examples.json` |
 | `extract_mutalyzer_github.py` | Extracts test patterns from the [mutalyzer-hgvs-parser](https://github.com/mutalyzer/mutalyzer-hgvs-parser) repo | `tests/fixtures/grammar/mutalyzer_github.json` |
-| `fetch_ncbi_variation.py` | Fetches HGVS/SPDI conversions from the [NCBI Variation Services API](https://api.ncbi.nlm.nih.gov/variation/v0/) | `tests/fixtures/validation/ncbi_variation.json` |
+| `fetch_ncbi_variation.py` | Ad-hoc live fetch of HGVS/SPDI conversions from the [NCBI Variation Services API](https://api.ncbi.nlm.nih.gov/variation/v0/). **Does not regenerate the committed fixture** (see note below). | `tests/fixtures/validation/ncbi_variation.live.json` (live; not committed) |
 | `fetch_variantvalidator.py` | Fetches validated HGVS variants from the [VariantValidator API](https://rest.variantvalidator.org) | `tests/fixtures/validation/variantvalidator_api.json` |
 | `benchmark_python.py` | Benchmarks ferro-hgvs Python bindings against biocommons/hgvs | N/A (prints results) |
 
@@ -38,8 +38,14 @@ python scripts/extract_hgvs_spec_examples.py
 git clone https://github.com/mutalyzer/mutalyzer-hgvs-parser external-repos/mutalyzer-hgvs-parser
 python scripts/extract_mutalyzer_github.py
 
-# Regenerate NCBI fixture (rate-limited, takes several minutes)
-python scripts/fetch_ncbi_variation.py
+# Ad-hoc live NCBI fetch (rate-limited, takes several minutes).
+# NOTE: tests/fixtures/validation/ncbi_variation.json is a curated, hand-authored
+# offline fixture that tests/it/spdi_tests.rs parses and asserts semantic invariants
+# against (not a byte-level file comparison). This script
+# does NOT regenerate it — by default it writes the live response to
+# tests/fixtures/validation/ncbi_variation.live.json instead. To inspect live data,
+# point --output at a scratch path; do not overwrite the curated fixture.
+python scripts/fetch_ncbi_variation.py --output /tmp/ncbi_variation.live.json
 
 # Regenerate VariantValidator fixture (rate-limited, takes several minutes)
 python scripts/fetch_variantvalidator.py

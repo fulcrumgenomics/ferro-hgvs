@@ -14,6 +14,15 @@ Key endpoints:
 
 Rate Limit: 3 requests/second
 
+This script performs live network fetches and is provided for ad-hoc exploration
+only. It does NOT regenerate the committed test fixture: by default it writes to
+`tests/fixtures/validation/ncbi_variation.live.json`, NOT the curated, hand-authored
+`tests/fixtures/validation/ncbi_variation.json` that `tests/it/spdi_tests.rs` parses
+and asserts semantic invariants against (exact SPDI/variant equality on the parsed
+JSON, not a byte-level file comparison). Overwriting the curated fixture with live
+data would re-introduce network variability and break those assertions. Point
+`--output` somewhere else (e.g. a scratch path) if you want the raw live response.
+
 Usage:
     python scripts/fetch_ncbi_variation.py [--output OUTPUT_PATH]
 """
@@ -334,8 +343,15 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("tests/fixtures/validation/ncbi_variation.json"),
-        help="Output fixture path",
+        # NOT the committed fixture: tests/fixtures/validation/ncbi_variation.json is a
+        # curated, hand-authored offline oracle whose parsed contents the SPDI tests
+        # assert semantic invariants against (not a byte-level file comparison).
+        # Default to a distinct, non-asserted live path so a stray run cannot clobber it.
+        default=Path("tests/fixtures/validation/ncbi_variation.live.json"),
+        help=(
+            "Output path for the live NCBI response. Defaults to a non-asserted "
+            "'.live.json' path; does NOT overwrite the committed, curated fixture."
+        ),
     )
     parser.add_argument(
         "--limit",

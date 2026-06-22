@@ -1,0 +1,130 @@
+{
+  "source": "synthetic (hand-authored offline fixture; NOT a live NCBI fetch)",
+  "api_base": "https://api.ncbi.nlm.nih.gov/variation/v0",
+  "generated": "2026-06-21 00:00:00 UTC",
+  "hgvs_conversions": {
+    "total": 6,
+    "successful": 4,
+    "variants": [
+      {
+        "input_hgvs": "NC_000017.11:g.7674220C>T",
+        "spdi_result": {
+          "data": {
+            "spdis": [
+              {
+                "seq_id": "NC_000017.11",
+                "position": 7674219,
+                "deleted_sequence": "C",
+                "inserted_sequence": "T"
+              }
+            ]
+          }
+        },
+        "roundtrip_hgvs": {
+          "data": {
+            "hgvs_list": ["NC_000017.11:g.7674220C>T"]
+          }
+        },
+        "vcf": null
+      },
+      {
+        "input_hgvs": "NC_000017.11:g.7673802G>A",
+        "spdi_result": {
+          "data": {
+            "spdis": [
+              {
+                "seq_id": "NC_000017.11",
+                "position": 7673801,
+                "deleted_sequence": "G",
+                "inserted_sequence": "A"
+              }
+            ]
+          }
+        },
+        "roundtrip_hgvs": {
+          "data": {
+            "hgvs_list": ["NC_000017.11:g.7673802G>A"]
+          }
+        },
+        "vcf": null
+      },
+      {
+        "input_hgvs": "NC_000007.14:g.140753336A>T",
+        "spdi_result": {
+          "data": {
+            "spdis": [
+              {
+                "seq_id": "NC_000007.14",
+                "position": 140753335,
+                "deleted_sequence": "A",
+                "inserted_sequence": "T"
+              }
+            ]
+          }
+        },
+        "roundtrip_hgvs": {
+          "data": {
+            "hgvs_list": ["NC_000007.14:g.140753336A>T"]
+          }
+        },
+        "vcf": null
+      },
+      {
+        "input_hgvs": "NC_000013.11:g.32316461C>T",
+        "spdi_result": {
+          "data": {
+            "spdis": [
+              {
+                "seq_id": "NC_000013.11",
+                "position": 32316460,
+                "deleted_sequence": "C",
+                "inserted_sequence": "T"
+              }
+            ]
+          }
+        },
+        "roundtrip_hgvs": {
+          "data": {
+            "hgvs_list": ["NC_000013.11:g.32316461C>T"]
+          }
+        },
+        "vcf": null
+      },
+      {
+        "input_hgvs": "NM_000546.6:c.215C>G",
+        "spdi_result": null,
+        "roundtrip_hgvs": null,
+        "vcf": null
+      },
+      {
+        "input_hgvs": "NM_000492.4:c.1521_1523del",
+        "spdi_result": null,
+        "roundtrip_hgvs": null,
+        "vcf": null
+      }
+    ]
+  },
+  "rsid_lookups": {
+    "total": 2,
+    "successful": 2,
+    "variants": [
+      {
+        "rsid": "rs121913529",
+        "info": null,
+        "hgvs_expressions": [
+          "NC_000007.14:g.140753336A>T",
+          "NM_004333.4:c.1799T>A"
+        ],
+        "spdi": null
+      },
+      {
+        "rsid": "rs113993960",
+        "info": null,
+        "hgvs_expressions": [
+          "NM_000492.4:c.1521_1523del"
+        ],
+        "spdi": null
+      }
+    ]
+  }
+}
