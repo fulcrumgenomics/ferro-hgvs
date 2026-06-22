@@ -363,6 +363,20 @@ fn extract_literal_sequence(
 
 // ── Translation helpers ───────────────────────────────────────────────────────
 
+/// Force residue 1 of a translated protein to the initiator `Met`, in place.
+///
+/// A no-op on an empty protein. Callers must only invoke this when the start
+/// codon is a recognized initiator (see [`cds_has_recognized_start`]); on a
+/// canonical `ATG` start residue 1 is already `Met` so this is a no-op, and on a
+/// non-recognized (drift) start it must NOT be called or a wrong `cds_start`
+/// would be masked. Mirrors the `replace_range(0..1, "M")` normalization in
+/// [`crate::reference::validate::validate_translation_against_protein`] (#801).
+pub(crate) fn force_initiator_met(protein: &mut [AminoAcid]) {
+    if let Some(first) = protein.first_mut() {
+        *first = AminoAcid::Met;
+    }
+}
+
 /// Translate a CDS sequence to a protein, stopping before the first stop codon.
 ///
 /// Incomplete codons at the end are silently dropped.
@@ -393,10 +407,26 @@ pub(crate) struct RefProteinBundle {
 
 impl RefProteinBundle {
     /// Build a bundle by reading and translating the CDS of `transcript`.
+    ///
+    /// When the CDS begins with a **recognized** initiator (`ATG` or the
+    /// near-cognates `CTG`/`GTG`/`TTG`, per [`cds_has_recognized_start`]),
+    /// residue 1 of the reference protein is forced to the initiator `Met`:
+    /// translation initiation installs Met regardless of the start codon, so the
+    /// authoritative `NP_` always begins with `M`, but `translate_full_cds`
+    /// renders the codon's own amino acid (e.g. Leu for `CTG`). This mirrors the
+    /// `replace_range(0..1, "M")` normalization in
+    /// [`crate::reference::validate::validate_translation_against_protein`] so the
+    /// bundle and that validator agree (#801, a #780 follow-up). The `ATG` case
+    /// is a no-op (already `Met`); a non-recognized start (genuine `cds_start`
+    /// drift) is left untouched so a wrong annotation is not masked (#625).
     pub(crate) fn from_transcript(transcript: &Transcript) -> Result<Self, FerroError> {
         let ref_cds = read_full_cds(transcript)?;
-        let ref_protein = translate_full_cds(&ref_cds);
-        let ref_protein_with_stop = translate_full_cds_with_stop(&ref_cds);
+        let mut ref_protein = translate_full_cds(&ref_cds);
+        let mut ref_protein_with_stop = translate_full_cds_with_stop(&ref_cds);
+        if cds_has_recognized_start(&ref_cds) {
+            force_initiator_met(&mut ref_protein);
+            force_initiator_met(&mut ref_protein_with_stop);
+        }
         Ok(Self {
             ref_cds,
             ref_protein,
@@ -1118,6 +1148,75 @@ mod tests {
         // The stricter ATG-only predicate is unchanged: it accepts only ATG.
         assert!(cds_has_valid_start("ATGAAA"));
         assert!(!cds_has_valid_start("CTGAAA"));
+    }
+
+    // ── RefProteinBundle::from_transcript Met1 normalization (#801) ───────────
+
+    #[test]
+    fn bundle_forces_met1_on_non_aug_recognized_start() {
+        // CTG start (Leu) followed by Arg + stop. Translation initiation installs
+        // Met regardless of the start codon, so residue 1 of the reference
+        // protein must be Met, not Leu (#801). The authoritative NP_ begins with M.
+        let t = tx("CTGCGCTAA", 1, 9);
+        let bundle = RefProteinBundle::from_transcript(&t).unwrap();
+        assert_eq!(
+            bundle.ref_protein,
+            vec![AminoAcid::Met, AminoAcid::Arg],
+            "CTG start: residue 1 forced to Met"
+        );
+        assert_eq!(
+            bundle.ref_protein_with_stop,
+            vec![AminoAcid::Met, AminoAcid::Arg, AminoAcid::Ter],
+            "the with-stop vector must agree at residue 1"
+        );
+    }
+
+    #[test]
+    fn bundle_forces_met1_for_gtg_and_ttg_starts() {
+        for start in ["GTG", "TTG"] {
+            let seq = format!("{start}CGCTAA");
+            let t = tx(&seq, 1, 9);
+            let bundle = RefProteinBundle::from_transcript(&t).unwrap();
+            assert_eq!(
+                bundle.ref_protein.first(),
+                Some(&AminoAcid::Met),
+                "{start} start: residue 1 forced to Met"
+            );
+            assert_eq!(
+                bundle.ref_protein_with_stop.first(),
+                Some(&AminoAcid::Met),
+                "{start} start: with-stop residue 1 forced to Met"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_atg_start_unchanged_no_op() {
+        // ATG start already begins with Met; forcing is a no-op and the rest of
+        // the protein is untouched.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let bundle = RefProteinBundle::from_transcript(&t).unwrap();
+        assert_eq!(bundle.ref_protein, vec![AminoAcid::Met, AminoAcid::Arg]);
+        assert_eq!(
+            bundle.ref_protein_with_stop,
+            vec![AminoAcid::Met, AminoAcid::Arg, AminoAcid::Ter]
+        );
+    }
+
+    #[test]
+    fn bundle_drift_start_not_forced_to_met() {
+        // AGT is genuine off-the-start drift (not a recognized initiator). We must
+        // NOT force Met1 — masking a wrong cds_start would emit a confidently
+        // wrong residue 1 (#625 protection). Residue 1 stays the translated AA.
+        // AGT → Ser.
+        let t = tx("AGTCGCTAA", 1, 9);
+        let bundle = RefProteinBundle::from_transcript(&t).unwrap();
+        assert_eq!(
+            bundle.ref_protein.first(),
+            Some(&AminoAcid::Ser),
+            "drift start: residue 1 left as translated (Ser), not forced to Met"
+        );
+        assert_eq!(bundle.ref_protein_with_stop.first(), Some(&AminoAcid::Ser));
     }
 
     #[test]

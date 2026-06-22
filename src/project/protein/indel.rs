@@ -11,9 +11,9 @@ use crate::reference::transcript::Transcript;
 
 use super::helpers::{
     affects_initiation_codon, build_cterminal_extension, build_initiator_unknown,
-    build_mutated_cds_with_ref, first_diff_position, mut_cds_with_3utr, net_length_change,
-    translate_full_cds_with_stop, translate_mutated_cds, translate_mutated_cds_inframe,
-    RefProteinBundle,
+    build_mutated_cds_with_ref, cds_has_recognized_start, first_diff_position, force_initiator_met,
+    mut_cds_with_3utr, net_length_change, translate_full_cds_with_stop, translate_mutated_cds,
+    translate_mutated_cds_inframe, RefProteinBundle,
 };
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -721,7 +721,15 @@ fn is_stop_loss_readthrough(
     }
 
     let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
-    let readthrough = translate_full_cds_with_stop(&scan_seq);
+    let mut readthrough = translate_full_cds_with_stop(&scan_seq);
+    // `ref_protein` had residue 1 forced to the initiator `Met` for a recognized
+    // initiator (`RefProteinBundle::from_transcript`, #801); apply the same
+    // normalization to the freshly re-translated read-through so the sense-prefix
+    // comparison below stays consistent. `scan_seq` shares the CDS start codon
+    // (a downstream stop-loss edit never touches codon 0), so the gate matches.
+    if cds_has_recognized_start(&scan_seq) {
+        force_initiator_met(&mut readthrough);
+    }
     let stop_idx = ref_protein.len();
     // The former-stop slot must hold a non-terminator residue (the stop was
     // read through) and every sense residue before it must be unchanged.
@@ -1082,6 +1090,37 @@ mod tests {
         assert!(s.contains("Ter3"), "expected Ter3 in '{}'", s);
         assert!(s.contains("Trp"), "expected Trp in '{}'", s);
         assert!(s.contains("ext"), "expected ext in '{}'", s);
+    }
+
+    #[test]
+    fn stop_readthrough_extension_on_non_aug_start() {
+        // #801 regression: stop-loss readthrough on a non-AUG-initiation
+        // transcript must still route to the C-terminal extension path. The
+        // RefProteinBundle now forces residue 1 to Met for a recognized
+        // initiator (CTG here), so `is_stop_loss_readthrough` must apply the
+        // same Met1 normalization to the re-translated read-through sequence
+        // before comparing — otherwise readthrough[0] (Leu, from the literal
+        // CTG) would not equal ref_protein[0] (Met) and the variant would
+        // misroute out of the extension path.
+        //
+        // CDS "CTGCGCTAA": Met(forced)-Arg-Ter; stop "TAA" at c.7_9.
+        // delins c.7_9 TGG converts the stop to Trp → readthrough, no further
+        // stop in CDS → p.(Ter3Trpext*?).
+        let t = tx("CTGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "TGG".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert!(
+            s.contains("Ter3") && s.contains("Trp") && s.contains("ext"),
+            "expected a C-terminal extension (Ter3...ext) on a CTG-start \
+             transcript, got '{}'",
+            s
+        );
     }
 
     #[test]
