@@ -652,12 +652,14 @@ impl AxisTally {
                     return;
                 }
             }
-            if let Some(sc) = &case.spec_citation {
-                if sc.axis == self.axis {
-                    self.spec_overridden
-                        .push((case.input.clone(), sc.section.to_string()));
-                    return;
-                }
+            // A `Case` may carry multiple per-axis spec citations (#827); use the
+            // one scoped to this tally's axis (at most one per axis). `find`
+            // preserves the previous single-citation behavior exactly when only
+            // one citation is present.
+            if let Some(sc) = case.spec_citations.iter().find(|sc| sc.axis == self.axis) {
+                self.spec_overridden
+                    .push((case.input.clone(), sc.section.to_string()));
+                return;
             }
         }
         let diag = match actual {
@@ -2125,11 +2127,26 @@ mod comparator_tests {
     use std::path::PathBuf;
 
     /// Build a minimal `Case` with the given input and optional
-    /// annotations. All other fields default to None/empty/true.
+    /// annotations. All other fields default to None/empty/true. The optional
+    /// single `spec_citation` is normalized into the `spec_citations` vec (#827).
     fn make_case(
         input: &str,
         accepted_divergence: Option<AcceptedDivergence>,
         spec_citation: Option<SpecCitation>,
+    ) -> Case {
+        make_case_with_citations(
+            input,
+            accepted_divergence,
+            spec_citation.into_iter().collect(),
+        )
+    }
+
+    /// Like [`make_case`] but takes the full per-axis `spec_citations` vec, for
+    /// exercising the multi-axis citation path (#827).
+    fn make_case_with_citations(
+        input: &str,
+        accepted_divergence: Option<AcceptedDivergence>,
+        spec_citations: Vec<SpecCitation>,
     ) -> Case {
         Case {
             keywords: Vec::new(),
@@ -2147,7 +2164,7 @@ mod comparator_tests {
             known_bug: None,
             improvement: None,
             reference_unavailable: None,
-            spec_citation,
+            spec_citations,
             accepted_rejection: None,
         }
     }
@@ -2164,7 +2181,7 @@ mod comparator_tests {
         );
         assert_eq!(case.input, "NM_000088.3:c.459A>G");
         assert!(case.accepted_divergence.is_none());
-        assert!(case.spec_citation.is_none());
+        assert!(case.spec_citations.is_empty());
     }
 
     // (1b) Typo in `axis` or `policy` is rejected at deserialization
@@ -2266,7 +2283,8 @@ mod comparator_tests {
                 }
             }"#,
         );
-        let sc = case.spec_citation.as_ref().expect("spec_citation present");
+        assert_eq!(case.spec_citations.len(), 1);
+        let sc = &case.spec_citations[0];
         assert_eq!(sc.axis, Axis::Normalized);
         assert_eq!(sc.section, SpecSection::Prioritization);
         assert_eq!(sc.note.as_deref(), Some("dup over ins"));
@@ -2289,7 +2307,8 @@ mod comparator_tests {
                 }
             }"#,
         );
-        let sc = case.spec_citation.as_ref().expect("spec_citation present");
+        assert_eq!(case.spec_citations.len(), 1);
+        let sc = &case.spec_citations[0];
         assert_eq!(sc.axis, Axis::ProteinDescription);
         assert_eq!(sc.section, SpecSection::SubstitutionConsequence);
 
@@ -2942,6 +2961,80 @@ mod comparator_tests {
         t.record(&case, "X", Ok("Y".to_string()));
         assert!(t.spec_overridden.is_empty());
         assert_eq!(t.fail.len(), 1);
+    }
+
+    // (8d) #827: a `Case` carrying TWO axis-scoped spec citations routes a
+    // mismatch on EACH cited axis into `spec_overridden` on the matching tally,
+    // and FAILs on an axis it does not cite. This is exactly the
+    // `c.3GC[5]`/`c.6C[4]` shape — a `normalized`-axis citation alongside a
+    // `protein_description`-axis citation on the same row.
+    #[test]
+    fn tally_multiple_spec_citations_route_per_axis() {
+        let case = make_case_with_citations(
+            "in",
+            None,
+            vec![
+                SpecCitation {
+                    axis: Axis::Normalized,
+                    section: SpecSection::RepeatCodingCodonException,
+                    note: None,
+                    cluster: None,
+                },
+                SpecCitation {
+                    axis: Axis::ProteinDescription,
+                    section: SpecSection::ProteinReference,
+                    note: None,
+                    cluster: None,
+                },
+            ],
+        );
+
+        // normalized-axis mismatch -> spec_overridden via the normalized citation.
+        let mut tn = AxisTally::new(Axis::Normalized);
+        tn.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(tn.spec_overridden.len(), 1);
+        assert_eq!(
+            tn.spec_overridden[0].1,
+            "HGVS §Repeated (coding codon exception)"
+        );
+        assert!(tn.fail.is_empty());
+
+        // protein-axis mismatch -> spec_overridden via the protein citation.
+        let mut tp = AxisTally::new(Axis::ProteinDescription);
+        tp.record(&case, "X", Ok("Y".to_string()));
+        assert_eq!(tp.spec_overridden.len(), 1);
+        assert_eq!(tp.spec_overridden[0].1, "HGVS protein reference (bare NP)");
+        assert!(tp.fail.is_empty());
+
+        // an uncited axis still FAILs — citations are axis-scoped.
+        let mut tg = AxisTally::new(Axis::Genomic);
+        tg.record(&case, "X", Ok("Y".to_string()));
+        assert!(tg.spec_overridden.is_empty());
+        assert_eq!(tg.fail.len(), 1);
+    }
+
+    // (8e) #827: a multi-axis row parses from the array wire form into a
+    // two-element `spec_citations` vec, with each element scoped to its axis (the
+    // exact `c.3GC[5]`/`c.6C[4]` shape — a `normalized` citation alongside a
+    // `protein_description` citation on one row).
+    #[test]
+    fn case_parses_with_multiple_spec_citations() {
+        let case = parse_case(
+            r#"{
+                "input": "NG_012337.1(NM_012459.2):c.3GC[5]",
+                "normalized": "NG_012337.1(NM_012459.2):c.3_6GC[5]",
+                "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insAlaArg)",
+                "spec_citation": [
+                    {"axis": "normalized",
+                     "section": "HGVS §Repeated (coding codon exception)"},
+                    {"axis": "protein_description",
+                     "section": "HGVS protein reference (bare NP)"}
+                ]
+            }"#,
+        );
+        assert_eq!(case.spec_citations.len(), 2);
+        assert_eq!(case.spec_citations[0].axis, Axis::Normalized);
+        assert_eq!(case.spec_citations[1].axis, Axis::ProteinDescription);
     }
 
     // (9) `summary_line` includes the `divergence_accepted` AND

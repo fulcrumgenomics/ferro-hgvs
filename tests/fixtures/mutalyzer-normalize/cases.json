@@ -3722,12 +3722,20 @@
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insAlaArg)",
       "genomic": "NG_012337.1:g.4917_4920GC[5]",
       "to_test": true,
-      "spec_citation": {
-        "axis": "normalized",
-        "section": "HGVS §Repeated (coding codon exception)",
-        "cluster": "coding-repeat-codon-exception",
-        "note": "Unit GC (length 2) in coding c.; repeat notation forbidden (length not a multiple of 3). Reference has GC[2], so GC[5] is a +3-copy expansion -> ferro emits c.6_7insGCGCGC; mutalyzer's c.3_6GC[5] is invalid."
-      }
+      "spec_citation": [
+        {
+          "axis": "normalized",
+          "section": "HGVS §Repeated (coding codon exception)",
+          "cluster": "coding-repeat-codon-exception",
+          "note": "Unit GC (length 2) in coding c.; repeat notation forbidden (length not a multiple of 3). Reference has GC[2], so GC[5] is a +3-copy expansion -> ferro emits c.6_7insGCGCGC; mutalyzer's c.3_6GC[5] is invalid."
+        },
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "cluster": "bare-np-protein",
+          "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495)."
+        }
+      ]
     },
     {
       "keywords": [
@@ -3786,12 +3794,20 @@
       "genomic": "NG_012337.1:g.4917G[4]",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Arg2_Lys3insPro)",
       "to_test": true,
-      "spec_citation": {
-        "axis": "normalized",
-        "section": "HGVS §Repeated (coding codon exception)",
-        "cluster": "coding-repeat-codon-exception",
-        "note": "Unit C (length 1) in coding c.; repeat notation forbidden (repeated.md L21). Reference has one C at c.6, so C[4] is a +3-copy expansion -> ferro emits c.6_7insCCC (the spec-mandated ins literal); mutalyzer's c.6C[4] is invalid."
-      }
+      "spec_citation": [
+        {
+          "axis": "normalized",
+          "section": "HGVS §Repeated (coding codon exception)",
+          "cluster": "coding-repeat-codon-exception",
+          "note": "Unit C (length 1) in coding c.; repeat notation forbidden (repeated.md L21). Reference has one C at c.6, so C[4] is a +3-copy expansion -> ferro emits c.6_7insCCC (the spec-mandated ins literal); mutalyzer's c.6C[4] is invalid."
+        },
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "cluster": "bare-np-protein",
+          "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495)."
+        }
+      ]
     },
     {
       "keywords": [
