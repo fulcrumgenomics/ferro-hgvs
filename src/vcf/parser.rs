@@ -254,8 +254,13 @@ fn convert_record(
     // One map per sample column, in sample-column order (matching the header's
     // `sample_names()`), keyed by FORMAT field name. A field whose value is
     // missing (`.`) or absent from a short sample column is omitted from the
-    // map; `VcfRecord`'s `Display` renders any absent FORMAT key as `.`, so the
-    // omission round-trips correctly and keeps the maps minimal.
+    // map, keeping the maps minimal. On output, `VcfRecord`'s `Display` walks
+    // every FORMAT key and re-materializes any omitted key as an explicit `.`
+    // placeholder. This is VCF-semantically equivalent but not byte-identical:
+    // an interior missing scalar round-trips verbatim (`./.:.:.`), whereas a
+    // trailing-absent field from a ragged/short sample column is re-emitted as
+    // a `.` rather than dropped (e.g. input `1/1` under `GT:DP:GQ` renders back
+    // as `1/1:.:.`).
     let samples: Vec<std::collections::HashMap<String, String>> = samples_buf
         .values()
         .map(|sample| {
@@ -391,7 +396,25 @@ fn format_genotype(
     rendered
 }
 
-/// Split a multi-allelic VCF record into multiple bi-allelic records
+/// Split a multi-allelic VCF record into multiple bi-allelic records.
+///
+/// Per-sample `FORMAT`/genotype data is **dropped** from the split records. A
+/// multi-allelic genotype encodes ALT alleles by their index into the original
+/// `alternate` list (e.g. `1/2` references the first and second ALTs); once the
+/// record is split so each output retains a single ALT, those indices no longer
+/// reference the right allele. Re-indexing genotypes correctly is non-trivial
+/// (and ambiguous for fields like `AD`/`PL` whose layout depends on the allele
+/// count), and no caller relies on split-record sample data, so the safe,
+/// minimal behavior is to clear `format`/`samples` rather than propagate the
+/// original multi-allelic genotype verbatim into each bi-allelic record.
+///
+/// Per-allele **INFO** fields (`Number=A`/`R`/`G`, e.g. `AF=0.1,0.2`) are
+/// allele-indexed in the same way and are **carried verbatim** into each
+/// bi-allelic output — they are *not* subset to the retained ALT, so split-record
+/// INFO is unreliable for per-allele keys (scalar `Number=1` fields such as `DP`
+/// stay correct). Subsetting them correctly needs the header's `Number=` metadata,
+/// which this record-only function does not have; callers needing accurate
+/// per-allele INFO must re-derive it from the original multi-allelic record.
 pub fn split_multiallelic(record: &VcfRecord) -> Vec<VcfRecord> {
     if !record.is_multiallelic() {
         return vec![record.clone()];
@@ -403,6 +426,10 @@ pub fn split_multiallelic(record: &VcfRecord) -> Vec<VcfRecord> {
         .map(|alt| {
             let mut new_record = record.clone();
             new_record.alternate = vec![alt.clone()];
+            // The original genotype's ALT indices are invalid after splitting;
+            // drop per-sample data rather than emit miscalled genotypes.
+            new_record.format = None;
+            new_record.samples = Vec::new();
             new_record
         })
         .collect()
@@ -480,6 +507,84 @@ chr1	12347	.	A	G,T	40	PASS	DP=50
         assert_eq!(split.len(), 2);
         assert_eq!(split[0].alternate, vec!["G"]);
         assert_eq!(split[1].alternate, vec!["T"]);
+    }
+
+    #[test]
+    fn test_split_multiallelic_drops_sample_genotypes() {
+        // A multi-allelic record whose sample carries a `1/2` genotype: the ALT
+        // indices in `1/2` reference both ALTs, so they are meaningless once the
+        // record is split to a single ALT. The split must drop per-sample data
+        // rather than copy the wrong verbatim `1/2` into each bi-allelic record.
+        const MULTI_SAMPLE_VCF: &str = r#"##fileformat=VCFv4.3
+##contig=<ID=chr1,length=249250621>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1
+chr1	100	.	A	G,T	30	PASS	.	GT	1/2
+"#;
+        let mut reader = parse_vcf_string(MULTI_SAMPLE_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+
+        // Precondition: the unsplit record carries the multi-allelic genotype.
+        assert!(record.is_multiallelic());
+        assert_eq!(record.samples.len(), 1);
+        assert_eq!(record.samples[0].get("GT").map(String::as_str), Some("1/2"));
+
+        let split = split_multiallelic(&record);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].alternate, vec!["G"]);
+        assert_eq!(split[1].alternate, vec!["T"]);
+
+        // Per-sample data is dropped on split; no record carries the now-invalid
+        // `1/2` genotype.
+        for bi_allelic in &split {
+            assert!(
+                bi_allelic.format.is_none(),
+                "FORMAT must be cleared on multi-allelic split"
+            );
+            assert!(
+                bi_allelic.samples.is_empty(),
+                "per-sample genotypes must be dropped on multi-allelic split"
+            );
+        }
+    }
+
+    #[test]
+    fn test_split_multiallelic_carries_per_allele_info_verbatim() {
+        // Per-allele INFO (`Number=A`, here `AF=0.1,0.2`) is a documented
+        // limitation of `split_multiallelic`: it is carried verbatim into every
+        // bi-allelic record rather than subset to the retained ALT, because
+        // subsetting needs the header's `Number=` metadata this record-only
+        // function lacks. Scalar `Number=1` INFO (`DP`) is unaffected. This test
+        // pins the documented behavior; a future change that subsets per-allele
+        // INFO should deliberately update it.
+        const MULTI_INFO_VCF: &str = r#"##fileformat=VCFv4.3
+##contig=<ID=chr1,length=249250621>
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Total Depth">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele Frequency">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	100	.	A	G,T	30	PASS	DP=50;AF=0.1,0.2
+"#;
+        let mut reader = parse_vcf_string(MULTI_INFO_VCF).unwrap();
+        let record = reader.read_record().unwrap().unwrap();
+        assert!(record.is_multiallelic());
+
+        let split = split_multiallelic(&record);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].alternate, vec!["G"]);
+        assert_eq!(split[1].alternate, vec!["T"]);
+
+        for bi_allelic in &split {
+            // Scalar `Number=1` INFO is unaffected by the split.
+            assert_eq!(bi_allelic.info.get("DP"), Some(&InfoValue::Integer(50)));
+            // Per-allele `Number=A` INFO is carried verbatim (documented
+            // limitation): both records keep the full two-value `AF` rather than
+            // the single value for their retained ALT.
+            assert_eq!(
+                bi_allelic.info.get("AF"),
+                record.info.get("AF"),
+                "per-allele INFO is carried verbatim on split (documented limitation)"
+            );
+        }
     }
 
     #[test]
@@ -594,6 +699,28 @@ chr1	300	.	G	A	30	PASS	.	GT:DP:GQ	1/1	0/0:20:40
         let s2 = &record.samples[1];
         assert_eq!(s2.get("GT").map(String::as_str), Some("0/0"));
         assert_eq!(s2.get("DP").map(String::as_str), Some("20"));
+    }
+
+    #[test]
+    fn test_ragged_sample_column_renders_explicit_missing() {
+        // A trailing-absent field from a ragged column is re-materialized by
+        // Display as an explicit `.`, not reproduced byte-for-byte. The input
+        // `1/1` (only GT under `GT:DP:GQ`) renders back as `1/1:.:.`:
+        // VCF-semantically equivalent, but not byte-identical.
+        let mut reader = parse_vcf_string(SAMPLE_VCF).unwrap();
+        for _ in 0..2 {
+            reader.read_record().unwrap().unwrap();
+        }
+        let record = reader.read_record().unwrap().unwrap();
+
+        let rendered = format!("{}", record);
+        let columns: Vec<&str> = rendered.split('\t').collect();
+        // CHROM POS ID REF ALT QUAL FILTER INFO FORMAT S1 S2
+        assert_eq!(columns[8], "GT:DP:GQ");
+        assert_eq!(
+            columns[9], "1/1:.:.",
+            "ragged column re-emits trailing-absent fields as explicit `.`"
+        );
     }
 
     #[test]
