@@ -963,6 +963,12 @@ fn transcript_of(v: &HgvsVariant) -> Option<String> {
         HgvsVariant::Cds(c) => Some(c.accession.transcript_accession()),
         HgvsVariant::Tx(t) => Some(t.accession.transcript_accession()),
         HgvsVariant::Rna(r) => Some(r.accession.transcript_accession()),
+        // Cis/trans alleles (e.g. `c.[274G>T;278A>G]`) carry the transcript on
+        // each member; descend to the first member that yields one so allele
+        // inputs route to the same `project_variant(&v, &tx_id)` call the
+        // single-variant axes use, rather than failing with "could not infer
+        // transcript_id".
+        HgvsVariant::Allele(a) => a.variants.iter().find_map(transcript_of),
         _ => None,
     }
 }
@@ -1311,12 +1317,10 @@ fn axis_coding_protein_descriptions() {
 
 #[test]
 fn axis_rna_description() {
-    // Manifest-gate even though the current body doesn't consume the
-    // manifest — keeps CI green and matches the other axes' shape.
-    if manifest_path().is_none() {
+    let Some(vp) = variant_projector() else {
         eprintln!("axis_rna_description: skipping — no manifest");
         return;
-    }
+    };
 
     let mut t = AxisTally::new(Axis::RnaDescription);
     for case in &fixture().cases {
@@ -1327,8 +1331,24 @@ fn axis_rna_description() {
             t.skipped += 1;
             continue;
         };
-        let actual: Result<String, String> =
-            Err("ferro-hgvs r. prediction surface not yet wired into this runner".to_string());
+
+        let actual = catch_panics(|| -> Result<String, String> {
+            let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
+            let tx_id =
+                transcript_of(&v).ok_or_else(|| "could not infer transcript_id".to_string())?;
+            let result = vp
+                .project_variant(&v, &tx_id)
+                .map_err(|e| format!("project: {e}"))?;
+            result
+                .rna
+                .as_ref()
+                .map(|r| format!("{r}"))
+                // Empty/degenerate projection (#651): expected an r. prediction
+                // but ferro predicted none. Tag it so the harness counts the
+                // output-quality degradation, not just the bucket membership.
+                .ok_or_else(|| format!("{EMPTY_PROJECTION_SENTINEL}no r. prediction"))
+        });
+
         t.record(case, expected, actual);
     }
     t.finish();

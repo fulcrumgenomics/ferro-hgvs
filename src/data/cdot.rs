@@ -5971,4 +5971,26 @@ mod tests {
         // Primary data survives normally.
         assert!(reloaded.get_transcript("NM_000088.3").is_some());
     }
+
+    /// #693: the genome-pivot n.→r. renumber relies on `cds_pos_from_tx_pos` to
+    /// convert a 1-based transcript position to its CDS coordinate. With
+    /// `cds_start = 50` (0-based), `n.51` (tx 0-based 50) is `c.1` and `n.50`
+    /// (tx 0-based 49) is the 5'UTR `c.-1` — exactly the renumber a coding
+    /// transcript must apply before mapping an `n.`/`r.` position to the genome.
+    #[test]
+    fn cds_pos_from_tx_pos_renumbers_transcript_to_cds() {
+        let tx = sample_transcript();
+        // First CDS base: tx 0-based 50 → c.1.
+        let first = tx.cds_pos_from_tx_pos(50).expect("exonic");
+        assert_eq!(first.base, 1);
+        assert!(!first.utr3);
+        // One base 5' of the CDS: tx 0-based 49 → c.-1.
+        let utr5 = tx.cds_pos_from_tx_pos(49).expect("exonic");
+        assert_eq!(utr5.base, -1);
+        assert!(!utr5.utr3);
+        // Worked example shape (NM_058195.3: n.204 → c.44): a base N into the
+        // CDS renumbers to `N - cds_start` (1-based). tx 0-based 60 → c.11.
+        let mid = tx.cds_pos_from_tx_pos(60).expect("exonic");
+        assert_eq!(mid.base, 11);
+    }
 }

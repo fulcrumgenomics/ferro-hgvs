@@ -64,6 +64,12 @@
       "title": "Transcript 5'/3' flank not c.-numberable (pter/qter)",
       "spec_section": "background/refseq.md L45-46",
       "note": "A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking sequences and can not be used to describe variants there (refseq.md L45-46). pter/qter denote those flanks, so they are not c.-numberable — as a coordinate or inside a cross-reference/delins payload. ferro declines; mutalyzer extrapolates the flank and resolves the bases. ferro's refusal is spec-correct (#758/#537)."
+    },
+    {
+      "id": "rna-allele-bracket-placement",
+      "title": "RNA predicted allele bracket placement",
+      "spec_section": "recommendations/RNA/alleles.md",
+      "note": "A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside the allele bracket (r.[(a;b)], e.g. LRG_199t1:r.[(578c>u;1339a>g;1680del)]); mutalyzer wraps the whole bracket (r.([a;b])), which has no spec counterpart. ferro's inside-bracket form is the spec-correct value (#693)."
     }
   ],
   "cases": [
@@ -2986,7 +2992,13 @@
       "genomic": "NG_012337.1:g.[7125G>T;7129A>G]",
       "protein_description": "NG_012337.1(NP_002993.1):p.(Asp92_Tyr93delinsTyrCys)",
       "rna_description": "NG_012337.1(NM_003002.2):r.([274g>u;278a>g])",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "rna_description",
+        "section": "HGVS §RNA alleles (predicted bracket placement)",
+        "note": "A predicted (uncertain) cis allele places the predicted '( )' wrapper inside the allele bracket: r.[(274g>u;278a>g)] (recommendations/RNA/alleles.md, e.g. LRG_199t1:r.[(578c>u;1339a>g;1680del)]). ferro emits this spec-correct inside-bracket form; mutalyzer's r.([274g>u;278a>g]) wraps the whole bracket, which has no counterpart in the spec. ferro's value is the spec-correct one.",
+        "cluster": "rna-allele-bracket-placement"
+      }
     },
     {
       "keywords": [

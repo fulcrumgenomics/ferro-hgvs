@@ -166,6 +166,16 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | `LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]` | normalized | accepted_divergence | — | — |
 | `LRG_24t1:c.pter_qterdelinspter_qter` | normalized | accepted_divergence | — | — |
 
+### RNA predicted allele bracket placement
+
+Spec: `recommendations/RNA/alleles.md`
+
+A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside the allele bracket (r.[(a;b)], e.g. LRG_199t1:r.[(578c>u;1339a>g;1680del)]); mutalyzer wraps the whole bracket (r.([a;b])), which has no spec counterpart. ferro's inside-bracket form is the spec-correct value (#693).
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_012337.1(NM_003002.2):c.[274G>T;278A>G]` | rna_description | spec_citation | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -245,3 +255,4 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 | infos | 4 | 0 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 47 |
+| rna_description | 0 | 0 | 0 | 0 | 1 |
