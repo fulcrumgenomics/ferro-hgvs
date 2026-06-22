@@ -822,11 +822,22 @@ impl std::fmt::Display for SpecSection {
     }
 }
 
-/// Spec-citation annotation. Documentary only — does NOT affect tally
-/// bucketing. Used to record that the `cases.json` expected output for
-/// `axis` has been corrected to ferro's spec-correct value (versus
+/// Spec-citation annotation. Records that the `cases.json` expected output
+/// for `axis` has been corrected to ferro's spec-correct value (versus
 /// mutalyzer's spec-incorrect output), with a citation to the relevant
 /// HGVS spec section.
+///
+/// This annotation **does** affect tally bucketing: when a row mismatches
+/// mutalyzer on `axis` and carries a matching `spec_citation`, `Tally::record`
+/// routes it into the `spec_overridden` bucket (away from `fail`). The
+/// *citation* is documentary, but the disposition is not — it is what keeps
+/// these spec-overridden rows out of the failure tally.
+///
+/// Unlike `accepted_divergence`/`known_bug`/`improvement`/
+/// `reference_unavailable`/`accepted_rejection`, `spec_citation` has no XPASS
+/// guard in `Tally::record`: a row that later converges to mutalyzer (so
+/// `actual == expected`) silently demotes to `pass` rather than FAILing to
+/// flag the now-stale citation.
 ///
 /// `axis` and `section` are now closed enums (see [`Axis`], [`SpecSection`]);
 /// serde rejects unknown variants at fixture-parse time, so a misspelled
