@@ -93,12 +93,11 @@ fn predict_from_variant(
             let span_len = span_len_from_cds_interval(&v.loc_edit.location);
 
             // Get the edit info
-            let (edit_type, is_frameshift, ref_len, alt_len) =
-                if let Some(edit) = v.loc_edit.edit.inner() {
-                    analyze_na_edit(edit, span_len)
-                } else {
-                    ("unknown", false, 0, 0)
-                };
+            let edit_opt = v.loc_edit.edit.inner();
+            let (edit_type, is_frameshift, ref_len, alt_len) = match edit_opt {
+                Some(edit) => analyze_na_edit(edit, span_len),
+                None => ("unknown", false, 0, 0),
+            };
 
             // Determine if intronic
             let is_intronic = cds_pos.is_intronic();
@@ -152,20 +151,38 @@ fn predict_from_variant(
                     state,
                     &accession,
                     &cds_pos,
+                    edit_opt,
                     edit_type,
                     is_frameshift,
                     ref_len,
-                    alt_len,
                 )
             } else {
                 None
             };
 
+            // A delins whose net frame delta is undeterminable reports
+            // `is_frameshift = false` conservatively (not "proven in-frame").
+            // The effect/protein paths above are frame-agnostic for delins (they
+            // report the length-independent `indel`), but NMD must NOT consume
+            // this signal — it would emit a definitive `predicted: false` we
+            // cannot justify. `predict_nmd_for_cds` declines (returns `None`)
+            // when this flag is set.
+            let frame_undecidable =
+                edit_opt.is_some_and(|edit| delins_frame_undecidable(edit, span_len));
+
             // NMD prediction if requested. Skip when the span is
             // undecidable — an NMD call rests on the frameshift signal,
             // which is unknown for a conservative-skip del/dup/ins.
             let nmd_prediction = if include_nmd && !span_undecidable {
-                predict_nmd_for_cds(state, &accession, &cds_pos, is_frameshift, edit_type)
+                predict_nmd_for_cds(
+                    state,
+                    &accession,
+                    &cds_pos,
+                    edit_opt,
+                    is_frameshift,
+                    edit_type,
+                    frame_undecidable,
+                )
             } else {
                 None
             };
@@ -403,6 +420,32 @@ pub fn analyze_na_edit(
         NaEdit::Identity { .. } => ("identity", false, 0, 0),
         NaEdit::Unknown { .. } => ("unknown", false, 0, 0),
         _ => ("other", false, 0, 0),
+    }
+}
+
+/// Whether a `delins`'s net frame delta is **undeterminable** — the deleted
+/// span length (from the position interval) or the inserted nucleotide count is
+/// unknown. In that state [`analyze_na_edit`] reports `is_frameshift = false`
+/// *conservatively* (not "proven in-frame"), so a frame-dependent consumer must
+/// decline rather than assert a definitive result.
+///
+/// This mirrors the `(span_len, alt_len)` match in [`analyze_na_edit`]'s
+/// `Delins` arm: the net delta is undecidable exactly when either endpoint of
+/// the `(ref, alt)` length pair is `None`. It is consumed only by the NMD path
+/// — an undecidable delins must yield *no* NMD prediction rather than a
+/// definitive `predicted: false` (issue #806 review). The effect/protein paths
+/// are frame-agnostic for delins (they report the length-independent `indel`),
+/// so they are unaffected.
+///
+/// Non-`delins` edits return `false`: the undecidable del/dup/ins case is the
+/// `span_undecidable` skip applied separately by the caller, and every other
+/// edit either carries a determinable frame delta or is not frame-relevant.
+fn delins_frame_undecidable(edit: &crate::hgvs::edit::NaEdit, span_len: Option<usize>) -> bool {
+    match edit {
+        crate::hgvs::edit::NaEdit::Delins { sequence, .. } => {
+            span_len.is_none() || sequence.len().is_none()
+        }
+        _ => false,
     }
 }
 
@@ -705,10 +748,10 @@ fn predict_protein_consequence(
     state: &AppState,
     accession: &str,
     cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
     edit_type: &str,
     is_frameshift: bool,
     ref_len: usize,
-    _alt_len: usize,
 ) -> Option<ProteinConsequence> {
     // Need cdot data for protein prediction
     let cdot = state.cdot.as_ref()?;
@@ -726,22 +769,46 @@ fn predict_protein_consequence(
     // Calculate codon phase (position within codon: 0, 1, or 2)
     let codon_phase = ((cds_pos.base - 1) % 3) as u8;
 
-    // `is_frameshift` is authoritative from the classifier; the
-    // `edit_type != "substitution"` guard is belt-and-braces (the
-    // classifier already returns `false` for the substitution arms).
-    // `_alt_len` is unused for the frameshift decision after this fix
-    // — the classifier handles unknown-length insert shapes correctly;
-    // kept in the signature for symmetry with `ref_len`.
-    let is_frameshift = is_frameshift && edit_type != "substitution";
-
     // Get the protein accession: the authoritative cdot value if present, else
-    // the transcript accession itself. We do NOT infer `NP_*`/`XP_*` from
-    // `NM_*`/`XM_*` by preserving the number — RefSeq does not guarantee the NM
-    // and NP numbers match, so that inference is frequently wrong (#808).
+    // the transcript accession itself. We compute it here (before resolving
+    // residues) and thread it through `resolve_residues*` so the sequence-backed
+    // path uses the SAME accession as the no-reference fallback below. The
+    // sequence-bearing reference `Transcript.protein_id` can be absent even when
+    // cdot carries the protein accession, so resolving from the transcript there
+    // would flip `NP_*:p...` to `NM_*:p...` purely by enabling `state.reference`
+    // (#806 review). We do NOT infer `NP_*`/`XP_*` from `NM_*`/`XM_*` by
+    // preserving the number — RefSeq does not guarantee the NM and NP numbers
+    // match, so that inference is frequently wrong (#808).
     let prot_acc = cdot_tx
         .protein
         .clone()
         .unwrap_or_else(|| accession.to_string());
+
+    // Try to resolve real amino-acid residues from a sequence-bearing
+    // reference (issue #806). When `state.reference` is available we always
+    // resolve the *reference* residue at the variant's first CDS codon (cheap,
+    // all edit classes); for substitutions we additionally resolve the real
+    // alternate residue and full HGVS-p notation via the engine's
+    // `predict_substitution_protein`. See `resolve_residues` for the honest
+    // `?` contract when sequence is unavailable or the edit class is deferred
+    // to #498.
+    if let Some(resolved) = resolve_residues(
+        state,
+        accession,
+        &prot_acc,
+        cds_pos,
+        edit,
+        edit_type,
+        is_frameshift,
+        ref_len,
+    ) {
+        return Some(resolved);
+    }
+
+    // `is_frameshift` is authoritative from the classifier; the
+    // `edit_type != "substitution"` guard is belt-and-braces (the
+    // classifier already returns `false` for the substitution arms).
+    let is_frameshift = is_frameshift && edit_type != "substitution";
 
     // Build HGVS protein notation
     // Without sequence data, we use position-based notation with uncertainty markers
@@ -772,9 +839,14 @@ fn predict_protein_consequence(
         format!("{}:p.(?{}?)", prot_acc, prot_position)
     };
 
-    // Note: Full amino acid lookup requires CDS sequence data
-    // which is not currently available in the service.
-    // The "?" markers indicate uncertain/unknown amino acids.
+    // Honest fallback (issue #806, state 2 = "data unavailable"). We reach
+    // this branch only when `resolve_residues` returned `None` — i.e. no
+    // sequence-bearing reference is configured (`state.reference` is `None`) or
+    // the transcript carries no CDS sequence. The `?` markers therefore mean
+    // "the service cannot obtain CDS bases", NOT "not implemented": when a
+    // reference IS available, `resolve_residues` always returns real residues
+    // (and never reaches here). The position-based HGVS-p notation above is the
+    // best the service can emit without bases.
     Some(ProteinConsequence {
         hgvs_p,
         ref_aa: format!("?(pos{})", codon_phase + 1), // Show codon position (1-3)
@@ -784,69 +856,452 @@ fn predict_protein_consequence(
     })
 }
 
-/// Predict NMD for CDS variant
+/// Resolve real amino-acid residues for a CDS variant using a sequence-bearing
+/// reference provider (issue #806).
+///
+/// Returns `None` when no real sequence is available — `state.reference` is
+/// unconfigured, the transcript is missing or carries no sequence, or the CDS
+/// position is not a resolvable in-CDS position — so the caller can fall back to
+/// the honest "data unavailable" (`?`) signal.
+///
+/// When sequence IS available it returns a [`ProteinConsequence`] with the real
+/// **reference** residue at the variant's first CDS codon for every edit class.
+/// For substitutions it additionally resolves the real **alternate** residue
+/// and full HGVS-p notation via the engine's
+/// [`predict_substitution_protein`](crate::project::protein::predict_substitution_protein),
+/// inheriting its initiation-codon (`p.(Met1?)`) and stop-loss-extension
+/// handling. For non-substitution indels the alternate residue and full
+/// protein-level notation are deferred to #498, so `alt_aa` carries the `?`
+/// sentinel meaning "not yet implemented for this edit class" — distinct from
+/// the no-reference "data unavailable" `?`.
+///
+/// This helper is the shared seam #498 (full c.→p.) inherits: it already fetches
+/// a sequence-bearing [`Transcript`](crate::reference::transcript::Transcript)
+/// and calls into the same protein machinery the engine uses.
+// Threads both the transcript `accession` (to fetch sequence from the provider)
+// and the authoritative protein `prot_acc` (for HGVS-p), plus the edit context;
+// splitting these into a struct would obscure the simple pass-through.
+#[allow(clippy::too_many_arguments)]
+fn resolve_residues(
+    state: &AppState,
+    accession: &str,
+    prot_acc: &str,
+    cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
+    edit_type: &str,
+    is_frameshift: bool,
+    ref_len: usize,
+) -> Option<ProteinConsequence> {
+    // A reference residue is only defined for an in-CDS position.
+    if cds_pos.base <= 0 || cds_pos.utr3 || cds_pos.offset.is_some() {
+        return None;
+    }
+    let provider = state.reference.as_ref()?;
+    let transcript =
+        crate::reference::provider::ReferenceProvider::get_transcript(provider.as_ref(), accession)
+            .ok()?;
+    resolve_residues_from_transcript(
+        &transcript,
+        prot_acc,
+        cds_pos,
+        edit,
+        edit_type,
+        is_frameshift,
+        ref_len,
+    )
+}
+
+/// Pure residue-resolution core, separated from `AppState` so it is unit
+/// testable against a synthetic sequence-bearing
+/// [`Transcript`](crate::reference::transcript::Transcript) (issue #806).
+///
+/// See [`resolve_residues`] for the honest `?` contract. Returns `None` when the
+/// reference residue cannot be read from `transcript.sequence` (e.g. the
+/// transcript carries no sequence) so the caller falls back to the
+/// "data unavailable" signal.
+fn resolve_residues_from_transcript(
+    transcript: &crate::reference::transcript::Transcript,
+    prot_acc: &str,
+    cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
+    edit_type: &str,
+    is_frameshift: bool,
+    ref_len: usize,
+) -> Option<ProteinConsequence> {
+    use crate::project::protein::{predict_substitution_protein, read_ref_codon, translate};
+
+    let cds_base = cds_pos.base; // i64, 1-based CDS coordinate
+    let prot_position = ((cds_base - 1) / 3 + 1) as u64;
+
+    // Reference residue at the variant's first CDS codon — resolved for every
+    // edit class (this is the "no silent ? where data exists" guarantee).
+    let (ref_codon, frame) = read_ref_codon(transcript, cds_base).ok()?;
+    let ref_aa = translate(&ref_codon)?;
+
+    // Substitutions get full alt-residue + HGVS-p resolution via the engine.
+    // This arm is *terminal* for every supported substitution form: once we
+    // have sequence we either resolve the real alternate residue or emit an
+    // EXPLICIT unresolvable `p.(?N?)` state — we never fall through to the
+    // indel formatter, which would silently relabel a substitution as a
+    // deferred indel (#806 review).
+    if edit_type == "substitution" {
+        // Normalize the supported substitution forms to a `Substitution` with a
+        // concrete reference base. `SubstitutionNoRef` (`c.N>Alt`) carries only
+        // the alternate allele, so derive the reference base from the sequence
+        // codon at this position (the engine requires a `Substitution`); this
+        // lets the no-ref form resolve the real alternate residue when sequence
+        // exists rather than degrading to `p.(?N?)`.
+        let normalized_sub = match edit {
+            Some(sub @ crate::hgvs::edit::NaEdit::Substitution { .. }) => Some(sub.clone()),
+            Some(crate::hgvs::edit::NaEdit::SubstitutionNoRef { alternative }) => {
+                let ref_base = crate::hgvs::edit::Base::from_char(
+                    ref_codon.as_bytes()[frame as usize] as char,
+                )?;
+                Some(crate::hgvs::edit::NaEdit::Substitution {
+                    reference: ref_base,
+                    alternative: *alternative,
+                })
+            }
+            _ => None,
+        };
+        if let Some(sub) = normalized_sub.as_ref() {
+            match predict_substitution_protein(transcript, cds_base, sub, prot_acc) {
+                Ok(variant) => {
+                    // The residue fields must agree with the engine's `hgvs_p`.
+                    // For a substitution affecting the translation initiation
+                    // codon the engine reports the uncertain initiator form
+                    // (`p.(Met1?)`), where the protein consequence — and thus
+                    // the alternate residue — is unpredictable and residue 1 is
+                    // the initiator Met regardless of the reference codon.
+                    // Anchoring `ref_aa`/`alt_aa` to the raw codon translation
+                    // here would contradict that contract (e.g. `ref_aa = Leu`
+                    // for a non-ATG start while `hgvs_p` says `Met1?`), so
+                    // derive both from the predicted variant instead. See
+                    // `substitution_residues_from_variant`.
+                    let (ref_aa_str, alt_aa, position) =
+                        substitution_residues_from_variant(&variant, ref_aa, prot_position);
+                    return Some(ProteinConsequence {
+                        hgvs_p: format!("{}", variant),
+                        ref_aa: ref_aa_str,
+                        alt_aa,
+                        position,
+                        is_frameshift: false,
+                    });
+                }
+                Err(_) => {
+                    // Prediction failed despite available sequence (e.g. an
+                    // explicit reference base that mismatches the codon, or an
+                    // unsupported codon shape). Represent this as an EXPLICIT
+                    // unresolvable protein state (`p.(?N?)`) for the variant's
+                    // own position — NOT a deferred indel notation. We still
+                    // report the real reference residue we read from sequence.
+                    return Some(ProteinConsequence {
+                        hgvs_p: format!("{}:p.(?{}?)", prot_acc, prot_position),
+                        ref_aa: ref_aa.to_three_letter().to_string(),
+                        alt_aa: "?".to_string(),
+                        position: prot_position,
+                        is_frameshift: false,
+                    });
+                }
+            }
+        }
+    }
+
+    // Non-substitution edit classes: real reference residue, but the alternate
+    // residue / full protein notation is #498's remit. The `?` here means
+    // "not yet implemented for this edit class", not "data unavailable".
+    let hgvs_p = build_indel_hgvs_p(prot_acc, edit_type, prot_position, is_frameshift, ref_len);
+    Some(ProteinConsequence {
+        hgvs_p,
+        ref_aa: ref_aa.to_three_letter().to_string(),
+        alt_aa: "?".to_string(),
+        position: prot_position,
+        is_frameshift,
+    })
+}
+
+/// Derive the `(ref_aa, alt_aa, position)` residue fields for a substitution
+/// `ProteinConsequence` from the engine's predicted protein `variant`, so they
+/// never contradict the variant's `hgvs_p`.
+///
+/// `raw_ref_aa` (the literal codon translation) and `raw_position` are the
+/// caller's fallbacks for the synonymous-identity shape, where `ref_aa` and
+/// `alt_aa` are legitimately equal.
+///
+/// The cases that need the variant's own contract rather than the raw codon:
+/// * **Plain residue substitution** (`p.(RefNAlt)`): take ref/alt/position from
+///   the variant — the engine already resolved them.
+/// * **Uncertain initiator / whole-protein unknown** (`p.(Met1?)`, `p.?`): the
+///   protein consequence is unpredictable, so the alternate residue is `"?"`;
+///   the reference residue and position come from the variant's location
+///   (residue 1 is the initiator `Met` on an ATG start regardless of the raw
+///   codon — anchoring `ref_aa` to the raw codon here would print e.g. `Leu`
+///   for a non-ATG start while `hgvs_p` says `Met1?`).
+/// * **C-terminal extension** (stop-loss, `p.(Ter3GlnextTer2)`): `ref_aa` is the
+///   terminator at the location and `alt_aa` is the read-through residue — never
+///   `Ter==Ter`, which the raw `ref/ref` fallback would wrongly produce.
+/// * **Synonymous identity** (`p.(=)`): `ref_aa == alt_aa` is correct; use the
+///   raw codon residue for both.
+fn substitution_residues_from_variant(
+    variant: &crate::hgvs::variant::HgvsVariant,
+    raw_ref_aa: crate::hgvs::location::AminoAcid,
+    raw_position: u64,
+) -> (String, String, u64) {
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::variant::HgvsVariant;
+
+    let raw_ref = raw_ref_aa.to_three_letter().to_string();
+    let HgvsVariant::Protein(p) = variant else {
+        return (raw_ref.clone(), raw_ref, raw_position);
+    };
+    // The variant's location residue/position — the engine's contract for the
+    // resolved fields. Falls back to the raw codon position if the boundary is
+    // unknown (should not happen for the shapes handled below).
+    let (loc_ref_aa, loc_position) = match p.loc_edit.location.start.inner() {
+        Some(pos) => (pos.aa.to_three_letter().to_string(), pos.number),
+        None => (raw_ref.clone(), raw_position),
+    };
+    match p.loc_edit.edit.inner() {
+        Some(ProteinEdit::Substitution { alternative, .. }) => (
+            loc_ref_aa,
+            alternative.to_three_letter().to_string(),
+            loc_position,
+        ),
+        // Uncertain initiator (`p.(Met1?)`) or whole-protein unknown (`p.?`):
+        // the alternate residue is unpredictable. Use the variant's location
+        // residue/position so the fields agree with `hgvs_p`.
+        Some(ProteinEdit::Unknown { .. }) => (loc_ref_aa, "?".to_string(), loc_position),
+        // Identity (synonymous): no residue change, so `ref_aa == alt_aa` is the
+        // honest report. The raw codon translation is the residue.
+        Some(ProteinEdit::Identity { .. }) => (raw_ref.clone(), raw_ref, raw_position),
+        // C-terminal extension (stop-loss, e.g. `p.(Ter3GlnextTer2)`): the
+        // reference residue is the terminator at the variant's location and the
+        // alternate is the read-through residue (`new_aa`). Reporting the raw
+        // codon for both would print `ref_aa == alt_aa == Ter`, which is wrong —
+        // a stop-loss is not synonymous. Anchor `ref_aa` to the location (the
+        // `Ter`) and take the new residue from the edit when the engine resolved
+        // it, falling back to `"?"` when it did not.
+        Some(ProteinEdit::Extension { new_aa, .. }) => {
+            let alt = new_aa
+                .map(|aa| aa.to_three_letter().to_string())
+                .unwrap_or_else(|| "?".to_string());
+            (loc_ref_aa, alt, loc_position)
+        }
+        // Any other structured edit a substitution might predict (frameshift,
+        // delins, …) is not representable as a single alternate residue here, so
+        // don't claim the reference residue is the alternate. Anchor to the
+        // location residue and mark the alternate unknown.
+        _ => (loc_ref_aa, "?".to_string(), loc_position),
+    }
+}
+
+/// Build position-based HGVS-p notation for a non-substitution indel when only
+/// the reference residue is resolved (full notation deferred to #498).
+fn build_indel_hgvs_p(
+    prot_acc: &str,
+    edit_type: &str,
+    prot_position: u64,
+    is_frameshift: bool,
+    ref_len: usize,
+) -> String {
+    if is_frameshift {
+        format!("{}:p.(?{}fs)", prot_acc, prot_position)
+    } else {
+        match edit_type {
+            "deletion" => {
+                // Preserve the ranged deletion form for in-frame multi-codon
+                // deletions (e.g. `p.(?2_?3del)`); collapse to single-position
+                // form only when the deletion spans one codon. Mirrors the
+                // no-reference fallback in `predict_protein_consequence`.
+                let end_pos = prot_position + (ref_len / 3).max(1) as u64 - 1;
+                if prot_position == end_pos {
+                    format!("{}:p.(?{}del)", prot_acc, prot_position)
+                } else {
+                    format!("{}:p.(?{}_?{}del)", prot_acc, prot_position, end_pos)
+                }
+            }
+            "insertion" => format!(
+                "{}:p.(?{}_?{}ins?)",
+                prot_acc,
+                prot_position,
+                prot_position + 1
+            ),
+            _ => format!("{}:p.(?{}?)", prot_acc, prot_position),
+        }
+    }
+}
+
+/// The "50–55 nt" NMD-escape boundary: a premature termination codon (PTC)
+/// within this many nucleotides upstream of the last exon-exon junction escapes
+/// nonsense-mediated decay (Nagy & Maquat 1998; the canonical rule is commonly
+/// cited as 50–55 nt). We use 55 nt — the conservative upper bound widely
+/// adopted by annotation tools (e.g. Ensembl VEP's NMD plugin) — so that
+/// borderline PTCs are classified as escaping rather than triggering.
+const NMD_LAST_JUNCTION_ESCAPE_NT: u64 = 55;
+
+/// Confidence for the NMD call when the variant introduces no PTC, or for a
+/// single-exon transcript — both are structural certainties, not predictions.
+const NMD_CONFIDENCE_STRUCTURAL: f64 = 0.9;
+
+/// Confidence for a nonsense-substitution NMD call: the PTC location is exact
+/// (the substituted codon), so the only residual uncertainty is the EJC model.
+const NMD_CONFIDENCE_EXACT_PTC: f64 = 0.85;
+
+/// Confidence for a frameshift NMD call: the reported PTC position is a 5' proxy
+/// for the true (downstream) PTC, so these calls are less certain.
+const NMD_CONFIDENCE_FRAMESHIFT_PTC: f64 = 0.7;
+
+/// Predict NMD for a CDS variant using junction-based PTC logic (issue #806).
+///
+/// Replaces the previous "last 10% of CDS" fraction heuristic with the
+/// biological rule: a PTC escapes NMD if it lies in the **last exon** or within
+/// [`NMD_LAST_JUNCTION_ESCAPE_NT`] nucleotides upstream of the **last exon-exon
+/// junction**; otherwise it triggers NMD. A single-exon transcript has no
+/// exon-exon junction and therefore can never trigger NMD.
+///
+/// The exon structure and CDS bounds come from the coordinate-only
+/// [`CdotTranscript`](crate::data::cdot::CdotTranscript) (always available when
+/// cdot is loaded — NMD needs only coordinates, not sequence). The PTC location
+/// is approximated by the variant's CDS position mapped to a transcript
+/// position: for a nonsense substitution this is exact; for a frameshift the
+/// true PTC is at or 3' of the variant, so using the variant position is the
+/// standard conservative proxy (reflected in the confidence score).
+///
+/// Returns `None` (no NMD prediction) when the variant's PTC status cannot be
+/// determined — either a substitution whose nonsense state is unknown (no
+/// sequence-bearing reference is configured) or a delins whose net frame delta
+/// is undeterminable (`frame_undecidable`) — rather than asserting a definitive
+/// `predicted: false` we cannot justify.
 fn predict_nmd_for_cds(
     state: &AppState,
     accession: &str,
     cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
     is_frameshift: bool,
     edit_type: &str,
+    frame_undecidable: bool,
 ) -> Option<NmdPrediction> {
-    // NMD prediction requires:
-    // 1. Knowing if the variant introduces a premature termination codon (PTC)
-    // 2. The position of the PTC relative to the last exon-exon junction
-
-    // For now, we use simplified rules:
-    // - Frameshift variants early in the CDS are more likely to trigger NMD
-    // - Variants in the last exon typically escape NMD
-
     let cdot = state.cdot.as_ref()?;
     let cdot_tx = cdot.get_transcript(accession)?;
 
-    let cds_start = cdot_tx.cds_start?;
-    let cds_end = cdot_tx.cds_end?;
-    let cds_length = cds_end.saturating_sub(cds_start);
+    // Only an in-CDS, non-intronic position can introduce a PTC we can place.
+    if cds_pos.base <= 0 || cds_pos.utr3 || cds_pos.offset.is_some() {
+        return None;
+    }
 
-    // Calculate relative position in CDS
-    let relative_pos = if cds_pos.base > 0 && cds_length > 0 {
-        cds_pos.base as f64 / cds_length as f64
+    // Does this variant plausibly introduce a PTC? Frameshifts do; a
+    // substitution does iff it creates a stop codon (nonsense) — detected
+    // exactly via the sequence-bearing reference. In-frame indels and
+    // missense/synonymous substitutions do not introduce a PTC.
+    //
+    // Two "unknown" states must NOT collapse into "no PTC" — each would emit a
+    // definitive `predicted: false` NMD call we cannot justify. Instead they
+    // propagate `None` so this function returns `None` (no NMD prediction), the
+    // honest signal that the call cannot be made:
+    //   - a substitution whose nonsense state is undeterminable because no
+    //     sequence-bearing reference is configured; and
+    //   - a delins whose net frame delta is undeterminable (`frame_undecidable`):
+    //     `is_frameshift = false` is conservative here, not "proven in-frame".
+    let introduces_ptc = if is_frameshift {
+        Some(true)
+    } else if edit_type == "substitution" {
+        is_nonsense_substitution(state, accession, cds_pos, edit)
+    } else if frame_undecidable {
+        None
     } else {
-        0.0
+        Some(false)
+    }?;
+
+    nmd_from_junction(cdot_tx, cds_pos, is_frameshift, introduces_ptc)
+}
+
+/// Pure junction-based NMD decision, separated from `AppState` so it is unit
+/// testable against a synthetic [`CdotTranscript`] (issue #806).
+///
+/// `introduces_ptc` is the caller's verdict on whether the variant introduces a
+/// premature termination codon (frameshift, or a nonsense substitution). All
+/// coordinates are taken from `cdot_tx` in its 0-based transcript coordinate
+/// system; `cds_pos` is the variant's 1-based CDS position.
+fn nmd_from_junction(
+    cdot_tx: &crate::data::cdot::CdotTranscript,
+    cds_pos: &CdsPos,
+    is_frameshift: bool,
+    introduces_ptc: bool,
+) -> Option<NmdPrediction> {
+    if !introduces_ptc {
+        return Some(NmdPrediction {
+            predicted: false,
+            confidence: NMD_CONFIDENCE_STRUCTURAL,
+            reason: "Variant does not introduce a premature termination codon".to_string(),
+        });
+    }
+
+    // Map the PTC's 1-based CDS position to a 0-based transcript position.
+    //
+    // For a nonsense substitution the PTC is the stop codon the substitution
+    // creates, so the distance-to-junction must be measured from that codon's
+    // anchor (its first base), not the edited nucleotide. Normalizing to the
+    // codon start makes every substitution that yields the same stop codon
+    // classify identically against the 55-nt boundary; without it a hit on
+    // codon base 2 or 3 shifts the distance by 1-2 nt and can flip a borderline
+    // call. A frameshift's PTC position is a deliberate 5' proxy at the edited
+    // base (see the confidence-constant docs), so it is left un-normalized.
+    let ptc_cds_base = if is_frameshift {
+        cds_pos.base
+    } else {
+        // Codon start (1-based): for base b, b - ((b - 1) mod 3).
+        cds_pos.base - (cds_pos.base - 1).rem_euclid(3)
+    };
+    let ptc_tx = cdot_tx.cds_to_tx(ptc_cds_base)?;
+
+    // No exon structure means we cannot reason about junctions at all — stay
+    // undecided rather than emit a definitive "no NMD" call we cannot justify.
+    if cdot_tx.exons.is_empty() {
+        return None;
+    }
+
+    // Single-exon transcript: no exon-exon junction exists, so the EJC-based
+    // NMD machinery has nothing to act on — a PTC here cannot trigger NMD.
+    if cdot_tx.exons.len() == 1 {
+        return Some(NmdPrediction {
+            predicted: false,
+            confidence: NMD_CONFIDENCE_STRUCTURAL,
+            reason: "Single-exon transcript has no exon-exon junction; PTC cannot trigger NMD"
+                .to_string(),
+        });
+    }
+
+    // Last exon-exon junction = first base (tx-start, column index 2) of the
+    // 3'-most exon in transcript order, in 0-based tx coordinates. Derive it as
+    // the maximum tx-start across exons rather than trusting `.last()`, so a
+    // missing or unsorted exon ordering invariant cannot silently flip a call.
+    let last_junction_tx = cdot_tx.exons.iter().map(|exon| exon[2]).max()?;
+
+    // A frameshift's PTC position is a 5' proxy (see the constant docs), so it
+    // carries lower confidence than an exact nonsense-substitution PTC.
+    let confidence = if is_frameshift {
+        NMD_CONFIDENCE_FRAMESHIFT_PTC
+    } else {
+        NMD_CONFIDENCE_EXACT_PTC
     };
 
-    // Check if in last exon (simplified - last 10% of CDS rule)
-    let near_3_end = relative_pos > 0.9;
-
-    // Predict NMD likelihood
-    let (predicted, confidence, reason) = if !is_frameshift && edit_type != "deletion" {
+    let (predicted, reason) = if ptc_tx >= last_junction_tx {
+        (false, "PTC in the last exon - escapes NMD".to_string())
+    } else if last_junction_tx - ptc_tx <= NMD_LAST_JUNCTION_ESCAPE_NT {
         (
             false,
-            0.9,
-            "Non-frameshift variant unlikely to trigger NMD".to_string(),
-        )
-    } else if near_3_end {
-        (
-            false,
-            0.8,
-            "Variant in last exon region - likely escapes NMD".to_string(),
-        )
-    } else if relative_pos < 0.5 && is_frameshift {
-        (
-            true,
-            0.7,
-            "Early frameshift likely to introduce PTC and trigger NMD".to_string(),
-        )
-    } else if is_frameshift {
-        (
-            true,
-            0.5,
-            "Frameshift may introduce PTC, NMD possible".to_string(),
+            format!(
+                "PTC within {} nt upstream of the last exon-exon junction - escapes NMD",
+                NMD_LAST_JUNCTION_ESCAPE_NT
+            ),
         )
     } else {
         (
-            false,
-            0.3,
-            "Insufficient information for NMD prediction".to_string(),
+            true,
+            format!(
+                "PTC more than {} nt upstream of the last exon-exon junction - triggers NMD",
+                NMD_LAST_JUNCTION_ESCAPE_NT
+            ),
         )
     };
 
@@ -857,9 +1312,809 @@ fn predict_nmd_for_cds(
     })
 }
 
+/// Determine whether a substitution at `cds_pos` creates a stop codon (nonsense)
+/// using the sequence-bearing reference.
+///
+/// Translates the reference and alternate codons (the latter via the engine's
+/// [`predict_substitution_protein`](crate::project::protein::predict_substitution_protein))
+/// and reports `true` iff the alternate residue is the terminator and the
+/// reference residue was not — i.e. a *new* premature stop.
+///
+/// Both `c.Ref>Alt` and the no-reference `c.N>Alt` form are accepted; the latter
+/// has its reference base resolved from sequence in the core (mirroring the
+/// protein-resolution path) so it is not silently excluded from NMD prediction.
+///
+/// Returns `None` when sequence is unavailable (reference unconfigured or
+/// transcript missing sequence) or the edit is not a substitution, so the caller
+/// can treat PTC-introduction as unknown rather than asserting a nonsense call
+/// without bases.
+fn is_nonsense_substitution(
+    state: &AppState,
+    accession: &str,
+    cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
+) -> Option<bool> {
+    use crate::hgvs::edit::NaEdit;
+
+    // Both `c.Ref>Alt` (Substitution) and the no-reference `c.N>Alt`
+    // (SubstitutionNoRef) are nonsense candidates — the core resolves the real
+    // reference base from sequence for the latter. Reject only non-substitution
+    // edits here so the no-ref form is not dropped before reaching the core.
+    match edit? {
+        NaEdit::Substitution { .. } | NaEdit::SubstitutionNoRef { .. } => {}
+        _ => return None,
+    }
+    let provider = state.reference.as_ref()?;
+    let transcript =
+        crate::reference::provider::ReferenceProvider::get_transcript(provider.as_ref(), accession)
+            .ok()?;
+    is_nonsense_substitution_from_transcript(&transcript, accession, cds_pos, edit)
+}
+
+/// Pure nonsense-substitution detection core, separated from `AppState` for unit
+/// testing against a synthetic sequence-bearing `Transcript` (issue #806). See
+/// [`is_nonsense_substitution`] for the contract.
+fn is_nonsense_substitution_from_transcript(
+    transcript: &crate::reference::transcript::Transcript,
+    accession: &str,
+    cds_pos: &CdsPos,
+    edit: Option<&crate::hgvs::edit::NaEdit>,
+) -> Option<bool> {
+    use crate::hgvs::edit::{Base, NaEdit, ProteinEdit};
+    use crate::hgvs::variant::HgvsVariant;
+    use crate::project::protein::{predict_substitution_protein, read_ref_codon};
+
+    // Normalize the supported substitution forms to a `Substitution` with a
+    // concrete reference base before calling the engine, which requires one.
+    // `SubstitutionNoRef` (`c.N>Alt`) carries only the alternate allele, so
+    // derive the reference base from the sequence codon at this position —
+    // mirroring the protein-resolution path so sequence-backed no-ref nonsense
+    // variants flow through the same NMD logic rather than being dropped.
+    let normalized_sub;
+    let edit = match edit? {
+        sub @ NaEdit::Substitution { .. } => sub,
+        NaEdit::SubstitutionNoRef { alternative } => {
+            let (ref_codon, frame) = read_ref_codon(transcript, cds_pos.base).ok()?;
+            let reference = Base::from_char(ref_codon.as_bytes()[frame as usize] as char)?;
+            normalized_sub = NaEdit::Substitution {
+                reference,
+                alternative: *alternative,
+            };
+            &normalized_sub
+        }
+        _ => return None,
+    };
+    let prot_acc = transcript
+        .protein_id
+        .clone()
+        .unwrap_or_else(|| accession.to_string());
+    let variant = predict_substitution_protein(transcript, cds_pos.base, edit, &prot_acc).ok()?;
+
+    // A substitution introduces a new PTC iff its predicted protein edit is a
+    // residue substitution whose alternate residue is the terminator. A
+    // reference stop (stop-loss) yields an extension, not a Substitution, so it
+    // correctly returns `false` here.
+    let HgvsVariant::Protein(p) = variant else {
+        return Some(false);
+    };
+    match p.loc_edit.edit.inner() {
+        Some(ProteinEdit::Substitution {
+            reference,
+            alternative,
+        }) => Some(
+            *alternative == crate::hgvs::location::AminoAcid::Ter
+                && *reference != crate::hgvs::location::AminoAcid::Ter,
+        ),
+        _ => Some(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -------------------------------------------------------------------------
+    // Issue #806: real amino-acid resolution + junction-based NMD
+    // -------------------------------------------------------------------------
+
+    use crate::data::cdot::CdotTranscript;
+    use crate::hgvs::edit::{Base, NaEdit};
+    use crate::reference::transcript::{Exon as TxExon, Strand, Transcript};
+
+    /// Build a sequence-bearing single-exon `Transcript` whose CDS starts at
+    /// tx position 1 (1-based inclusive). `seq` is the full transcript = CDS.
+    fn seq_transcript(id: &str, seq: &str, protein_id: Option<&str>) -> Transcript {
+        Transcript {
+            id: id.to_string(),
+            strand: Strand::Plus,
+            sequence: Some(seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(seq.len() as u64),
+            exons: vec![TxExon::new(1, 1, seq.len() as u64)],
+            protein_id: protein_id.map(|s| s.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Like [`seq_transcript`] but with an explicit 1-based inclusive CDS end
+    /// shorter than the sequence — so the bases past `cds_end` act as a 3'UTR
+    /// (needed to exercise the stop-loss read-through / extension path).
+    fn seq_transcript_with_cds(
+        id: &str,
+        seq: &str,
+        cds_end: u64,
+        protein_id: Option<&str>,
+    ) -> Transcript {
+        Transcript {
+            id: id.to_string(),
+            strand: Strand::Plus,
+            sequence: Some(seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(cds_end),
+            exons: vec![TxExon::new(1, 1, seq.len() as u64)],
+            protein_id: protein_id.map(|s| s.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Build a `CdotTranscript` with the given exon tx-spans (each `(tx_start,
+    /// tx_end_excl)`, 0-based) and `cds_start = 0` (CDS begins at tx 0).
+    fn cdot_with_exons(exon_tx_spans: &[(u64, u64)]) -> CdotTranscript {
+        let exons: Vec<[u64; 4]> = exon_tx_spans
+            .iter()
+            .enumerate()
+            .map(|(i, &(ts, te))| {
+                // Arbitrary but monotonic genomic coords; NMD math uses only the
+                // tx columns (indices 2 and 3).
+                let g = 1000 + (i as u64) * 1000;
+                [g, g + (te - ts), ts, te]
+            })
+            .collect();
+        let tx_len = exon_tx_spans.last().map(|&(_, te)| te).unwrap_or(0);
+        CdotTranscript {
+            gene_name: None,
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Plus,
+            exons,
+            cds_start: Some(0),
+            cds_end: Some(tx_len),
+            exon_cigars: Vec::new(),
+            gene_id: None,
+            protein: None,
+        }
+    }
+
+    fn cds(base: i64) -> CdsPos {
+        CdsPos::new(base)
+    }
+
+    // ---- Amino-acid resolution (real residues, not "?") ----
+
+    #[test]
+    fn resolve_real_missense_residues() {
+        // CDS: ATG (Met) CGT (Arg) ... ; substitute CGT -> CAT = His at codon 2.
+        // c.5G>A changes the middle base of codon 2 (CGT) to CAT.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::G,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(5),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("residues should resolve");
+        assert_eq!(pc.ref_aa, "Arg", "real reference residue, not '?'");
+        assert_eq!(pc.alt_aa, "His", "real alternate residue, not '?'");
+        assert_eq!(pc.position, 2);
+        assert!(!pc.ref_aa.contains('?') && !pc.alt_aa.contains('?'));
+    }
+
+    #[test]
+    fn resolve_indel_with_reference_gives_real_ref_residue_not_silent_question() {
+        // Finding #4 guard: when a reference IS available, an indel still
+        // resolves the real *reference* residue (alt_aa is the documented
+        // not-yet-implemented "?", never a silent "?" for ref_aa).
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(4), // codon 2 = CGT = Arg
+            Some(&edit),
+            "deletion",
+            true,
+            3,
+        )
+        .expect("ref residue should resolve");
+        assert_eq!(
+            pc.ref_aa, "Arg",
+            "indel-with-reference resolves real ref residue"
+        );
+        assert_eq!(
+            pc.alt_aa, "?",
+            "indel alt residue is deferred to #498 (not-yet-implemented)"
+        );
+    }
+
+    #[test]
+    fn resolve_inframe_multicodon_deletion_keeps_ranged_form() {
+        // A sequence-backed in-frame deletion spanning >1 codon must keep the
+        // ranged HGVS-p form `p.(?N_?Mdel)` rather than collapsing to the
+        // single-position `p.(?Ndel)`. `ref_len` flows through
+        // `resolve_residues_from_transcript` into `build_indel_hgvs_p`.
+        let seq = "ATGCGTGGGGAATAA"; // Met Arg Gly Glu Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(4), // codon 2
+            Some(&edit),
+            "deletion",
+            false,
+            6, // two codons deleted -> aa range of length 2
+        )
+        .expect("ref residue should resolve");
+        assert_eq!(pc.ref_aa, "Arg", "real reference residue at codon 2");
+        assert_eq!(
+            pc.hgvs_p, "NP_TEST.1:p.(?2_?3del)",
+            "multi-codon deletion keeps the ranged form, not collapsed p.(?2del)"
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_without_sequence() {
+        // No sequence on the transcript => cannot read a codon => None, so the
+        // caller emits the honest "data unavailable" "?" fallback.
+        let mut tx = seq_transcript("NM_TEST.1", "ATGCGTGGGTAA", Some("NP_TEST.1"));
+        tx.sequence = None;
+        let edit = NaEdit::Substitution {
+            reference: Base::G,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(5),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        );
+        assert!(
+            pc.is_none(),
+            "no sequence => None => honest 'data unavailable'"
+        );
+    }
+
+    #[test]
+    fn resolve_initiation_codon_substitution_residues_match_hgvs_p() {
+        // A substitution anywhere in the initiation codon (CDS 1-3) has an
+        // unpredictable protein consequence: the engine emits `p.(Met1?)` on an
+        // ATG start. The residue fields must agree with that contract -- ref_aa
+        // = Met (residue 1 is the initiator Met) and alt_aa = "?" -- NOT the raw
+        // codon translation, which would otherwise contradict `hgvs_p` for a
+        // non-ATG-changing edit and (here) yield a bogus concrete alt residue.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        // c.2T>A hits codon 1 (ATG); engine returns p.(Met1?).
+        let edit = NaEdit::Substitution {
+            reference: Base::T,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(2),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("initiation-codon substitution should resolve");
+        assert_eq!(pc.hgvs_p, "NP_TEST.1:p.(Met1?)");
+        assert_eq!(pc.ref_aa, "Met", "residue 1 is the initiator Met");
+        assert_eq!(
+            pc.alt_aa, "?",
+            "initiation-codon alt residue is unpredictable, must not contradict Met1?"
+        );
+        assert_eq!(pc.position, 1);
+    }
+
+    #[test]
+    fn resolve_non_atg_initiation_codon_substitution_residues_match_hgvs_p() {
+        // On a non-ATG start codon a raw translation of codon 1 would give a
+        // concrete non-Met residue (e.g. Leu for CTG), which contradicts the
+        // engine's initiator output. The substitution path reports `p.(Met1?)`
+        // for any initiation-codon substitution; the residue fields must agree
+        // (ref_aa = Met, alt_aa = "?"), never the raw codon residue.
+        let seq = "CTGCGTGGGTAA"; // CTG (Leu by raw translation) start ...
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        // c.1C>A hits the non-ATG start codon.
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(1),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("non-ATG initiation-codon substitution should resolve");
+        assert_eq!(pc.hgvs_p, "NP_TEST.1:p.(Met1?)");
+        assert_ne!(
+            pc.ref_aa, "Leu",
+            "must not report the raw CTG residue that contradicts the initiator output"
+        );
+        assert_eq!(
+            pc.ref_aa, "Met",
+            "initiator residue 1 is Met per the engine"
+        );
+        assert_eq!(pc.alt_aa, "?");
+    }
+
+    #[test]
+    fn resolve_uses_cdot_protein_accession_when_transcript_lacks_protein_id() {
+        // Finding 1 (#806 review): the sequence-backed path must use the
+        // authoritative cdot protein accession (threaded as `prot_acc`), NOT
+        // `transcript.protein_id`. A reference `Transcript` can lack
+        // `protein_id` even when cdot carries `NP_*`; resolving from the
+        // transcript there would flip `NP_*:p...` to `NM_*:p...` purely by
+        // enabling `state.reference`. Here the transcript has NO protein_id but
+        // we pass the cdot accession `NP_TEST.1` — the HGVS-p must carry it.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, None); // no protein_id
+        let edit = NaEdit::Substitution {
+            reference: Base::G,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1", // cdot-derived protein accession
+            &cds(5),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("residues should resolve");
+        assert_eq!(
+            pc.hgvs_p, "NP_TEST.1:p.(Arg2His)",
+            "uses cdot NP_ accession even though transcript.protein_id is None"
+        );
+        assert!(
+            !pc.hgvs_p.starts_with("NM_"),
+            "must not fall back to the NM_ transcript accession"
+        );
+
+        // Same guarantee for the deferred indel path (build_indel_hgvs_p).
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let pc_del = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(4),
+            Some(&del),
+            "deletion",
+            true,
+            1,
+        )
+        .expect("ref residue should resolve");
+        assert!(
+            pc_del.hgvs_p.starts_with("NP_TEST.1:"),
+            "indel path also uses the cdot NP_ accession, got {:?}",
+            pc_del.hgvs_p
+        );
+    }
+
+    #[test]
+    fn resolve_substitution_no_ref_resolves_real_alt_residue() {
+        // `c.N>Alt` (SubstitutionNoRef) carries only the alternate allele. When
+        // sequence exists the reference base is derived from the codon, so the
+        // form must resolve the REAL alternate residue — never degrade to the
+        // deferred `p.(?N?)` / indel notation (#806 review, finding 2a).
+        // CDS: ATG (Met) CGT (Arg) ...; c.5N>A rewrites the middle base of codon
+        // 2 (CGT -> CAT = His), matching `resolve_real_missense_residues`.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::SubstitutionNoRef {
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(5),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("no-ref substitution should resolve against sequence");
+        assert_eq!(pc.ref_aa, "Arg", "ref residue read from the codon");
+        assert_eq!(pc.alt_aa, "His", "no-ref alt residue resolved, not '?'");
+        assert_eq!(pc.position, 2);
+        assert_eq!(
+            pc.hgvs_p, "NP_TEST.1:p.(Arg2His)",
+            "no-ref form yields fully-resolved HGVS-p, not p.(?2?)"
+        );
+        assert!(
+            !pc.hgvs_p.contains("?"),
+            "no deferred '?' when sequence exists"
+        );
+    }
+
+    #[test]
+    fn resolve_substitution_explicit_ref_mismatch_still_resolves() {
+        // An explicit reference base that disagrees with the sequence must NOT
+        // collapse to a sequence-backed `p.(?N?)`: the engine reads the real
+        // codon from sequence and applies the alt regardless of the stated ref,
+        // so the prediction still resolves to real residues (#806 review,
+        // finding 2b). Codon 2 is CGT (Arg); we state ref=A (wrong) but alt=A,
+        // giving CGT -> CAT = His just as the correct-ref case would.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::A, // deliberately wrong vs. the codon's G
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(5),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("explicit-ref-mismatch substitution should still resolve");
+        assert_eq!(
+            pc.hgvs_p, "NP_TEST.1:p.(Arg2His)",
+            "explicit-ref mismatch resolves from sequence, not p.(?2?)"
+        );
+        assert!(
+            !pc.hgvs_p.contains("?"),
+            "explicit-ref mismatch must not yield a sequence-backed p.(?N?)"
+        );
+        assert_eq!(pc.ref_aa, "Arg");
+        assert_eq!(pc.alt_aa, "His");
+    }
+
+    #[test]
+    fn resolve_stop_loss_extension_reports_readthrough_residue_not_ter_ter() {
+        // A stop-loss substitution predicts a C-terminal extension
+        // (`p.(Ter3GlnextTer2)`), NOT a residue substitution. The residue fields
+        // must report the read-through residue as the alternate — never the raw
+        // `Ter==Ter` the generic ref/ref fallback would produce (#806 review:
+        // "stop-loss substitutions report alt_aa as the reference residue").
+        // CDS "ATGAAATAA" (Met-Lys-Ter; stop at c.7-9) + 3'UTR "GGGTAA".
+        // c.7T>C turns TAA -> CAA (Gln), reading through to a downstream Ter.
+        let seq = "ATGAAATAAGGGTAA";
+        let tx = seq_transcript_with_cds("NM_TEST.1", seq, 9, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::T,
+            alternative: Base::C,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(7),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("stop-loss substitution should resolve");
+        assert_eq!(
+            pc.hgvs_p, "NP_TEST.1:p.(Ter3GlnextTer2)",
+            "stop-loss yields a C-terminal extension"
+        );
+        assert_eq!(pc.ref_aa, "Ter", "reference residue is the terminator");
+        assert_eq!(
+            pc.alt_aa, "Gln",
+            "alternate is the read-through residue, NOT Ter (no ref==alt)"
+        );
+        assert_ne!(
+            pc.ref_aa, pc.alt_aa,
+            "a stop-loss is not synonymous: ref_aa must not equal alt_aa"
+        );
+        assert_eq!(pc.position, 3, "extension is at the original stop codon");
+    }
+
+    #[test]
+    fn resolve_synonymous_substitution_reports_equal_ref_and_alt() {
+        // A synonymous substitution predicts identity (`p.(=)`), where reporting
+        // `ref_aa == alt_aa` is the honest, correct result. CDS codon 2 is CGT
+        // (Arg); c.6T>A -> CGA, still Arg.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::T,
+            alternative: Base::A,
+        };
+        let pc = resolve_residues_from_transcript(
+            &tx,
+            "NP_TEST.1",
+            &cds(6),
+            Some(&edit),
+            "substitution",
+            false,
+            1,
+        )
+        .expect("synonymous substitution should resolve");
+        assert_eq!(
+            pc.ref_aa, "Arg",
+            "synonymous change keeps the reference residue"
+        );
+        assert_eq!(pc.alt_aa, "Arg", "synonymous: alt residue equals ref");
+        assert_eq!(pc.position, 2);
+    }
+
+    // ---- Nonsense detection ----
+
+    #[test]
+    fn detects_nonsense_substitution() {
+        // Codon 2 CGT (Arg). C>T at c.4 makes TGT (Cys) — not nonsense.
+        // Use CAA (Gln) at codon 2 and C>T at c.4 -> TAA (Ter): nonsense.
+        let seq = "ATGCAAGGGTAA"; // Met Gln Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::T,
+        };
+        let is_nonsense =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(4), Some(&edit));
+        assert_eq!(is_nonsense, Some(true), "CAA->TAA is a new stop (nonsense)");
+    }
+
+    #[test]
+    fn missense_is_not_nonsense() {
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::G,
+            alternative: Base::A,
+        };
+        let is_nonsense =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(5), Some(&edit));
+        assert_eq!(
+            is_nonsense,
+            Some(false),
+            "CGT->CAT (His) is missense, not nonsense"
+        );
+    }
+
+    #[test]
+    fn nonsense_unknown_without_sequence_stays_none() {
+        // Without a sequence the nonsense state is undeterminable; the detector
+        // must report `None` (unknown), NOT `Some(false)`. `predict_nmd_for_cds`
+        // relies on this to decline an NMD call rather than emit a false-negative
+        // `predicted: false`.
+        let mut tx = seq_transcript("NM_TEST.1", "ATGCAAGGGTAA", Some("NP_TEST.1"));
+        tx.sequence = None;
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::T,
+        };
+        let is_nonsense =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(4), Some(&edit));
+        assert_eq!(
+            is_nonsense, None,
+            "no sequence => unknown nonsense state, never a coerced false"
+        );
+    }
+
+    #[test]
+    fn detects_nonsense_no_ref_substitution() {
+        // `c.N>Alt` (SubstitutionNoRef) must flow through nonsense detection just
+        // like `c.Ref>Alt`: the reference base is derived from sequence, so a
+        // no-ref nonsense variant is not silently excluded from NMD (#806 review:
+        // "Normalize no-ref substitutions before NMD detection"). Codon 2 CAA
+        // (Gln); c.4N>T derives ref C from the codon -> TAA (Ter): nonsense.
+        let seq = "ATGCAAGGGTAA"; // Met Gln Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::SubstitutionNoRef {
+            alternative: Base::T,
+        };
+        let is_nonsense =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(4), Some(&edit));
+        assert_eq!(
+            is_nonsense,
+            Some(true),
+            "no-ref c.4N>T (CAA->TAA) is a new stop (nonsense), not dropped"
+        );
+    }
+
+    #[test]
+    fn no_ref_missense_substitution_is_not_nonsense() {
+        // No-ref counterpart of `missense_is_not_nonsense`: a resolved missense
+        // must report `Some(false)`, not `None`. Codon 2 CGT (Arg); c.5N>A
+        // derives ref G -> CAT (His): missense.
+        let seq = "ATGCGTGGGTAA"; // Met Arg Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::SubstitutionNoRef {
+            alternative: Base::A,
+        };
+        let is_nonsense =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(5), Some(&edit));
+        assert_eq!(
+            is_nonsense,
+            Some(false),
+            "no-ref CGT->CAT (His) is missense, resolved (not unknown)"
+        );
+    }
+
+    // ---- Junction-based NMD ----
+
+    #[test]
+    fn nmd_ptc_in_last_exon_escapes() {
+        // Exons (tx 0-based): [0,100),[100,200),[200,250). Last junction tx=200.
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        // c.201 -> tx 200 == last junction -> last exon -> escape.
+        let pred = nmd_from_junction(&cdot_tx, &cds(201), true, true).unwrap();
+        assert!(!pred.predicted, "PTC in last exon escapes NMD");
+        assert!(pred.reason.contains("last exon"));
+    }
+
+    #[test]
+    fn nmd_ptc_within_55nt_of_last_junction_escapes() {
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        // c.180 -> tx 179 -> 200-179 = 21 nt upstream -> escape.
+        let pred = nmd_from_junction(&cdot_tx, &cds(180), true, true).unwrap();
+        assert!(!pred.predicted, "PTC within 55 nt of last junction escapes");
+    }
+
+    #[test]
+    fn nmd_55nt_boundary_is_inclusive() {
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        // c.146 -> tx 145 -> 200-145 = 55 -> exactly at boundary -> escape.
+        let escape = nmd_from_junction(&cdot_tx, &cds(146), true, true).unwrap();
+        assert!(
+            !escape.predicted,
+            "exactly 55 nt upstream escapes (inclusive)"
+        );
+        // c.145 -> tx 144 -> 200-144 = 56 -> beyond boundary -> trigger.
+        let trigger = nmd_from_junction(&cdot_tx, &cds(145), true, true).unwrap();
+        assert!(trigger.predicted, "56 nt upstream triggers NMD");
+    }
+
+    #[test]
+    fn nmd_ptc_mid_cds_triggers() {
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        // c.10 -> tx 9 -> 200-9 = 191 nt upstream -> trigger.
+        let pred = nmd_from_junction(&cdot_tx, &cds(10), true, true).unwrap();
+        assert!(pred.predicted, "PTC far 5' of last junction triggers NMD");
+        assert!(pred.reason.contains("triggers NMD"));
+    }
+
+    #[test]
+    fn nmd_single_exon_never_triggers() {
+        let cdot_tx = cdot_with_exons(&[(0, 250)]);
+        // Even a frameshift PTC near the 5' end cannot trigger NMD: no junction.
+        let pred = nmd_from_junction(&cdot_tx, &cds(10), true, true).unwrap();
+        assert!(!pred.predicted, "single-exon transcript never triggers NMD");
+        assert!(pred.reason.contains("Single-exon"));
+    }
+
+    #[test]
+    fn nmd_empty_exons_is_undecided() {
+        // Missing exon structure must stay undecided (`None`), not collapse into
+        // a definitive "no NMD" call: `cds_to_tx` only needs `cds_start`, so the
+        // junction logic is reached even with no exons (#806 review).
+        let cdot_tx = cdot_with_exons(&[]);
+        assert!(
+            nmd_from_junction(&cdot_tx, &cds(4), false, true).is_none(),
+            "empty exon metadata yields no NMD prediction"
+        );
+    }
+
+    #[test]
+    fn nmd_last_junction_uses_max_tx_start_not_order() {
+        // The last junction is the maximum exon tx-start, independent of the
+        // order exons appear in: an unsorted list must classify identically to
+        // the sorted one (#806 review: derive the junction by max, not `.last()`).
+        let sorted = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        let unsorted = cdot_with_exons(&[(200, 250), (0, 100), (100, 200)]);
+        // c.50 -> tx 49. Against the true last junction (tx 200) this is 151 nt
+        // upstream -> triggers NMD. A naive `.last()` on the unsorted list would
+        // pick tx-start 100 (51 nt upstream) and wrongly escape, so this pins the
+        // order-independent max-based derivation.
+        let from_sorted = nmd_from_junction(&sorted, &cds(50), true, true).unwrap();
+        let from_unsorted = nmd_from_junction(&unsorted, &cds(50), true, true).unwrap();
+        assert!(from_sorted.predicted);
+        assert_eq!(
+            from_sorted.predicted, from_unsorted.predicted,
+            "junction derived by max tx-start is order-independent"
+        );
+    }
+
+    #[test]
+    fn nmd_nonsense_substitution_mid_cds_triggers_end_to_end() {
+        // Ties nonsense detection (sequence-bearing Transcript) to the
+        // junction decision (CdotTranscript): a CAA->TAA nonsense at codon 2
+        // (c.4), far 5' of the last junction, triggers NMD.
+        let seq = "ATGCAAGGGTAA"; // Met Gln Gly Ter
+        let tx = seq_transcript("NM_TEST.1", seq, Some("NP_TEST.1"));
+        let edit = NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::T,
+        };
+        let introduces_ptc =
+            is_nonsense_substitution_from_transcript(&tx, "NM_TEST.1", &cds(4), Some(&edit))
+                .unwrap_or(false);
+        assert!(introduces_ptc, "nonsense substitution introduces a PTC");
+
+        // Multi-exon transcript with the last junction well 3' of codon 2.
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        let pred = nmd_from_junction(&cdot_tx, &cds(4), false, introduces_ptc).unwrap();
+        assert!(pred.predicted, "nonsense PTC mid-CDS triggers NMD");
+    }
+
+    #[test]
+    fn nmd_nonsense_substitution_is_phase_independent_at_boundary() {
+        // A nonsense substitution must classify by the stop CODON's anchor, not
+        // the edited nucleotide: all three bases of the same codon yield the
+        // same stop and must classify identically against the 55-nt boundary.
+        //
+        // Exons [0,100),[100,200),[200,250): last junction tx=200. The codon at
+        // c.145/146/147 (codon start c.145 -> tx 144 -> distance 56 -> trigger)
+        // straddles the boundary by edited-base: c.146 -> tx 145 -> distance 55
+        // would naively escape. Normalizing to codon start makes all three
+        // trigger.
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        for base in [145, 146, 147] {
+            let pred = nmd_from_junction(&cdot_tx, &cds(base), false, true).unwrap();
+            assert!(
+                pred.predicted,
+                "nonsense at c.{base} (codon start c.145, 56 nt upstream) must trigger NMD"
+            );
+        }
+    }
+
+    #[test]
+    fn nmd_frameshift_uses_edited_base_not_codon_start() {
+        // A frameshift's PTC position is a 5' proxy at the edited base -- it must
+        // NOT be normalized to a codon start (that would shift the proxy and the
+        // classification). c.146 -> tx 145 -> distance 55 -> escape for a
+        // frameshift, distinct from the nonsense-substitution case above.
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        let pred = nmd_from_junction(&cdot_tx, &cds(146), true, true).unwrap();
+        assert!(
+            !pred.predicted,
+            "frameshift proxy at tx 145 (55 nt upstream) escapes; not codon-normalized"
+        );
+    }
+
+    #[test]
+    fn nmd_no_ptc_does_not_trigger() {
+        let cdot_tx = cdot_with_exons(&[(0, 100), (100, 200), (200, 250)]);
+        // In-frame / missense (introduces_ptc = false), even mid-CDS.
+        let pred = nmd_from_junction(&cdot_tx, &cds(10), false, false).unwrap();
+        assert!(
+            !pred.predicted,
+            "variant without a PTC does not trigger NMD"
+        );
+        assert!(pred.reason.contains("does not introduce"));
+    }
 
     #[test]
     fn test_analyze_substitution() {
@@ -906,6 +2161,76 @@ mod tests {
                 assert!(!is_frameshift, "3 bp deletion is in-frame");
             }
         }
+    }
+
+    // ---- delins frame-undecidability → NMD declines (issue #806 review) ----
+    //
+    // A delins whose net frame delta is undeterminable reports `is_frameshift =
+    // false` *conservatively*. `predict_nmd_for_cds` keys off this flag to
+    // return `None` (no NMD prediction) instead of a definitive `predicted:
+    // false` it cannot justify — these tests pin the flag for the shapes that
+    // feed that decision.
+
+    #[test]
+    fn delins_unknown_alt_len_is_frame_undecidable() {
+        use crate::hgvs::edit::InsertedSequence;
+        // Ref span known (3 bp) but the inserted nt count is unknown
+        // (`Range`/`Named`/`Reference`-style insert): net delta undeterminable.
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Range(5, 10),
+            deleted: None,
+            deleted_length: None,
+        };
+        assert!(
+            delins_frame_undecidable(&edit, Some(3)),
+            "unknown inserted length leaves the net frame delta undecidable"
+        );
+    }
+
+    #[test]
+    fn delins_unknown_span_with_literal_is_frame_undecidable() {
+        use crate::hgvs::edit::{InsertedSequence, Sequence};
+        // Inserted length known (single literal base) but the deleted span is
+        // unknown (no position-interval span): still undecidable. This is the
+        // "unknown-span delins with a single-nt literal insert" shape.
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![Base::A])),
+            deleted: None,
+            deleted_length: None,
+        };
+        assert!(
+            delins_frame_undecidable(&edit, None),
+            "unknown deleted span leaves the net frame delta undecidable"
+        );
+    }
+
+    #[test]
+    fn delins_known_span_and_alt_is_frame_decidable() {
+        use crate::hgvs::edit::{InsertedSequence, Sequence};
+        // Both endpoints known (3 bp deleted, 2 bp inserted): the net delta is
+        // fully determined, so this is NOT undecidable — NMD may proceed.
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![Base::A, Base::T])),
+            deleted: None,
+            deleted_length: None,
+        };
+        assert!(
+            !delins_frame_undecidable(&edit, Some(3)),
+            "both ref span and alt length known => frame delta is decidable"
+        );
+    }
+
+    #[test]
+    fn non_delins_is_never_frame_undecidable() {
+        // A del/dup/ins with an unknown span is handled by the caller's separate
+        // `span_undecidable` skip, not this delins-specific flag — so the flag
+        // must stay `false` for non-delins edits regardless of `span_len`.
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        assert!(!delins_frame_undecidable(&edit, None));
+        assert!(!delins_frame_undecidable(&edit, Some(2)));
     }
 
     #[test]
