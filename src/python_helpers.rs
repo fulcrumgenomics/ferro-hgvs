@@ -83,43 +83,6 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
     }
 }
 
-/// Get the edit type from debug string representation
-///
-/// This is a fallback function that determines the edit type by inspecting
-/// the Debug representation of an edit. Use `na_edit_type_str` when possible.
-pub fn edit_type_from_debug<T: std::fmt::Debug>(edit: &T) -> &'static str {
-    let debug = format!("{:?}", edit);
-    if debug.contains("Substitution") {
-        "substitution"
-    } else if debug.contains("Deletion") {
-        "deletion"
-    } else if debug.contains("DupIns") {
-        "dupins"
-    } else if debug.contains("Duplication") {
-        "duplication"
-    } else if debug.contains("BreakpointInsertion") {
-        "breakpoint_insertion"
-    } else if debug.contains("Insertion") {
-        "insertion"
-    } else if debug.contains("Delins") {
-        "delins"
-    } else if debug.contains("Inversion") {
-        "inversion"
-    } else if debug.contains("Repeat") {
-        "repeat"
-    } else if debug.contains("Identity") {
-        "identity"
-    } else if debug.contains("Conversion") {
-        "conversion"
-    } else if debug.contains("Methylation") {
-        "methylation"
-    } else if debug.contains("CopyNumber") {
-        "copy_number"
-    } else {
-        "unknown"
-    }
-}
-
 /// Parse a direction string into ShuffleDirection
 ///
 /// Accepts various common formats:
@@ -684,29 +647,6 @@ mod tests {
         // get_indel_length must return None (not Some(0) or any deterministic value).
         let variant = parse_hgvs("NM_000333.3:c.(4_246)delN[15]").expect("must parse delN[15]");
         assert_eq!(get_indel_length(&variant), None);
-    }
-
-    // ===== edit_type_from_debug Tests =====
-
-    #[test]
-    fn test_edit_type_from_debug_substitution() {
-        #[derive(Debug)]
-        struct TestSubstitution;
-        assert_eq!(edit_type_from_debug(&TestSubstitution), "substitution");
-    }
-
-    #[test]
-    fn test_edit_type_from_debug_deletion() {
-        #[derive(Debug)]
-        struct TestDeletion;
-        assert_eq!(edit_type_from_debug(&TestDeletion), "deletion");
-    }
-
-    #[test]
-    fn test_edit_type_from_debug_unknown() {
-        #[derive(Debug)]
-        struct TestOther;
-        assert_eq!(edit_type_from_debug(&TestOther), "unknown");
     }
 
     // ===== parse_direction Tests =====
