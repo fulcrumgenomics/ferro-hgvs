@@ -758,24 +758,18 @@ fn get_refseq_accession(chrom: &str, build: &GenomeBuild) -> Option<String> {
     }
 }
 
-/// Extract chromosome from RefSeq accession
+/// Extract the UCSC chromosome name from a RefSeq accession.
+///
+/// Resolves the primary-assembly `NC_` → UCSC mapping through the shared,
+/// build-aware [`ContigAliases`](crate::liftover::aliases::ContigAliases)
+/// reverse table rather than a hand-rolled accession ladder, so the forward and
+/// reverse directions share one source of truth. Accessions the table does not
+/// describe are returned unchanged.
 fn extract_chromosome_from_accession(accession: &str) -> String {
-    if accession.starts_with("NC_") {
-        if let Some(num_part) = accession.strip_prefix("NC_") {
-            if let Some(chrom_num) = num_part.split('.').next() {
-                if let Ok(num) = chrom_num.parse::<u32>() {
-                    return match num {
-                        1..=22 => format!("chr{}", num),
-                        23 => "chrX".to_string(),
-                        24 => "chrY".to_string(),
-                        12920 => "chrM".to_string(),
-                        _ => format!("chr{}", num),
-                    };
-                }
-            }
-        }
-    }
-    accession.to_string()
+    crate::liftover::aliases::default_human_aliases()
+        .refseq_to_ucsc(accession)
+        .map(|ucsc| ucsc.to_string())
+        .unwrap_or_else(|| accession.to_string())
 }
 
 #[cfg(test)]
@@ -817,6 +811,20 @@ mod tests {
         assert_eq!(extract_chromosome_from_accession("NC_000023.11"), "chrX");
         assert_eq!(extract_chromosome_from_accession("NC_000024.10"), "chrY");
         assert_eq!(extract_chromosome_from_accession("NC_012920.1"), "chrM");
+    }
+
+    #[test]
+    fn test_extract_chromosome_from_accession_unmapped_passthrough() {
+        // An accession the shared alias table does not know is returned
+        // unchanged rather than being coerced to a fabricated chrN.
+        assert_eq!(
+            extract_chromosome_from_accession("NC_000025.11"),
+            "NC_000025.11"
+        );
+        assert_eq!(
+            extract_chromosome_from_accession("NW_009646201.1"),
+            "NW_009646201.1"
+        );
     }
 
     #[test]

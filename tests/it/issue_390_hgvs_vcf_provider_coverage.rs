@@ -291,14 +291,18 @@ mod substitution_axis_matrix {
 mod c_axis_edit_kind_matrix {
     use super::*;
 
-    fn cds_del_atg() -> HgvsVariant {
+    // The fixture genome holds "TGC" at genomic 1049-1051 (where c.1_3
+    // projects), so the deleted/duplicated sequences below use "TGC" to keep
+    // each variant biologically consistent with the reference it acts on.
+
+    fn cds_del_tgc() -> HgvsVariant {
         HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "TEST", Some(1)),
             gene_symbol: Some("TEST".to_string()),
             loc_edit: LocEdit::new(
                 CdsInterval::new(CdsPos::new(1), CdsPos::new(3)),
                 NaEdit::Deletion {
-                    sequence: Some(Sequence::from_str("ATG").unwrap()),
+                    sequence: Some(Sequence::from_str("TGC").unwrap()),
                     length: None,
                 },
             ),
@@ -312,20 +316,22 @@ mod c_axis_edit_kind_matrix {
             loc_edit: LocEdit::new(
                 CdsInterval::new(CdsPos::new(1), CdsPos::new(2)),
                 NaEdit::Insertion {
+                    // Inserted material is arbitrary novel sequence (it need
+                    // not match the reference); "ATG" exercises that path.
                     sequence: InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()),
                 },
             ),
         })
     }
 
-    fn cds_dup_atg() -> HgvsVariant {
+    fn cds_dup_tgc() -> HgvsVariant {
         HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "TEST", Some(1)),
             gene_symbol: Some("TEST".to_string()),
             loc_edit: LocEdit::new(
                 CdsInterval::new(CdsPos::new(1), CdsPos::new(3)),
                 NaEdit::Duplication {
-                    sequence: Some(Sequence::from_str("ATG").unwrap()),
+                    sequence: Some(Sequence::from_str("TGC").unwrap()),
                     length: None,
                     uncertain_extent: None,
                 },
@@ -333,7 +339,7 @@ mod c_axis_edit_kind_matrix {
         })
     }
 
-    fn cds_delins_atg_ttcc() -> HgvsVariant {
+    fn cds_delins_tgc_ttcc() -> HgvsVariant {
         HgvsVariant::Cds(CdsVariant {
             accession: Accession::new("NM", "TEST", Some(1)),
             gene_symbol: Some("TEST".to_string()),
@@ -341,44 +347,69 @@ mod c_axis_edit_kind_matrix {
                 CdsInterval::new(CdsPos::new(1), CdsPos::new(3)),
                 NaEdit::Delins {
                     sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
-                    deleted: Some(Sequence::from_str("ATG").unwrap()),
+                    deleted: Some(Sequence::from_str("TGC").unwrap()),
                     deleted_length: None,
                 },
             ),
         })
     }
 
-    fn assert_genomic_reference_not_available(variant: HgvsVariant, label: &str) {
+    /// Convert `variant` against the fixture transcript + provider and assert
+    /// the resulting VCF record.
+    ///
+    /// Before #805 these cells surfaced a `GenomicReferenceNotAvailable`
+    /// because the anchor-base lookup fetched against the transcript id with a
+    /// genomic position. The converter now fetches the anchor base genomically
+    /// (keyed by the contig name the record is emitted under), so each cell
+    /// resolves to a VCF record with the provider-recovered anchor base.
+    ///
+    /// Fixture genomic bases: 1-based genomic position N (for N >= 1000) holds
+    /// `"ATGCATGC"`[(N - 1000) mod 8]. c.1 maps to genomic 1049.
+    fn assert_converts_to(
+        variant: HgvsVariant,
+        label: &str,
+        expected_pos: u64,
+        expected_ref: &str,
+        expected_alt: &str,
+    ) {
         let tx = fixture_transcript();
         let provider = fixture_provider();
         let converter = HgvsToVcfConverter::new(&tx, &provider);
-        let err = converter.convert(&variant).expect_err(label);
-        assert!(
-            matches!(err, FerroError::GenomicReferenceNotAvailable { .. }),
-            "{label}: expected GenomicReferenceNotAvailable (pre-existing \
-             converter bug — anchor-base lookup uses transcript id with \
-             genomic position), got: {err:?}"
+        let record = converter.convert(&variant).expect(label).record;
+        assert_eq!(record.chrom, "chr1", "{label}: chrom");
+        assert_eq!(record.pos, expected_pos, "{label}: pos");
+        assert_eq!(record.reference, expected_ref, "{label}: ref");
+        assert_eq!(
+            record.alternate,
+            vec![expected_alt.to_string()],
+            "{label}: alt"
         );
     }
 
     #[test]
-    fn c_axis_deletion_with_explicit_seq_surfaces_provider_gap() {
-        assert_genomic_reference_not_available(cds_del_atg(), "c. del");
+    fn c_axis_deletion_recovers_anchor_from_provider() {
+        // c.1_3delTGC (genomic 1049-1051 = "TGC"); anchor at genomic 1048 =
+        // 'A'. REF = anchor + deleted, ALT = anchor.
+        assert_converts_to(cds_del_tgc(), "c. del", 1048, "ATGC", "A");
     }
 
     #[test]
-    fn c_axis_insertion_with_explicit_seq_surfaces_provider_gap() {
-        assert_genomic_reference_not_available(cds_ins_atg(), "c. ins");
+    fn c_axis_insertion_recovers_anchor_from_provider() {
+        // c.1_2insATG (anchor at genomic 1049 = 'T'); ALT = anchor + inserted.
+        assert_converts_to(cds_ins_atg(), "c. ins", 1049, "T", "TATG");
     }
 
     #[test]
-    fn c_axis_duplication_with_explicit_seq_surfaces_provider_gap() {
-        assert_genomic_reference_not_available(cds_dup_atg(), "c. dup");
+    fn c_axis_duplication_recovers_anchor_from_provider() {
+        // c.1_3dupTGC (anchor at the genomic end 1051 = 'C').
+        assert_converts_to(cds_dup_tgc(), "c. dup", 1051, "C", "CTGC");
     }
 
     #[test]
-    fn c_axis_delins_with_explicit_seqs_surfaces_provider_gap() {
-        assert_genomic_reference_not_available(cds_delins_atg_ttcc(), "c. delins");
+    fn c_axis_delins_recovers_anchor_from_provider() {
+        // c.1_3delTGCinsTTCC (length-changing → anchor at genomic 1048 = 'A';
+        // deleted bases fetched from genomic 1049-1051 = "TGC").
+        assert_converts_to(cds_delins_tgc_ttcc(), "c. delins", 1048, "ATGC", "ATTCC");
     }
 }
 

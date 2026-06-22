@@ -572,75 +572,84 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
             })
     }
 
-    /// Get a single reference base at a position
-    fn get_reference_base(&self, _chrom: &str, pos: u64) -> Result<char, FerroError> {
-        // Try to get from cached transcript bases first; coordinate-only
-        // transcripts fall through to the reference provider.
-        if let Some(seq) = self
-            .transcript
-            .sequence
-            .as_deref()
-            .filter(|s| !s.is_empty())
-        {
-            // This is a simplification - in practice we'd need proper coordinate mapping
-            // Use checked conversion to avoid truncation on 32-bit systems
-            let idx = usize::try_from(pos.saturating_sub(1)).map_err(|_| {
-                FerroError::ConversionError {
-                    msg: format!("Position {} is too large for this platform", pos),
-                }
-            })?;
-            if idx < seq.len() {
-                return Ok(seq.chars().nth(idx).unwrap_or('N'));
-            }
-        }
-
-        // Fallback: try reference provider
-        let accession = &self.transcript.id;
-        let sequence = self.provider.get_sequence(accession, pos - 1, pos)?;
-        sequence
+    /// Get a single reference base at a 1-based genomic position on `chrom`.
+    fn get_reference_base(&self, chrom: &str, pos: u64) -> Result<char, FerroError> {
+        let bases = self.get_reference_sequence(chrom, pos, pos)?;
+        bases
             .chars()
             .next()
             .ok_or_else(|| FerroError::ConversionError {
-                msg: format!("Could not get reference base at position {}", pos),
+                msg: format!("Could not get reference base at {}:{}", chrom, pos),
             })
     }
 
-    /// Get reference sequence for a range
+    /// Fetch reference bases over a 1-based inclusive genomic range `[start,
+    /// end]` on contig `chrom`.
+    ///
+    /// All callers in [`Self::build_vcf_record`] supply genomic coordinates
+    /// (the CDS/transcript paths map to genomic before calling), so the bases
+    /// are fetched from the provider's genomic contig — keyed by the same
+    /// `chrom` name used for the output VCF record — rather than from the
+    /// transcript-relative sequence (which is in a different coordinate frame
+    /// and would yield the wrong base for genomic positions).
+    ///
+    /// Coordinates are validated (`start >= 1`, `end >= start`) before the
+    /// 1-based → 0-based half-open conversion, and the returned slice is
+    /// length-checked so a short provider read errors rather than silently
+    /// truncating the reference allele. When the provider has no genomic data
+    /// for `chrom`, the error propagates so del/ins anchor recovery declines
+    /// cleanly instead of emitting a wrong base.
     fn get_reference_sequence(
         &self,
-        _chrom: &str,
+        chrom: &str,
         start: u64,
         end: u64,
     ) -> Result<String, FerroError> {
-        // Try to get from cached transcript bases first; coordinate-only
-        // transcripts fall through to the reference provider.
-        if let Some(seq) = self
-            .transcript
-            .sequence
-            .as_deref()
-            .filter(|s| !s.is_empty())
-        {
-            // Use checked conversion to avoid truncation on 32-bit systems
-            let start_idx = usize::try_from(start.saturating_sub(1)).map_err(|_| {
-                FerroError::ConversionError {
-                    msg: format!("Start position {} is too large for this platform", start),
-                }
-            })?;
-            let end_idx = usize::try_from(end).map_err(|_| FerroError::ConversionError {
-                msg: format!("End position {} is too large for this platform", end),
-            })?;
-            if end_idx <= seq.len() {
-                return Ok(seq[start_idx..end_idx].to_string());
-            }
+        if start < 1 || end < start {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "invalid 1-based genomic range [{}, {}] for {}",
+                    start, end, chrom
+                ),
+            });
         }
 
-        // Fallback: try reference provider
-        let accession = &self.transcript.id;
-        self.provider.get_sequence(accession, start - 1, end)
+        // 1-based inclusive [start, end] → 0-based half-open [start - 1, end).
+        let zb_start = start - 1;
+        let zb_end = end;
+        let expected_len = (zb_end - zb_start) as usize;
+
+        // The genomic accession is the contig name; prefer the dedicated
+        // genomic path and fall back to `get_sequence` for providers that
+        // store contigs under the generic sequence map.
+        let bases = match self.provider.get_genomic_sequence(chrom, zb_start, zb_end) {
+            Ok(seq) => seq,
+            Err(_) => self.provider.get_sequence(chrom, zb_start, zb_end)?,
+        };
+
+        if bases.len() != expected_len {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "reference fetch for {}:{}-{} returned {} bases, expected {}",
+                    chrom,
+                    start,
+                    end,
+                    bases.len(),
+                    expected_len
+                ),
+            });
+        }
+
+        Ok(bases)
     }
 }
 
-/// Convert a genomic HGVS variant directly to VCF (no transcript needed)
+/// Convert a genomic HGVS variant directly to VCF (no transcript needed).
+///
+/// This standalone path has no [`ReferenceProvider`], so it cannot recover the
+/// VCF anchor base that deletions and insertions require — those edits decline
+/// with a clear error. To convert deletions/insertions, use
+/// [`HgvsToVcfConverter`], which fetches the anchor base from the provider.
 pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroError> {
     let interval = &variant.loc_edit.location;
     let edit = variant.loc_edit.edit.inner().expect("Edit must be known");
@@ -661,13 +670,16 @@ pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroEr
             vec![alt_base.to_char().to_string()],
         ),
         NaEdit::Deletion { sequence, .. } => {
-            let deleted = sequence
-                .as_ref()
-                .map(|s| s.to_string())
-                .ok_or_else(|| FerroError::ConversionError {
-                    msg: "Cannot convert deletion to VCF without deleted sequence (no reference data)".to_string(),
+            // VCF deletions need the preceding (anchor) base, which requires
+            // reference access this provider-less path does not have. Surface a
+            // distinct message when the deleted sequence is also unknown.
+            let deleted =
+                sequence.as_ref().ok_or_else(|| {
+                    FerroError::ConversionError {
+                msg: "Cannot convert deletion to VCF without deleted sequence (no reference data)"
+                    .to_string(),
+            }
                 })?;
-            // Without reference access, we can't get the anchor base
             return Err(FerroError::ConversionError {
                 msg: format!(
                     "Cannot convert deletion '{}' to VCF: anchor base required (no reference data)",
@@ -676,12 +688,12 @@ pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroEr
             });
         }
         NaEdit::Insertion { sequence } => {
-            let inserted = sequence.to_string();
-            // Without reference access, we can't get the anchor base
+            // VCF insertions need the anchor base; without reference access we
+            // cannot recover it.
             return Err(FerroError::ConversionError {
                 msg: format!(
                     "Cannot convert insertion '{}' to VCF: anchor base required (no reference data)",
-                    inserted
+                    sequence
                 ),
             });
         }
@@ -695,43 +707,34 @@ pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroEr
     Ok(VcfRecord::new(chrom, pos, reference, alternate))
 }
 
-/// Map RefSeq chromosome accession to chromosome name
+/// Map a RefSeq chromosome accession to its UCSC chromosome name.
+///
+/// The primary-assembly `NC_` → UCSC mapping is resolved through the shared,
+/// build-aware [`ContigAliases`](crate::liftover::aliases::ContigAliases)
+/// reverse table ([`refseq_to_ucsc`](crate::liftover::aliases::ContigAliases::refseq_to_ucsc))
+/// rather than a hand-rolled accession ladder, so the single source of truth in
+/// `liftover::aliases` governs both the forward and reverse directions. The
+/// table is keyed by the fully versioned accession and carries both GRCh37 and
+/// GRCh38 versions of chr1–22, X, Y, and M (e.g. `NC_012920.1` → `chrM`).
+///
+/// Accessions the table does not describe (alternate loci `NC_06*`, bacterial
+/// `NZ_`, unplaced scaffolds `NT_`/`NW_`) are returned verbatim; anything else
+/// declines with `None`.
 fn accession_to_chromosome(accession: &str) -> Option<String> {
-    // Extract base accession (without version)
+    use crate::liftover::aliases::default_human_aliases;
+
+    if let Some(ucsc) = default_human_aliases().refseq_to_ucsc(accession) {
+        return Some(ucsc.to_string());
+    }
+
+    // Non-primary contigs the shared table does not cover are passed through
+    // by accession (without version) so callers retain a usable contig label.
     let base = accession.split('.').next().unwrap_or(accession);
-
-    // GRCh38 primary assembly: NC_000001.11 -> chr1, etc.
-    if base.starts_with("NC_0000") && base.len() >= 9 {
-        let num_str = &base[7..9];
-        if let Ok(num) = num_str.parse::<u32>() {
-            if num <= 22 {
-                return Some(format!("chr{}", num));
-            } else if num == 23 {
-                return Some("chrX".to_string());
-            } else if num == 24 {
-                return Some("chrY".to_string());
-            }
-        }
-    }
-
-    // GRCh38 patches and alternate loci: NC_060000+ series
-    // These are typically alternate haplotypes, return the accession itself
-    if base.starts_with("NC_06") {
-        return Some(base.to_string());
-    }
-
-    // Mitochondrial
-    if base.starts_with("NC_012920") {
-        return Some("chrM".to_string());
-    }
-
-    // Bacterial/other RefSeq: NZ_ prefix - return as-is
-    if base.starts_with("NZ_") {
-        return Some(base.to_string());
-    }
-
-    // Unplaced scaffolds: return as-is
-    if base.starts_with("NT_") || base.starts_with("NW_") {
+    if base.starts_with("NC_06")
+        || base.starts_with("NZ_")
+        || base.starts_with("NT_")
+        || base.starts_with("NW_")
+    {
         return Some(base.to_string());
     }
 
@@ -849,6 +852,189 @@ mod tests {
         assert_eq!(accession_to_chromosome("NC_000025.11"), None);
         assert_eq!(accession_to_chromosome(""), None);
         assert_eq!(accession_to_chromosome("invalid"), None);
+    }
+
+    /// Build a converter whose provider carries genomic sequence under the
+    /// UCSC contig name `chr1` (the key `build_vcf_record` fetches against),
+    /// so anchor-base recovery and coordinate mapping can be exercised
+    /// end-to-end. The first base is at 1-based genomic position 1.
+    fn converter_with_genomic_chr1<'a>(
+        transcript: &'a Transcript,
+        provider: &'a mut MockProvider,
+        sequence: &str,
+    ) -> HgvsToVcfConverter<'a, MockProvider> {
+        provider.add_genomic_sequence("chr1", sequence);
+        HgvsToVcfConverter::new(transcript, provider)
+    }
+
+    #[test]
+    fn test_get_reference_base_reads_genomic_contig() {
+        // Genomic sequence "ACGTACGT" under chr1; 1-based position N returns
+        // the base at 0-based index N-1 (off-by-one boundary check).
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, "ACGTACGT");
+
+        assert_eq!(converter.get_reference_base("chr1", 1).unwrap(), 'A');
+        assert_eq!(converter.get_reference_base("chr1", 2).unwrap(), 'C');
+        assert_eq!(converter.get_reference_base("chr1", 4).unwrap(), 'T');
+        assert_eq!(converter.get_reference_base("chr1", 8).unwrap(), 'T');
+    }
+
+    #[test]
+    fn test_get_reference_base_rejects_position_zero() {
+        // A 1-based position of 0 is invalid and must error, not silently map
+        // to index 0 or underflow.
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, "ACGT");
+
+        assert!(converter.get_reference_base("chr1", 0).is_err());
+    }
+
+    #[test]
+    fn test_get_reference_sequence_validates_range() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, "ACGTACGT");
+
+        // Correct 1-based inclusive range maps to the right bases.
+        assert_eq!(
+            converter.get_reference_sequence("chr1", 2, 4).unwrap(),
+            "CGT"
+        );
+        // start < 1 is invalid.
+        assert!(converter.get_reference_sequence("chr1", 0, 4).is_err());
+        // end < start is invalid.
+        assert!(converter.get_reference_sequence("chr1", 4, 2).is_err());
+    }
+
+    #[test]
+    fn test_genomic_deletion_recovers_anchor_from_provider() {
+        // chr1 = "ACGTACGT"; delete genomic 3..4 ("GT"). Anchor is the base
+        // at genomic position 2 ("C"). REF = anchor + deleted, ALT = anchor,
+        // POS = anchor position (start - 1).
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, "ACGTACGT");
+
+        let variant = HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::new(GenomePos::new(3), GenomePos::new(4)),
+                NaEdit::Deletion {
+                    sequence: Some(Sequence::from_str("GT").unwrap()),
+                    length: None,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 2);
+        assert_eq!(record.reference, "CGT");
+        assert_eq!(record.alternate, vec!["C"]);
+    }
+
+    #[test]
+    fn test_genomic_insertion_recovers_anchor_from_provider() {
+        // chr1 = "ACGTACGT"; insert "TTT" after genomic position 3. Anchor is
+        // the base at genomic position 3 ("G"). REF = anchor, ALT = anchor + ins.
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, "ACGTACGT");
+
+        let variant = HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::point(GenomePos::new(3)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::from_str("TTT").unwrap()),
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.pos, 3);
+        assert_eq!(record.reference, "G");
+        assert_eq!(record.alternate, vec!["GTTT"]);
+    }
+
+    #[test]
+    fn test_genomic_deletion_declines_without_reference() {
+        // No genomic sequence registered: anchor recovery must fail with a
+        // clear error rather than emit a silently wrong base.
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::new(GenomePos::new(3), GenomePos::new(4)),
+                NaEdit::Deletion {
+                    sequence: Some(Sequence::from_str("GT").unwrap()),
+                    length: None,
+                },
+            ),
+        });
+
+        assert!(converter.convert(&variant).is_err());
+    }
+
+    #[test]
+    fn test_genomic_insertion_declines_without_reference() {
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::point(GenomePos::new(3)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::from_str("TTT").unwrap()),
+                },
+            ),
+        });
+
+        assert!(converter.convert(&variant).is_err());
+    }
+
+    #[test]
+    fn test_accession_to_chromosome_mt_and_unmapped() {
+        // MT resolves via the shared ContigAliases table.
+        assert_eq!(
+            accession_to_chromosome("NC_012920.1"),
+            Some("chrM".to_string())
+        );
+        // An unmapped primary contig accession declines.
+        assert_eq!(accession_to_chromosome("NC_000025.11"), None);
+    }
+
+    #[test]
+    fn test_accession_to_chromosome_non_primary_passthrough() {
+        // Non-primary contigs the shared table does not cover are returned
+        // verbatim (without version) rather than mapped to a fabricated chrN.
+        assert_eq!(
+            accession_to_chromosome("NW_009646201.1"),
+            Some("NW_009646201".to_string())
+        );
+        assert_eq!(
+            accession_to_chromosome("NT_167244.2"),
+            Some("NT_167244".to_string())
+        );
+        assert_eq!(
+            accession_to_chromosome("NZ_CP011113.1"),
+            Some("NZ_CP011113".to_string())
+        );
+        assert_eq!(
+            accession_to_chromosome("NC_060925.1"),
+            Some("NC_060925".to_string())
+        );
     }
 
     #[test]
