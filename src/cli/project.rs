@@ -83,6 +83,7 @@ fn engine_error_is_unavailable(e: &FerroError) -> bool {
             | FerroError::ProteinSequenceUnavailable { .. }
             | FerroError::IntronicVariant { .. }
             | FerroError::TranscriptVersionNotExact { .. }
+            | FerroError::TranscriptSequenceUnreconstructable { .. }
     )
 }
 
@@ -230,6 +231,15 @@ mod tests {
     fn unsupported_projection_is_unavailable_not_hard() {
         let e = FerroError::UnsupportedProjection {
             reason: "no chromosomal placement is known for NG_TEST.1".to_string(),
+        };
+        assert!(engine_error_is_unavailable(&e));
+    }
+
+    #[test]
+    fn transcript_sequence_unreconstructable_is_unavailable_not_hard() {
+        let e = FerroError::TranscriptSequenceUnreconstructable {
+            id: "NM_TEST.1".to_string(),
+            insertions: 1,
         };
         assert!(engine_error_is_unavailable(&e));
     }

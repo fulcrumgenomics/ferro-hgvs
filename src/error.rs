@@ -46,6 +46,10 @@ pub enum ErrorCode {
     ChromosomeNotFound = 2003,
     /// Exact transcript version unavailable under strict resolution
     TranscriptVersionNotExact = 2004,
+    /// cdot base synthesis cannot reconstruct a transcript whose CIGAR carries an
+    /// insertion (transcript-only bases absent from the genome and not recorded
+    /// by cdot)
+    TranscriptSequenceUnreconstructable = 2005,
 
     // Validation errors (E3xxx)
     /// Position out of bounds
@@ -129,6 +133,10 @@ impl ErrorCode {
             ErrorCode::ChromosomeNotFound => "chromosome not found",
             ErrorCode::TranscriptVersionNotExact => {
                 "transcript not available at the exact requested version (strict resolution)"
+            }
+            ErrorCode::TranscriptSequenceUnreconstructable => {
+                "transcript sequence cannot be reconstructed from cdot (CIGAR insertion bases are \
+                 absent from the genome and not recorded by cdot)"
             }
             ErrorCode::PositionOutOfBounds => "position out of bounds",
             ErrorCode::ReferenceMismatch => "reference sequence mismatch",
@@ -335,6 +343,27 @@ pub enum FerroError {
     )]
     TranscriptVersionNotExact { requested: String },
 
+    /// A transcript's bases were being synthesized from cdot's exon alignment
+    /// against the genome FASTA (the #331 fallback used when the transcript FASTA
+    /// lacks the requested accession), but the cdot CIGAR encodes an `Insertion`:
+    /// transcript bases with no genome counterpart. cdot's GFF3 Gap CIGAR records
+    /// only the insertion *length*, never the inserted base identities, and
+    /// [`CdotTranscript`] carries no transcript sequence — so those bases cannot
+    /// be reconstructed from the available data. Rather than serve a sequence that
+    /// is provably missing them (the silent divergence of #471/#400/#807), base
+    /// synthesis declines. Distinct from [`FerroError::AlignmentGap`], which is the
+    /// *mapping*-axis refusal when a queried position lands inside a CIGAR indel;
+    /// this is the *synthesis*-axis refusal to fabricate the whole sequence.
+    ///
+    /// [`CdotTranscript`]: crate::data::cdot::CdotTranscript
+    #[error(
+        "cannot reconstruct transcript {id} from cdot: its exon alignment encodes \
+         {insertions} inserted base(s) that are present in the deposited transcript \
+         but not the genome (and cdot does not record them), so the synthesized \
+         sequence would diverge; declining rather than serving a divergent sequence"
+    )]
+    TranscriptSequenceUnreconstructable { id: String, insertions: u64 },
+
     /// Variant spans an exon-intron boundary
     #[error("Variant spans exon-intron boundary at exon {exon}: {variant}")]
     ExonIntronBoundary { exon: u32, variant: String },
@@ -482,6 +511,9 @@ impl FerroError {
                 ..
             } => d.code,
             FerroError::ReferenceNotFound { .. } => Some(ErrorCode::ReferenceNotFound),
+            FerroError::TranscriptSequenceUnreconstructable { .. } => {
+                Some(ErrorCode::TranscriptSequenceUnreconstructable)
+            }
             FerroError::TranscriptVersionNotExact { .. } => {
                 Some(ErrorCode::TranscriptVersionNotExact)
             }
