@@ -11,7 +11,7 @@ use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer, ShuffleD
 /// Shared helpers for integration tests that require benchmark reference data.
 #[cfg(test)]
 mod integration_helpers {
-    use ferro_hgvs::{parse_hgvs, MultiFastaProvider, Normalizer};
+    use ferro_hgvs::{parse_hgvs, FerroError, MultiFastaProvider, Normalizer};
     use std::path::Path;
 
     pub fn create_normalizer() -> Option<Normalizer<MultiFastaProvider>> {
@@ -30,8 +30,73 @@ mod integration_helpers {
         Some(format!("{}", normalized))
     }
 
-    pub fn has_reference_data() -> bool {
-        Path::new("benchmark-output/manifest.json").exists()
+    /// Assert that `input` normalizes to exactly `expected` against the prepared
+    /// reference, and that normalization is idempotent (re-normalizing the output
+    /// returns it unchanged). Callers are `#[ignore]`d, so the reference is
+    /// always present when these run; a missing reference is a setup error, not a
+    /// silent skip.
+    ///
+    /// The first assertion compares ferro's output against a value derived from
+    /// ferro itself (a self-consistency check). Per the `tests/**/*.rs` path rule
+    /// in `.coderabbit.yaml`, an assertion should also validate against an
+    /// independent oracle or a *different property* than the one under test. A
+    /// genomic cross-projection is not available here: `project_to_genomic` (and
+    /// the `.genomic` projection axis) is deliberately gated on an `NG_`/`NC_`
+    /// parent placement (#327/#480) that these bare `NM_…:c.` ClinVar inputs do
+    /// not carry, so it declines even for exonic positions; and a
+    /// `CoordinateMapper`-based locus check would be circular — the normalizer
+    /// re-anchors intronic offsets *using* that same cdot mapping, so it agrees
+    /// by construction. The non-circular check available is **idempotency**
+    /// (which `.coderabbit.yaml` explicitly blesses): re-normalizing the output
+    /// must yield the same string. For the renormalizing cases (e.g.
+    /// `c.80+1del` → `c.79+1del`) this proves the re-anchored form is itself a
+    /// stable fixed point, not merely whatever the first pass happened to emit.
+    /// Full independent-oracle conformance (Mutalyzer / VariantValidator) is the
+    /// remit of the separate `FERRO_MANIFEST` conformance-axis tests, not this
+    /// reference-gated regression suite.
+    pub fn assert_normalizes_to(input: &str, expected: &str) {
+        let normalizer = create_normalizer().unwrap_or_else(|| {
+            panic!(
+                "prepared reference required (symlink benchmark-output/ to a prepared ref); \
+                 these tests are #[ignore]d and must be run with --ignored + reference"
+            )
+        });
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
+        let normalized = normalizer
+            .normalize(&variant)
+            .unwrap_or_else(|e| panic!("normalize failed for {input}: {e:?}"));
+        assert_eq!(
+            format!("{normalized}"),
+            expected,
+            "wrong normalization for {input}"
+        );
+
+        // Idempotency (see doc comment): re-normalizing the output must return it
+        // unchanged, proving the result is a stable fixed point.
+        let renormalized = normalizer.normalize(&normalized).unwrap_or_else(|e| {
+            panic!("re-normalize failed for {normalized} (from {input}): {e:?}")
+        });
+        assert_eq!(
+            format!("{renormalized}"),
+            expected,
+            "normalization is not idempotent for {input}: {normalized} re-normalizes to {renormalized}"
+        );
+    }
+
+    /// Normalize `input` and return the `FerroError` it fails with (panicking if
+    /// it unexpectedly succeeds). Used by the Bucket C residual cases to pin the
+    /// exact current decline.
+    pub fn normalize_expect_err(input: &str) -> FerroError {
+        let normalizer = create_normalizer().unwrap_or_else(|| {
+            panic!("prepared reference required; run #[ignore]d tests with --ignored + reference")
+        });
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
+        match normalizer.normalize(&variant) {
+            Ok(n) => panic!("expected {input} to fail conversion, but it normalized to {n}"),
+            Err(e) => e,
+        }
     }
 }
 
@@ -4195,248 +4260,325 @@ mod comprehensive_normalization_tests {
 }
 
 // =============================================================================
-// INTRONIC NORMALIZATION FAILURE TESTS (TDD Phase 1)
+// INTRONIC NORMALIZATION: cigar-aware backlog (issue #811)
 // =============================================================================
-// These tests document known intronic normalization failures that need fixes.
-// Each test asserts the DESIRED behavior (normalization succeeds). They are
-// marked #[ignore] and will fail until the corresponding fixes are implemented.
+// These modules sweep the intronic/CIGAR-aware normalization cases surfaced
+// during the #807 work (apply cdot CIGAR during transcript synthesis; decline
+// on CIGAR insertions with E2005 `TranscriptSequenceUnreconstructable`).
 //
-// Root causes:
-// 1. CIGAR insertions: CDS numbering skips CIGAR insertion bases
-// 2. CIGAR complex: deletions or multi-gap CIGARs compound the issue
-// 3. Version mismatch: FASTA has latest version; ClinVar references old versions
-// 4. LRG transcripts: LRG→RefSeq mapping points to old RefSeq versions
-// 5. Non-contiguous cdot exons: gaps trigger supplemental fallback → single exon
+// History: these cases were originally written as silently-vacuous tests —
+// gated on `has_reference_data()` and, when the reference was absent (CI, fresh
+// checkout), they early-returned without asserting anything; even when run they
+// only weakly checked `result.is_some()`, never the value. That dormant shape is
+// exactly what issue #811 wanted closed: a sweep could not tell whether a case
+// had silently started passing (or regressed).
 //
-// Run with: cargo nextest run intronic_normalization --ignored
-// Requires: benchmark-output/ with reference data
+// They are now resolved against #807's actual behavior, classified per case:
+//   - Bucket A (88 cases): now normalize OK. Each asserts the EXACT normalized
+//     string (identity for most; a handful renormalize to the canonical exon
+//     anchor, e.g. `c.80+1del` -> `c.79+1del`) *and* that re-normalizing the
+//     output is a no-op (idempotency — see `assert_normalizes_to`), so the
+//     re-anchored form is a stable fixed point rather than a first-pass artifact.
+//     See `cigar_*`, `cdot_gap_*`, `version_mismatch_*`, and the OK subset of
+//     `lrg_intronic_*`.
+//   - Bucket B (0 cases): no integration case reaches the E2005 decline — these
+//     transcripts are served from the transcript FASTA, so cdot-synthesis (the
+//     only E2005 emitter) is never invoked. The apply/decline split is covered
+//     by the synthesis unit tests in `src/reference/multi_fasta.rs`.
+//   - Bucket C (7 cases): residual LRG-addressed-path failures (`ConversionFailed`)
+//     where the NM-addressed equivalent succeeds (LRG->genomic mapping gap), plus
+//     LRG_720t1 (no genomic alignment). #807 did not address this shape; these
+//     assert the exact current decline and are tracked in #811 (see
+//     `lrg_intronic_still_unsupported`).
+//
+// All of these need the prepared reference and so are `#[ignore]`d (not silently
+// skipped) — matching this file's `real_repeat_tests` / `ferro_mutalyzer_differences`
+// idiom. Run locally with a prepared reference symlinked at `benchmark-output/`:
+//   cargo nextest run --features dev --ignored -E 'test(intronic) | test(cigar) | test(cdot_gap) | test(version_mismatch)'
 // =============================================================================
 
 #[cfg(test)]
 mod cigar_aware_normalization {
-    use super::integration_helpers::{has_reference_data, try_normalize};
+    use super::integration_helpers::assert_normalizes_to;
     use rstest::rstest;
 
     // =========================================================================
-    // CIGAR insertion offset: these transcripts have CIGAR insertions (I ops)
-    // that cause CDS position offsets. Without CIGAR-aware mapping, the
-    // intronic position cannot be resolved to a genomic coordinate.
+    // CIGAR insertion-offset transcripts. With #807 applying the cdot CIGAR
+    // during synthesis, every intronic case below resolves to a genomic
+    // coordinate and normalizes (Bucket A). Each asserts the EXACT normalized
+    // string: identity for the already-canonical cases, and the one canonical
+    // exon-anchor renormalization (`NM_001304717.5:c.729+...` -> `c.728+...`).
     // =========================================================================
 
     #[rstest]
     // NM_015120.4 (ABHD12): CIGAR has I3 in exon 0 — 3bp insertion shifts CDS
-    #[case("NM_015120.4:c.1433-12_1433-10dup")]
-    #[case("NM_015120.4:c.450+22_450+25del")]
-    #[case("NM_015120.4:c.9540-7dup")]
-    #[case("NM_015120.4:c.12362+16_12362+29delinsTGAGTTTGTGTG")]
-    #[case("NM_015120.4:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA")]
-    #[case("NM_015120.4:c.7007+30del")]
-    #[case("NM_015120.4:c.1114-8del")]
-    // NM_001304717.5: CIGAR has M479 D1 M444 in exon 0
-    #[case("NM_001304717.5:c.774-30dup")]
-    #[case("NM_001304717.5:c.729+4_729+7del")]
-    #[case("NM_001304717.5:c.1066+4del")]
-    #[case("NM_001304717.5:c.1066+5_1066+8del")]
-    #[case("NM_001304717.5:c.1067-3_1067-2del")]
+    #[case("NM_015120.4:c.1433-12_1433-10dup", "NM_015120.4:c.1433-12_1433-10dup")]
+    #[case("NM_015120.4:c.450+22_450+25del", "NM_015120.4:c.450+22_450+25del")]
+    #[case("NM_015120.4:c.9540-7dup", "NM_015120.4:c.9540-7dup")]
+    #[case(
+        "NM_015120.4:c.12362+16_12362+29delinsTGAGTTTGTGTG",
+        "NM_015120.4:c.12362+16_12362+29delinsTGAGTTTGTGTG"
+    )]
+    #[case(
+        "NM_015120.4:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA",
+        "NM_015120.4:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA"
+    )]
+    #[case("NM_015120.4:c.7007+30del", "NM_015120.4:c.7007+30del")]
+    #[case("NM_015120.4:c.1114-8del", "NM_015120.4:c.1114-8del")]
+    // NM_001304717.5: CIGAR has M479 D1 M444 in exon 0. c.729 is the first base
+    // of an exon, so the donor (+) offset re-anchors to the upstream exon's last
+    // base (c.728) — a correct canonical renormalization.
+    #[case("NM_001304717.5:c.774-30dup", "NM_001304717.5:c.774-30dup")]
+    #[case("NM_001304717.5:c.729+4_729+7del", "NM_001304717.5:c.728+4_728+7del")]
+    #[case("NM_001304717.5:c.1066+4del", "NM_001304717.5:c.1066+4del")]
+    #[case(
+        "NM_001304717.5:c.1066+5_1066+8del",
+        "NM_001304717.5:c.1066+5_1066+8del"
+    )]
+    #[case(
+        "NM_001304717.5:c.1067-3_1067-2del",
+        "NM_001304717.5:c.1067-3_1067-2del"
+    )]
     // NM_002111.8 (HTT): CIGAR insertion in first exon
-    #[case("NM_002111.8:c.52+1del")]
-    #[case("NM_002111.8:c.53-6del")]
-    #[case("NM_002111.8:c.52+5G>A")]
+    #[case("NM_002111.8:c.52+1del", "NM_002111.8:c.52+1del")]
+    #[case("NM_002111.8:c.53-6del", "NM_002111.8:c.53-6del")]
+    #[case("NM_002111.8:c.52+5G>A", "NM_002111.8:c.52+5G>A")]
     // NM_001467.6: CIGAR-affected transcript
-    #[case("NM_001467.6:c.1+1del")]
+    #[case("NM_001467.6:c.1+1del", "NM_001467.6:c.1+1del")]
     // NM_001164278.2 / NM_001164279.2: CIGAR-affected
-    #[case("NM_001164278.2:c.427+5del")]
-    #[case("NM_001164279.2:c.544+5del")]
+    #[case("NM_001164278.2:c.427+5del", "NM_001164278.2:c.427+5del")]
+    #[case("NM_001164279.2:c.544+5del", "NM_001164279.2:c.544+5del")]
     // NM_000527.4 (LDLR): widely-referenced transcript with CIGAR gap
-    #[case("NM_000527.4:c.313+1G>A")]
-    #[case("NM_000527.4:c.313+2T>C")]
-    #[case("NM_000527.4:c.190+4_190+7del")]
-    fn test_cigar_intronic_normalizes_ok(#[case] input: &str) {
-        let result = try_normalize(input);
-        // Skip if reference data not available
-        if result.is_none() && !has_reference_data() {
-            eprintln!("Skipping test - benchmark-output not available");
-            return;
-        }
-        assert!(result.is_some(), "Should normalize successfully: {}", input);
+    #[case("NM_000527.4:c.313+1G>A", "NM_000527.4:c.313+1G>A")]
+    #[case("NM_000527.4:c.313+2T>C", "NM_000527.4:c.313+2T>C")]
+    #[case("NM_000527.4:c.190+4_190+7del", "NM_000527.4:c.190+4_190+7del")]
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    fn test_cigar_intronic_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
+        assert_normalizes_to(input, expected);
     }
 }
 
 #[cfg(test)]
 mod cigar_edge_case_normalization {
-    use super::integration_helpers::{has_reference_data, try_normalize};
+    use super::integration_helpers::assert_normalizes_to;
     use rstest::rstest;
 
     // =========================================================================
     // CIGAR edge cases: transcripts with deletions (D ops), multi-gap CIGARs,
-    // or large offsets where simple insertion offset doesn't fix the boundary.
+    // or large offsets. With #807 these all normalize to the input identity
+    // (Bucket A); each asserts the exact normalized string.
     // =========================================================================
 
     #[rstest]
     // NM_130444.3 / NM_030582.4: complex CIGAR with D ops
-    #[case("NM_130444.3:c.4332+9_4332+10del")]
-    #[case("NM_130444.3:c.4939-20AC[4]")]
-    #[case("NM_130444.3:c.4740+14del")]
-    #[case("NM_130444.3:c.4476-6del")]
-    #[case("NM_130444.3:c.3788+11del")]
-    #[case("NM_130444.3:c.4186+5G>A")]
-    #[case("NM_130444.3:c.4939-5del")]
-    #[case("NM_130444.3:c.5261+5G>A")]
-    #[case("NM_030582.4:c.4332+9_4332+10del")]
-    #[case("NM_030582.4:c.4939-20AC[4]")]
-    #[case("NM_030582.4:c.4740+14del")]
-    #[case("NM_030582.4:c.4476-6del")]
-    #[case("NM_030582.4:c.3788+11del")]
-    #[case("NM_030582.4:c.4186+5G>A")]
+    #[case("NM_130444.3:c.4332+9_4332+10del", "NM_130444.3:c.4332+9_4332+10del")]
+    #[case("NM_130444.3:c.4939-20AC[4]", "NM_130444.3:c.4939-20AC[4]")]
+    #[case("NM_130444.3:c.4740+14del", "NM_130444.3:c.4740+14del")]
+    #[case("NM_130444.3:c.4476-6del", "NM_130444.3:c.4476-6del")]
+    #[case("NM_130444.3:c.3788+11del", "NM_130444.3:c.3788+11del")]
+    #[case("NM_130444.3:c.4186+5G>A", "NM_130444.3:c.4186+5G>A")]
+    #[case("NM_130444.3:c.4939-5del", "NM_130444.3:c.4939-5del")]
+    #[case("NM_130444.3:c.5261+5G>A", "NM_130444.3:c.5261+5G>A")]
+    #[case("NM_030582.4:c.4332+9_4332+10del", "NM_030582.4:c.4332+9_4332+10del")]
+    #[case("NM_030582.4:c.4939-20AC[4]", "NM_030582.4:c.4939-20AC[4]")]
+    #[case("NM_030582.4:c.4740+14del", "NM_030582.4:c.4740+14del")]
+    #[case("NM_030582.4:c.4476-6del", "NM_030582.4:c.4476-6del")]
+    #[case("NM_030582.4:c.3788+11del", "NM_030582.4:c.3788+11del")]
+    #[case("NM_030582.4:c.4186+5G>A", "NM_030582.4:c.4186+5G>A")]
     // NM_001372044.2: CIGAR with D2 in middle of exon
-    #[case("NM_001372044.2:c.1529+4dup")]
-    #[case("NM_001372044.2:c.1530-4del")]
-    #[case("NM_001372044.2:c.1347+5G>A")]
-    #[case("NM_001372044.2:c.1529+3A>G")]
-    #[case("NM_001372044.2:c.1244+7C>T")]
-    #[case("NM_001372044.2:c.1244+5G>A")]
+    #[case("NM_001372044.2:c.1529+4dup", "NM_001372044.2:c.1529+4dup")]
+    #[case("NM_001372044.2:c.1530-4del", "NM_001372044.2:c.1530-4del")]
+    #[case("NM_001372044.2:c.1347+5G>A", "NM_001372044.2:c.1347+5G>A")]
+    #[case("NM_001372044.2:c.1529+3A>G", "NM_001372044.2:c.1529+3A>G")]
+    #[case("NM_001372044.2:c.1244+7C>T", "NM_001372044.2:c.1244+7C>T")]
+    #[case("NM_001372044.2:c.1244+5G>A", "NM_001372044.2:c.1244+5G>A")]
     // NM_001414686.1 / NM_001401501.2 / NM_001414687.1: multi-gap CIGARs
-    #[case("NM_001414686.1:c.313+1G>A")]
-    #[case("NM_001414686.1:c.313+2T>C")]
-    #[case("NM_001414686.1:c.190+4_190+7del")]
-    #[case("NM_001401501.2:c.313+1G>A")]
-    #[case("NM_001401501.2:c.313+2T>C")]
-    #[case("NM_001401501.2:c.190+4_190+7del")]
-    #[case("NM_001414687.1:c.313+1G>A")]
-    #[case("NM_001414687.1:c.313+2T>C")]
-    #[case("NM_001414687.1:c.190+4_190+7del")]
+    #[case("NM_001414686.1:c.313+1G>A", "NM_001414686.1:c.313+1G>A")]
+    #[case("NM_001414686.1:c.313+2T>C", "NM_001414686.1:c.313+2T>C")]
+    #[case("NM_001414686.1:c.190+4_190+7del", "NM_001414686.1:c.190+4_190+7del")]
+    #[case("NM_001401501.2:c.313+1G>A", "NM_001401501.2:c.313+1G>A")]
+    #[case("NM_001401501.2:c.313+2T>C", "NM_001401501.2:c.313+2T>C")]
+    #[case("NM_001401501.2:c.190+4_190+7del", "NM_001401501.2:c.190+4_190+7del")]
+    #[case("NM_001414687.1:c.313+1G>A", "NM_001414687.1:c.313+1G>A")]
+    #[case("NM_001414687.1:c.313+2T>C", "NM_001414687.1:c.313+2T>C")]
+    #[case("NM_001414687.1:c.190+4_190+7del", "NM_001414687.1:c.190+4_190+7del")]
     // Additional CIGAR-complex transcripts
-    #[case("NM_001405709.1:c.313+1G>A")]
-    #[case("NM_001405709.1:c.190+4_190+7del")]
-    #[case("NM_001405710.1:c.313+1G>A")]
-    #[case("NM_001405710.1:c.190+4_190+7del")]
-    fn test_cigar_edge_case_normalizes_ok(#[case] input: &str) {
-        let result = try_normalize(input);
-        if result.is_none() && !has_reference_data() {
-            eprintln!("Skipping test - benchmark-output not available");
-            return;
-        }
-        assert!(result.is_some(), "Should normalize successfully: {}", input);
+    #[case("NM_001405709.1:c.313+1G>A", "NM_001405709.1:c.313+1G>A")]
+    #[case("NM_001405709.1:c.190+4_190+7del", "NM_001405709.1:c.190+4_190+7del")]
+    #[case("NM_001405710.1:c.313+1G>A", "NM_001405710.1:c.313+1G>A")]
+    #[case("NM_001405710.1:c.190+4_190+7del", "NM_001405710.1:c.190+4_190+7del")]
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    fn test_cigar_edge_case_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
+        assert_normalizes_to(input, expected);
     }
 }
 
 #[cfg(test)]
 mod cdot_gap_normalization {
-    use super::integration_helpers::{has_reference_data, try_normalize};
+    use super::integration_helpers::assert_normalizes_to;
     use rstest::rstest;
 
     // =========================================================================
     // Non-contiguous cdot exons: transcripts where cdot tx coordinates have
-    // gaps between exons. This triggers the supplemental fallback which creates
-    // a single synthetic exon, losing all intron boundaries.
+    // gaps between exons. With #807 these resolve and normalize to identity
+    // (Bucket A); each asserts the exact normalized string.
     // =========================================================================
 
     #[rstest]
     // NM_001405681.2: gaps in cdot exon tx coordinates
-    #[case("NM_001405681.2:c.2535-4_2755del")]
-    #[case("NM_001405681.2:c.2923-106_3210-108del")]
+    #[case("NM_001405681.2:c.2535-4_2755del", "NM_001405681.2:c.2535-4_2755del")]
+    #[case(
+        "NM_001405681.2:c.2923-106_3210-108del",
+        "NM_001405681.2:c.2923-106_3210-108del"
+    )]
     // NM_017940.8: gaps in cdot exon tx coordinates
-    #[case("NM_017940.8:c.2451-4_2671del")]
-    #[case("NM_017940.8:c.2839-106_3126-108del")]
+    #[case("NM_017940.8:c.2451-4_2671del", "NM_017940.8:c.2451-4_2671del")]
+    #[case(
+        "NM_017940.8:c.2839-106_3126-108del",
+        "NM_017940.8:c.2839-106_3126-108del"
+    )]
     // NM_001405694.2: gaps in cdot exon tx coordinates
-    #[case("NM_001405694.2:c.2451-4_2671del")]
-    #[case("NM_001405694.2:c.2839-106_3126-108del")]
+    #[case("NM_001405694.2:c.2451-4_2671del", "NM_001405694.2:c.2451-4_2671del")]
+    #[case(
+        "NM_001405694.2:c.2839-106_3126-108del",
+        "NM_001405694.2:c.2839-106_3126-108del"
+    )]
     // NM_001405693.2: gaps in cdot exon tx coordinates
-    #[case("NM_001405693.2:c.2451-4_2671del")]
-    #[case("NM_001405693.2:c.2839-106_3126-108del")]
+    #[case("NM_001405693.2:c.2451-4_2671del", "NM_001405693.2:c.2451-4_2671del")]
+    #[case(
+        "NM_001405693.2:c.2839-106_3126-108del",
+        "NM_001405693.2:c.2839-106_3126-108del"
+    )]
     // NM_001405684.2: gaps in cdot exon tx coordinates
-    #[case("NM_001405684.2:c.2451-4_2671del")]
+    #[case("NM_001405684.2:c.2451-4_2671del", "NM_001405684.2:c.2451-4_2671del")]
     // NM_001405683.2: gaps in cdot exon tx coordinates
-    #[case("NM_001405683.2:c.2451-4_2671del")]
-    fn test_cdot_gap_intronic_normalizes_ok(#[case] input: &str) {
-        let result = try_normalize(input);
-        if result.is_none() && !has_reference_data() {
-            eprintln!("Skipping test - benchmark-output not available");
-            return;
-        }
-        assert!(result.is_some(), "Should normalize successfully: {}", input);
+    #[case("NM_001405683.2:c.2451-4_2671del", "NM_001405683.2:c.2451-4_2671del")]
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    fn test_cdot_gap_intronic_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
+        assert_normalizes_to(input, expected);
     }
 }
 
 #[cfg(test)]
 mod version_mismatch_normalization {
-    use super::integration_helpers::{has_reference_data, try_normalize};
+    use super::integration_helpers::assert_normalizes_to;
     use rstest::rstest;
 
     // =========================================================================
     // Version mismatch: the FASTA has the latest transcript version but the
-    // ClinVar pattern references an older version. Version fallback changes
-    // cds_start, causing intronic positions to be off.
+    // ClinVar pattern references an older version. With #807 these all resolve
+    // (Bucket A); each asserts the exact normalized string. One renormalizes to
+    // the canonical exon anchor (`NM_000314.4:c.80+1del` -> `c.79+1del`).
     // =========================================================================
 
     #[rstest]
-    #[case("NM_000036.2:c.1015-27del")] // FASTA has .3
-    #[case("NM_000068.2:c.4987-12del")] // FASTA has .4
-    #[case("NM_000251.1:c.942+3A>T")] // FASTA has .3
-    #[case("NM_000314.4:c.80+1del")] // FASTA has .8
-    #[case("NM_000351.4:c.1037-5_1037-4del")] // FASTA has .7
-    #[case("NM_000368.4:c.1000+5del")] // FASTA has .5
-    #[case("NM_000500.6:c.290-13A>C")] // FASTA has .9
-    #[case("NM_000542.3:c.1-55del")] // FASTA has .5
-    #[case("NM_153609.3:c.494+5G>A")] // FASTA has .4
-    #[case("NM_000059.3:c.68-7del")] // FASTA has .4, BRCA2
-    #[case("NM_000059.3:c.8332-1G>A")] // FASTA has .4, BRCA2
-    #[case("NM_000059.3:c.7435+1G>A")] // FASTA has .4, BRCA2
-    #[case("NM_000249.3:c.1558+1G>A")] // FASTA has .4, MLH1
-    #[case("NM_000249.3:c.306+1G>A")] // FASTA has .4, MLH1
-    #[case("NM_007294.3:c.5278-1G>A")] // FASTA has .4, BRCA1
-    fn test_version_mismatch_normalizes_ok(#[case] input: &str) {
-        let result = try_normalize(input);
-        if result.is_none() && !has_reference_data() {
-            eprintln!("Skipping test - benchmark-output not available");
-            return;
-        }
-        assert!(result.is_some(), "Should normalize successfully: {}", input);
+    #[case("NM_000036.2:c.1015-27del", "NM_000036.2:c.1015-27del")] // FASTA has .3
+    #[case("NM_000068.2:c.4987-12del", "NM_000068.2:c.4987-12del")] // FASTA has .4
+    #[case("NM_000251.1:c.942+3A>T", "NM_000251.1:c.942+3A>T")] // FASTA has .3
+    #[case("NM_000314.4:c.80+1del", "NM_000314.4:c.79+1del")] // FASTA has .8; canonical exon anchor
+    #[case("NM_000351.4:c.1037-5_1037-4del", "NM_000351.4:c.1037-5_1037-4del")] // FASTA has .7
+    #[case("NM_000368.4:c.1000+5del", "NM_000368.4:c.1000+5del")] // FASTA has .5
+    #[case("NM_000500.6:c.290-13A>C", "NM_000500.6:c.290-13A>C")] // FASTA has .9
+    #[case("NM_000542.3:c.1-55del", "NM_000542.3:c.1-55del")] // FASTA has .5
+    #[case("NM_153609.3:c.494+5G>A", "NM_153609.3:c.494+5G>A")] // FASTA has .4
+    #[case("NM_000059.3:c.68-7del", "NM_000059.3:c.68-7del")] // FASTA has .4, BRCA2
+    #[case("NM_000059.3:c.8332-1G>A", "NM_000059.3:c.8332-1G>A")] // FASTA has .4, BRCA2
+    #[case("NM_000059.3:c.7435+1G>A", "NM_000059.3:c.7435+1G>A")] // FASTA has .4, BRCA2
+    #[case("NM_000249.3:c.1558+1G>A", "NM_000249.3:c.1558+1G>A")] // FASTA has .4, MLH1
+    #[case("NM_000249.3:c.306+1G>A", "NM_000249.3:c.306+1G>A")] // FASTA has .4, MLH1
+    #[case("NM_007294.3:c.5278-1G>A", "NM_007294.3:c.5278-1G>A")] // FASTA has .4, BRCA1
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    fn test_version_mismatch_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
+        assert_normalizes_to(input, expected);
     }
 }
 
 #[cfg(test)]
 mod lrg_intronic_normalization {
-    use super::integration_helpers::{has_reference_data, try_normalize};
+    use super::integration_helpers::assert_normalizes_to;
     use rstest::rstest;
 
     // =========================================================================
-    // LRG transcripts: LRG→RefSeq mapping typically points to an old RefSeq
-    // version, making these a downstream effect of version mismatch + CIGAR.
-    // Once those are fixed, LRG patterns should work.
+    // LRG transcripts (Bucket A subset): these LRG-addressed intronic variants
+    // resolve and normalize with #807. Each asserts the exact normalized
+    // string; a few renormalize to the canonical upstream span (e.g.
+    // `LRG_486t1:c.-234-1616_-234-235del1382` -> `c.-1850_-469del`).
+    //
+    // The 7 LRG cases that still fail are in `lrg_intronic_still_unsupported`.
     // =========================================================================
 
     #[rstest]
     // LRG_741t1 → NM_015120.4 (CIGAR-affected)
-    #[case("LRG_741t1:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA")]
-    #[case("LRG_741t1:c.1433-12_1433-10dup")]
-    #[case("LRG_741t1:c.7007+30del")]
-    #[case("LRG_741t1:c.450+22_450+25del")]
-    // LRG_763t1 → NM_002111.8 (CIGAR-affected, HTT gene)
-    #[case("LRG_763t1:c.52+1del")]
-    #[case("LRG_763t1:c.53-6del")]
-    // LRG_720t1 → NM_000280.3 (version mismatch — FASTA has .4)
+    #[case(
+        "LRG_741t1:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA",
+        "LRG_741t1:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA"
+    )]
+    #[case("LRG_741t1:c.1433-12_1433-10dup", "LRG_741t1:c.1433-12_1433-10dup")]
+    #[case("LRG_741t1:c.450+22_450+25del", "LRG_741t1:c.450+22_450+25del")]
+    // LRG_293t1 → NM_000059.3 (BRCA2)
+    #[case("LRG_293t1:c.68-7del", "LRG_293t1:c.68-7del")]
+    #[case("LRG_293t1:c.8332-1G>A", "LRG_293t1:c.8332-1G>A")]
+    // LRG_486t1 → NM_000368.4; spans renormalize to the canonical upstream form
+    #[case("LRG_486t1:c.-234-1616_-234-235del1382", "LRG_486t1:c.-1850_-469del")]
+    // LRG_384t1 → NM_000257.2
+    #[case("LRG_384t1:c.-64-17del", "LRG_384t1:c.-77del")]
+    // LRG_311t1 → NM_000314.4
+    #[case("LRG_311t1:c.-1032-222_-366del889", "LRG_311t1:c.-1254_-366del")]
+    #[case("LRG_311t1:c.80+1del", "LRG_311t1:c.79+1del")]
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    fn test_lrg_intronic_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
+        assert_normalizes_to(input, expected);
+    }
+}
+
+#[cfg(test)]
+mod lrg_intronic_still_unsupported {
+    use super::integration_helpers::normalize_expect_err;
+    use ferro_hgvs::error::ErrorCode;
+    use ferro_hgvs::FerroError;
+    use rstest::rstest;
+
+    // =========================================================================
+    // Bucket C (issue #811, residual): LRG-addressed intronic variants that
+    // still fail with `ConversionFailed` even after #807. This is NOT a clean
+    // E2005 decline — for several of these the identical variant addressed via
+    // the NM_ accession succeeds (see the version_mismatch_normalization and
+    // cigar_aware_normalization modules), so the gap is in the LRG→genomic
+    // mapping path, not in resolving the intronic offset itself. The two
+    // LRG_720t1 cases are a distinct missing-genomic-alignment failure.
+    //
+    // These assert the EXACT current decline so the residual gap is tracked and
+    // a future fix that starts resolving them is forced to update this test
+    // (moving the case into the OK module) rather than silently passing.
+    //
+    // Residual shape — tracked follow-up: LRG-addressed intronic normalization
+    // fails (ConversionFailed) where the NM-addressed equivalent succeeds, plus
+    // LRG_720t1 lacking any genomic alignment.
+    // =========================================================================
+
+    #[rstest]
+    // NM-addressed equivalents succeed; only the LRG-addressed path fails.
+    #[case("LRG_741t1:c.7007+30del")] // cf. NM_015120.4:c.7007+30del (OK)
+    #[case("LRG_763t1:c.52+1del")] // cf. NM_002111.8:c.52+1del (OK)
+    #[case("LRG_763t1:c.53-6del")] // cf. NM_002111.8:c.53-6del (OK)
+    #[case("LRG_293t1:c.1-59_1-57del")] // BRCA2 5'-UTR intronic
+    #[case("LRG_486t1:c.1000+5del")]
+    // cf. NM_000368.4:c.1000+5del (OK)
+    // LRG_720t1 → NM_000280.3: no genomic alignment on any known build.
     #[case("LRG_720t1:c.1183+4dup")]
     #[case("LRG_720t1:c.1327+4del")]
-    // LRG_293t1 → NM_000059.3 (version mismatch — FASTA has .4, BRCA2)
-    #[case("LRG_293t1:c.1-59_1-57del")]
-    #[case("LRG_293t1:c.68-7del")]
-    #[case("LRG_293t1:c.8332-1G>A")]
-    // LRG_486t1 → NM_000368.4 (version mismatch — FASTA has .5)
-    #[case("LRG_486t1:c.-234-1616_-234-235del1382")]
-    #[case("LRG_486t1:c.1000+5del")]
-    // LRG_384t1 → NM_000257.2 (version mismatch)
-    #[case("LRG_384t1:c.-64-17del")]
-    // LRG_311t1 → NM_000314.4 (version mismatch — FASTA has .8)
-    #[case("LRG_311t1:c.-1032-222_-366del889")]
-    #[case("LRG_311t1:c.80+1del")]
-    fn test_lrg_intronic_normalizes_ok(#[case] input: &str) {
-        let result = try_normalize(input);
-        if result.is_none() && !has_reference_data() {
-            eprintln!("Skipping test - benchmark-output not available");
-            return;
-        }
-        assert!(result.is_some(), "Should normalize successfully: {}", input);
+    #[ignore = "residual LRG-addressed intronic gap (Bucket C) — run with --ignored; tracked in #811"]
+    fn test_lrg_intronic_still_declines(#[case] input: &str) {
+        let err = normalize_expect_err(input);
+        assert!(
+            matches!(err, FerroError::ConversionError { .. }),
+            "expected a ConversionError (E5001) for residual LRG case {input}, got {err:?}"
+        );
+        assert_eq!(
+            err.code(),
+            Some(ErrorCode::ConversionFailed),
+            "expected E5001 (ConversionFailed) for residual LRG case {input}, got {err:?}"
+        );
     }
 }
 
