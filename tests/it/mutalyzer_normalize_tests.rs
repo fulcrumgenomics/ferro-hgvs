@@ -1360,10 +1360,10 @@ fn axis_rna_description() {
 
 #[test]
 fn axis_noncoding() {
-    if manifest_path().is_none() {
+    let Some(vp) = variant_projector() else {
         eprintln!("axis_noncoding: skipping — no manifest");
         return;
-    }
+    };
 
     let mut t = AxisTally::new(Axis::Noncoding);
     for case in &fixture().cases {
@@ -1375,8 +1375,60 @@ fn axis_noncoding() {
             continue;
         };
         let expected = expected_list.join(" | ");
-        let actual: Result<String, String> =
-            Err("ferro-hgvs n. projection surface not yet wired into this runner".to_string());
+
+        let actual = catch_panics(|| -> Result<String, String> {
+            let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
+            // The n. corpus rows are projections onto *overlapping* non-coding
+            // transcripts (e.g. an `NM_`/`g.` input expecting an `NR_…:n.` form
+            // on a sibling transcript at the same locus), so fan out across all
+            // transcripts via `project_variant_all` and collect every `n.` axis
+            // (mirrors `axis_coding_protein_descriptions`). Each result's
+            // `noncoding` is already re-framed under the input's `NG_` parent by
+            // `frame_projection_owned`.
+            let results = vp
+                .project_variant_all(&v)
+                .map_err(|e| format!("project_all: {e}"))?;
+            let mut actual_set: Vec<String> = results
+                .iter()
+                .filter_map(|r| r.noncoding.as_ref().map(|n| n.to_string()))
+                .collect();
+            // Dedup so a form two overlapping transcripts render identically
+            // appears once in the mismatch diagnostic (the subset check is
+            // membership-based, so duplicates do not affect pass/fail).
+            actual_set.sort();
+            actual_set.dedup();
+
+            // Empty/degenerate projection (#651): mutalyzer expects at least one
+            // n. form but ferro produced none across all transcripts. Tag it so
+            // a populated→empty degradation is counted as an output-quality
+            // regression rather than just a missing-set-member miss. This stays
+            // an `Err` (hard FAIL even under an annotation) because it means
+            // ferro produced nothing at all.
+            if actual_set.is_empty() {
+                return Err(format!(
+                    "{EMPTY_PROJECTION_SENTINEL}project_variant_all produced no n. forms; expected {expected}"
+                ));
+            }
+
+            // Subset check: every expected n. form must appear among the forms
+            // ferro produced across all overlapping transcripts. On a miss,
+            // return the produced set as an `Ok` *mismatch* (not an `Err`) so a
+            // transcript-SET divergence — ferro enumerated valid n. forms but
+            // not the exact one mutalyzer lists — routes through the standard
+            // `known_bug`/`spec_citation` disposition path, which only buckets a
+            // successful-but-mismatched run. An `Err` here would hard-FAIL even
+            // when annotated, conflating a set divergence with ferro producing
+            // nothing (mirrors the `coding_protein_descriptions` #763 rationale).
+            if expected_list
+                .iter()
+                .all(|want| actual_set.iter().any(|got| got == want))
+            {
+                Ok(expected.clone())
+            } else {
+                Ok(actual_set.join(" | "))
+            }
+        });
+
         t.record(case, &expected, actual);
     }
     t.finish();

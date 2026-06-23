@@ -70,6 +70,12 @@
       "title": "RNA predicted allele bracket placement",
       "spec_section": "recommendations/RNA/alleles.md",
       "note": "A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside the allele bracket (r.[(a;b)], e.g. LRG_199t1:r.[(578c>u;1339a>g;1680del)]); mutalyzer wraps the whole bracket (r.([a;b])), which has no spec counterpart. ferro's inside-bracket form is the spec-correct value (#693)."
+    },
+    {
+      "id": "noncoding-overlap-enumeration-646",
+      "title": "n. projection onto an overlapping transcript outside its exonic span",
+      "spec_section": "background/numbering.md#DNAn (3' downstream offset)",
+      "note": "The n. corpus rows expect a projection onto the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), where the variant lies 3' downstream of its single exon and mutalyzer addresses it as n.616+offset. ferro's transcript fan-out enumerates only transcripts the variant overlaps, so it emits valid n. forms on the overlapping NM_ isoforms but declines NR_024274.1 ('variant does not overlap transcript'). Spec tension: numbering.md L43-44 bars describing variants beyond a bare transcript's boundaries, so a bare NR_024274.1:n.616+offset would be invalid; but mutalyzer (and the corpus) frame it under its NG_007485.1 genomic parent (NG_007485.1(NR_024274.1):n.616+offset), the same genomic-context construction numbering.md L65 endorses (e.g. NG_012232.1(NM_004006.2):r.186+1_186+4), where the parent supplies the flanking sequence. Under that framing the form is valid and ferro should produce it -> known_bug, not accepted_divergence. Cross-isoform enumeration scope tracked by #646 (core landed in #647); ferro should extend enumeration/addressing to the downstream-of-last-exon case when the genomic parent is present. XPASS-guarded: if #646 lands and ferro starts matching, the annotation fails loudly and the row demotes."
     }
   ],
   "cases": [
@@ -120,6 +126,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "Mid-codon in-frame insertion (ATC after c.161, within Met54's codon): ATG AT|ATC|G GGC → ATA(Ile) TCG(Ser) GGC(Gly), so Met54 changes and Ser is added → p.(Met54delinsIleSer), a delins not a clean insertion (#511). ferro's prediction now matches mutalyzer; it differs only by the genomic-context wrapper — bare NP_ per #483/#495 is the spec-correct reference form.",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -148,6 +160,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "Bracket-form sibling of NG_007485.1(NM_000077.4):c.161_162insATC; same mid-codon in-frame insertion → p.(Met54delinsIleSer) (delins, #511). Matches mutalyzer modulo the bare-NP_ wrapper (#483/#495).",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -174,6 +192,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -200,6 +224,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -227,6 +257,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -255,6 +291,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {
@@ -399,7 +441,13 @@
       "noncoding": [
         "NG_007485.1(NR_024274.1):n.616+26260_616+26261insTAG"
       ],
-      "to_test": true
+      "to_test": true,
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
+      }
     },
     {
       "keywords": [
@@ -2659,6 +2707,12 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "known_bug": {
+        "axis": "noncoding",
+        "tracking_issue": 646,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "cluster": "noncoding-overlap-enumeration-646"
       }
     },
     {

@@ -176,6 +176,23 @@ A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside
 |---|---|---|---|---|
 | `NG_012337.1(NM_003002.2):c.[274G>T;278A>G]` | rna_description | spec_citation | — | — |
 
+### n. projection onto an overlapping transcript outside its exonic span
+
+Spec: `background/numbering.md#DNAn (3' downstream offset)`
+
+The n. corpus rows expect a projection onto the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), where the variant lies 3' downstream of its single exon and mutalyzer addresses it as n.616+offset. ferro's transcript fan-out enumerates only transcripts the variant overlaps, so it emits valid n. forms on the overlapping NM_ isoforms but declines NR_024274.1 ('variant does not overlap transcript'). Spec tension: numbering.md L43-44 bars describing variants beyond a bare transcript's boundaries, so a bare NR_024274.1:n.616+offset would be invalid; but mutalyzer (and the corpus) frame it under its NG_007485.1 genomic parent (NG_007485.1(NR_024274.1):n.616+offset), the same genomic-context construction numbering.md L65 endorses (e.g. NG_012232.1(NM_004006.2):r.186+1_186+4), where the parent supplies the flanking sequence. Under that framing the form is valid and ferro should produce it -> known_bug, not accepted_divergence. Cross-isoform enumeration scope tracked by #646 (core landed in #647); ferro should extend enumeration/addressing to the downstream-of-last-exon case when the genomic parent is present. XPASS-guarded: if #646 lands and ferro starts matching, the annotation fails loudly and the row demotes.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_000077.4):c.161_162insATC` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_000077.4):c.161_162ins[ATC]` | noncoding | known_bug | — | #646 |
+| `NG_007485.1(NM_058195.3):c.141_142del` | noncoding | known_bug | — | #646 |
+| `NG_007485.1:g.5479_5480insACT` | noncoding | known_bug | — | #646 |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -253,6 +270,7 @@ A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
+| noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 47 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
