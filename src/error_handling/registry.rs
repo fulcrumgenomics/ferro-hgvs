@@ -193,7 +193,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             good_examples: &["NM_000088.3:c.100A>G"],
             mode_behavior: None,
             hgvs_spec_url: None,
-            related_codes: &["E2002", "E2003", "E2004"],
+            related_codes: &["E2002", "E2003", "E2004", "E2005"],
         },
     );
 
@@ -242,6 +242,27 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 "The requested transcript was found only at a different version (or via cdot \
                 reconstruction); strict resolution refuses to substitute. Request an available \
                 version or relax strict version pinning.",
+            category: CodeCategory::Reference,
+            bad_examples: &[],
+            good_examples: &[],
+            mode_behavior: None,
+            hgvs_spec_url: None,
+            related_codes: &["E2001"],
+        },
+    );
+
+    map.insert(
+        "E2005",
+        CodeInfo {
+            code: "E2005",
+            name: "TranscriptSequenceUnreconstructable",
+            summary: "Transcript sequence cannot be reconstructed from cdot.",
+            explanation:
+                "Base synthesis fell back to cdot's exon alignment against the genome (the \
+                transcript FASTA lacks this accession), but the cdot CIGAR encodes an insertion \
+                — transcript bases with no genome counterpart. cdot records only the insertion \
+                length, not the inserted bases, so the sequence cannot be reconstructed; ferro \
+                declines rather than serve a knowingly-divergent sequence.",
             category: CodeCategory::Reference,
             bad_examples: &[],
             good_examples: &[],
@@ -1982,6 +2003,15 @@ mod tests {
         // the engine's `code()` mapping but is a separate reference-family code).
         let info = get_code_info("E2004").expect("E2004 registered");
         assert_eq!(info.name, "TranscriptVersionNotExact");
+        assert_eq!(info.category, CodeCategory::Reference);
+    }
+
+    #[test]
+    fn transcript_sequence_unreconstructable_is_registered() {
+        // #807: E2005 must resolve so `ferro explain E2005` works (the enum→registry
+        // edge is not test-enforced, so a missing registry entry is otherwise silent).
+        let info = get_code_info("E2005").expect("E2005 registered");
+        assert_eq!(info.name, "TranscriptSequenceUnreconstructable");
         assert_eq!(info.category, CodeCategory::Reference);
     }
 

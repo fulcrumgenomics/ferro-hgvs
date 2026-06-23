@@ -266,6 +266,7 @@ pub const FERRO_NO_MUTALYZER_EQUIV: &[&str] = &[
     "ProteinReferenceNotAvailable",
     "ProteinSequenceUnavailable",
     "TranscriptNotOverlapping",
+    "TranscriptSequenceUnreconstructable",
     "TranscriptVersionNotExact",
     "UnsupportedProjection",
     "UtrCdsBoundary",
@@ -409,6 +410,7 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
         | FerroError::ConversionError { .. }
         | FerroError::VariantExceedsReference { .. }
         | FerroError::TranscriptVersionNotExact { .. }
+        | FerroError::TranscriptSequenceUnreconstructable { .. }
         | FerroError::Io { .. }
         | FerroError::Json { .. } => &[],
     }
@@ -513,6 +515,10 @@ mod tests {
             FerroError::TranscriptVersionNotExact {
                 requested: "NM_000088.4".to_string(),
             },
+            FerroError::TranscriptSequenceUnreconstructable {
+                id: "NM_TEST.1".to_string(),
+                insertions: 1,
+            },
             FerroError::ExonIntronBoundary {
                 exon: 1,
                 variant: "c.1del".to_string(),
@@ -591,6 +597,9 @@ mod tests {
             FerroError::AlignmentGap { .. } => "AlignmentGap",
             FerroError::ReferenceNotFound { .. } => "ReferenceNotFound",
             FerroError::TranscriptVersionNotExact { .. } => "TranscriptVersionNotExact",
+            FerroError::TranscriptSequenceUnreconstructable { .. } => {
+                "TranscriptSequenceUnreconstructable"
+            }
             FerroError::ExonIntronBoundary { .. } => "ExonIntronBoundary",
             FerroError::UtrCdsBoundary { .. } => "UtrCdsBoundary",
             FerroError::InvalidCoordinates { .. } => "InvalidCoordinates",

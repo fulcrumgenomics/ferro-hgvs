@@ -1443,12 +1443,22 @@ impl MultiFastaProvider {
     /// would emit the second exon's bases before the first exon's (closes #331
     /// review feedback).
     ///
+    /// CIGAR-aware (#807). Each exon's per-exon cdot CIGAR is applied while
+    /// synthesizing (via [`apply_exon_cigar`], after the exon window is oriented
+    /// to the transcript 5'→3' direction): `Deletion` genome bases are skipped so
+    /// the served sequence matches the GenBank-deposited transcript, and a CIGAR
+    /// `Insertion` — transcript-only bases cdot does not record — makes synthesis
+    /// decline (see the `Returns` list) rather than serve a divergent sequence.
+    /// Exons with no/empty CIGAR emit their whole genome window unchanged.
+    ///
     /// Returns `FerroError::GenomicReferenceNotAvailable` when the cdot-named
-    /// contig is missing from the genome FASTA, and `FerroError::InvalidCoordinates`
-    /// when any exon's genomic span is degenerate or the cdot record carries
-    /// no exons. The cdot-named contig is consulted directly (not version-
-    /// stripped); callers that rely on a different contig version should keep
-    /// the genome FASTA in sync with cdot.
+    /// contig is missing from the genome FASTA, `FerroError::InvalidCoordinates`
+    /// when any exon's genomic span is degenerate, the cdot record carries no
+    /// exons, or an exon CIGAR's consumed genome length disagrees with its span,
+    /// and `FerroError::TranscriptSequenceUnreconstructable` when an exon CIGAR
+    /// carries an insertion. The cdot-named contig is consulted directly (not
+    /// version-stripped); callers that rely on a different contig version should
+    /// keep the genome FASTA in sync with cdot.
     ///
     /// `tx.strand` is honored; metadata fields are projected onto the returned
     /// `Transcript` using the same conventions as the FASTA-backed path so
@@ -1486,9 +1496,26 @@ impl MultiFastaProvider {
         // `get_genomic_sequence` expects a 0-based half-open window, so we
         // subtract 1 from both bounds. For minus-strand transcripts we
         // revcomp per exon before concatenation — see fn doc.
+        // #807: apply each exon's cdot CIGAR while synthesizing, so the served
+        // bases match the GenBank-deposited transcript instead of silently
+        // diverging on indels. The CIGAR is walked from the exon's transcript-5'
+        // end (see `cigar_deletion_gap_at_genome_pos` / `cigar_insertion_gap_at_tx_pos`):
+        //   - `Match(n)`   — keep `n` bases (present in both transcript and genome).
+        //   - `Deletion(n)`— skip `n` genome bases (present in genome, absent from
+        //     the transcript): applying these is what makes the length/content match.
+        //   - `Insertion(n)`— `n` transcript bases with no genome counterpart. cdot
+        //     records only the length, never the inserted bases, and `CdotTranscript`
+        //     carries no transcript sequence, so they cannot be reconstructed. We
+        //     decline (`TranscriptSequenceUnreconstructable`) rather than serve a
+        //     sequence provably missing them.
+        // To make the CIGAR's tx-5' offset axis coincide with the byte index of the
+        // bases we walk, we first orient each exon's genome window to the transcript
+        // 5'→3' direction (reverse-complement on the minus strand) and only then
+        // apply the CIGAR. Exons with no/empty CIGAR keep the whole window (the
+        // pre-#807 behavior — the overwhelming common, non-indel case).
         let is_minus = matches!(tx.strand, Strand::Minus);
         let mut sequence = String::new();
-        for e in &tx.exons {
+        for (i, e) in tx.exons.iter().enumerate() {
             let g_start_hgvs = e[0];
             let g_end_excl_hgvs = e[1];
             if g_end_excl_hgvs <= g_start_hgvs || g_start_hgvs == 0 {
@@ -1499,38 +1526,72 @@ impl MultiFastaProvider {
                     ),
                 });
             }
-            let bases =
+            let genome_bases =
                 self.get_genomic_sequence(&tx.contig, g_start_hgvs - 1, g_end_excl_hgvs - 1)?;
-            if is_minus {
-                sequence.push_str(&crate::sequence::reverse_complement(&bases));
+            // Transcript 5'→3' orientation of this exon's genome window.
+            let tx_oriented = if is_minus {
+                crate::sequence::reverse_complement(&genome_bases)
             } else {
-                sequence.push_str(&bases);
+                genome_bases
+            };
+
+            match tx.exon_cigars.get(i) {
+                // Indel-bearing or gapless CIGAR present: walk it.
+                Some(Some(ops)) if !ops.is_empty() => {
+                    // `apply_exon_cigar` only guarantees the CIGAR is consistent
+                    // with the *genome* span (Match + Deletion == window length).
+                    // It does not tie the emitted *transcript* length back to the
+                    // declared exon transcript span `[e[2], e[3])`, which is what
+                    // `TxExon.{start,end}` (and downstream CDS coordinates) are
+                    // built from below. A record whose Match count disagrees with
+                    // `e[3] - e[2]` would yield a sequence whose byte length is
+                    // inconsistent with its own exon/CDS metadata, so refuse it
+                    // rather than serve mismatched coordinates (#807).
+                    let expected_tx_len =
+                        e[3].checked_sub(e[2])
+                            .ok_or_else(|| FerroError::InvalidCoordinates {
+                                msg: format!(
+                                    "cdot exon for {id} has invalid transcript span [{}, {})",
+                                    e[2], e[3]
+                                ),
+                            })?;
+                    let applied = apply_exon_cigar(id, &tx_oriented, ops)?;
+                    if applied.len() as u64 != expected_tx_len {
+                        return Err(FerroError::InvalidCoordinates {
+                            msg: format!(
+                                "cdot CIGAR for {id} emits {} transcript base(s) but the exon \
+                                 transcript span is {expected_tx_len}; refusing to synthesize \
+                                 from an inconsistent alignment",
+                                applied.len()
+                            ),
+                        });
+                    }
+                    sequence.push_str(&applied);
+                }
+                // No per-exon CIGAR data: keep the whole window (pre-#807 behavior).
+                _ => sequence.push_str(&tx_oriented),
             }
         }
 
-        // #471: the bases above are pulled straight from the genome without
-        // applying the cdot CIGAR, so flag — at a severity matching the
-        // available alignment evidence — when the reconstruction is at elevated
-        // risk of diverging from the deposited transcript. The call site already
-        // emitted a soft "synthesizing from cdot" notice; the gapless case adds
-        // nothing further.
-        match classify_cdot_synthesis_risk(&tx.exon_cigars) {
-            CdotSynthesisRisk::UnappliedIndels {
-                insertions,
-                deletions,
-            } => warn!(
-                "{id}: cdot exon alignment encodes {insertions} inserted and {deletions} deleted \
-                 base(s) that base synthesis does not apply — the synthesized sequence will \
-                 diverge from the deposited transcript in length and content; treat normalize \
-                 output for {id} as low-confidence (issue #471)"
-            ),
-            CdotSynthesisRisk::NoAlignmentGapData => warn!(
-                "{id}: cdot record carries no per-exon alignment-gap (CIGAR) data — synthesized \
-                 bases assume an exact genome match and cannot represent transcript-specific \
-                 indels or substitutions, so normalize output for {id} may diverge from the \
-                 deposited transcript (issues #471, #400)"
-            ),
-            CdotSynthesisRisk::Gapless => {}
+        // #807/#471: with deletions now applied and insertions declined above, the
+        // only residual divergence base synthesis cannot capture is (a) substitution-
+        // level differences (cdot's GFF3 Gap CIGAR encodes M/I/D only, never
+        // substitutions) and (b) any exon synthesized under the unverified
+        // exact-genome-match assumption because it had no usable per-exon CIGAR. The
+        // gapless and deletion-applied exons are faithful and add nothing further.
+        //
+        // The gate is per-exon coverage: a whole-transcript summary of the CIGARs
+        // that are *present* would let an applied deletion (or an otherwise-gapless
+        // but too-short CIGAR vector) mask a sibling exon that carries no CIGAR at
+        // all, wrongly suppressing the warning for a mixed deletion+missing-CIGAR
+        // record (#807/#471/#400).
+        if cdot_synthesis_has_unverified_exon(tx.exons.len(), &tx.exon_cigars) {
+            warn!(
+                "{id}: cdot record is missing per-exon alignment-gap (CIGAR) data for one or \
+                 more exons — those bases assume an exact genome match and cannot represent \
+                 transcript-specific indels or substitutions, so normalize output for {id} may \
+                 diverge from the deposited transcript (issues #471, #400)"
+            );
         }
 
         // Project cdot exons + CDS metadata onto the transcript struct using the
@@ -1581,61 +1642,215 @@ impl MultiFastaProvider {
     }
 }
 
-/// Risk that cdot-driven base synthesis ([`MultiFastaProvider::synthesize_transcript_from_cdot`])
-/// produces bases that diverge from the deposited transcript.
+/// Apply one exon's cdot CIGAR to its transcript-5'→3'-oriented genome bases,
+/// returning the bases the transcript actually carries for that exon (#807).
 ///
-/// cdot's GFF3 `Gap` CIGAR encodes only `M`/`I`/`D` operations (never
-/// substitutions), and `synthesize_transcript_from_cdot` reconstructs bases
-/// purely from the genome FASTA over each exon's genomic span — it does **not**
-/// apply the CIGAR. So the reconstruction is faithful only when the alignment
-/// is gapless; missing CIGARs or indel-bearing CIGARs mean the synthesized
-/// bases can silently diverge from the GenBank-deposited transcript. See issue
-/// #471 (and #400, the `NM_001166478.1` reconstruction mismatch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CdotSynthesisRisk {
-    /// Every exon carries a gapless (`M`-only) CIGAR: the synthesized length is
-    /// exact. Only substitution-level differences — which cdot's GFF3 Gap CIGAR
-    /// cannot represent — could still diverge. Lowest risk.
-    Gapless,
-    /// No per-exon alignment-gap data (the CIGAR vector is empty, or at least
-    /// one exon has no CIGAR entry): the synthesis assumes an exact genome match
-    /// and cannot represent any transcript-specific indel or substitution.
-    NoAlignmentGapData,
-    /// At least one exon's CIGAR encodes indels that base synthesis does not
-    /// apply, so the synthesized length and content provably diverge.
-    UnappliedIndels { insertions: u64, deletions: u64 },
-}
-
-/// Classify the divergence risk of cdot base synthesis from the per-exon
-/// CIGARs. Pure; see [`CdotSynthesisRisk`]. Indels anywhere dominate (strongest,
-/// most actionable signal); otherwise fully-covered gapless CIGARs are low risk
-/// and any missing per-exon data is elevated.
-pub(crate) fn classify_cdot_synthesis_risk(
-    exon_cigars: &[Option<Vec<crate::data::cdot::CigarOp>>],
-) -> CdotSynthesisRisk {
+/// `tx_oriented_bases` must already be in the transcript's 5'→3' direction
+/// (reverse-complemented on the minus strand) so the CIGAR's tx-5' offset axis
+/// coincides with the byte index — see
+/// [`MultiFastaProvider::synthesize_transcript_from_cdot`]. The CIGAR is walked
+/// left-to-right from that 5' end:
+///   - `Match(n)`    — copy the next `n` bases.
+///   - `Deletion(n)` — skip the next `n` genome bases (absent from the transcript).
+///   - `Insertion(n)`— transcript-only bases with no genome counterpart; cdot does
+///     not record their identity and the genome cannot supply them, so the exon's
+///     bases cannot be reconstructed. Returns
+///     [`FerroError::TranscriptSequenceUnreconstructable`].
+///
+/// Returns [`FerroError::InvalidCoordinates`] when the CIGAR's consumed
+/// genome length (`Match` + `Deletion`) does not equal the exon's genome span —
+/// an internally inconsistent record we refuse rather than mis-slice.
+///
+/// `ops` is assumed non-empty (the caller only walks present, non-empty CIGARs).
+fn apply_exon_cigar(
+    id: &str,
+    tx_oriented_bases: &str,
+    ops: &[crate::data::cdot::CigarOp],
+) -> Result<String, FerroError> {
     use crate::data::cdot::CigarOp;
-    let mut insertions = 0u64;
-    let mut deletions = 0u64;
-    for op in exon_cigars.iter().flatten().flatten() {
+
+    // Decline the whole synthesis if any exon carries an insertion op. The
+    // presence of *any* `Insertion` op — not just a positive total — is the
+    // decline trigger: cdot does not record transcript-only base identities, so
+    // even a degenerate `Insertion(0)` marks a record we refuse to reconstruct
+    // rather than reach the per-op loop's insertion arm. Use checked addition
+    // for the reported total: a malformed CIGAR whose insertion counts overflow
+    // `u64` is invalid metadata, not a wrapped sum we should trust.
+    if ops.iter().any(|op| matches!(op, CigarOp::Insertion(_))) {
+        let inserted: u64 = ops
+            .iter()
+            .try_fold(0u64, |acc, op| {
+                let n = match op {
+                    CigarOp::Insertion(n) => *n,
+                    _ => 0,
+                };
+                acc.checked_add(n)
+            })
+            .ok_or_else(|| FerroError::InvalidCoordinates {
+                msg: format!("cdot CIGAR for {id} insertion lengths overflow u64"),
+            })?;
+        return Err(FerroError::TranscriptSequenceUnreconstructable {
+            id: id.to_string(),
+            insertions: inserted,
+        });
+    }
+
+    let genome_len = tx_oriented_bases.len() as u64;
+    // Checked addition again: a wrapped `Match`/`Deletion` total could spuriously
+    // equal `genome_len` and pass span validation while the cursor math below
+    // mis-slices, so refuse overflow as invalid metadata.
+    let consumed: u64 = ops
+        .iter()
+        .try_fold(0u64, |acc, op| {
+            let n = match op {
+                CigarOp::Match(n) | CigarOp::Deletion(n) => *n,
+                CigarOp::Insertion(_) => 0,
+            };
+            acc.checked_add(n)
+        })
+        .ok_or_else(|| FerroError::InvalidCoordinates {
+            msg: format!("cdot CIGAR for {id} genome-consuming lengths overflow u64"),
+        })?;
+    if consumed != genome_len {
+        return Err(FerroError::InvalidCoordinates {
+            msg: format!(
+                "cdot CIGAR for {id} consumes {consumed} genome base(s) but the exon's genome \
+                 span is {genome_len}; refusing to synthesize from an inconsistent alignment"
+            ),
+        });
+    }
+
+    // Genome bases are single-byte ASCII nucleotides, so byte offsets are char
+    // boundaries and the `consumed == genome_len` check above guarantees every
+    // slice below is in bounds.
+    let mut out = String::with_capacity(tx_oriented_bases.len());
+    let mut cursor = 0usize;
+    for op in ops {
         match op {
-            CigarOp::Insertion(n) => insertions += n,
-            CigarOp::Deletion(n) => deletions += n,
-            CigarOp::Match(_) => {}
+            CigarOp::Match(n) => {
+                let end = cursor + *n as usize;
+                out.push_str(&tx_oriented_bases[cursor..end]);
+                cursor = end;
+            }
+            CigarOp::Deletion(n) => {
+                cursor += *n as usize;
+            }
+            // Any `Insertion` op (including a degenerate `Insertion(0)`) makes
+            // the whole synthesis decline above, so the loop never reaches one.
+            // Handle it as a no-op anyway — an insertion contributes no genome
+            // bases — so a future code path can never panic here.
+            CigarOp::Insertion(_) => {}
         }
     }
-    if insertions > 0 || deletions > 0 {
-        CdotSynthesisRisk::UnappliedIndels {
-            insertions,
-            deletions,
+    Ok(out)
+}
+
+/// True when cdot base synthesis emitted at least one of `exon_count` exons under
+/// the unverified exact-genome-match assumption — i.e. that exon had no usable
+/// per-exon CIGAR: a missing entry (`None`), an empty operation list, or an
+/// `exon_cigars` vector shorter than the exon list (so `get(i)` is `None`).
+///
+/// This is the gate for the best-effort divergence warning in
+/// [`MultiFastaProvider::synthesize_transcript_from_cdot`] and mirrors that
+/// function's per-exon fallback branch exactly: an exon is synthesized verbatim
+/// from the genome window unless its slot is `Some(Some(ops))` with non-empty
+/// `ops`. Checking per exon (rather than summarizing the whole CIGAR vector) is
+/// what catches a mixed deletion+missing-CIGAR record, where an applied deletion
+/// on one exon would otherwise mask a sibling exon that carries no CIGAR at all
+/// (#807/#471/#400).
+fn cdot_synthesis_has_unverified_exon(
+    exon_count: usize,
+    exon_cigars: &[Option<Vec<crate::data::cdot::CigarOp>>],
+) -> bool {
+    (0..exon_count).any(|i| !matches!(exon_cigars.get(i), Some(Some(ops)) if !ops.is_empty()))
+}
+
+/// The transcript length [`MultiFastaProvider::synthesize_transcript_from_cdot`]
+/// would actually *serve* for `tx`, applying the same per-exon CIGAR rules — or
+/// `None` when synthesis would decline rather than emit bases. This mirrors the
+/// synthesis path exactly so length-gated callers (e.g.
+/// [`MultiFastaProvider::reconcile_cdot_with_overrides`]) compare against the
+/// bases the read path produces, not the raw max `tx_end` (#807):
+///   - no exons → `None` (synthesis errors).
+///   - exon with a present, non-empty CIGAR: a possibly deletion-shortened
+///     sequence whose length is the summed `Match` count — but only once the
+///     CIGAR is consistent with both the exon's genome span
+///     (`Match + Deletion == e[1] - e[0]`) and its transcript span
+///     (`Match == e[3] - e[2]`). An insertion CIGAR (unreconstructable) or any
+///     inconsistency makes synthesis decline → `None`.
+///   - exon with no/empty CIGAR: the whole genome window, `e[1] - e[0]`
+///     (pre-#807 behavior).
+///
+/// Scope mirrors the per-exon CIGAR handling of synthesis, including declining
+/// malformed records with degenerate genome coordinates (`e[0] == 0` or
+/// `e[1] <= e[0]`), which [`MultiFastaProvider::synthesize_transcript_from_cdot`]
+/// rejects before serving any bases. Returning a length for such a record would
+/// let override reconciliation compare against bases the read path can never
+/// produce, so this helper declines (`None`) on the same degenerate spans.
+fn cdot_synthesized_tx_length(tx: &crate::data::cdot::CdotTranscript) -> Option<u64> {
+    use crate::data::cdot::CigarOp;
+    if tx.exons.is_empty() {
+        return None;
+    }
+    let mut total: u64 = 0;
+    for (i, e) in tx.exons.iter().enumerate() {
+        // Decline the same degenerate genome spans synthesis refuses, so this
+        // length never disagrees with what the read path would serve.
+        if e[0] == 0 || e[1] <= e[0] {
+            return None;
         }
-    } else if !exon_cigars.is_empty()
-        && exon_cigars
-            .iter()
-            .all(|c| matches!(c, Some(ops) if !ops.is_empty()))
-    {
-        CdotSynthesisRisk::Gapless
-    } else {
-        CdotSynthesisRisk::NoAlignmentGapData
+        let genome_span = e[1] - e[0];
+        let exon_len = match tx.exon_cigars.get(i) {
+            Some(Some(ops)) if !ops.is_empty() => {
+                let tx_span = e[3].checked_sub(e[2])?;
+                // Checked accumulation mirrors `apply_exon_cigar`: a malformed
+                // CIGAR whose counts overflow `u64` declines (`None`) here too,
+                // matching the length the read path would actually serve.
+                let (mut matched, mut consumed) = (0u64, 0u64);
+                // Mirror `apply_exon_cigar`: the *presence* of any insertion op
+                // (including a degenerate `Insertion(0)`) makes the record
+                // unreconstructable, so the read path declines and serves no
+                // length. Track presence, not just a positive total.
+                let mut has_insertion = false;
+                for op in ops {
+                    match op {
+                        CigarOp::Match(n) => {
+                            matched = matched.checked_add(*n)?;
+                            consumed = consumed.checked_add(*n)?;
+                        }
+                        CigarOp::Deletion(n) => consumed = consumed.checked_add(*n)?,
+                        CigarOp::Insertion(_) => has_insertion = true,
+                    }
+                }
+                // An insertion CIGAR is unreconstructable, and a CIGAR that
+                // disagrees with the exon's genome or transcript span is
+                // refused — synthesis declines either way, so no length is
+                // served.
+                if has_insertion || consumed != genome_span || matched != tx_span {
+                    return None;
+                }
+                matched
+            }
+            // No usable per-exon CIGAR: the whole genome window is served.
+            _ => genome_span,
+        };
+        total = total.checked_add(exon_len)?;
+    }
+    Some(total)
+}
+
+/// Pick the more informative of two transcript-probe errors, preferring whichever
+/// is *not* a bare [`FerroError::ReferenceNotFound`]. A typed decline such as
+/// [`FerroError::TranscriptSequenceUnreconstructable`] (E2005 — an insertion-CIGAR
+/// transcript that cannot be reconstructed) carries a precise "representation
+/// unavailable" signal that a generic not-found would mask; once such an error is
+/// captured while probing one build, a later `ReferenceNotFound` from probing the
+/// other build (or the no-hint fallback) must not overwrite it (#807). Keeps
+/// `existing` when it is already informative, otherwise takes `candidate`.
+fn prefer_informative_err(existing: Option<FerroError>, candidate: FerroError) -> FerroError {
+    match existing {
+        Some(e) if !matches!(e, FerroError::ReferenceNotFound { .. }) => e,
+        _ => candidate,
     }
 }
 
@@ -1719,24 +1934,20 @@ impl MultiFastaProvider {
                 // The served length is the FASTA index length if the transcript
                 // is FASTA-backed, else — for a cdot-synthesis-only transcript
                 // with no FASTA entry — the length the read path actually
-                // produces via `synthesize_transcript_from_cdot`: the summed exon
-                // *genomic* span (`genomic_end - genomic_start`, i.e. `e[1] -
-                // e[0]`). The raw `max(tx_end)` can disagree with that served
-                // length when an exon's genomic and transcript spans differ, so
-                // `apply_canonical_overrides` would gate on a length the server
-                // never produced. Empty exons → `None` (synthesis errors), so
-                // reconciliation is skipped. Proceed when the length matches the
-                // authoritative length, or when the override carries the
-                // canonical `sequence` (the served bases are replaced on read
-                // regardless).
+                // produces via `synthesize_transcript_from_cdot`. That is *not*
+                // simply the summed genomic span: since #807 the synthesis path
+                // applies each exon's CIGAR, so a deletion-bearing exon serves
+                // its `Match` length (after span validation), not its genomic
+                // span, and an insertion/inconsistent CIGAR (or empty exons)
+                // makes synthesis decline entirely. `cdot_synthesized_tx_length`
+                // mirrors those rules, returning `None` when synthesis would not
+                // serve bases so reconciliation is skipped. Proceed when the
+                // length matches the authoritative length, or when the override
+                // carries the canonical `sequence` (the served bases are
+                // replaced on read regardless).
                 let served_len = self.index.get(acc).map(|e| e.length).or_else(|| {
-                    cdot.get_transcript(acc).and_then(|t| {
-                        if t.exons.is_empty() {
-                            None
-                        } else {
-                            Some(t.exons.iter().map(|e| e[1].saturating_sub(e[0])).sum())
-                        }
-                    })
+                    cdot.get_transcript(acc)
+                        .and_then(cdot_synthesized_tx_length)
                 });
                 let length_matches = served_len == Some(auth.tx_length);
                 if !length_matches && auth.sequence.is_none() {
@@ -2045,18 +2256,35 @@ impl MultiFastaProvider {
                 // don't get silent cross-version mismatches. The base
                 // accession comparison is conservative: it warns whenever cdot
                 // does not store the exact-version key.
+                // These bases are reconstructed from the *genome* FASTA via the
+                // cdot exon alignment, not read from the deposited transcript
+                // sequence — because that sequence is absent from the prepared
+                // reference's transcript FASTA. The cdot GFF3 Gap CIGAR encodes
+                // only M/I/D, never substitutions, so even with complete CIGAR
+                // coverage an aligned ('M') base can differ from the deposited
+                // transcript at a substitution site, undetectably (#807/#471/#400).
+                // The only fix is to make the authoritative sequence available:
+                // add `id` (at the requested version) to the prepared reference's
+                // transcript FASTA and re-prepare. We surface that remediation on
+                // every synthesis so the divergence is never silent.
                 if !cdot.has_transcript_exact(id) {
                     warn!(
-                        "{} not in transcript FASTA and not in cdot at this exact version; \
-                         synthesizing bases via cdot version fallback (the cdot record \
-                         may correspond to a sibling version)",
-                        id
+                        "{id} is absent from the prepared reference's transcript FASTA and cdot \
+                         has no record at this exact version; reconstructing bases from a \
+                         sibling-version cdot exon alignment against the genome FASTA. These \
+                         genome-derived bases may diverge from the deposited transcript at \
+                         substitutions (and at indels for any exon lacking per-exon CIGAR data). \
+                         To serve the authoritative sequence, add {id} at the requested version \
+                         to the prepared reference's transcript FASTA and re-run `ferro prepare`."
                     );
                 } else {
                     warn!(
-                        "{} not in transcript FASTA; synthesizing bases from cdot \
-                         exon alignment against the genome FASTA",
-                        id
+                        "{id} is absent from the prepared reference's transcript FASTA; \
+                         reconstructing bases from the cdot exon alignment against the genome \
+                         FASTA. These genome-derived bases may diverge from the deposited \
+                         transcript at substitutions (and at indels for any exon lacking \
+                         per-exon CIGAR data). To serve the authoritative sequence, add {id} to \
+                         the prepared reference's transcript FASTA and re-run `ferro prepare`."
                     );
                 }
                 return self.synthesize_transcript_from_cdot(id, tx, build_hint);
@@ -2589,21 +2817,34 @@ impl ReferenceProvider for MultiFastaProvider {
             }
         };
 
+        // Track the most informative probe error across builds. A typed decline
+        // (e.g. E2005 `TranscriptSequenceUnreconstructable` from an insertion
+        // CIGAR) must survive a later build's bare `ReferenceNotFound` so the
+        // decline still surfaces for parented variants instead of degrading to a
+        // generic not-found (#807).
         let mut last_err: Option<FerroError> = None;
         for build in probe_order {
             match self.get_transcript_on_build_cached(&tx_id, Some(build)) {
                 Ok(tx) if tx.chromosome.is_some() => return Ok(tx),
-                Ok(tx) => last_err = Some(FerroError::ReferenceNotFound { id: tx.id.clone() }),
-                Err(e) => last_err = Some(e),
+                Ok(tx) => {
+                    last_err = Some(prefer_informative_err(
+                        last_err,
+                        FerroError::ReferenceNotFound { id: tx.id.clone() },
+                    ))
+                }
+                Err(e) => last_err = Some(prefer_informative_err(last_err, e)),
             }
         }
 
         // Final fallback: try without a build hint (uses cdot's primary build
         // and any supplemental/FASTA-only data). Preserves the historical
-        // behavior for transcripts that only live in the primary build.
+        // behavior for transcripts that only live in the primary build. On
+        // failure, keep whichever of the accumulated and final errors is more
+        // informative, so a no-hint E2005 is not discarded in favor of an
+        // earlier `ReferenceNotFound`.
         match self.get_transcript_on_build_cached(&tx_id, None) {
             Ok(tx) => Ok(tx),
-            Err(e) => Err(last_err.unwrap_or(e)),
+            Err(e) => Err(prefer_informative_err(last_err, e)),
         }
     }
 
@@ -3338,118 +3579,284 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         );
     }
 
-    // ---- #471: cdot base-synthesis divergence-risk classifier ----
+    // ---- #471/#807: cdot base-synthesis unverified-exon warning gate ----
+    //
+    // `cdot_synthesis_has_unverified_exon` decides whether the best-effort
+    // divergence warning fires: it is true exactly when at least one of the
+    // transcript's exons would be synthesized verbatim from the genome window
+    // because it has no usable per-exon CIGAR (missing/empty entry, or a CIGAR
+    // vector shorter than the exon list).
 
     #[test]
-    fn cdot_synthesis_risk_empty_is_no_gap_data() {
-        // No CIGAR data at all (the common cdot case) → cannot represent any
-        // transcript-vs-genome difference → elevated risk.
-        assert_eq!(
-            classify_cdot_synthesis_risk(&[]),
-            CdotSynthesisRisk::NoAlignmentGapData
-        );
+    fn unverified_exon_empty_cigars_is_true() {
+        // No CIGAR data at all (the common cdot case) → every exon is synthesized
+        // under the unverified exact-genome-match assumption.
+        assert!(cdot_synthesis_has_unverified_exon(2, &[]));
     }
 
     #[test]
-    fn cdot_synthesis_risk_all_none_is_no_gap_data() {
-        assert_eq!(
-            classify_cdot_synthesis_risk(&[None, None]),
-            CdotSynthesisRisk::NoAlignmentGapData
-        );
+    fn unverified_exon_all_none_is_true() {
+        assert!(cdot_synthesis_has_unverified_exon(2, &[None, None]));
     }
 
     #[test]
-    fn cdot_synthesis_risk_empty_inner_vec_is_no_gap_data() {
-        // `Some(vec![])` is a CIGAR slot that is present but carries no operations:
-        // there is no alignment data for that exon, so it must elevate to
-        // NoAlignmentGapData rather than masquerade as Gapless (per the doc on
-        // `CdotSynthesisRisk::NoAlignmentGapData`).
-        assert_eq!(
-            classify_cdot_synthesis_risk(&[Some(vec![])]),
-            CdotSynthesisRisk::NoAlignmentGapData
-        );
+    fn unverified_exon_empty_inner_vec_is_true() {
+        // `Some(vec![])` is a slot that is present but carries no operations: that
+        // exon has no usable alignment data, so it is unverified.
+        assert!(cdot_synthesis_has_unverified_exon(1, &[Some(vec![])]));
     }
 
     #[test]
-    fn cdot_synthesis_risk_mixed_empty_inner_vec_is_no_gap_data() {
+    fn unverified_exon_mixed_real_and_empty_inner_vec_is_true() {
         use crate::data::cdot::CigarOp;
-        // One exon has real alignment data, another has an empty CIGAR vector:
-        // we cannot vouch for the whole transcript, so this is elevated, not gapless.
         let cigars = vec![Some(vec![CigarOp::Match(185)]), Some(vec![])];
-        assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::NoAlignmentGapData
-        );
+        assert!(cdot_synthesis_has_unverified_exon(2, &cigars));
     }
 
     #[test]
-    fn cdot_synthesis_risk_all_match_is_gapless() {
+    fn unverified_exon_full_gapless_coverage_is_false() {
         use crate::data::cdot::CigarOp;
+        // Every exon carries a non-empty CIGAR → all verified → no warning.
         let cigars = vec![
             Some(vec![CigarOp::Match(185)]),
             Some(vec![CigarOp::Match(250)]),
         ];
-        assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::Gapless
-        );
+        assert!(!cdot_synthesis_has_unverified_exon(2, &cigars));
     }
 
     #[test]
-    fn cdot_synthesis_risk_partial_coverage_is_no_gap_data() {
+    fn unverified_exon_full_deletion_coverage_is_false() {
         use crate::data::cdot::CigarOp;
-        // One exon carries a CIGAR, one does not — we cannot vouch for the whole
-        // transcript, so this is elevated, not gapless.
+        // Deletion CIGARs are applied faithfully, so a fully-covered transcript
+        // (even with deletions) has no unverified exon.
+        let cigars = vec![
+            Some(vec![CigarOp::Match(100), CigarOp::Deletion(5)]),
+            Some(vec![CigarOp::Match(250)]),
+        ];
+        assert!(!cdot_synthesis_has_unverified_exon(2, &cigars));
+    }
+
+    #[test]
+    fn unverified_exon_partial_coverage_is_true() {
+        use crate::data::cdot::CigarOp;
+        // One exon carries a CIGAR, one does not → the missing exon is unverified.
         let cigars = vec![Some(vec![CigarOp::Match(185)]), None];
+        assert!(cdot_synthesis_has_unverified_exon(2, &cigars));
+    }
+
+    #[test]
+    fn unverified_exon_mixed_deletion_and_missing_is_true() {
+        use crate::data::cdot::CigarOp;
+        // #807 regression: an applied deletion on one exon must NOT mask a sibling
+        // exon that carries no CIGAR at all — the missing exon is still unverified
+        // and the warning must fire.
+        let cigars = vec![Some(vec![CigarOp::Match(100), CigarOp::Deletion(5)]), None];
+        assert!(cdot_synthesis_has_unverified_exon(2, &cigars));
+    }
+
+    #[test]
+    fn unverified_exon_cigar_vector_shorter_than_exons_is_true() {
+        use crate::data::cdot::CigarOp;
+        // #807 regression: a gapless CIGAR covering only the first of two exons
+        // leaves the second exon with no CIGAR (`get(1)` is `None`) → unverified,
+        // even though the present CIGAR is itself gapless.
+        let cigars = vec![Some(vec![CigarOp::Match(185)])];
+        assert!(cdot_synthesis_has_unverified_exon(2, &cigars));
+    }
+
+    #[test]
+    fn unverified_exon_ignores_out_of_range_trailing_slots() {
+        use crate::data::cdot::CigarOp;
+        // Only the first `exon_count` slots are synthesized; a trailing `None`
+        // beyond the exon list is never emitted, so it must not trigger a warning.
+        let cigars = vec![Some(vec![CigarOp::Match(185)]), None];
+        assert!(!cdot_synthesis_has_unverified_exon(1, &cigars));
+    }
+
+    // `cdot_synthesized_tx_length` must report the length
+    // `synthesize_transcript_from_cdot` would actually serve, applying the same
+    // per-exon CIGAR rules so length-gated callers don't compare against a length
+    // the read path never produces (#807).
+
+    /// Minimal cdot record for the length-helper tests (only exons + CIGARs matter).
+    fn cdot_tx(
+        exons: Vec<[u64; 4]>,
+        exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
+    ) -> crate::data::cdot::CdotTranscript {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::Strand;
+        CdotTranscript {
+            gene_name: None,
+            contig: "NC_TEST.1".to_string(),
+            strand: Strand::Plus,
+            exons,
+            cds_start: None,
+            cds_end: None,
+            gene_id: None,
+            protein: None,
+            exon_cigars,
+        }
+    }
+
+    #[test]
+    fn synthesized_tx_length_no_cigars_sums_genome_spans() {
+        // No per-exon CIGAR → each exon serves its whole genome window: 5 + 4 = 9.
+        let tx = cdot_tx(vec![[1, 6, 0, 5], [10, 14, 5, 9]], Vec::new());
+        assert_eq!(cdot_synthesized_tx_length(&tx), Some(9));
+    }
+
+    #[test]
+    fn synthesized_tx_length_deletion_cigar_uses_match_length() {
+        use crate::data::cdot::CigarOp;
+        // Genome span 12 (1..13), CIGAR M9 D3: synthesis emits the 9 Match bases,
+        // so the served length is 9 (the transcript span), not the 12-base span.
+        let tx = cdot_tx(
+            vec![[1, 13, 0, 9]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(3)])],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), Some(9));
+    }
+
+    #[test]
+    fn synthesized_tx_length_mixed_cigar_and_no_cigar_exons() {
+        use crate::data::cdot::CigarOp;
+        // Exon 0: span 12, M9 D3 → 9 served. Exon 1: no CIGAR → whole 4-base window.
+        let tx = cdot_tx(
+            vec![[1, 13, 0, 9], [20, 24, 9, 13]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(3)]), None],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), Some(13));
+    }
+
+    #[test]
+    fn synthesized_tx_length_insertion_cigar_declines() {
+        use crate::data::cdot::CigarOp;
+        // Insertion CIGAR → unreconstructable (E2005) → synthesis declines → None.
+        let tx = cdot_tx(
+            vec![[1, 10, 0, 11]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Insertion(2)])],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), None);
+    }
+
+    #[test]
+    fn synthesized_tx_length_zero_length_insertion_declines() {
+        use crate::data::cdot::CigarOp;
+        // A degenerate `Insertion(0)` carries no count but still marks the
+        // record unreconstructable in `apply_exon_cigar`, so this helper must
+        // decline (`None`) too — staying consistent with the bases the read
+        // path would actually serve (it serves none).
+        let tx = cdot_tx(
+            vec![[1, 10, 0, 9]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Insertion(0)])],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), None);
+    }
+
+    #[test]
+    fn synthesized_tx_length_cigar_inconsistent_with_genome_span_declines() {
+        use crate::data::cdot::CigarOp;
+        // Match+Deletion (10) != genome span (12) → InvalidCoordinates → None.
+        let tx = cdot_tx(
+            vec![[1, 13, 0, 9]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(1)])],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), None);
+    }
+
+    #[test]
+    fn synthesized_tx_length_cigar_inconsistent_with_tx_span_declines() {
+        use crate::data::cdot::CigarOp;
+        // Match (9) != transcript span (8) even though genome consumption matches
+        // → the emitted length would disagree with the exon metadata → None.
+        let tx = cdot_tx(
+            vec![[1, 13, 0, 8]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(3)])],
+        );
+        assert_eq!(cdot_synthesized_tx_length(&tx), None);
+    }
+
+    #[test]
+    fn synthesized_tx_length_empty_or_underflow_exons_decline() {
+        // No exons → synthesis errors → None.
         assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::NoAlignmentGapData
+            cdot_synthesized_tx_length(&cdot_tx(vec![], Vec::new())),
+            None
+        );
+        // A genome end below the start (underflow) → None rather than a panic.
+        assert_eq!(
+            cdot_synthesized_tx_length(&cdot_tx(vec![[10, 5, 0, 5]], Vec::new())),
+            None
+        );
+        // A zero genome start (`e[0] == 0`) is a degenerate span synthesis
+        // rejects outright, so the helper must decline too — not report
+        // `e[1] - e[0]` for bases the read path will never serve.
+        assert_eq!(
+            cdot_synthesized_tx_length(&cdot_tx(vec![[0, 5, 0, 5]], Vec::new())),
+            None
+        );
+        // An equal start/end (`e[1] == e[0]`) is likewise degenerate → None.
+        assert_eq!(
+            cdot_synthesized_tx_length(&cdot_tx(vec![[5, 5, 0, 0]], Vec::new())),
+            None
         );
     }
 
     #[test]
-    fn cdot_synthesis_risk_insertion_is_unapplied_indels() {
+    fn synthesized_tx_length_overflowing_cigar_counts_decline() {
         use crate::data::cdot::CigarOp;
-        let cigars = vec![Some(vec![
-            CigarOp::Match(185),
-            CigarOp::Insertion(3),
-            CigarOp::Match(250),
-        ])];
-        assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::UnappliedIndels {
-                insertions: 3,
-                deletions: 0
-            }
+        // A `Match` count that overflows `u64` when accumulated must decline
+        // rather than wrap, matching `apply_exon_cigar`'s checked arithmetic.
+        let tx = cdot_tx(
+            vec![[1, 13, 0, 9]],
+            vec![Some(vec![CigarOp::Match(u64::MAX), CigarOp::Match(1)])],
         );
+        assert_eq!(cdot_synthesized_tx_length(&tx), None);
+    }
+
+    // `prefer_informative_err` keeps a typed decline (E2005) from being masked by
+    // a bare `ReferenceNotFound` accumulated while probing another build (#807).
+
+    #[test]
+    fn prefer_informative_err_keeps_existing_typed_decline() {
+        let existing = FerroError::TranscriptSequenceUnreconstructable {
+            id: "NM_TEST.1".to_string(),
+            insertions: 2,
+        };
+        let candidate = FerroError::ReferenceNotFound {
+            id: "NM_TEST.1".to_string(),
+        };
+        assert!(matches!(
+            prefer_informative_err(Some(existing), candidate),
+            FerroError::TranscriptSequenceUnreconstructable { .. }
+        ));
     }
 
     #[test]
-    fn cdot_synthesis_risk_deletion_is_unapplied_indels() {
-        use crate::data::cdot::CigarOp;
-        let cigars = vec![Some(vec![CigarOp::Match(100), CigarOp::Deletion(5)])];
-        assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::UnappliedIndels {
-                insertions: 0,
-                deletions: 5
-            }
-        );
+    fn prefer_informative_err_replaces_existing_reference_not_found() {
+        // A bare not-found gives way to a later typed decline.
+        let existing = FerroError::ReferenceNotFound {
+            id: "NM_TEST.1".to_string(),
+        };
+        let candidate = FerroError::TranscriptSequenceUnreconstructable {
+            id: "NM_TEST.1".to_string(),
+            insertions: 1,
+        };
+        assert!(matches!(
+            prefer_informative_err(Some(existing), candidate),
+            FerroError::TranscriptSequenceUnreconstructable { .. }
+        ));
     }
 
     #[test]
-    fn cdot_synthesis_risk_indels_dominate_missing_data() {
-        use crate::data::cdot::CigarOp;
-        // An indel on one exon and a missing CIGAR on another → the indel is the
-        // strongest, most actionable signal and must win.
-        let cigars = vec![Some(vec![CigarOp::Insertion(2)]), None];
-        assert_eq!(
-            classify_cdot_synthesis_risk(&cigars),
-            CdotSynthesisRisk::UnappliedIndels {
-                insertions: 2,
-                deletions: 0
-            }
-        );
+    fn prefer_informative_err_none_takes_candidate() {
+        let candidate = FerroError::ReferenceNotFound {
+            id: "NM_TEST.1".to_string(),
+        };
+        assert!(matches!(
+            prefer_informative_err(None, candidate),
+            FerroError::ReferenceNotFound { .. }
+        ));
     }
 
     #[test]
@@ -4291,6 +4698,349 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             matches!(err, FerroError::InvalidCoordinates { .. }),
             "expected InvalidCoordinates, got {err:?}"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // #807: cdot CIGAR-aware base synthesis.
+    //
+    // When the synthesis fallback fires (transcript absent from the FASTA but
+    // present in cdot), the per-exon CIGAR must be APPLIED so the served bases
+    // match the deposited transcript instead of silently diverging on indels:
+    //   - Deletion(n): skip those genome bases (genome-only → absent from tx).
+    //   - Insertion(n): tx-only bases cdot does not record → DECLINE.
+    //   - gapless / no CIGAR: emit the whole genome window (unchanged).
+    //
+    // Genome `NC_TEST.1` = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC".
+    // Single-exon fixtures use the genome window HGVS 11..=30
+    // (0-based [10..30]) = "GGTTTTAAAACCCCGGGGTT" (20 bases), the same window
+    // the no-CIGAR fallback tests use, so the only behavioral difference is the
+    // CIGAR application.
+    // ----------------------------------------------------------------------
+
+    /// Build a CdotMapper seating a single-exon `NM_CIG.1` over genome window
+    /// HGVS 11..=30 on `NC_TEST.1`, with the given strand and CIGAR. CIGARs
+    /// cannot be injected via `from_transcripts` (it discards them), so we build
+    /// the `CdotTranscript` by hand.
+    fn seat_single_exon_cigar(
+        strand: crate::reference::transcript::Strand,
+        cigar: Vec<crate::data::cdot::CigarOp>,
+    ) -> CdotMapper {
+        use crate::data::cdot::{CdotTranscript, CigarOp};
+        // Derive the transcript span from the CIGAR so the fixture is internally
+        // consistent: the exon carries one transcript base per Match/Insertion
+        // operation (Deletions are genome-only). Synthesis now validates the
+        // emitted length against this span (#807), so a hardcoded span would
+        // spuriously fail the deletion fixtures (Match-sum < genome span).
+        let tx_len: u64 = cigar
+            .iter()
+            .map(|op| match op {
+                CigarOp::Match(n) | CigarOp::Insertion(n) => *n,
+                CigarOp::Deletion(_) => 0,
+            })
+            .sum();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_CIG.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("CIG".to_string()),
+                contig: "NC_TEST.1".to_string(),
+                // cdot exon layout: [genome_start (1-based incl),
+                // genome_end (1-based excl), tx_start (0-based), tx_end (0-based excl)].
+                exons: vec![[11, 31, 0, tx_len]],
+                strand,
+                cds_start: Some(0),
+                cds_end: Some(17),
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![Some(cigar)],
+            },
+        );
+        cdot
+    }
+
+    #[test]
+    fn test_synthesis_applies_cigar_deletion_plus_strand() {
+        use crate::data::cdot::CigarOp;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        // CIGAR M5 D3 M12 over "GGTTTTAAAACCCCGGGGTT": drop the 3 genome bases at
+        // offsets [5,8) ("TAA") → "GGTTT" + "AACCCCGGGGTT" = "GGTTTAACCCCGGGGTT".
+        provider.cdot_mapper = Some(seat_single_exon_cigar(
+            Strand::Plus,
+            vec![CigarOp::Match(5), CigarOp::Deletion(3), CigarOp::Match(12)],
+        ));
+
+        let tx = provider
+            .get_transcript("NM_CIG.1")
+            .expect("deletion CIGAR must synthesize, not decline");
+        assert_eq!(tx.sequence.as_deref(), Some("GGTTTAACCCCGGGGTT"));
+    }
+
+    #[test]
+    fn test_synthesis_applies_cigar_deletion_minus_strand() {
+        use crate::data::cdot::CigarOp;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        // Minus strand: orient the window to tx-5'→3' first =
+        // revcomp("GGTTTTAAAACCCCGGGGTT") = "AACCCCGGGGTTTTAAAACC", THEN apply
+        // M5 D3 M12: drop offsets [5,8) ("CGG") → "AACCC" + "GTTTTAAAACC"
+        // = "AACCCGGTTTTAAAACC".
+        provider.cdot_mapper = Some(seat_single_exon_cigar(
+            Strand::Minus,
+            vec![CigarOp::Match(5), CigarOp::Deletion(3), CigarOp::Match(12)],
+        ));
+
+        let tx = provider
+            .get_transcript("NM_CIG.1")
+            .expect("deletion CIGAR must synthesize, not decline");
+        assert_eq!(tx.sequence.as_deref(), Some("AACCCGGTTTTAAAACC"));
+    }
+
+    #[test]
+    fn test_synthesis_declines_on_cigar_insertion() {
+        use crate::data::cdot::CigarOp;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        // CIGAR M5 I3 M12: 3 transcript-only bases cdot does not record. The
+        // genome cannot supply them, so synthesis must DECLINE with a typed
+        // error rather than serve a sequence missing those bases.
+        provider.cdot_mapper = Some(seat_single_exon_cigar(
+            Strand::Plus,
+            vec![CigarOp::Match(5), CigarOp::Insertion(3), CigarOp::Match(15)],
+        ));
+
+        let err = provider
+            .get_transcript("NM_CIG.1")
+            .expect_err("insertion CIGAR must decline, not serve a divergent sequence");
+        assert!(
+            matches!(
+                err,
+                FerroError::TranscriptSequenceUnreconstructable { ref id, insertions: 3 }
+                    if id == "NM_CIG.1"
+            ),
+            "expected TranscriptSequenceUnreconstructable{{insertions:3}}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_synthesis_rejects_cigar_inconsistent_with_exon_span() {
+        use crate::data::cdot::CigarOp;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        // Exon genome span is 20 bases, but M5 D3 M2 consumes only 10 → the CIGAR
+        // is inconsistent with the exon; refuse rather than mis-slice.
+        provider.cdot_mapper = Some(seat_single_exon_cigar(
+            Strand::Plus,
+            vec![CigarOp::Match(5), CigarOp::Deletion(3), CigarOp::Match(2)],
+        ));
+
+        let err = provider
+            .get_transcript("NM_CIG.1")
+            .expect_err("CIGAR not covering the exon genome span must be rejected");
+        assert!(
+            matches!(err, FerroError::InvalidCoordinates { .. }),
+            "expected InvalidCoordinates, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_synthesis_rejects_cigar_emitting_wrong_transcript_length() {
+        use crate::data::cdot::{CdotTranscript, CigarOp};
+        use crate::reference::transcript::Strand;
+
+        // The CIGAR is consistent with the *genome* span (M17 D3 consumes the
+        // full 20-base window) but emits only 17 transcript bases, while the
+        // declared exon transcript span is [0, 20) = 20. The genome-consumption
+        // check passes, so this is caught only by the transcript-length check
+        // (#807): serving a 17-base sequence under 20-base exon/CDS coordinates
+        // would leave the metadata inconsistent, so it must be refused.
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_CIG.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("CIG".to_string()),
+                contig: "NC_TEST.1".to_string(),
+                // Deliberately inconsistent: tx span 20 but the CIGAR yields 17.
+                exons: vec![[11, 31, 0, 20]],
+                strand: Strand::Plus,
+                cds_start: Some(0),
+                cds_end: Some(17),
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![Some(vec![CigarOp::Match(17), CigarOp::Deletion(3)])],
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        let err = provider.get_transcript("NM_CIG.1").expect_err(
+            "a CIGAR emitting fewer transcript bases than the exon span must be rejected",
+        );
+        assert!(
+            matches!(err, FerroError::InvalidCoordinates { .. }),
+            "expected InvalidCoordinates, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_synthesis_gapless_cigar_matches_no_cigar_output() {
+        use crate::data::cdot::CigarOp;
+        use crate::reference::transcript::Strand;
+
+        // An explicit gapless (M-only) CIGAR must synthesize byte-for-byte
+        // identically to the no-CIGAR fallback (the common, non-indel case is
+        // unregressed): both emit the whole genome window "GGTTTTAAAACCCCGGGGTT".
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        provider.cdot_mapper = Some(seat_single_exon_cigar(
+            Strand::Plus,
+            vec![CigarOp::Match(20)],
+        ));
+        let gapless = provider
+            .get_transcript("NM_CIG.1")
+            .expect("gapless CIGAR must synthesize");
+        assert_eq!(gapless.sequence.as_deref(), Some("GGTTTTAAAACCCCGGGGTT"));
+
+        // Cross-check against the no-CIGAR path (existing helper, same window).
+        let (mut provider2, _kept2) = build_provider_with_test_genome();
+        let tx_no_cigar = build_single_exon_synthetic_tx(Strand::Plus);
+        provider2.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx_no_cigar)));
+        let no_cigar = provider2
+            .get_transcript("NM_TEST.1")
+            .expect("no-CIGAR fallback must synthesize");
+        assert_eq!(gapless.sequence, no_cigar.sequence);
+    }
+
+    #[test]
+    fn test_synthesis_mixed_deletion_and_missing_cigar_exon() {
+        use crate::data::cdot::{CdotTranscript, CigarOp};
+        use crate::reference::transcript::Strand;
+
+        // #807 regression: a two-exon transcript where exon 0 carries a deletion
+        // CIGAR (applied) and exon 1 carries no CIGAR (synthesized verbatim). The
+        // applied deletion must not mask exon 1's missing data: synthesis still
+        // succeeds and emits each exon under its own rule.
+        //
+        // Genome NC_TEST.1 = "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC".
+        //   Exon 0: genome HGVS [11,21) (0-based [10..20]) = "GGTTTTAAAA";
+        //           CIGAR M3 D2 M5 drops offsets [3,5) ("TT") → "GGT" + "TAAAA"
+        //           = "GGTTAAAA".
+        //   Exon 1: genome HGVS [21,31) (0-based [20..30]) = "CCCCGGGGTT";
+        //           no CIGAR → whole window "CCCCGGGGTT".
+        //   Synthesized = "GGTTAAAA" + "CCCCGGGGTT" = "GGTTAAAACCCCGGGGTT".
+        let (mut provider, _kept) = build_provider_with_test_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_MIX.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("MIX".to_string()),
+                contig: "NC_TEST.1".to_string(),
+                exons: vec![[11, 21, 0, 8], [21, 31, 8, 18]],
+                strand: Strand::Plus,
+                cds_start: Some(0),
+                cds_end: Some(18),
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![
+                    Some(vec![
+                        CigarOp::Match(3),
+                        CigarOp::Deletion(2),
+                        CigarOp::Match(5),
+                    ]),
+                    None,
+                ],
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        let tx = provider
+            .get_transcript("NM_MIX.1")
+            .expect("mixed deletion + missing-CIGAR record must synthesize, not decline");
+        assert_eq!(tx.sequence.as_deref(), Some("GGTTAAAACCCCGGGGTT"));
+    }
+
+    #[test]
+    fn test_apply_exon_cigar_pure_helper() {
+        use crate::data::cdot::CigarOp;
+
+        // M-only: identity.
+        assert_eq!(
+            apply_exon_cigar("X", "ACGTACGT", &[CigarOp::Match(8)]).unwrap(),
+            "ACGTACGT"
+        );
+        // Interior deletion: keep first 2 ("AC"), drop next 3 ("GTA"), keep
+        // last 3 ("CGT") → "ACCGT".
+        assert_eq!(
+            apply_exon_cigar(
+                "X",
+                "ACGTACGT",
+                &[CigarOp::Match(2), CigarOp::Deletion(3), CigarOp::Match(3)]
+            )
+            .unwrap(),
+            "ACCGT"
+        );
+        // Leading deletion.
+        assert_eq!(
+            apply_exon_cigar("X", "ACGTAC", &[CigarOp::Deletion(2), CigarOp::Match(4)]).unwrap(),
+            "GTAC"
+        );
+        // Trailing deletion.
+        assert_eq!(
+            apply_exon_cigar("X", "ACGTAC", &[CigarOp::Match(4), CigarOp::Deletion(2)]).unwrap(),
+            "ACGT"
+        );
+        // Any insertion → decline.
+        assert!(matches!(
+            apply_exon_cigar(
+                "X",
+                "ACGT",
+                &[CigarOp::Match(2), CigarOp::Insertion(1), CigarOp::Match(2)]
+            ),
+            Err(FerroError::TranscriptSequenceUnreconstructable { insertions: 1, .. })
+        ));
+        // Degenerate zero-length insertion → decline cleanly, never panic.
+        // Pre-fix the `inserted > 0` guard let an `Insertion(0)` slip past and
+        // reach the loop's `unreachable!` insertion arm, panicking the
+        // synthesizer on adversarial cdot metadata (DoS). Now the *presence* of
+        // any insertion op declines with E2005.
+        assert!(matches!(
+            apply_exon_cigar(
+                "X",
+                "ACGT",
+                &[CigarOp::Match(2), CigarOp::Insertion(0), CigarOp::Match(2)]
+            ),
+            Err(FerroError::TranscriptSequenceUnreconstructable { insertions: 0, .. })
+        ));
+        // An `Insertion(0)` as the sole op (no genome-consuming bases) likewise
+        // declines rather than panicking.
+        assert!(matches!(
+            apply_exon_cigar("X", "", &[CigarOp::Insertion(0)]),
+            Err(FerroError::TranscriptSequenceUnreconstructable { insertions: 0, .. })
+        ));
+        // Consumed length != genome span → reject.
+        assert!(matches!(
+            apply_exon_cigar("X", "ACGTAC", &[CigarOp::Match(2)]),
+            Err(FerroError::InvalidCoordinates { .. })
+        ));
+        // Overflowing insertion total → invalid metadata, not a wrapped sum that
+        // could slip past the E2005 branch.
+        assert!(matches!(
+            apply_exon_cigar(
+                "X",
+                "ACGT",
+                &[CigarOp::Insertion(u64::MAX), CigarOp::Insertion(1)]
+            ),
+            Err(FerroError::InvalidCoordinates { .. })
+        ));
+        // Overflowing genome-consuming total → invalid metadata, not a wrapped
+        // sum that could spuriously match the genome span.
+        assert!(matches!(
+            apply_exon_cigar("X", "ACGT", &[CigarOp::Match(u64::MAX), CigarOp::Match(1)]),
+            Err(FerroError::InvalidCoordinates { .. })
+        ));
     }
 
     // ----------------------------------------------------------------------
@@ -5384,7 +6134,8 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 gene_name: None,
                 contig: "NC_TEST.1".to_string(),
                 strand: Strand::Plus,
-                exons: vec![[0, 9, 0, 9]],
+                // 1-based genome bounds (cdot never emits `e[0] == 0`); span 9.
+                exons: vec![[1, 10, 0, 9]],
                 cds_start: Some(2), // wrong
                 cds_end: Some(6),   // wrong
                 gene_id: None,
@@ -5423,6 +6174,17 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         acc: &str,
         exons: Vec<[u64; 4]>,
     ) -> (MultiFastaProvider, tempfile::TempDir) {
+        synth_provider_with_cdot_cigars(acc, exons, Vec::new())
+    }
+
+    /// As [`synth_provider_with_cdot`], but with explicit per-exon CIGARs so the
+    /// served (CIGAR-applied) length can diverge from the raw genomic span (#807).
+    #[cfg(test)]
+    fn synth_provider_with_cdot_cigars(
+        acc: &str,
+        exons: Vec<[u64; 4]>,
+        exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
+    ) -> (MultiFastaProvider, tempfile::TempDir) {
         use crate::data::cdot::{CdotMapper, CdotTranscript};
         use crate::reference::Strand;
         let (mut provider, kept) = build_provider_with_test_genome();
@@ -5438,7 +6200,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_end: Some(6),   // wrong
                 gene_id: None,
                 protein: Some("NP_WRONG.9".to_string()),
-                exon_cigars: Vec::new(),
+                exon_cigars,
             },
         );
         provider.cdot_mapper = Some(cdot);
@@ -5464,11 +6226,13 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
     #[test]
     fn reconcile_cdot_synthesis_only_multi_exon_uses_genomic_span() {
-        // Two exons with genomic spans 5 (0..5) and 4 (10..14) → summed genomic
+        // Two exons with genomic spans 5 (1..6) and 4 (10..14) → summed genomic
         // span 9 == authoritative length → reconcile. (Here the genomic span and
         // raw max tx_end coincide; the next test pins the case where they don't.)
+        // 1-based genome starts: cdot never emits `e[0] == 0`, and the helper
+        // declines that degenerate span (matching synthesis).
         let (mut provider, _kept) =
-            synth_provider_with_cdot("NM_MX.1", vec![[0, 5, 0, 5], [10, 14, 5, 9]]);
+            synth_provider_with_cdot("NM_MX.1", vec![[1, 6, 0, 5], [10, 14, 5, 9]]);
         provider.canonical_overrides = coding_override("NM_MX.1", 9);
         provider.reconcile_cdot_with_overrides();
         let rec = provider
@@ -5482,13 +6246,14 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
     #[test]
     fn reconcile_cdot_synthesis_only_uses_served_length_not_raw_tx_end() {
-        // A cdot exon whose genomic span (12 bases, 0..12) exceeds its transcript
+        // A cdot exon whose genomic span (12 bases, 1..13) exceeds its transcript
         // extent (tx_end 9) — the served bases come from the genomic span, so
         // `synthesize_transcript_from_cdot` produces a 12 nt sequence. The
         // authoritative length 12 therefore matches the *served* length, and
         // reconciliation must fire. Keying off the raw max tx_end (9) instead
         // would wrongly skip, gating on a length the server never produced.
-        let (mut provider, _kept) = synth_provider_with_cdot("NM_GSPAN.1", vec![[0, 12, 0, 9]]);
+        // 1-based genome start (cdot never emits `e[0] == 0`).
+        let (mut provider, _kept) = synth_provider_with_cdot("NM_GSPAN.1", vec![[1, 13, 0, 9]]);
         provider.canonical_overrides = coding_override("NM_GSPAN.1", 12);
         provider.reconcile_cdot_with_overrides();
         let rec = provider
@@ -5506,8 +6271,9 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
     #[test]
     fn reconcile_cdot_synthesis_only_length_mismatch_skips() {
-        // cdot exon max tx_end 9 but authoritative length 100, no sequence → skip.
-        let (mut provider, _kept) = synth_provider_with_cdot("NM_MM.1", vec![[0, 9, 0, 9]]);
+        // cdot exon served length 9 (1-based genome span 1..10) but authoritative
+        // length 100, no sequence → length mismatch → skip.
+        let (mut provider, _kept) = synth_provider_with_cdot("NM_MM.1", vec![[1, 10, 0, 9]]);
         provider.canonical_overrides = coding_override("NM_MM.1", 100);
         provider.reconcile_cdot_with_overrides();
         let rec = provider
@@ -5531,6 +6297,59 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             .get_transcript("NM_EX.1")
             .unwrap();
         assert_eq!(rec.cds_start, Some(2), "empty exons → cdot untouched");
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_uses_cigar_applied_length() {
+        use crate::data::cdot::CigarOp;
+        // Genome span 12 (1..13) but a deletion CIGAR M9 D3: since #807 the read
+        // path applies the CIGAR, so the *served* length is the 9-base Match run,
+        // not the 12-base genomic span. An override claiming 9 must therefore
+        // reconcile (the old genome-span gate would have computed 12 and skipped).
+        let (mut provider, _kept) = synth_provider_with_cdot_cigars(
+            "NM_DEL.1",
+            vec![[1, 13, 0, 9]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(3)])],
+        );
+        provider.canonical_overrides = coding_override("NM_DEL.1", 9);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_DEL.1")
+            .unwrap();
+        assert_eq!(
+            rec.cds_start,
+            Some(0),
+            "served (CIGAR-applied) length 9 matches override → reconcile"
+        );
+        assert_eq!(rec.protein.as_deref(), Some("NP_OV.2"));
+    }
+
+    #[test]
+    fn reconcile_cdot_synthesis_only_cigar_rejects_raw_genomic_span() {
+        use crate::data::cdot::CigarOp;
+        // Same record, but the override claims the raw 12-base genomic span. The
+        // served length is the CIGAR-applied 9, so this must NOT reconcile — the
+        // pre-#807 genome-span gate would have wrongly matched 12.
+        let (mut provider, _kept) = synth_provider_with_cdot_cigars(
+            "NM_DEL2.1",
+            vec![[1, 13, 0, 9]],
+            vec![Some(vec![CigarOp::Match(9), CigarOp::Deletion(3)])],
+        );
+        provider.canonical_overrides = coding_override("NM_DEL2.1", 12);
+        provider.reconcile_cdot_with_overrides();
+        let rec = provider
+            .cdot_mapper()
+            .unwrap()
+            .get_transcript("NM_DEL2.1")
+            .unwrap();
+        assert_eq!(
+            rec.cds_start,
+            Some(2),
+            "raw genomic-span length 12 no longer matches the served length → skip"
+        );
+        assert_eq!(rec.protein.as_deref(), Some("NP_WRONG.9"));
     }
 
     // ----------------------------------------------------------------------

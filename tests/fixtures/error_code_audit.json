@@ -99,6 +99,14 @@
       "spec_section_notes": "Infrastructure: strict version-pinning policy, reference-state dependent."
     },
     {
+      "code": "E2005",
+      "description": "TranscriptSequenceUnreconstructable — cdot base synthesis cannot reconstruct a transcript whose CIGAR carries an insertion.",
+      "spec_section": null,
+      "spec_url": null,
+      "status": "infra",
+      "spec_section_notes": "Infrastructure: cdot data limitation (insertion bases not recorded), reference-state dependent."
+    },
+    {
       "code": "E3001",
       "description": "PositionOutOfBounds — position beyond the length of the reference sequence.",
       "spec_section": "recommendations/general.md line 15: 'the reference sequence used must contain the residue(s) described to be changed'",
