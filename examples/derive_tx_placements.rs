@@ -123,7 +123,12 @@ fn candidate_siblings<'a>(
 }
 
 fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
-    let provider = MultiFastaProvider::from_manifest(&cli.manifest)
+    // Load WITHOUT injecting the manifest's `derived_transcript_placements`
+    // artifact (#800): once that key is wired to this producer's own prior output,
+    // injecting it would make the target accession present in cdot and the
+    // derivation would decline (skip) it, silently producing an empty artifact on
+    // a re-run or CI `--check`. The producer derives over real cdot records only.
+    let provider = MultiFastaProvider::from_manifest_without_derived_tx(&cli.manifest)
         .map_err(|e| anyhow::anyhow!("load manifest {}: {e}", cli.manifest.display()))?;
     let cdot = provider
         .cdot_mapper()

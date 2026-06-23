@@ -482,8 +482,49 @@ impl MultiFastaProvider {
         merged
     }
 
-    /// Create a provider from a manifest file
+    /// Create a provider from a manifest file.
+    ///
+    /// This is the standard (runtime) entry point: it loads every manifest key,
+    /// including injecting build-time–derived transcript structures
+    /// (`derived_transcript_placements`, #790) into the cdot mapper so projection
+    /// resolves cdot-absent old versions with real exons.
     pub fn from_manifest<P: AsRef<Path>>(manifest_path: P) -> Result<Self, FerroError> {
+        Self::from_manifest_inner(manifest_path, true)
+    }
+
+    /// Like [`Self::from_manifest`], but skips injecting the manifest's
+    /// `derived_transcript_placements` artifact into the cdot mapper.
+    ///
+    /// This exists for the #790 build-time producer
+    /// (`examples/derive_tx_placements.rs`), which derives those structures by
+    /// reasoning over *real* cdot records. If the producer loaded the standard
+    /// way once the manifest's `derived_transcript_placements` key is wired to its
+    /// own prior output, that output would be injected into cdot and the target
+    /// accession (e.g. `NM_003002.2`) would then satisfy `has_transcript_exact`,
+    /// causing the producer to skip (decline) it — i.e. in-place regeneration (or
+    /// a CI `--check`) would silently produce an empty artifact (#800). Suppressing
+    /// the injection makes the producer's cdot view identical to the pre-wired
+    /// state, so re-derivation is reliable.
+    ///
+    /// Note: because the injection is suppressed, a `canonical_overrides` entry
+    /// that targets a *derived* old version would not be reconciled here (the
+    /// override needs the injected record present to match). That is intentional
+    /// and benign for the producer, whose job is to derive structures, not serve
+    /// overridden coordinates.
+    pub fn from_manifest_without_derived_tx<P: AsRef<Path>>(
+        manifest_path: P,
+    ) -> Result<Self, FerroError> {
+        Self::from_manifest_inner(manifest_path, false)
+    }
+
+    /// Shared body of [`Self::from_manifest`] /
+    /// [`Self::from_manifest_without_derived_tx`]. When `inject_derived_tx` is
+    /// false, the `derived_transcript_placements` injection block is skipped; all
+    /// other manifest keys load identically.
+    fn from_manifest_inner<P: AsRef<Path>>(
+        manifest_path: P,
+        inject_derived_tx: bool,
+    ) -> Result<Self, FerroError> {
         let manifest_path = manifest_path.as_ref();
 
         // Get the directory containing the manifest - paths are relative to this
@@ -958,25 +999,33 @@ impl MultiFastaProvider {
         // absent from cdot (`has_transcript_exact == false`) and reconcile only
         // corrects records present exactly (`has_transcript_exact == true`), so
         // the two are independent except for this ordering.
-        if let Some(rel) = manifest
-            .get("derived_transcript_placements")
-            .and_then(|v| v.as_str())
-        {
-            let path = resolve_path(rel);
-            match crate::reference::derived_tx_structure::DerivedTxStructures::from_json_path(&path)
+        //
+        // The #790 build-time producer suppresses this injection
+        // (`from_manifest_without_derived_tx`) so it derives structures over real
+        // cdot records only — see #800. `inject_derived_tx` is true for the
+        // runtime `from_manifest` path, so runtime projection is unchanged.
+        if inject_derived_tx {
+            if let Some(rel) = manifest
+                .get("derived_transcript_placements")
+                .and_then(|v| v.as_str())
             {
-                Ok(derived) => {
-                    eprintln!(
-                        "Loaded {} derived transcript structures",
-                        derived.structures.len()
-                    );
-                    provider.inject_derived_tx_structures(&derived);
+                let path = resolve_path(rel);
+                match crate::reference::derived_tx_structure::DerivedTxStructures::from_json_path(
+                    &path,
+                ) {
+                    Ok(derived) => {
+                        eprintln!(
+                            "Loaded {} derived transcript structures",
+                            derived.structures.len()
+                        );
+                        provider.inject_derived_tx_structures(&derived);
+                    }
+                    Err(e) => eprintln!(
+                        "Warning: Failed to load derived transcript placements {}: {}",
+                        path.display(),
+                        e
+                    ),
                 }
-                Err(e) => eprintln!(
-                    "Warning: Failed to load derived transcript placements {}: {}",
-                    path.display(),
-                    e
-                ),
             }
         }
 
@@ -5927,5 +5976,108 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             "real cdot record must not be overwritten by derived structure"
         );
         assert_eq!(t.gene_name.as_deref(), Some("REAL"));
+    }
+
+    /// #800: `from_manifest_without_derived_tx` must NOT inject the manifest's
+    /// `derived_transcript_placements` artifact, while `from_manifest` still does.
+    /// This is the regression guard for the build-time producer: if it loaded the
+    /// standard way once the key points at its own prior output, the target
+    /// accession would be present in cdot and the producer would skip (decline) it,
+    /// silently emitting an empty artifact on a re-run / CI `--check`.
+    #[test]
+    fn from_manifest_without_derived_tx_suppresses_injection() {
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A FASTA dir is required by from_manifest; a minimal transcript FASTA.
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        // A real cdot record for the *sibling* version `NM_REAL.3` — the producer
+        // anchors to real cdot records, which must always be present regardless of
+        // injection suppression.
+        fs::write(
+            d.join("cdot.json"),
+            r#"{
+                "transcripts": {
+                    "NM_REAL.3": {
+                        "gene_name": "REAL",
+                        "genome_builds": {
+                            "GRCh38": {
+                                "contig": "NC_000011.10",
+                                "strand": "+",
+                                "exons": [[100, 110, 1, 0, 10, "M10"]]
+                            }
+                        },
+                        "start_codon": 2,
+                        "stop_codon": 8
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        // A derived-placements artifact for the cdot-absent *old* version
+        // `NM_REAL.2` — i.e. the producer's own prior output.
+        fs::write(
+            d.join("derived.json"),
+            r#"{
+                "description": "test",
+                "structures": [{
+                    "accession": "NM_REAL.2",
+                    "contig": "NC_000011.10",
+                    "strand": "+",
+                    "exons": [[100, 110, 0, 10]],
+                    "cds_start": 2,
+                    "cds_end": 8,
+                    "gene_name": "REAL",
+                    "protein": "NP_REAL.1",
+                    "anchored_by": "NM_REAL.3",
+                    "mismatch_fraction": 0.0
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "cdot_json": "cdot.json",
+                "derived_transcript_placements": "derived.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        // Standard (runtime) load injects the derived old version into cdot.
+        let injected = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+        let injected_cdot = injected.cdot_mapper().expect("cdot mapper loaded");
+        assert!(
+            injected_cdot.has_transcript_exact("NM_REAL.2"),
+            "from_manifest must inject the derived old version (runtime path unchanged)"
+        );
+        assert!(
+            injected_cdot.has_transcript_exact("NM_REAL.3"),
+            "real sibling record must be present"
+        );
+
+        // Producer load suppresses the injection: the derived old version is
+        // absent, but the real sibling record remains so derivation can proceed.
+        let suppressed =
+            MultiFastaProvider::from_manifest_without_derived_tx(d.join("manifest.json")).unwrap();
+        let suppressed_cdot = suppressed.cdot_mapper().expect("cdot mapper loaded");
+        assert!(
+            !suppressed_cdot.has_transcript_exact("NM_REAL.2"),
+            "from_manifest_without_derived_tx must NOT inject the derived old version (#800)"
+        );
+        assert!(
+            suppressed_cdot.has_transcript_exact("NM_REAL.3"),
+            "real sibling record must still be present after injection is suppressed"
+        );
     }
 }
