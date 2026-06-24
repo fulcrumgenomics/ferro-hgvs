@@ -41,6 +41,16 @@ pub struct MockProvider {
     /// otherwise refuses by design. Empty by default, so an unconfigured mock
     /// never substitutes a version.
     version_substitutions: HashMap<String, String>,
+    /// Build-keyed transcripts: `(transcript_id, build)` → the `Transcript` whose
+    /// bases/CDS the provider should serve for an input addressed on that genome
+    /// build. Lets a test model a transcript whose *sequence differs between
+    /// GRCh37 and GRCh38* — the real divergence a genome-reconstructed transcript
+    /// exhibits, which the single build-agnostic `transcripts` map cannot capture
+    /// (#843). Consulted by [`Self::get_transcript_for_accession`] when the input
+    /// accession carries a build-bearing `genomic_context` (an `NC_*.10`/`.11`
+    /// parent); falls back to the build-agnostic `transcripts` map otherwise.
+    /// Empty by default, so an unconfigured mock is build-agnostic as before.
+    build_transcripts: HashMap<(String, &'static str), Arc<Transcript>>,
 }
 
 impl MockProvider {
@@ -54,6 +64,7 @@ impl MockProvider {
             genomic_placements: HashMap::new(),
             legacy_gene_models: HashMap::new(),
             version_substitutions: HashMap::new(),
+            build_transcripts: HashMap::new(),
         }
     }
 
@@ -169,7 +180,19 @@ impl MockProvider {
             genomic_placements: HashMap::new(),
             legacy_gene_models: HashMap::new(),
             version_substitutions: HashMap::new(),
+            build_transcripts: HashMap::new(),
         })
+    }
+
+    /// Register a build-specific transcript so the provider serves
+    /// build-divergent bases/CDS for the same `transcript_id` (#843). `build`
+    /// is `"GRCh37"` / `"GRCh38"`. Consulted by
+    /// [`ReferenceProvider::get_transcript_for_accession`] when the input
+    /// accession carries a build-bearing `genomic_context` whose inferred build
+    /// matches; the build-agnostic [`Self::add_transcript`] map is the fallback.
+    pub fn add_transcript_on_build(&mut self, build: &'static str, transcript: Transcript) {
+        self.build_transcripts
+            .insert((transcript.id.clone(), build), Arc::new(transcript));
     }
 
     /// Add a transcript to the provider
@@ -422,6 +445,71 @@ impl ReferenceProvider for MockProvider {
         crate::reference::legacy_selector::resolve_legacy_selector_in(selector, |g| {
             self.legacy_gene_models.get(g).cloned()
         })
+    }
+
+    /// Build-aware transcript resolution (#843). When the input accession
+    /// carries a build-bearing `genomic_context` (an `NC_*.10`/`.11` parent)
+    /// and a build-specific transcript was registered via
+    /// [`Self::add_transcript_on_build`], serve that build's record so a test
+    /// can model build-divergent transcript bases. Otherwise fall back to the
+    /// build-agnostic [`Self::get_transcript`] — preserving existing behavior
+    /// for every input that does not opt into build-keyed transcripts.
+    ///
+    /// To avoid silently masking an incomplete test setup, the fallback is
+    /// **refused for a partially build-keyed transcript**: if `tx_id` has a
+    /// build-keyed record for *some* build but not the requested one, return
+    /// [`FerroError::ReferenceNotFound`] rather than serving the build-agnostic
+    /// record (which would hide a wrong/missing `add_transcript_on_build` call).
+    /// A transcript with **no** build-keyed records keeps the build-agnostic
+    /// path, so cross-id fallback and the deliberate primary-build fixture
+    /// entry are unaffected.
+    fn get_transcript_for_accession(
+        &self,
+        accession: &Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        if !self.build_transcripts.is_empty() {
+            if let Some(parent) = accession.genomic_context.as_deref() {
+                if let Some(build) = self.infer_genome_build(parent) {
+                    let tx_id = accession.transcript_accession();
+                    // Apply the same unversioned → versioned base-accession rule
+                    // [`Self::get_transcript`] uses (`NM_123` resolves to a
+                    // stored `NM_123.1`): an exact-key lookup would miss a
+                    // build-keyed versioned record for a bare/unversioned input
+                    // accession and silently fall back to the build-agnostic
+                    // (wrong-build) bases — the very bug #843 fixes. Only an
+                    // unversioned query bridges to a versioned key; a versioned
+                    // miss never resolves a different version.
+                    let matches_tx_id = |keyed_id: &str| {
+                        keyed_id == tx_id.as_str()
+                            || (!tx_id.contains('.')
+                                && keyed_id.split('.').next().unwrap_or(keyed_id) == tx_id.as_str())
+                    };
+                    if let Some(tx) =
+                        self.build_transcripts
+                            .iter()
+                            .find_map(|((keyed_id, keyed_build), tx)| {
+                                (matches_tx_id(keyed_id) && *keyed_build == build)
+                                    .then(|| Arc::clone(tx))
+                            })
+                    {
+                        return Ok(tx);
+                    }
+                    // `tx_id` is build-keyed on a different build but not this
+                    // one: a partial setup. Surface it rather than silently
+                    // serving the build-agnostic record.
+                    let partially_keyed = self
+                        .build_transcripts
+                        .keys()
+                        .any(|(keyed_id, _)| matches_tx_id(keyed_id));
+                    if partially_keyed {
+                        return Err(FerroError::ReferenceNotFound {
+                            id: format!("{tx_id} (no build-keyed record for {build})"),
+                        });
+                    }
+                }
+            }
+        }
+        self.get_transcript(&accession.transcript_accession())
     }
 
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
@@ -710,6 +798,69 @@ mod tests {
             .genomic_placement_on_build(&ng2, Some("GRCh37"))
             .is_some());
         assert!(grch37_only.genomic_placement(&ng2).is_some());
+    }
+
+    /// #843: the build-keyed transcript lookup must honor the same unversioned
+    /// → versioned base-accession rule that [`MockProvider::get_transcript`]
+    /// applies (`NM_123` resolves to a stored `NM_123.1`). Without it, a bare
+    /// `g.` allele whose transcript accession is unversioned would miss the
+    /// build-specific record and silently fall back to the build-agnostic
+    /// (primary) bases — exactly the wrong-build serving this fix exists to
+    /// prevent. Register a versioned record on GRCh37, query with the
+    /// unversioned accession carrying a GRCh37 `genomic_context`, and assert it
+    /// resolves to that build's record rather than the build-agnostic one.
+    #[test]
+    fn build_keyed_lookup_resolves_unversioned_accession() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand};
+
+        let mk = |build: GenomeBuild, seq: &str| Transcript {
+            id: "NM_555555.1".to_string(),
+            gene_symbol: Some("BUILDDIV".to_string()),
+            strand: Strand::Plus,
+            sequence: Some(seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(seq.len() as u64),
+            exons: vec![Exon::new(1, 1, seq.len() as u64)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: build,
+            mane_status: ManeStatus::None,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        let mut provider = MockProvider::new();
+        // Build-keyed records (versioned ids) with build-divergent bases.
+        provider.add_transcript_on_build("GRCh37", mk(GenomeBuild::GRCh37, "AAAA"));
+        provider.add_transcript_on_build("GRCh38", mk(GenomeBuild::GRCh38, "CCCC"));
+        // Build-agnostic fallback = the primary (GRCh38) bases, mirroring how a
+        // real provider serves the primary record when no build is keyed.
+        provider.add_transcript(mk(GenomeBuild::GRCh38, "CCCC"));
+
+        // Unversioned transcript accession (`NM_555555`, version `None`) carrying
+        // a build-bearing GRCh37 `genomic_context` (`NC_000001.10`).
+        let unversioned = Accession::new("NM", "555555", None)
+            .with_genomic_context(Accession::new("NC", "000001", Some(10)));
+        let tx = provider
+            .get_transcript_for_accession(&unversioned)
+            .expect("unversioned accession must resolve to the GRCh37 build record");
+        assert_eq!(
+            tx.sequence.as_deref(),
+            Some("AAAA"),
+            "must serve the GRCh37 build-keyed bases, not the build-agnostic (GRCh38) fallback"
+        );
+
+        // GRCh38 context resolves to its own build's bases.
+        let unversioned_38 = Accession::new("NM", "555555", None)
+            .with_genomic_context(Accession::new("NC", "000001", Some(11)));
+        let tx38 = provider
+            .get_transcript_for_accession(&unversioned_38)
+            .expect("unversioned accession must resolve to the GRCh38 build record");
+        assert_eq!(tx38.sequence.as_deref(), Some("CCCC"));
     }
 
     #[test]
