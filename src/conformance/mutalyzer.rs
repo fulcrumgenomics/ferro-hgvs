@@ -836,6 +836,15 @@ pub enum SpecSection {
     /// single `accepted_divergence` slot already documents the other axis (#745).
     #[serde(rename = "HGVS §Repeated (DNA contraction)")]
     RepeatDnaContraction,
+    /// HGVS RNA alleles — a predicted (uncertain) cis allele places the `( )`
+    /// predicted wrapper **inside** the allele bracket: `r.[(a;b)]`
+    /// (`docs/recommendations/RNA/alleles.md`, example
+    /// `LRG_199t1:r.[(578c>u;1339a>g;1680del)]`). ferro emits this spec-correct
+    /// inside-bracket form; mutalyzer wraps the whole bracket
+    /// (`r.([a;b])`), which has no counterpart in the spec. ferro's
+    /// `r.[(…)]` is the spec-correct value (#693).
+    #[serde(rename = "HGVS §RNA alleles (predicted bracket placement)")]
+    RnaAlleleBracketPlacement,
 }
 
 impl SpecSection {
@@ -857,6 +866,9 @@ impl SpecSection {
             }
             SpecSection::RepeatCodingCodonException => "HGVS §Repeated (coding codon exception)",
             SpecSection::RepeatDnaContraction => "HGVS §Repeated (DNA contraction)",
+            SpecSection::RnaAlleleBracketPlacement => {
+                "HGVS §RNA alleles (predicted bracket placement)"
+            }
         }
     }
 }

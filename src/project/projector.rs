@@ -672,6 +672,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 *field = Some(Self::relabel_under_parent(v, parent));
             }
         }
+        // The RNA axis can be a predicted allele (`r.[...]`), so frame it through
+        // `apply_rna_framing` — which recurses into allele members — rather than
+        // the single-variant `relabel_under_parent` used above. Drop any
+        // synthesized gene symbol (`None`), matching the parent-framing policy the
+        // other axes follow here (#121/#693).
+        if let Some(rna) = result.rna.as_mut() {
+            Self::apply_rna_framing(rna, Some(parent), None);
+        }
         if let (Some(HgvsVariant::Genome(gv)), Some(placement)) =
             (result.genomic.as_ref(), placement)
         {
@@ -730,6 +738,80 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             _ => {}
         }
         v
+    }
+
+    /// Re-frame a predicted RNA (`r.`) consequence so its accession matches the
+    /// *input* variant's reference framing (#693).
+    ///
+    /// [`crate::project::rna::predict_rna`] copies the accession and gene symbol
+    /// from the synthesized `coding` form it is handed, which on the
+    /// genome-pivot / direct-`n.` paths is the bare transcript accession with a
+    /// cdot-looked-up gene symbol (e.g. `NM_058195.3(CDKN2A)`). The single
+    /// projection path (`project_single_inner`) — unlike `project_variant_all`'s
+    /// `frame_projection_owned` — never re-labels its output under the input's
+    /// parent, so the predicted `r.` dropped the input's `NG_(NM_)` genomic
+    /// context and substituted a synthesized gene symbol.
+    ///
+    /// Carry the input's framing onto the `r.` axis: set the input's
+    /// `genomic_context` (if any) on the RNA accession, and adopt the input's
+    /// gene symbol (`None` when the input carried none) so a symbol that was not
+    /// in the input is not fabricated (#121). Only the `r.` axis is touched;
+    /// `coding`/`protein` keep their existing (bare) single-path rendering.
+    /// A `None` prediction (axis unavailable) passes through unchanged.
+    fn reframe_rna_from_input(
+        rna: Option<HgvsVariant>,
+        input: &HgvsVariant,
+    ) -> Option<HgvsVariant> {
+        let mut rna = rna?;
+        let context = input
+            .accession()
+            .and_then(|a| a.genomic_context.as_deref().cloned());
+        // `gene_symbol()` returns `None` for an `Allele`, so an allele input that
+        // carries a user-provided selector on its members (e.g.
+        // `NM_x(GENE):c.[...]`) would otherwise lose it. Derive the symbol from
+        // the members when they unanimously agree, so the predicted `r.` allele
+        // keeps the input's selector instead of stripping it (#693).
+        let gene_symbol = match input {
+            HgvsVariant::Allele(a) => a.variants.first().and_then(|first| {
+                let symbol = first.gene_symbol()?;
+                a.variants
+                    .iter()
+                    .all(|member| member.gene_symbol() == Some(symbol))
+                    .then_some(symbol)
+            }),
+            _ => input.gene_symbol(),
+        }
+        .map(str::to_string);
+        Self::apply_rna_framing(&mut rna, context.as_ref(), gene_symbol.as_deref());
+        Some(rna)
+    }
+
+    /// Stamp `context`/`gene_symbol` onto every `r.` leaf of `rna` (descending
+    /// into a predicted allele so its first-member-derived prefix is re-framed).
+    fn apply_rna_framing(
+        rna: &mut HgvsVariant,
+        context: Option<&Accession>,
+        gene_symbol: Option<&str>,
+    ) {
+        match rna {
+            HgvsVariant::Rna(r) => {
+                r.accession = match context {
+                    Some(parent) => r.accession.clone().with_genomic_context(parent.clone()),
+                    // Strip any genomic context the predicted form may carry when
+                    // the input had none, mirroring the input's bare framing.
+                    None => r.accession.clone().without_genomic_context(),
+                };
+                r.gene_symbol = gene_symbol.map(str::to_string);
+            }
+            // A predicted RNA allele renders its accession prefix from the first
+            // member (compact form), so every member must carry the input frame.
+            HgvsVariant::Allele(a) => {
+                for member in &mut a.variants {
+                    Self::apply_rna_framing(member, context, gene_symbol);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Derive the genomic LRG parent (`LRG_<n>`) of an LRG transcript or protein
@@ -1063,55 +1145,64 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    route through `data::mapping::CoordinateMapper::cds_to_genome`
         //    (which also handles intronic offsets and the `utr3` flag); the
         //    non-coding path uses `CdotTranscript::tx_to_genome` directly.
-        let (accession, gene_symbol, edit_mu, start_cds, end_cds) = match variant {
-            HgvsVariant::Cds(v) => {
-                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start")?;
-                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end")?;
-                (
-                    v.accession.clone(),
-                    v.gene_symbol.clone(),
-                    v.loc_edit.edit.clone(),
-                    s,
-                    e,
-                )
-            }
-            HgvsVariant::Tx(v) => {
-                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
-                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
-                let to_cds = |p: TxPos| CdsPos {
-                    base: p.base,
-                    offset: p.offset,
-                    utr3: p.downstream,
-                    special: None,
-                };
-                (
-                    v.accession.clone(),
-                    v.gene_symbol.clone(),
-                    v.loc_edit.edit.clone(),
-                    to_cds(s),
-                    to_cds(e),
-                )
-            }
-            HgvsVariant::Rna(v) => {
-                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
-                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
-                // RnaPos shape mirrors CdsPos exactly.
-                let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
-                    base: p.base,
-                    offset: p.offset,
-                    utr3: p.utr3,
-                    special: None,
-                };
-                (
-                    v.accession.clone(),
-                    v.gene_symbol.clone(),
-                    v.loc_edit.edit.clone(),
-                    to_cds(s),
-                    to_cds(e),
-                )
-            }
-            _ => unreachable!("variant kind already filtered above"),
-        };
+        // `input_is_transcript_coord` distinguishes `n.`/`r.` inputs (whose
+        // `base` is a 1-based *transcript* position) from `c.` inputs (CDS
+        // coordinates). For a coding transcript an `n.`/`r.` base must be
+        // converted to a CDS coordinate before the CDS-aware genome mapping runs
+        // (#693) — without it, `n.204` is mapped as if it were `c.204`.
+        let (accession, gene_symbol, edit_mu, start_cds, end_cds, input_is_transcript_coord) =
+            match variant {
+                HgvsVariant::Cds(v) => {
+                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start")?;
+                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end")?;
+                    (
+                        v.accession.clone(),
+                        v.gene_symbol.clone(),
+                        v.loc_edit.edit.clone(),
+                        s,
+                        e,
+                        false,
+                    )
+                }
+                HgvsVariant::Tx(v) => {
+                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
+                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
+                    let to_cds = |p: TxPos| CdsPos {
+                        base: p.base,
+                        offset: p.offset,
+                        utr3: p.downstream,
+                        special: None,
+                    };
+                    (
+                        v.accession.clone(),
+                        v.gene_symbol.clone(),
+                        v.loc_edit.edit.clone(),
+                        to_cds(s),
+                        to_cds(e),
+                        true,
+                    )
+                }
+                HgvsVariant::Rna(v) => {
+                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
+                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
+                    // RnaPos shape mirrors CdsPos exactly.
+                    let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
+                        base: p.base,
+                        offset: p.offset,
+                        utr3: p.utr3,
+                        special: None,
+                    };
+                    (
+                        v.accession.clone(),
+                        v.gene_symbol.clone(),
+                        v.loc_edit.edit.clone(),
+                        to_cds(s),
+                        to_cds(e),
+                        true,
+                    )
+                }
+                _ => unreachable!("variant kind already filtered above"),
+            };
 
         // 2. Reject `?` position sentinels explicitly — these have base == 0
         //    and no offset, which would otherwise propagate into the genomic
@@ -1235,7 +1326,55 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    input `base` is the 1-based tx_pos directly; convert it to the
         //    0-based form cdot exposes and use `CdotTranscript::tx_to_genome`.
         let is_coding = cdot_tx.cds_start.is_some() && cdot_tx.cds_end.is_some();
+        // For an `n.`/`r.` input on a coding transcript, the carried `base` is a
+        // 1-based *transcript* position, not a CDS coordinate; convert it to the
+        // CDS frame before the CDS-aware genome mapping (#693). An exonic
+        // position converts directly; an intronic-offset position converts its
+        // exon-anchor `base` and keeps the offset/utr3 flags. A transcript
+        // position that cannot be expressed in the CDS frame (`base < 1`, or a
+        // `None` conversion for a position past the last exon) is rejected here:
+        // leaving it unconverted would let the CDS-aware mapping interpret an
+        // `n.`/`r.` coordinate as a `c.` coordinate and emit the wrong g.
+        // position (#693).
+        let to_cds_frame = |p: CdsPos| -> Result<CdsPos, FerroError> {
+            // A position already flagged 3'UTR/downstream (`r.*N`, `n.*N`) carries
+            // its `*N` distance in `base`, not an absolute 1-based transcript
+            // position — feeding it to `cds_pos_from_tx_pos` would renumber it as a
+            // transcript base. Leave such positions untouched so the downstream
+            // CDS-aware mapping interprets the `*N` directly.
+            if !(input_is_transcript_coord && is_coding) || p.utr3 {
+                return Ok(p);
+            }
+            if p.base < 1 {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript position {} is outside coding transcript {} and cannot be \
+                         mapped as a CDS coordinate",
+                        p.base, transcript_id
+                    ),
+                });
+            }
+            match cdot_tx.cds_pos_from_tx_pos((p.base - 1) as u64) {
+                Some(cds) => Ok(CdsPos {
+                    base: cds.base,
+                    offset: p.offset,
+                    // Keep the resolved 3'UTR flag even for intronic anchors
+                    // (`c.*N±M`); dropping it when an offset is present would
+                    // collapse a 3'UTR intron into a plain `c.N±M`.
+                    utr3: cds.utr3,
+                    special: p.special,
+                }),
+                None => Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript position {} is outside coding transcript {} and cannot be \
+                         mapped as a CDS coordinate",
+                        p.base, transcript_id
+                    ),
+                }),
+            }
+        };
         let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
+            let p = to_cds_frame(p)?;
             if is_coding {
                 let result = cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint)?;
                 // Sequence-aware correction (#644), mirroring the g.→c. path.
@@ -1787,12 +1926,23 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             None
         };
 
+        // Predicted RNA allele (#693): predict from the assembled coding allele
+        // — `predict_rna` handles the `Allele` shape directly, emitting one
+        // outer predicted wrapper `r.([a;b])` (recommendations/RNA/alleles.md).
+        // Re-frame under the input's parent so it matches the input framing.
+        let rna = coding.as_ref().and_then(|coding_allele| {
+            self.cached_get_transcript_for_variant(original, transcript_id)
+                .ok()
+                .and_then(|tx| crate::project::rna::predict_rna(coding_allele, &tx))
+        });
+        let rna = Self::reframe_rna_from_input(rna, original);
+
         Ok(VariantProjection {
             genomic,
             coding,
             noncoding,
             protein,
-            rna: None,
+            rna,
             transcript_id: transcript_id.to_string(),
             gene_symbol,
             is_frameshift,
@@ -2210,6 +2360,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .cached_get_transcript_for_variant(normalized, transcript_id)
             .ok()
             .and_then(|tx| crate::project::rna::predict_rna(normalized, &tx));
+        let rna = Self::reframe_rna_from_input(rna, normalized);
 
         Ok(VariantProjection {
             genomic: None,
@@ -2436,6 +2587,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let frameshift = is_frameshift(normalized);
 
         let rna = crate::project::rna::predict_rna(&coding, &tx);
+        // The synthesized `coding` form carries a cdot-looked-up gene symbol the
+        // input did not have; re-frame the predicted `r.` from the input so it
+        // renders bare (or under the input's parent for an `NG_(NM_)` input).
+        let rna = Self::reframe_rna_from_input(rna, normalized);
         Ok(VariantProjection {
             genomic: None,
             coding: Some(coding),
@@ -3040,6 +3195,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .cached_get_transcript_for_variant(&cache_variant, transcript_id)
             .ok()
             .and_then(|tx| crate::project::rna::predict_rna(&coding, &tx));
+        // `coding` carries the bare transcript accession plus a synthesized gene
+        // symbol; re-frame the predicted `r.` under the input's parent (the
+        // `NG_(NM_)` genomic context) so the RNA axis matches the input framing
+        // rather than dropping the parent and substituting a gene symbol (#693).
+        let rna = Self::reframe_rna_from_input(rna, normalized);
 
         Ok(VariantProjection {
             genomic,
@@ -4538,6 +4698,61 @@ mod tests {
             g.to_string().contains("g.1006"),
             "expected corrected 'g.1006' (not naive 'g.1004'), got '{g}'"
         );
+    }
+
+    #[test]
+    fn project_to_genomic_rejects_out_of_transcript_noncoding_on_coding_tx() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::TxInterval;
+        use crate::hgvs::location::TxPos;
+        use crate::hgvs::variant::{Accession, TxVariant};
+
+        // An `n.` (transcript-coordinate) position on a CODING transcript must be
+        // converted into the CDS frame via `cds_pos_from_tx_pos` before the
+        // CDS-aware genome mapping runs (#693). When that conversion has no answer
+        // — here `n.100` is far past the single 9-base exon of `NM_TEST.1`, so
+        // `cds_pos_from_tx_pos` returns `None` — the position must be REJECTED with
+        // an `InvalidCoordinates` error rather than falling through unconverted and
+        // being silently re-interpreted as a `c.` coordinate (which would emit a
+        // wrong g. position or a less-specific downstream error). The `NM_TEST.1`
+        // fixture is a coding transcript (`cds_start`/`cds_end` set) on chr1.
+        let (projector, provider) = make_test_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+
+        let n = TxVariant {
+            // `project_to_genomic` requires an explicit NC/NG parent (#327); the
+            // reject under test fires before any re-anchoring against that parent.
+            accession: parse_accession("NM_TEST.1").with_genomic_context(Accession::new(
+                "NC",
+                "000001",
+                Some(11),
+            )),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::point(TxPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        };
+        let err = vp
+            .project_to_genomic(&HgvsVariant::Tx(n))
+            .expect_err("an out-of-transcript n. position on a coding transcript must error");
+        // Pin the *early-reject* contract specifically: the error must be the
+        // `to_cds_frame` rejection, identified by its message. The pre-#693
+        // fallback (`None => p`) also eventually errored — but with a generic
+        // downstream message — so asserting only `InvalidCoordinates` would not
+        // distinguish the early-reject from the fall-through. The dedicated
+        // phrase below is emitted only by `to_cds_frame`, so this assertion fails
+        // if the fall-through is ever reintroduced.
+        match err {
+            FerroError::InvalidCoordinates { msg } => assert!(
+                msg.contains("cannot be mapped as a CDS coordinate"),
+                "expected the to_cds_frame early-reject message, got {msg:?}"
+            ),
+            other => panic!("expected InvalidCoordinates from to_cds_frame, got {other:?}"),
+        }
     }
 
     /// Minus-strand sibling of `make_ungapped_indel_provider_and_projector`.
@@ -9250,5 +9465,191 @@ mod tests {
         // `infer_input_build` falls through to consult the parent via the provider.
         let variant = make_coding_variant("NM_TEST.1", Some(parent));
         assert_eq!(vp.infer_input_build(&variant), Some("GRCh37"));
+    }
+
+    // ------------------------------------------------------------------
+    // #693: reframe_rna_from_input
+    // ------------------------------------------------------------------
+
+    /// Build a bare predicted RNA `NM_x:r.(<...>)` carrying a synthesized gene
+    /// symbol, as `predict_rna` produces on the genome-pivot / direct paths.
+    fn synthesized_rna(accession: &str, gene: Option<&str>) -> HgvsVariant {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::RnaInterval;
+        use crate::hgvs::location::RnaPos;
+        use crate::hgvs::variant::{LocEdit, RnaVariant};
+        let pos = RnaPos {
+            base: 41,
+            offset: None,
+            utr3: false,
+        };
+        let edit = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::C,
+        };
+        HgvsVariant::Rna(RnaVariant {
+            accession: parse_accession(accession),
+            gene_symbol: gene.map(str::to_string),
+            loc_edit: LocEdit::new_predicted(RnaInterval::new(pos, pos), edit),
+        })
+    }
+
+    /// An `NG_(NM_)` input re-frames the predicted RNA under its genomic parent
+    /// and drops the synthesized gene symbol — `NM_x(GENE):r.(…)` →
+    /// `NG_y(NM_x):r.(…)` (#693).
+    #[test]
+    fn reframe_rna_carries_input_genomic_context() {
+        let input = crate::parse_hgvs("NG_009299.1(NM_017668.3):c.41A>C").unwrap();
+        let rna = synthesized_rna("NM_017668.3", Some("NDE1"));
+        let reframed = VariantProjector::<MockProvider>::reframe_rna_from_input(Some(rna), &input)
+            .expect("some");
+        assert_eq!(reframed.to_string(), "NG_009299.1(NM_017668.3):r.(41a>c)");
+    }
+
+    /// A bare input (no genomic context, no input gene symbol) strips any
+    /// synthesized gene symbol so the RNA renders bare — `NM_x(GENE):r.(…)` →
+    /// `NM_x:r.(…)` (#693, #121: never fabricate a selector absent from input).
+    #[test]
+    fn reframe_rna_strips_synthesized_gene_for_bare_input() {
+        let input = crate::parse_hgvs("NM_017668.3:c.41A>C").unwrap();
+        let rna = synthesized_rna("NM_017668.3", Some("NDE1"));
+        let reframed = VariantProjector::<MockProvider>::reframe_rna_from_input(Some(rna), &input)
+            .expect("some");
+        assert_eq!(reframed.to_string(), "NM_017668.3:r.(41a>c)");
+    }
+
+    /// A predicted RNA allele re-frames every member so the first-member-derived
+    /// compact prefix carries the input's genomic context (#693).
+    #[test]
+    fn reframe_rna_reframes_allele_members() {
+        let input = crate::parse_hgvs("NG_012337.1(NM_003002.2):c.[274G>T;278A>G]").unwrap();
+        let members = vec![
+            synthesized_rna("NM_003002.2", Some("SDHD")),
+            synthesized_rna("NM_003002.2", Some("SDHD")),
+        ];
+        let allele = HgvsVariant::Allele(AlleleVariant::new_uncertain(members, AllelePhase::Cis));
+        let reframed =
+            VariantProjector::<MockProvider>::reframe_rna_from_input(Some(allele), &input)
+                .expect("some");
+        // First-member prefix carries NG_; predicted wrapper inside the bracket.
+        assert!(
+            reframed
+                .to_string()
+                .starts_with("NG_012337.1(NM_003002.2):r.["),
+            "got {reframed}"
+        );
+        // The compact prefix only reflects the first member, so assert every RNA
+        // member is reframed: each carries the NG_ parent and no synthesized gene
+        // symbol. Guards against a regression that leaves later members bare.
+        let HgvsVariant::Allele(allele) = &reframed else {
+            panic!("expected RNA allele, got {reframed}");
+        };
+        for member in &allele.variants {
+            let HgvsVariant::Rna(r) = member else {
+                panic!("expected RNA member, got {member}");
+            };
+            assert_eq!(
+                r.accession.genomic_context.as_deref().map(|a| a.full()),
+                Some("NG_012337.1".to_string()),
+                "member was not framed under the NG_ parent: {member}"
+            );
+            assert!(
+                r.gene_symbol.is_none(),
+                "member kept a synthesized gene symbol: {member}"
+            );
+        }
+    }
+
+    /// An allele input that carries a user-provided gene selector on its members
+    /// (e.g. `NM_x(GENE):c.[...]`) keeps that selector on the predicted `r.`
+    /// allele. `gene_symbol()` returns `None` for an `Allele`, so without
+    /// deriving the symbol from the members the selector would be wrongly
+    /// stripped (#693).
+    #[test]
+    fn reframe_rna_preserves_allele_member_gene_symbol() {
+        let input = crate::parse_hgvs("NM_003002.2(SDHD):c.[274G>T;278A>G]").unwrap();
+        // The synthesized RNA members deliberately carry a *different* selector
+        // (`SYNTH`) than the input's `SDHD`. `reframe_rna_from_input` derives the
+        // output selector from the INPUT allele members, not the predicted ones,
+        // so the output must show `SDHD`. Asserting `SDHD` here (rather than the
+        // synthesized `SYNTH`) pins the input-derived path: a regression that
+        // read the predicted-member symbol would surface `SYNTH` and fail.
+        let members = vec![
+            synthesized_rna("NM_003002.2", Some("SYNTH")),
+            synthesized_rna("NM_003002.2", Some("SYNTH")),
+        ];
+        let allele = HgvsVariant::Allele(AlleleVariant::new_uncertain(members, AllelePhase::Cis));
+        let reframed =
+            VariantProjector::<MockProvider>::reframe_rna_from_input(Some(allele), &input)
+                .expect("some");
+        let HgvsVariant::Allele(allele) = &reframed else {
+            panic!("expected RNA allele, got {reframed}");
+        };
+        for member in &allele.variants {
+            let HgvsVariant::Rna(r) = member else {
+                panic!("expected RNA member, got {member}");
+            };
+            assert!(
+                r.accession.genomic_context.is_none(),
+                "member fabricated a genomic context: {member}"
+            );
+            assert_eq!(
+                r.gene_symbol.as_deref(),
+                Some("SDHD"),
+                "member dropped the input gene selector: {member}"
+            );
+        }
+    }
+
+    /// When allele members disagree on a gene selector, none is carried onto the
+    /// predicted `r.` allele rather than picking the first member's (#693).
+    #[test]
+    fn reframe_rna_drops_disagreeing_allele_gene_symbols() {
+        // Disagreement must live on the INPUT allele members: the first parses
+        // with `SDHD`, then the second's selector is forced to `OTHER`. The
+        // selector is derived from these input members, so unanimity fails and
+        // no symbol is carried. (The synthesized members keep a consistent
+        // `SDHD`, proving the drop is driven by input disagreement, not the
+        // predicted-member symbols — which `reframe_rna_from_input` ignores.)
+        let mut input = crate::parse_hgvs("NM_003002.2(SDHD):c.[274G>T;278A>G]").unwrap();
+        {
+            let HgvsVariant::Allele(input_allele) = &mut input else {
+                panic!("expected input allele, got {input}");
+            };
+            let [_, second] = input_allele.variants.as_mut_slice() else {
+                panic!("expected two input members, got {input}");
+            };
+            let HgvsVariant::Cds(cds) = second else {
+                panic!("expected Cds input member, got {second}");
+            };
+            cds.gene_symbol = Some("OTHER".to_string());
+        }
+        let members = vec![
+            synthesized_rna("NM_003002.2", Some("SDHD")),
+            synthesized_rna("NM_003002.2", Some("SDHD")),
+        ];
+        let allele = HgvsVariant::Allele(AlleleVariant::new_uncertain(members, AllelePhase::Cis));
+        let reframed =
+            VariantProjector::<MockProvider>::reframe_rna_from_input(Some(allele), &input)
+                .expect("some");
+        let HgvsVariant::Allele(allele) = &reframed else {
+            panic!("expected RNA allele, got {reframed}");
+        };
+        for member in &allele.variants {
+            let HgvsVariant::Rna(r) = member else {
+                panic!("expected RNA member, got {member}");
+            };
+            assert!(
+                r.gene_symbol.is_none(),
+                "member kept a gene selector despite disagreement: {member}"
+            );
+        }
+    }
+
+    /// `None` (axis unavailable) passes through unchanged.
+    #[test]
+    fn reframe_rna_passes_none_through() {
+        let input = crate::parse_hgvs("NM_017668.3:c.41A>C").unwrap();
+        assert!(VariantProjector::<MockProvider>::reframe_rna_from_input(None, &input).is_none());
     }
 }

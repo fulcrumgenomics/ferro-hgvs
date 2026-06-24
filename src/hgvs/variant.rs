@@ -191,6 +191,14 @@ impl Accession {
         self
     }
 
+    /// Drop any genomic context, returning the bare accession (e.g.
+    /// `NG_007485.1(NM_058195.3)` → `NM_058195.3`). The inverse of
+    /// [`Self::with_genomic_context`].
+    pub fn without_genomic_context(mut self) -> Self {
+        self.genomic_context = None;
+        self
+    }
+
     /// Check if this is an assembly/chromosome style reference
     pub fn is_assembly_ref(&self) -> bool {
         self.assembly.is_some() && self.chromosome.is_some()
