@@ -317,6 +317,10 @@ pub fn print_check_summary(result: &CheckResult, reference_dir: &Path) {
         eprintln!("  Supplemental transcripts: {}", supp.display());
     }
 
+    if let Some(ref backfill) = manifest.backfill_transcripts_fasta {
+        eprintln!("  Backfilled transcripts: {}", backfill.display());
+    }
+
     if let Some(ref legacy) = manifest.legacy_transcripts_fasta {
         eprintln!("  Legacy transcripts: {}", legacy.display());
     }
@@ -386,6 +390,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -442,6 +447,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -500,6 +506,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -558,6 +565,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -616,6 +624,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -674,6 +683,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -732,6 +742,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),
@@ -790,6 +801,7 @@ mod tests {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: dir.path().to_path_buf(),

@@ -3180,7 +3180,8 @@ impl PyPrepareConfig {
         skip_existing=true,
         dry_run=false,
         download_cdot_grch37=false,
-        download_ensembl=false
+        download_ensembl=false,
+        backfill_transcripts=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -3195,6 +3196,7 @@ impl PyPrepareConfig {
         dry_run: bool,
         download_cdot_grch37: bool,
         download_ensembl: bool,
+        backfill_transcripts: Option<&str>,
     ) -> Self {
         Self {
             inner: PrepareConfig {
@@ -3213,6 +3215,7 @@ impl PyPrepareConfig {
                 patterns_file: None,
                 validate_canonical_accessions: None,
                 derive_ng_placements: None,
+                backfill_transcripts: backfill_transcripts.map(std::path::PathBuf::from),
                 genome: "grch38".to_string(),
                 dry_run,
             },
@@ -3247,6 +3250,14 @@ impl PyPrepareConfig {
     #[getter]
     fn download_ensembl(&self) -> bool {
         self.inner.download_ensembl
+    }
+
+    #[getter]
+    fn backfill_transcripts(&self) -> Option<String> {
+        self.inner
+            .backfill_transcripts
+            .as_ref()
+            .map(|p| p.display().to_string())
     }
 }
 

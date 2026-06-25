@@ -1515,6 +1515,7 @@ fn run_prepare_tool(
                 patterns_file: None,
                 validate_canonical_accessions: None,
                 derive_ng_placements: None,
+                backfill_transcripts: None,
                 genome: match genome {
                     GenomeOption::None => "none".to_string(),
                     GenomeOption::Grch37 => "grch37".to_string(),

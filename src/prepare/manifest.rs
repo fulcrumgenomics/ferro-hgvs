@@ -97,6 +97,14 @@ pub struct ReferenceManifest {
     /// Supplemental FASTA file (missing ClinVar transcripts fetched from NCBI)
     #[serde(default)]
     pub supplemental_fasta: Option<PathBuf>,
+    /// Version-aware backfill FASTA (#842): deposited sequences for
+    /// `accession.version`s that are present in cdot but absent from the bulk
+    /// RefSeq RNA feed, fetched by `ferro prepare --backfill-transcripts`. The
+    /// provider ingests it as a transcript FASTA so the primary path serves
+    /// those versions directly instead of synthesizing lossy bases from the
+    /// genome via the cdot exon CIGAR.
+    #[serde(default)]
+    pub backfill_transcripts_fasta: Option<PathBuf>,
     /// Legacy transcript versions FASTA (older versions not in current RefSeq)
     #[serde(default)]
     pub legacy_transcripts_fasta: Option<PathBuf>,
@@ -156,6 +164,7 @@ impl Default for ReferenceManifest {
             legacy_genbank_fasta: None,
             legacy_genbank_metadata: None,
             canonical_overrides: None,
+            backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
             reference_dir: PathBuf::new(),
@@ -303,6 +312,7 @@ impl ReferenceManifest {
             &self.legacy_genbank_fasta,
             &self.legacy_genbank_metadata,
             &self.canonical_overrides,
+            &self.backfill_transcripts_fasta,
         ]
         .into_iter()
         .flatten()
@@ -347,6 +357,7 @@ impl ReferenceManifest {
             &mut self.legacy_genbank_fasta,
             &mut self.legacy_genbank_metadata,
             &mut self.canonical_overrides,
+            &mut self.backfill_transcripts_fasta,
         ] {
             if let Some(p) = o.as_mut() {
                 f(p);
@@ -583,6 +594,7 @@ mod tests {
             legacy_genbank_fasta: Some(ref_dir.join("genbank.fa")),
             legacy_genbank_metadata: Some(ref_dir.join("genbank.json")),
             canonical_overrides: None,
+            backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
             reference_dir: ref_dir.to_path_buf(),
@@ -843,6 +855,42 @@ mod tests {
             loaded.ng_hosted_transcripts,
             Some(ref_dir.join("ng_hosted_transcripts.json"))
         );
+    }
+
+    #[test]
+    fn backfill_transcripts_fasta_path_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().to_path_buf();
+        let mut m = ReferenceManifest {
+            reference_dir: ref_dir.clone(),
+            backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
+            ..Default::default()
+        };
+        m.save().unwrap();
+        // On-disk JSON stores the path relative to reference_dir.
+        let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
+        assert!(raw.contains("backfill/backfill_transcripts.fna"));
+        assert!(!raw.contains(ref_dir.to_str().unwrap()));
+        // Reloading absolutizes it back under reference_dir.
+        let loaded = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        assert_eq!(
+            loaded.backfill_transcripts_fasta,
+            Some(ref_dir.join("backfill/backfill_transcripts.fna"))
+        );
+    }
+
+    #[test]
+    fn pre_842_manifest_without_backfill_field_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path();
+        // A manifest JSON with NO backfill_transcripts_fasta key (pre-#842).
+        std::fs::write(
+            ref_dir.join("manifest.json"),
+            r#"{"prepared_at":"","transcript_fastas":[],"genome_fasta":null,"cdot_json":null,"transcript_count":0,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+        let m = ReferenceManifest::load_or_default(ref_dir).unwrap();
+        assert_eq!(m.backfill_transcripts_fasta, None);
     }
 
     #[test]

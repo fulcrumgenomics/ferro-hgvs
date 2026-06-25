@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod backfill;
 pub mod manifest;
 pub use manifest::{check_references, ReferenceManifest};
 
@@ -65,6 +66,13 @@ pub struct PrepareConfig {
     /// Optional newline-delimited NG_ accession file; when set, prepare derives
     /// `derived_refseqgene_placements.json` and wires the manifest field.
     pub derive_ng_placements: Option<PathBuf>,
+    /// Optional newline-delimited `accession.version` file (#842); when set,
+    /// prepare backfills each listed transcript that is present in cdot but
+    /// absent from the bulk RefSeq RNA FASTA — fetching its deposited sequence
+    /// from NCBI and appending it to `backfill/backfill_transcripts.fna`, then
+    /// wiring the manifest field. Requires cdot in the same prepare run.
+    /// Networked; per-accession failures warn and continue.
+    pub backfill_transcripts: Option<PathBuf>,
     /// Genome build selection string ("grch38", "grch37", "all", "none").
     /// Stored so `builds_for_genome` can map it to build names at derivation time.
     pub genome: String,
@@ -90,6 +98,7 @@ impl Default for PrepareConfig {
             patterns_file: None,
             validate_canonical_accessions: None,
             derive_ng_placements: None,
+            backfill_transcripts: None,
             genome: "grch38".to_string(),
             dry_run: false,
         }
@@ -249,6 +258,26 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
     // Load existing manifest if present, else default
     let mut manifest = ReferenceManifest::load_or_default(&config.output_dir)?;
+
+    // Pre-flight: the version-aware backfill (#842) targets the cdot-vs-FASTA
+    // gap, so it needs cdot to know which versions are worth fetching — either
+    // downloaded in this run, or already on disk from a prior prepare (so a
+    // user can backfill a few accessions against an existing reference without
+    // re-downloading cdot). Reject a truly cdot-less selection up front.
+    if config.backfill_transcripts.is_some()
+        && !(config.download_cdot
+            || config.download_cdot_grch37
+            || manifest.cdot_json.is_some()
+            || manifest.cdot_grch37_json.is_some())
+    {
+        return Err(FerroError::Io {
+            msg: "--backfill-transcripts requires cdot, either downloaded in this run or \
+                  already present in the reference; the current selection (e.g. \
+                  --genome none or --no-cdot against a reference with no cdot) has none, \
+                  so the cdot-vs-FASTA version gap cannot be computed"
+                .to_string(),
+        });
+    }
 
     // Download transcripts
     if config.download_transcripts {
@@ -794,6 +823,15 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         }
     }
 
+    // Version-aware transcript backfill (#842): fetch deposited sequences for
+    // requested accession.versions that are present in cdot but absent from the
+    // bulk transcript FASTA, append them to the backfill FASTA, and wire the
+    // manifest field so the provider serves them from the primary index path
+    // (synthesis is never invoked for those accessions). Networked; opt-in.
+    if let Some(acc_file) = config.backfill_transcripts.clone() {
+        backfill_transcripts_step(config, &mut manifest, &acc_file)?;
+    }
+
     manifest.save()?;
 
     // Derive version-independent NG_ placements (#728/#740) when requested.
@@ -902,6 +940,192 @@ fn write_ng_hosted_transcripts(
         msg: format!("write {}: {e}", out.display()),
     })?;
     Ok(out.to_path_buf())
+}
+
+/// Load the union of `accession.version` keys present in the manifest's cdot
+/// JSON file(s) (GRCh38 primary + GRCh37 secondary, whichever are present).
+///
+/// Used by the version-aware backfill (#842) to know which requested versions
+/// cdot actually carries an alignment for. A load failure for one file warns and
+/// is skipped (the other file's keys still count).
+fn load_cdot_versions(manifest: &ReferenceManifest) -> HashSet<String> {
+    let mut versions = HashSet::new();
+    for path in [&manifest.cdot_json, &manifest.cdot_grch37_json]
+        .into_iter()
+        .flatten()
+    {
+        // Use `load` (not `from_json_file`) so the rkyv cache built by
+        // `download_cdot` is reused instead of re-parsing the ~200MB JSON.
+        match crate::data::cdot::CdotMapper::load(path) {
+            Ok(mapper) => versions.extend(mapper.transcript_ids().map(str::to_string)),
+            Err(e) => eprintln!(
+                "  Warning: failed to load cdot {} for backfill diff: {}",
+                path.display(),
+                e
+            ),
+        }
+    }
+    versions
+}
+
+/// Version-aware transcript backfill (#842).
+///
+/// Reads the requested `accession.version` list, diffs it against the cdot keys
+/// and the transcript-FASTA keys, fetches the genuine gap (in cdot, absent from
+/// the FASTA) from NCBI, appends it to `backfill/backfill_transcripts.fna`,
+/// reindexes, and wires the manifest field. Per-accession fetch failures warn and
+/// continue; the prepare run is never aborted by them.
+fn backfill_transcripts_step(
+    config: &PrepareConfig,
+    manifest: &mut ReferenceManifest,
+    acc_file: &Path,
+) -> Result<(), FerroError> {
+    use backfill::{execute_backfill, plan_backfill};
+
+    eprintln!("\n=== Version-aware transcript backfill (#842) ===");
+    let requested = read_accession_list(acc_file)?;
+    eprintln!("  {} requested accession.version(s)", requested.len());
+
+    let backfill_dir = config.output_dir.join("backfill");
+    let backfill_fasta = backfill_dir.join("backfill_transcripts.fna");
+
+    if config.dry_run {
+        eprintln!(
+            "  [dry-run] would diff {} requested accessions against cdot + the \
+             transcript FASTA and backfill the gap into {}",
+            requested.len(),
+            backfill_fasta.display()
+        );
+        return Ok(());
+    }
+
+    // cdot keys (the alignment-bearing universe worth backfilling).
+    let cdot_versions = load_cdot_versions(manifest);
+    if cdot_versions.is_empty() {
+        return Err(FerroError::Io {
+            msg: "no cdot transcripts could be loaded for --backfill-transcripts; \
+                  refresh or re-download cdot in this reference before retrying"
+                .to_string(),
+        });
+    }
+
+    // `--force` (skip_existing == false): discard any prior backfill output so
+    // every requested accession is re-fetched, and so the append path never
+    // produces a duplicate `>accession` record (which would make `.fai` keys
+    // collide). In the default incremental mode the prior output is kept and
+    // folded into the present set below as the cache.
+    let force = !config.skip_existing;
+    if force {
+        let fai = PathBuf::from(format!("{}.fai", backfill_fasta.display()));
+        let _ = fs::remove_file(&backfill_fasta);
+        let _ = fs::remove_file(&fai);
+    }
+
+    // Present keys: bulk transcript FASTA + supplemental + (incremental only)
+    // any prior backfill output, so a re-run skips already-fetched accessions —
+    // the incremental cache. The backfill present set is read from the FASTA
+    // headers themselves (the file `execute_backfill` appends to), not its
+    // derived `.fai`: a prior run interrupted after the append but before
+    // reindex — or a deleted `.fai` — would otherwise look empty and re-fetch
+    // and re-append the same accession, duplicating its `>accession` record
+    // (and colliding `.fai` keys on the subsequent reindex).
+    let transcripts_dir = config.output_dir.join("transcripts");
+    let supplemental_dir = config.output_dir.join("supplemental");
+    let mut present = load_available_versions(&transcripts_dir, Some(&supplemental_dir));
+    if !force {
+        present.extend(load_fasta_header_accessions(&backfill_fasta));
+    }
+
+    let plan = plan_backfill(&requested, &cdot_versions, &present);
+    eprintln!(
+        "  {} to fetch, {} already present, {} not in cdot",
+        plan.to_fetch.len(),
+        plan.already_present.len(),
+        plan.not_in_cdot.len()
+    );
+    if !plan.not_in_cdot.is_empty() {
+        eprintln!(
+            "  Warning: {} requested accession(s) are absent from cdot and will not be \
+             backfilled (no exon alignment): {}",
+            plan.not_in_cdot.len(),
+            plan.not_in_cdot.join(", ")
+        );
+    }
+
+    if !plan.to_fetch.is_empty() {
+        fs::create_dir_all(&backfill_dir).map_err(|e| FerroError::Io {
+            msg: format!("Failed to create backfill directory: {}", e),
+        })?;
+        eprintln!(
+            "  Fetching {} deposited transcript sequence(s) from NCBI...",
+            plan.to_fetch.len()
+        );
+        let outcome = execute_backfill(&plan.to_fetch, &backfill_fasta, fetch_transcript_fasta)?;
+        eprintln!(
+            "  Backfilled {} sequence(s), {} failed",
+            outcome.fetched.len(),
+            outcome.failed.len()
+        );
+        if !outcome.failed.is_empty() {
+            eprintln!(
+                "  Warning: {} accession(s) could not be backfilled (fetch/parse/version \
+                 mismatch): {}",
+                outcome.failed.len(),
+                outcome.failed.join(", ")
+            );
+        }
+    }
+
+    // Wire the manifest field iff a non-empty backfill FASTA exists (newly
+    // written this run, or carried over from a prior incremental run); otherwise
+    // clear it so a deleted/empty file never leaves a dangling manifest
+    // reference. Mirrors the no-orphan rule in fetch_canonical_overrides.
+    let has_content = backfill_fasta
+        .metadata()
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
+    if has_content {
+        eprintln!("  Indexing backfill FASTA...");
+        index_fasta(&backfill_fasta)?;
+        manifest.backfill_transcripts_fasta = Some(backfill_fasta);
+    } else {
+        manifest.backfill_transcripts_fasta = None;
+    }
+
+    Ok(())
+}
+
+/// Fetch a transcript's deposited sequence from NCBI EFetch as FASTA text.
+///
+/// Returns the raw FASTA record (`>{accession.version} desc\n<bases>`) on success,
+/// or `None` on a fetch failure. `rettype=fasta` (not `gb`): the version-exact CDS
+/// frame comes from cdot, so only the bases are needed here. Same 100 ms NCBI
+/// rate-limit as the other efetch callers. The injected boundary for
+/// [`backfill::execute_backfill`]; tests supply fixtures instead.
+fn fetch_transcript_fasta(accession: &str) -> Option<String> {
+    let url = format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={}&rettype=fasta&retmode=text",
+        accession
+    );
+    // `--fail` turns an HTTP 4xx/5xx into a non-zero exit (treated as a failed
+    // fetch below); the timeouts bound a single slow/stalled request so one
+    // accession cannot hang the whole prepare run.
+    let result = Command::new("curl")
+        .args([
+            "-sS",
+            "-L",
+            "--fail",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "60",
+            &url,
+        ])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(100)); // NCBI rate limit
+    let out = result.ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    (out.status.success() && text.starts_with('>')).then_some(text)
 }
 
 /// Fetch supplemental data from ClinVar/patterns (benchmark feature only)
@@ -1441,6 +1665,31 @@ fn load_available_versions(
     versions
 }
 
+/// Read the set of record accessions directly from a FASTA file's headers
+/// (`>{accession} description` → `accession`, the first whitespace-delimited
+/// token after `>`).
+///
+/// Unlike [`load_available_versions`], which scans the derived `.fai`, this
+/// reads the `.fna` itself — the source of truth for the incremental backfill
+/// cache, since [`backfill::execute_backfill`] appends to the `.fna`. A prior
+/// run interrupted after the append but before reindex, or a deleted `.fai`,
+/// would leave the index empty (or stale) and cause the same accession to be
+/// re-fetched and appended a second time. Returns an empty set if the file is
+/// absent or unreadable.
+fn load_fasta_header_accessions(fasta: &Path) -> HashSet<String> {
+    let mut versions = HashSet::new();
+    if let Ok(file) = File::open(fasta) {
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some(rest) = line.strip_prefix('>') {
+                if let Some(acc) = rest.split_whitespace().next() {
+                    versions.insert(acc.to_string());
+                }
+            }
+        }
+    }
+    versions
+}
+
 /// Extract versioned accessions from patterns file.
 ///
 /// Filters to only transcript accessions (NM_, NR_, XM_, XR_) with version numbers.
@@ -1912,6 +2161,69 @@ mod tests {
     }
 
     #[test]
+    fn test_backfill_transcripts_step_errors_when_no_cdot_loaded() {
+        // #842: an explicit `--backfill-transcripts` run against a reference
+        // whose cdot cannot be loaded (empty version universe) must fail loudly
+        // rather than succeed as a warning-only no-op — otherwise a stale or
+        // corrupt manifest silently produces no backfill output.
+        let temp_dir = TempDir::new().unwrap();
+        let acc_file = temp_dir.path().join("accessions.txt");
+        std::fs::write(&acc_file, "NM_000088.3\n").unwrap();
+
+        let config = PrepareConfig {
+            output_dir: temp_dir.path().to_path_buf(),
+            dry_run: false,
+            ..PrepareConfig::default()
+        };
+        // Default manifest carries no cdot paths, so `load_cdot_versions`
+        // returns an empty set.
+        let mut manifest = ReferenceManifest::default();
+
+        let err = backfill_transcripts_step(&config, &mut manifest, &acc_file)
+            .expect_err("empty cdot must abort the backfill step");
+        match err {
+            FerroError::Io { msg } => {
+                assert!(
+                    msg.contains("no cdot transcripts could be loaded"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected FerroError::Io, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_load_fasta_header_accessions_reads_unindexed_fna() {
+        // #842 regression: the incremental backfill cache must reflect what is
+        // actually in backfill_transcripts.fna even when its `.fai` is missing
+        // (e.g. a prior run was interrupted after the append but before reindex,
+        // or the index was deleted). Reading only the `.fai` would treat the
+        // file as empty and re-append the same accession, duplicating the
+        // `>accession` record.
+        let dir = TempDir::new().unwrap();
+        let fasta = dir.path().join("backfill_transcripts.fna");
+        let mut f = File::create(&fasta).unwrap();
+        writeln!(f, ">NM_000088.3 Homo sapiens collagen").unwrap();
+        writeln!(f, "ACGTACGT").unwrap();
+        writeln!(f, ">NM_000001.1 some description").unwrap();
+        writeln!(f, "GGGGCCCC").unwrap();
+        drop(f);
+        // Deliberately no `.fai` written alongside the `.fna`.
+
+        let present = load_fasta_header_accessions(&fasta);
+        assert_eq!(present.len(), 2);
+        assert!(present.contains("NM_000088.3"));
+        assert!(present.contains("NM_000001.1"));
+    }
+
+    #[test]
+    fn test_load_fasta_header_accessions_absent_file_is_empty() {
+        let dir = TempDir::new().unwrap();
+        let present = load_fasta_header_accessions(&dir.path().join("missing.fna"));
+        assert!(present.is_empty());
+    }
+
+    #[test]
     fn test_detect_patterns_from_ferro_reference_with_patterns() {
         let temp_dir = TempDir::new().unwrap();
         let ferro_ref = temp_dir.path();
@@ -2051,6 +2363,35 @@ mod tests {
     fn prepare_config_default_has_no_derive_ng() {
         let cfg = PrepareConfig::default();
         assert!(cfg.derive_ng_placements.is_none());
+    }
+
+    #[test]
+    fn prepare_config_default_has_no_backfill() {
+        let cfg = PrepareConfig::default();
+        assert!(cfg.backfill_transcripts.is_none());
+    }
+
+    #[test]
+    fn backfill_requires_cdot_in_same_run() {
+        // A cdot-less selection (no GRCh38/GRCh37 cdot) must be rejected up front,
+        // before any downloads, mirroring the --derive-ng-placements guard.
+        let tmp = tempfile::tempdir().unwrap();
+        let acc_file = tmp.path().join("targets.txt");
+        std::fs::write(&acc_file, "NM_002001.2\n").unwrap();
+        let config = PrepareConfig {
+            output_dir: tmp.path().join("ref"),
+            download_transcripts: false,
+            download_genome: false,
+            download_cdot: false,
+            download_cdot_grch37: false,
+            backfill_transcripts: Some(acc_file),
+            ..Default::default()
+        };
+        let err = prepare_references(&config).expect_err("cdot-less backfill must be rejected");
+        assert!(
+            format!("{err}").contains("--backfill-transcripts requires cdot"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
