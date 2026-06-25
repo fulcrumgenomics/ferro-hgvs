@@ -317,12 +317,38 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                         msg: "CDS interval start is unknown".to_string(),
                     }
                 })?;
-                let pos = self
-                    .projector
-                    .mapper()
-                    .cds_to_genome_on_build(&transcript_id, &start_cds, build_hint)?
-                    .variant
-                    .base;
+                let pos = match self.projector.mapper().cds_to_genome_on_build(
+                    &transcript_id,
+                    &start_cds,
+                    build_hint,
+                ) {
+                    Ok(r) => r.variant.base,
+                    Err(e) => {
+                        // Poly-A 3'UTR fallback (#797): a `c.*` position in the
+                        // post-transcriptional poly-A tail has no exon, so
+                        // `cds_to_genome` declines and `project_variant_all` would
+                        // otherwise fail to seed fan-out and miss the transcript.
+                        // `try_extend_polya_to_genome` self-gates on a genuine
+                        // `c.*` poly-A endpoint; when it confirms one, seed the
+                        // stab query from an *in-transcript* anchor — the
+                        // 3'-terminal exon's genomic start, which is inside the
+                        // exon span on either strand — rather than the walked
+                        // downstream coordinate (which is past the exon end by
+                        // construction and would land the stab off the transcript).
+                        // The per-transcript projection then takes the multi-axis
+                        // short-circuit. Propagate the original decline when the
+                        // position is not a poly-A endpoint.
+                        if self
+                            .try_extend_polya_to_genome(cdot_tx, &transcript_id, &start_cds)
+                            .is_some()
+                        {
+                            let last = cdot_tx.exons.last().ok_or(e)?;
+                            last[0]
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                };
                 Ok((cdot_tx.contig.clone(), pos))
             }
             HgvsVariant::Tx(t) => {
@@ -1076,6 +1102,128 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `r.` inputs carrying `Base::U` are translated to DNA on the way to the
     /// g. output (`U`→`T` on the plus strand, `U`→`A` via complement on the
     /// minus strand), so the emitted g. variant is always valid DNA (#395 item 4).
+    /// Whether either endpoint of a `c.` input is a confirmed poly-A 3'UTR
+    /// position (#797) — i.e. lands in the transcript's post-transcriptional
+    /// poly-A tail, where it has no genomic alignment and is mapped only by the
+    /// contiguous downstream walk of [`Self::try_extend_polya_to_genome`].
+    ///
+    /// Used by [`Self::deanchor_genomic_parent_input`] to keep an NG_/LRG_-parented
+    /// poly-A `c.*` input in its transcript-coordinate form rather than de-anchoring
+    /// it to a synthetic (off-exon) `NC_` `Genome`: the `c.` fan-out seed path
+    /// (`extract_contig_and_pos`) handles poly-A endpoints by seeding the stab from
+    /// the 3'-terminal exon anchor, whereas the off-exon `Genome` coordinate would
+    /// land the stab off the transcript and fail enumeration. Resolves the
+    /// transcript via the input's build and returns `false` (decline) when the
+    /// transcript or an endpoint cannot be resolved.
+    fn cds_input_has_polya_endpoint(&self, variant: &HgvsVariant) -> bool {
+        let HgvsVariant::Cds(c) = variant else {
+            return false;
+        };
+        let transcript_id = c.accession.transcript_accession();
+        let build_hint = self.build_hint_for_variant(variant);
+        let Ok(cdot_tx) = self.cdot_tx_with_build_hint(&transcript_id, build_hint) else {
+            return false;
+        };
+        [
+            c.loc_edit.location.start.inner(),
+            c.loc_edit.location.end.inner(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|p| {
+            self.try_extend_polya_to_genome(cdot_tx, &transcript_id, p)
+                .is_some()
+        })
+    }
+
+    /// Map a `c.*` 3'UTR position that falls in the transcript's poly-A tail to
+    /// the contiguous downstream genome coordinate (#797), or `None` to decline.
+    ///
+    /// A transcript's poly-A tail is post-transcriptional and has no genomic
+    /// coordinate, so a derived exon→genome structure (#790) strips it and the
+    /// CDS-aware mapper declines a `c.*` position landing there. mutalyzer maps
+    /// such a position by a base-agnostic coordinate walk into downstream genome
+    /// from the transcript's own 3'-terminal exon; this performs that walk via
+    /// [`CdotTranscript::tx_to_genome_extending_polya`].
+    ///
+    /// Returns `None` (so the caller propagates the original decline) unless ALL
+    /// hold, so normal projection is never perturbed and no wrong coordinate is
+    /// emitted:
+    /// - the position is a `c.*` 3'UTR position (`utr3`, no `special` sentinel),
+    ///   optionally with a *positive* intronic-style `offset` (`c.*N+k`);
+    /// - the base position `c.*N` itself lands in the poly-A region (past the
+    ///   3'-terminal exon) — never a real intron between exons;
+    /// - the transcript has a `cds_end` (needed to resolve `c.*N`);
+    /// - the effective transcript position (`c.*N` plus any offset) is
+    ///   `< true_tx_length` — i.e. it lies inside the transcript's real poly-A
+    ///   tail, not past the transcript end. The true length comes from the
+    ///   transcript FASTA, because the derived exon map's length excludes the
+    ///   stripped tail.
+    ///
+    /// A `c.*N+k` whose base is in the poly-A region is reinterpreted linearly:
+    /// the poly-A tail is the transcript's 3' terminus, not an intron, so the
+    /// offset displaces `k` bases further along the contiguous downstream genome
+    /// (this matches the normalizer's `c.*N+k → c.*(N+k)` folding and mutalyzer).
+    /// Folding the offset into the effective tx coordinate is strand-correct
+    /// because [`CdotTranscript::tx_to_genome_extending_polya`] already encodes
+    /// the strand walk direction.
+    fn try_extend_polya_to_genome(
+        &self,
+        cdot_tx: &crate::data::cdot::CdotTranscript,
+        transcript_id: &str,
+        p: &crate::hgvs::location::CdsPos,
+    ) -> Option<u64> {
+        if !p.utr3 || p.special.is_some() || p.base < 1 {
+            return None;
+        }
+        // Only a non-negative downstream offset is meaningful in the poly-A
+        // region (a negative offset would point back toward the genomic core,
+        // which is mapped — leave it to the normal path / decline).
+        let offset = match p.offset {
+            None => 0,
+            Some(k) if k >= 0 => k as u64,
+            Some(_) => return None,
+        };
+        let cds_end = cdot_tx.cds_end?;
+        // `c.*N` lives at tx position `cds_end + N - 1` (cds_end is 0-based
+        // exclusive, so `c.*1` is at `cds_end`); mirrors `cds_to_tx_aware` in
+        // `data::mapping`. Use checked arithmetic throughout.
+        let base_tx_pos = cds_end.checked_add(p.base as u64)?.checked_sub(1)?;
+        // The base position must itself be in the poly-A region (past the
+        // 3'-terminal exon). If `c.*N` is still inside an exon, an offset would
+        // be a genuine intron position — not ours to handle. (tx coords are
+        // contiguous in real cdot, so "no exon" here means "past the terminal
+        // exon", never a pre-terminal hole; `tx_to_genome_extending_polya`
+        // independently rejects a pre-terminal hole as a second guard.)
+        if cdot_tx.tx_to_genome(base_tx_pos).is_some() {
+            return None;
+        }
+        // Fold the (downstream) offset into the effective tx coordinate.
+        let tx_pos = base_tx_pos.checked_add(offset)?;
+        // Gate to the transcript's TRUE length (FASTA) so the walk stays within
+        // the real poly-A tail. Decline if the length is unavailable.
+        let true_tx_length = self.provider.get_sequence_length(transcript_id).ok()?;
+        if tx_pos >= true_tx_length {
+            return None;
+        }
+        let g = cdot_tx.tx_to_genome_extending_polya(tx_pos)?;
+        // Validate the walked coordinate against the contig bounds: the plus-strand
+        // walk (`genome_end + delta`) could in principle run off the 3' end of the
+        // contig, and a 1-based genome coordinate is never 0. The transcript-length
+        // guard above bounds the walk to the real poly-A tail, but that is a
+        // transcript-frame bound, not a contig-frame one — decline if the resulting
+        // genome coordinate falls outside `1..=contig_len`.
+        if g == 0 {
+            return None;
+        }
+        if let Ok(contig_len) = self.provider.get_sequence_length(&cdot_tx.contig) {
+            if g > contig_len {
+                return None;
+            }
+        }
+        Some(g)
+    }
+
     fn project_to_genomic_nc(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::GenomeInterval;
@@ -1373,10 +1521,45 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 }),
             }
         };
+        // The poly-A 3'UTR fallback below is a `c.*`-only refinement (#797): it
+        // reinterprets a `c.*` 3'UTR endpoint that lands in the transcript's
+        // post-transcriptional poly-A tail. `n.`/`r.` inputs are reshaped into
+        // `CdsPos` for this closure (with `utr3` carrying their own
+        // downstream/3'UTR flag), so without this gate an off-exon `n.*`/`r.*`
+        // endpoint would be reinterpreted as a `c.*` poly-A walk and emit a
+        // genomic coordinate from a coordinate class that has no poly-A
+        // semantics. Restrict the fallback to genuine `c.` (CDS) inputs.
+        let is_cds_input = matches!(variant, HgvsVariant::Cds(_));
         let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
             let p = to_cds_frame(p)?;
             if is_coding {
-                let result = cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint)?;
+                let result =
+                    match cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            // Poly-A-region 3'UTR fallback (#797). A `c.*` position
+                            // can land in the transcript's post-transcriptional
+                            // poly-A tail, which the (e.g. #790-derived) exon→genome
+                            // map strips — so `cds_to_genome` declines. mutalyzer
+                            // maps such positions by a contiguous coordinate walk into
+                            // downstream genome from the transcript's own 3'-terminal
+                            // exon. `try_extend_polya_to_genome` self-gates (a `c.*`
+                            // position whose base lands in the poly-A region, an
+                            // optional positive downstream offset, and an effective
+                            // tx position within the transcript's TRUE length, i.e.
+                            // inside the real poly-A tail) and returns None to
+                            // propagate the original decline otherwise — so beyond
+                            // the tail we never walk into non-transcript genome.
+                            if is_cds_input {
+                                if let Some(g) =
+                                    self.try_extend_polya_to_genome(cdot_tx, &transcript_id, &p)
+                                {
+                                    return Ok(g);
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
                 // Sequence-aware correction (#644), mirroring the g.→c. path.
                 // Only simple exonic positions are corrected; intronic / special
                 // positions are derived by boundary arithmetic the realignment
@@ -1585,6 +1768,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     .then(|| self.provider.genomic_placement_on_build(ctx, build))
                     .flatten()
                 {
+                    // A poly-A `c.*` endpoint (#797) has no genomic alignment, so
+                    // `project_to_genomic_nc` now derives it by a contiguous walk to
+                    // an OFF-exon `NC_` coordinate. De-anchoring to that synthetic
+                    // `Genome` would seed the fan-out stab off the transcript span
+                    // (and then fail genome→CDS re-derivation). Keep the input's
+                    // transcript-coordinate (`c.`) form instead and just signal the
+                    // parent for re-framing: the `c.` fan-out seed path
+                    // (`extract_contig_and_pos`) anchors poly-A endpoints to the
+                    // 3'-terminal exon, so enumeration + the multi-axis short-circuit
+                    // proceed correctly — mirroring how a bare-`NM_` poly-A `c.*`
+                    // already fans out.
+                    if self.cds_input_has_polya_endpoint(variant) {
+                        return (variant.clone(), Some(ctx.clone()));
+                    }
                     if let Ok(HgvsVariant::Genome(nc_gv)) = self.project_to_genomic_nc(variant) {
                         // `nc_gv` carries the parent (NG_/LRG_) accession but NC_
                         // coordinates. Stamp the placement's own `NC_` accession —
@@ -2978,6 +3175,46 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             id: transcript_id.to_string(),
         })?;
 
+        // #797 (multi-axis): a `c.*` poly-A input maps to a genome coordinate that
+        // is outside the cdot exon span by construction (the post-transcriptional
+        // poly-A tail has no genomic alignment; `project_to_genomic_nc` derives it
+        // by a contiguous downstream walk). Re-deriving the coding axis from that
+        // synthetic coordinate via genome→CDS would fail the span check below
+        // (`TranscriptNotOverlapping`), so short-circuit: keep the input's own
+        // coding form and report the walked genome coordinate as the genomic axis.
+        // Only a `c.*` (CDS) input whose pivot lands past the span qualifies: the
+        // poly-A tail fallback is keyed on a `c.*` 3'UTR endpoint
+        // (`try_extend_polya_to_genome` self-gates on `p.utr3`), so it has no
+        // meaning for `n.`/`r.` inputs. A genuine off-transcript `g.` input — or a
+        // non-overlapping `n.`/`r.` input — must still raise
+        // `TranscriptNotOverlapping` via the normal path below.
+        //
+        // Gate on ANY outside endpoint, not both: a boundary-spanning interval
+        // like `c.*3_*4del` has one endpoint inside the stripped terminal exon
+        // (the 3'UTR genomic core) and the other in the poly-A tail past the span.
+        // Requiring BOTH outside would miss that case — `map_position` would then
+        // reject the single outside (poly-A) endpoint as `TranscriptNotOverlapping`
+        // even though `project_to_genomic_nc` already walked it. This is safe for
+        // exactly this `c.` branch: `projected_genome` only ever holds an off-span
+        // coordinate that `project_to_genomic_nc` produced via the `c.`-gated
+        // poly-A walk (`cds_to_genome` otherwise yields an in-exon coordinate), so
+        // an outside endpoint here is necessarily a validated poly-A endpoint —
+        // `polya_multiaxis_projection` re-anchors that already-walked genome
+        // coordinate rather than re-deriving anything from it.
+        if matches!(normalized, HgvsVariant::Cds(_)) {
+            let outside = |p: &GenomePos| p.base < tx_genome_start || p.base >= tx_genome_end;
+            if outside(&g_start) || outside(&g_end) {
+                if let Some(projection) = self.polya_multiaxis_projection(
+                    normalized,
+                    transcript_id,
+                    &projected_genome,
+                    gene_symbol.clone(),
+                ) {
+                    return Ok(projection);
+                }
+            }
+        }
+
         // Helper: map one GenomePos → CdsPos, converting out-of-range errors.
         // `normalized.to_string()` is only consumed by the error message and
         // the happy path doesn't touch it; building it eagerly was ~2% of
@@ -3213,6 +3450,82 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_intronic,
             is_utr,
             affects_init: edit_reaches_initiation_codon(&c_edit, &cds_start, &cds_end, is_intronic),
+        })
+    }
+
+    /// Build the multi-axis projection for a `c.*` poly-A input whose genome
+    /// pivot lands outside the cdot exon span (#797).
+    ///
+    /// The post-transcriptional poly-A tail has no genomic alignment, so the
+    /// synthetic genome coordinate produced by `project_to_genomic_nc`'s
+    /// contiguous downstream walk cannot be re-derived back to a CDS position via
+    /// the normal genome→CDS path (it would be rejected as
+    /// `TranscriptNotOverlapping`). The coding axis is therefore the input's own
+    /// (bare-accession) form, and the genomic axis is the re-anchored walked
+    /// coordinate. A `c.*` 3'UTR/poly-A position has no protein consequence, so
+    /// `protein`/`rna`/`noncoding` are `None` (best-effort: nothing to derive
+    /// from a position with no genomic exon context).
+    ///
+    /// Returns `None` (so the caller falls through to the normal path, which
+    /// raises the canonical decline) when the input is not a `c.*` (CDS)
+    /// variant or when the genomic axis cannot be re-anchored into the
+    /// parent frame — never stamping a chromosome coordinate under a parent
+    /// accession (invalid HGVS).
+    fn polya_multiaxis_projection(
+        &self,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+        projected_genome: &HgvsVariant,
+        gene_symbol: Option<String>,
+    ) -> Option<VariantProjection> {
+        // The coding axis is the input's own form, rendered bare (no NC_ wrapper),
+        // matching how `coding` is reported on the normal path. Only `c.*` (CDS)
+        // inputs qualify for the poly-A fallback (the caller gates on
+        // `HgvsVariant::Cds`); `n.`/`r.` inputs have no poly-A 3'UTR endpoint and
+        // must fall through to the canonical `TranscriptNotOverlapping` decline.
+        let coding = match normalized {
+            HgvsVariant::Cds(c) => {
+                let mut c = c.clone();
+                c.accession.genomic_context = None;
+                HgvsVariant::Cds(c)
+            }
+            _ => return None,
+        };
+
+        // Re-anchor the walked genome coordinate into the parent's own frame, or
+        // drop the genomic axis if it cannot be framed (rather than emit a
+        // chromosome coordinate under the parent accession; mirrors the normal
+        // path's #655/#702 handling).
+        let genomic = match projected_genome {
+            HgvsVariant::Genome(gv) => self
+                .reanchor_genome_output(gv.clone(), self.build_hint_for_variant(normalized))
+                .ok()
+                .map(|reanchored| {
+                    self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
+                        log::trace!(
+                            "poly-A genomic-frame renormalization failed for {reanchored}; \
+                             emitting un-normalized re-anchored form: {e}"
+                        );
+                        reanchored
+                    })
+                }),
+            _ => return None,
+        };
+
+        Some(VariantProjection {
+            genomic,
+            coding: Some(coding),
+            noncoding: None,
+            protein: None,
+            rna: None,
+            transcript_id: transcript_id.to_string(),
+            gene_symbol,
+            is_frameshift: false,
+            is_intronic: false,
+            // A `c.*` poly-A position is in the 3'UTR (its post-transcriptional
+            // extension), so flag the UTR axis.
+            is_utr: true,
+            affects_init: false,
         })
     }
 }
@@ -7182,6 +7495,866 @@ mod tests {
                 s.contains(":g.1012A>G"),
                 "expected NC_000001.11...:g.1012A>G for c.*1A>G, got: {}",
                 s
+            );
+        }
+
+        /// A transcript whose cdot exon→genome map (e.g. #790-derived) **strips**
+        /// the post-transcriptional poly-A tail: the cdot exon ends at tx 12
+        /// (genome 1011 inclusive / 1012 exclusive), but the transcript FASTA is
+        /// 15 bases long — a 3-base poly-A tail (tx 12..15) with no exon. This
+        /// mirrors NM_003002.2 (#797), where the last exon ends at tx 1364 but
+        /// the FASTA is 1382 bases.
+        fn make_polya_test_provider_and_projector() -> (Projector, MockProvider) {
+            let mut cdot = CdotMapper::new();
+            cdot.add_transcript(
+                "NM_POLYA.1".to_string(),
+                CdotTranscript {
+                    gene_name: Some("POLYAGENE".to_string()),
+                    contig: "chr1".to_string(),
+                    strand: ProvStrand::Plus,
+                    // exon covers only the genomic core (poly-A stripped): tx 0..12.
+                    exons: vec![[1000, 1012, 0, 12]],
+                    cds_start: Some(3),
+                    cds_end: Some(9),
+                    gene_id: None,
+                    protein: Some("NP_POLYA.1".to_string()),
+                    exon_cigars: Vec::new(),
+                },
+            );
+            let projector = Projector::new(cdot);
+
+            let mut provider = MockProvider::new();
+            // FASTA carries the full 15-base transcript incl. the 3-base poly-A
+            // tail ("AAA"); cds is c.1..c.6 (tx 3..9), 3'UTR core c.*1..c.*3
+            // (tx 9..12), poly-A c.*4..c.*6 (tx 12..15).
+            provider.add_transcript(Transcript {
+                id: "NM_POLYA.1".to_string(),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some("TTTATGCGCGTAAA".to_string() + "A"), // 15 bases, trailing AAA tail
+                cds_start: Some(4),                                 // 1-based inclusive
+                cds_end: Some(9),
+                exons: vec![Exon::with_genomic(1, 1, 12, 1000, 1011)],
+                chromosome: Some("chr1".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1011),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+                protein_id: Some("NP_POLYA.1".to_string()),
+            });
+            // Genomic bases: 999 leading bases so HGVS g.1000 == 0-based index 999,
+            // then the 12-base exon core (indices 999..1010), then a downstream
+            // tail past the stripped exon (g.1012, g.1013, …). The poly-A walk is
+            // base-agnostic, so the downstream bases don't affect the *walk*; but
+            // they DO feed the genomic-frame renormalization the public
+            // `project_to_genomic` runs on its output, so the flanks are
+            // **non-repeating** (a repeating `ACGT`/`CAGT` cycle, no homopolymer at
+            // any single position) — a single-base del at g.1012 / g.1013 then
+            // stays put under 3'-shifting, exercising normalization without moving
+            // the asserted coordinate. The same bases are registered under the
+            // `NC_000001.11` output accession so normalization can fetch them
+            // (registering only `chr1` would silently fall back to the
+            // un-normalized form; #797 review).
+            let genomic = polya_genomic_sequence();
+            provider.add_genomic_sequence("chr1", genomic.clone());
+            provider.add_genomic_sequence("NC_000001.11", genomic);
+            (projector, provider)
+        }
+
+        /// Build the shared genomic backbone for the poly-A fixtures: a
+        /// non-repeating `ACGT`-cycle prefix (indices 0..999), the 12-base exon
+        /// core `TTTATGCGCGTA` (indices 999..1011 → HGVS g.1000..g.1011), and a
+        /// non-repeating downstream `CAGT`-cycle tail (indices 1011.. → g.1012+).
+        /// Non-repeating flanks keep single-base dels at the asserted poly-A
+        /// coordinates stable under genomic-frame renormalization.
+        fn polya_genomic_sequence() -> String {
+            let cycle = |pat: &str, len: usize| -> String {
+                pat.chars().cycle().take(len).collect::<String>()
+            };
+            let prefix = cycle("ACGT", 999);
+            let exon = "TTTATGCGCGTA"; // 12 bases, indices 999..1011
+            let downstream = cycle("CAGT", 100); // indices 1011..
+            format!("{prefix}{exon}{downstream}")
+        }
+
+        /// A `c.*` position in the genomic CORE of the 3'UTR projects normally
+        /// (unchanged by #797). c.*1 = tx 9 → genome 1009.
+        #[test]
+        fn project_to_genomic_polya_core_3utr_unchanged() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 1,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("c.*1del should project (genomic-core 3'UTR)");
+            let s = match out {
+                HgvsVariant::Genome(ref g) => g.to_string(),
+                _ => panic!("expected Genome variant"),
+            };
+            assert!(
+                s.contains(":g.1009del"),
+                "expected g.1009del for c.*1del, got: {s}"
+            );
+        }
+
+        /// A `c.*` position in the POLY-A region (past the stripped exon end, but
+        /// within the true transcript length) projects via the contiguous
+        /// downstream genome walk (#797). c.*4 = tx 12 → genome 1012 (exon
+        /// genome_end, exclusive → first downstream base).
+        #[test]
+        fn project_to_genomic_polya_region_walks_downstream() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("c.*4del (poly-A region) should project via contiguous walk");
+            let s = match out {
+                HgvsVariant::Genome(ref g) => g.to_string(),
+                _ => panic!("expected Genome variant"),
+            };
+            assert!(
+                s.contains(":g.1012del"),
+                "expected g.1012del for c.*4del (poly-A walk), got: {s}"
+            );
+        }
+
+        /// A `c.*N+k` whose base is in the poly-A region folds the downstream
+        /// offset linearly (#797), matching mutalyzer / the normalizer's
+        /// `c.*N+k → c.*(N+k)`. c.*4+1 → effective tx 13 → genome 1013.
+        #[test]
+        fn project_to_genomic_polya_region_with_offset_folds_linearly() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: Some(1),
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("c.*4+1del (poly-A region, +offset) should project");
+            let s = match out {
+                HgvsVariant::Genome(ref g) => g.to_string(),
+                _ => panic!("expected Genome variant"),
+            };
+            assert!(
+                s.contains(":g.1013del"),
+                "expected g.1013del for c.*4+1del (poly-A walk + offset), got: {s}"
+            );
+        }
+
+        /// #797 (multi-axis): a `c.*` poly-A position routed through the full
+        /// `project_variant` / `project` / `project_variant_all` public APIs must
+        /// not be rejected as `TranscriptNotOverlapping`. The synthetic poly-A
+        /// genome coordinate is outside the cdot exon span by construction, so the
+        /// usual genome→CDS re-derivation cannot round-trip it; the projection must
+        /// short-circuit, keeping the input's own coding form and the contiguous
+        /// downstream genomic coordinate.
+        #[test]
+        fn project_variant_polya_region_multiaxis_short_circuits() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let proj = vp
+                .project_variant(&HgvsVariant::Cds(cds), "NM_POLYA.1")
+                .expect("poly-A c.*4del must project through project_variant (multi-axis)");
+            // Genomic axis: the contiguous downstream walk, NC parent unchanged.
+            let g = proj
+                .genomic
+                .as_ref()
+                .expect("poly-A multi-axis projection must carry a genomic axis");
+            assert!(
+                g.to_string().contains(":g.1012del"),
+                "expected g.1012del genomic axis, got: {g}"
+            );
+            // Coding axis: the input's own c.*4del form is preserved (poly-A
+            // positions cannot be re-derived from the synthetic genome coordinate).
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("poly-A multi-axis projection must carry a coding axis");
+            assert!(
+                c.to_string().contains("c.*4del"),
+                "expected the input c.*4del coding axis preserved, got: {c}"
+            );
+            // A 3'UTR / poly-A position has no protein consequence.
+            assert!(!proj.is_intronic, "poly-A 3'UTR position is not intronic");
+        }
+
+        /// Minus-strand analogue: a `c.*` poly-A position projects through the
+        /// multi-axis public API without a `TranscriptNotOverlapping` rejection.
+        #[test]
+        fn project_variant_minus_polya_region_multiaxis_short_circuits() {
+            let (projector, provider) = make_minus_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MPOLYA.1"),
+                gene_symbol: Some("MPOLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let proj = vp
+                .project_variant(&HgvsVariant::Cds(cds), "NM_MPOLYA.1")
+                .expect("minus-strand poly-A c.*4del must project through project_variant");
+            let g = proj
+                .genomic
+                .as_ref()
+                .expect("poly-A multi-axis projection must carry a genomic axis");
+            assert!(
+                g.to_string().contains(":g.999del"),
+                "expected g.999del genomic axis, got: {g}"
+            );
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("poly-A multi-axis projection must carry a coding axis");
+            assert!(
+                c.to_string().contains("c.*4del"),
+                "expected the input c.*4del coding axis preserved, got: {c}"
+            );
+        }
+
+        /// #797 (multi-axis gate): the poly-A short-circuit must fire **only** for
+        /// a `c.*` (CDS) endpoint. A bare transcript-coordinate `n.` input that
+        /// lands off the cdot exon span is NOT a poly-A 3'UTR endpoint — it has no
+        /// `c.*` poly-A semantics — so it must still raise the canonical
+        /// `TranscriptNotOverlapping` decline rather than being smuggled through
+        /// the bypass and returned in the `.coding` slot.
+        ///
+        /// `n.13` on `NM_POLYA.1` is tx index 12, which is off the cdot exon
+        /// (`tx 0..12`) — the same genome neighborhood the poly-A walk targets for
+        /// the `c.*4` case. Because the poly-A genome→genome walk fallback in
+        /// `project_to_genomic_nc` self-gates on a `c.*` (`p.utr3`) endpoint, the
+        /// `n.` input never synthesizes an outside-span genome coordinate: it
+        /// declines cleanly during projection rather than being smuggled through
+        /// the multi-axis short-circuit and returned in the `.coding` slot. With
+        /// the looser `!Genome` gate, a future `project_to_genomic_nc` that did
+        /// synthesize such a coordinate for an `n.`/`r.` input would have wrongly
+        /// taken the bypass; the `Cds`-only gate forecloses that.
+        #[test]
+        fn project_variant_offexon_noncoding_input_is_not_polya_short_circuited() {
+            use crate::hgvs::interval::TxInterval;
+            use crate::hgvs::location::TxPos;
+            use crate::hgvs::variant::TxVariant;
+
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let tx = TxVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    TxInterval::point(TxPos::new(13)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let tx = attach_genomic_context_tx(tx, nc_parent());
+            let result = vp.project_variant(&HgvsVariant::Tx(tx), "NM_POLYA.1");
+            let err = result.expect_err(
+                "an off-exon n. input is not a c.* poly-A endpoint and must \
+                 decline, not take the poly-A multi-axis bypass",
+            );
+            // The decline is a clean projection failure, NOT a multi-axis bypass:
+            // the input must never come back with the `n.` form parked in the
+            // `.coding` slot (which is what the over-broad `!Genome` gate allowed).
+            assert!(
+                matches!(
+                    err,
+                    FerroError::TranscriptNotOverlapping { .. }
+                        | FerroError::InvalidCoordinates { .. }
+                ),
+                "expected a clean projection decline for an off-exon n. input, \
+                 got: {err:?}",
+            );
+        }
+
+        /// #797 (poly-A fallback gate, c.-only): the `project_to_genomic`
+        /// poly-A walk fallback must fire **only** for a `c.` (CDS) input. An
+        /// off-exon `n.*` (`Tx`) endpoint is reshaped into a `CdsPos` with
+        /// `utr3` set for this projection closure, so without the `c.`-only gate
+        /// it would be reinterpreted as a `c.*` poly-A walk and emit a genomic
+        /// coordinate — a coordinate class that has no poly-A semantics. It must
+        /// instead decline. `n.13` on `NM_POLYA.1` is tx index 12, off the cdot
+        /// exon (`tx 0..12`) — the genome neighborhood the poly-A walk targets.
+        #[test]
+        fn project_to_genomic_offexon_noncoding_n_input_declines() {
+            use crate::hgvs::interval::TxInterval;
+            use crate::hgvs::location::TxPos;
+            use crate::hgvs::variant::TxVariant;
+
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let tx = TxVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    TxInterval::point(TxPos::new(13)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let tx = attach_genomic_context_tx(tx, nc_parent());
+            let err = vp
+                .project_to_genomic(&HgvsVariant::Tx(tx))
+                .expect_err("off-exon n. input must decline, not take the c.* poly-A walk");
+            assert!(
+                matches!(
+                    err,
+                    FerroError::TranscriptNotOverlapping { .. }
+                        | FerroError::InvalidCoordinates { .. }
+                ),
+                "expected a clean decline for an off-exon n. input, got: {err:?}",
+            );
+        }
+
+        /// #797 (poly-A fallback gate, c.-only): RNA (`r.`) analogue of the `n.`
+        /// decline above. An off-exon `r.*` endpoint must not be reinterpreted as
+        /// a `c.*` poly-A walk by `project_to_genomic`.
+        #[test]
+        fn project_to_genomic_offexon_rna_input_declines() {
+            use crate::hgvs::interval::RnaInterval;
+            use crate::hgvs::location::RnaPos;
+            use crate::hgvs::variant::RnaVariant;
+
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            // r.*4 reshapes to a CdsPos { base: 4, utr3: true } — the same shape a
+            // genuine c.*4 poly-A endpoint carries — so it directly exercises the
+            // `c.`-only gate: an RNA input with this shape must still decline.
+            let rna = RnaVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    RnaInterval::point(RnaPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let rna = {
+                let mut r = rna;
+                r.accession = r.accession.with_genomic_context(nc_parent());
+                r
+            };
+            let err = vp
+                .project_to_genomic(&HgvsVariant::Rna(rna))
+                .expect_err("off-exon r. input must decline, not take the c.* poly-A walk");
+            assert!(
+                matches!(
+                    err,
+                    FerroError::TranscriptNotOverlapping { .. }
+                        | FerroError::InvalidCoordinates { .. }
+                ),
+                "expected a clean decline for an off-exon r. input, got: {err:?}",
+            );
+        }
+
+        /// #797 (boundary-spanning): a `c.*` interval that spans the core→poly-A
+        /// boundary — one endpoint inside the stripped terminal exon (3'UTR
+        /// genomic core), the other in the poly-A tail past the exon — must
+        /// project through the multi-axis short-circuit, not be rejected as
+        /// `TranscriptNotOverlapping`. On `NM_POLYA.1`, `c.*3` is tx 11 (genome
+        /// 1011, inside exon `tx 0..12`) and `c.*4` is tx 12 (genome 1012, poly-A
+        /// tail). With the over-strict `outside(start) && outside(end)` gate the
+        /// single outside (poly-A) endpoint was rejected; the `any-outside` gate
+        /// short-circuits correctly.
+        #[test]
+        fn project_variant_polya_boundary_spanning_short_circuits() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(
+                        CdsPos {
+                            base: 3,
+                            offset: None,
+                            utr3: true,
+                            special: None,
+                        },
+                        CdsPos {
+                            base: 4,
+                            offset: None,
+                            utr3: true,
+                            special: None,
+                        },
+                    ),
+                    // A delins (not a plain del) so the boundary-spanning interval
+                    // does not collapse into the surrounding poly-A homopolymer as a
+                    // repeat-contraction during normalization — that would shift the
+                    // interval and obscure the boundary-spanning shape under test.
+                    NaEdit::Delins {
+                        sequence: InsertedSequence::Literal("GG".parse().unwrap()),
+                        deleted: None,
+                        deleted_length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let proj = vp
+                .project_variant(&HgvsVariant::Cds(cds), "NM_POLYA.1")
+                .expect("boundary-spanning c.*3_*4delinsGG must project (multi-axis)");
+            // Genomic axis: the walked interval (g.1011 inside exon, g.1012 the
+            // first poly-A walk coordinate) re-anchored under the NC parent. The
+            // public path renormalizes it in the genome frame, so assert the axis
+            // is present on the NC contig rather than an exact (pre-normalization)
+            // coordinate — the load-bearing assertion is that it short-circuits at
+            // all instead of raising TranscriptNotOverlapping.
+            let g = proj
+                .genomic
+                .as_ref()
+                .expect("boundary-spanning poly-A projection must carry a genomic axis")
+                .to_string();
+            // Pin the exact normalized interval, not just the accession: the start
+            // (g.1011) is inside the stripped terminal exon and the end (g.1012) is
+            // the first poly-A walk coordinate, and the plus-strand edit keeps the
+            // literal `GG` insertion. A wrong endpoint or a non-reverse-complemented
+            // edit would fail here, where `starts_with("NC_000001.11")` would not.
+            assert!(
+                g.contains(":g.1011_1012delinsGG"),
+                "expected plus-strand boundary interval g.1011_1012delinsGG, got: {g}"
+            );
+            // Coding axis: the input's own c.*3_*4delinsGG form is preserved.
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("boundary-spanning poly-A projection must carry a coding axis");
+            assert!(
+                c.to_string().contains("c.*3_*4delinsGG"),
+                "expected the input c.*3_*4delinsGG coding axis preserved, got: {c}"
+            );
+        }
+
+        /// Minus-strand analogue of the boundary-spanning case. On the minus
+        /// `NM_MPOLYA.1`, `c.*3` maps to genome 1000 (inside the exon) and `c.*4`
+        /// to genome 999 (poly-A tail, one base downstream on the minus strand),
+        /// so the genomic interval spans g.999_1000.
+        #[test]
+        fn project_variant_minus_polya_boundary_spanning_short_circuits() {
+            let (projector, provider) = make_minus_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MPOLYA.1"),
+                gene_symbol: Some("MPOLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(
+                        CdsPos {
+                            base: 3,
+                            offset: None,
+                            utr3: true,
+                            special: None,
+                        },
+                        CdsPos {
+                            base: 4,
+                            offset: None,
+                            utr3: true,
+                            special: None,
+                        },
+                    ),
+                    NaEdit::Delins {
+                        sequence: InsertedSequence::Literal("GG".parse().unwrap()),
+                        deleted: None,
+                        deleted_length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let proj = vp
+                .project_variant(&HgvsVariant::Cds(cds), "NM_MPOLYA.1")
+                .expect("minus-strand boundary-spanning c.*3_*4delinsGG must project");
+            // As in the plus-strand case, assert the axis is present on the NC
+            // contig rather than an exact coordinate (genome-frame renormalization
+            // may shuffle it); the load-bearing check is that it short-circuits.
+            let g = proj
+                .genomic
+                .as_ref()
+                .expect("boundary-spanning poly-A projection must carry a genomic axis")
+                .to_string();
+            // Pin the exact normalized interval: on the minus strand `c.*3` maps to
+            // the higher genome coordinate (g.1000, inside the exon) and `c.*4` to
+            // the lower poly-A walk coordinate (g.999), so the genome-frame interval
+            // is g.999_1000, and the inserted `GG` is reverse-complemented to `CC`.
+            // Pinning the full interval+edit catches a wrong endpoint or a missing
+            // reverse-complement that `starts_with("NC_000001.11")` would miss.
+            assert!(
+                g.contains(":g.999_1000delinsCC"),
+                "expected minus-strand boundary interval g.999_1000delinsCC, got: {g}"
+            );
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("boundary-spanning poly-A projection must carry a coding axis");
+            assert!(
+                c.to_string().contains("c.*3_*4delinsGG"),
+                "expected the input c.*3_*4delinsGG coding axis preserved, got: {c}"
+            );
+        }
+
+        /// #797 (NG/LRG fan-out): an NG_-parented poly-A `c.*` input routed
+        /// through `project_variant_all` must NOT be de-anchored to a synthetic
+        /// (off-exon) `NC_` `Genome`. The poly-A walk produces a coordinate past
+        /// the cdot exon span by construction; de-anchoring to it would seed the
+        /// fan-out stab off the transcript and lose enumeration. The de-anchor
+        /// step instead keeps the transcript-coordinate (`c.`) form for a confirmed
+        /// poly-A endpoint, so the `c.` seed path anchors to the terminal exon,
+        /// enumerates the transcript, and reaches the multi-axis short-circuit —
+        /// framing the coding axis under the NG_ parent.
+        #[test]
+        fn project_variant_all_ng_parented_polya_enumerates_under_parent() {
+            let (projector, mut provider) = make_polya_test_provider_and_projector();
+            // Place NG_POLYA.1 onto the same NC_000001.11 the poly-A fixture uses:
+            // NG base 1 == nc 1000, covering the 12-base exon core [1000,1012).
+            provider.add_genomic_placement(
+                "NG_POLYA.1",
+                crate::reference::GenomicPlacement {
+                    nc: Accession::new("NC", "000001", Some(11)),
+                    parent_start: 1,
+                    nc_start: 1000,
+                    nc_end: 1012,
+                    strand: crate::reference::Strand::Plus,
+                },
+            );
+            let vp = VariantProjector::new(projector, provider);
+
+            // NG_POLYA.1(NM_POLYA.1):c.*4del — a poly-A c.* endpoint with an NG_
+            // genomic_context.
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1").with_genomic_context(Accession::new(
+                    "NG",
+                    "POLYA",
+                    Some(1),
+                )),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let results = vp
+                .project_variant_all(&HgvsVariant::Cds(cds))
+                .expect("NG-parented poly-A c.*4del must enumerate, not de-anchor off-exon");
+            let proj = results
+                .iter()
+                .find(|p| p.transcript_id == "NM_POLYA.1")
+                .expect("NM_POLYA.1 must be enumerated for the NG-parented poly-A input");
+            // Coding axis preserved and framed under the NG_ parent.
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("NG-parented poly-A projection must carry a coding axis")
+                .to_string();
+            assert!(
+                c.starts_with("NG_POLYA.1(") && c.contains("c.*4del"),
+                "expected NG_-framed c.*4del coding axis, got: {c}"
+            );
+        }
+
+        /// #797 (fan-out): a `c.*` poly-A input routed through the
+        /// `project_variant_all` public API must enumerate its
+        /// terminal-exon-overlapping transcript rather than failing to seed
+        /// fan-out. The seed-position extraction (`extract_contig_and_pos`)
+        /// previously hard-failed on the stripped poly-A tail (`cds_to_genome`
+        /// declines); it now seeds the stab query from the 3'-terminal exon anchor
+        /// when `try_extend_polya_to_genome` confirms a genuine poly-A endpoint, so
+        /// the per-transcript projection reaches the multi-axis short-circuit.
+        #[test]
+        fn project_variant_all_polya_region_enumerates_transcript() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let projections = vp
+                .project_variant_all(&HgvsVariant::Cds(cds))
+                .expect("poly-A c.*4del must enumerate through project_variant_all");
+            assert!(
+                !projections.is_empty(),
+                "project_variant_all must enumerate the poly-A transcript, got none"
+            );
+            let proj = projections
+                .iter()
+                .find(|p| p.transcript_id == "NM_POLYA.1")
+                .expect("NM_POLYA.1 must be among the enumerated transcripts");
+            let g = proj
+                .genomic
+                .as_ref()
+                .expect("enumerated poly-A projection must carry a genomic axis");
+            assert!(
+                g.to_string().contains(":g.1012del"),
+                "expected g.1012del genomic axis from fan-out, got: {g}"
+            );
+            let c = proj
+                .coding
+                .as_ref()
+                .expect("enumerated poly-A projection must carry a coding axis");
+            assert!(
+                c.to_string().contains("c.*4del"),
+                "expected the input c.*4del coding axis preserved, got: {c}"
+            );
+        }
+
+        /// Minus-strand analogue of `make_polya_test_provider_and_projector`:
+        /// the 3'-terminal exon is the one with the smallest genome_start, and
+        /// the poly-A walk descends in genome from `genome_start - 1`.
+        fn make_minus_polya_test_provider_and_projector() -> (Projector, MockProvider) {
+            let mut cdot = CdotMapper::new();
+            cdot.add_transcript(
+                "NM_MPOLYA.1".to_string(),
+                CdotTranscript {
+                    gene_name: Some("MPOLYAGENE".to_string()),
+                    contig: "chr1".to_string(),
+                    strand: ProvStrand::Minus,
+                    // single 3'-terminal exon, genome [1000,1012), tx 0..12.
+                    exons: vec![[1000, 1012, 0, 12]],
+                    cds_start: Some(3),
+                    cds_end: Some(9),
+                    gene_id: None,
+                    protein: Some("NP_MPOLYA.1".to_string()),
+                    exon_cigars: Vec::new(),
+                },
+            );
+            let projector = Projector::new(cdot);
+            let mut provider = MockProvider::new();
+            // 15-base transcript incl. 3-base poly-A tail (tx 12..15).
+            provider.add_transcript(Transcript {
+                id: "NM_MPOLYA.1".to_string(),
+                gene_symbol: Some("MPOLYAGENE".to_string()),
+                strand: TxStrand::Minus,
+                sequence: Some("TTTATGCGCGTAAAA".to_string()), // 15 bases
+                cds_start: Some(4),
+                cds_end: Some(9),
+                exons: vec![Exon::with_genomic(1, 1, 12, 1000, 1011)],
+                chromosome: Some("chr1".to_string()),
+                genomic_start: Some(1000),
+                genomic_end: Some(1011),
+                genome_build: Default::default(),
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+                protein_id: Some("NP_MPOLYA.1".to_string()),
+            });
+            // Same non-repeating backbone as the plus fixture, registered under
+            // both `chr1` (cdot contig) and the `NC_000001.11` output accession so
+            // genomic-frame renormalization can fetch bases around the minus-strand
+            // walk targets (g.999 / g.998) without falling back (#797 review).
+            let genomic = polya_genomic_sequence();
+            provider.add_genomic_sequence("chr1", genomic.clone());
+            provider.add_genomic_sequence("NC_000001.11", genomic);
+            (projector, provider)
+        }
+
+        /// Minus-strand poly-A walk: c.*4 = tx 12 → genome_start(1000) - 1 = 999.
+        #[test]
+        fn project_to_genomic_minus_polya_region_walks_downstream() {
+            let (projector, provider) = make_minus_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MPOLYA.1"),
+                gene_symbol: Some("MPOLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("minus-strand c.*4del (poly-A region) should project");
+            let s = match out {
+                HgvsVariant::Genome(ref g) => g.to_string(),
+                _ => panic!("expected Genome variant"),
+            };
+            assert!(
+                s.contains(":g.999del"),
+                "expected g.999del for minus-strand c.*4del, got: {s}"
+            );
+        }
+
+        /// Minus-strand poly-A walk with a downstream offset: c.*4+1 = tx 13 →
+        /// genome 998 (one base further downstream on the minus strand).
+        #[test]
+        fn project_to_genomic_minus_polya_region_with_offset_folds_linearly() {
+            let (projector, provider) = make_minus_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_MPOLYA.1"),
+                gene_symbol: Some("MPOLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 4,
+                        offset: Some(1),
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let out = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect("minus-strand c.*4+1del should project");
+            let s = match out {
+                HgvsVariant::Genome(ref g) => g.to_string(),
+                _ => panic!("expected Genome variant"),
+            };
+            assert!(
+                s.contains(":g.998del"),
+                "expected g.998del for minus-strand c.*4+1del, got: {s}"
+            );
+        }
+
+        /// A `c.*` position at/past the TRUE transcript end (beyond the poly-A
+        /// tail) declines cleanly — never walks into non-transcript genome.
+        /// c.*7 = tx 15 = true_tx_length → decline.
+        #[test]
+        fn project_to_genomic_beyond_polya_tail_declines() {
+            let (projector, provider) = make_polya_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let cds = CdsVariant {
+                accession: parse_accession("NM_POLYA.1"),
+                gene_symbol: Some("POLYAGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos {
+                        base: 7,
+                        offset: None,
+                        utr3: true,
+                        special: None,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let cds = attach_genomic_context_cds(cds, nc_parent());
+            let err = vp
+                .project_to_genomic(&HgvsVariant::Cds(cds))
+                .expect_err("c.*7del is past the transcript end; must decline");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("Cannot map tx position") || msg.contains("15"),
+                "expected a clean tx-mapping decline for c.*7del, got: {msg}"
             );
         }
 

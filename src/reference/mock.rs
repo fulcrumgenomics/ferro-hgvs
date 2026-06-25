@@ -607,10 +607,38 @@ impl ReferenceProvider for MockProvider {
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
-        self.genomic_sequences
-            .get(id)
-            .map(|s| s.len() as u64)
-            .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })
+        // Mirror the routing of `get_sequence` (and the real
+        // `MultiFastaProvider`, which serves a length for any indexed sequence —
+        // genomic *or* transcript). Tests that need a transcript's true length
+        // (e.g. the #797 poly-A walk) rely on the transcript fallback; without
+        // it Mock returns `ReferenceNotFound` for a transcript id and diverges
+        // from the production contract.
+        //
+        // 1. A known contig resolves strictly against `genomic_sequences`,
+        //    mirroring `get_sequence`, which returns from the contig branch
+        //    immediately. Without the early error a known contig with no loaded
+        //    genomic sequence would fall through to the transcript lookup below
+        //    and could return a transcript length for an ambiguous contig id.
+        if self.is_known_contig(id) {
+            if let Some(s) = self.genomic_sequences.get(id) {
+                return Ok(s.len() as u64);
+            }
+            return Err(FerroError::ReferenceNotFound { id: id.to_string() });
+        }
+        // 2. Otherwise treat it as a transcript accession, via `get_transcript`
+        //    so the unversioned-fallback / version-substitution paths apply
+        //    exactly as in `get_sequence`.
+        if let Ok(tx) = self.get_transcript(id) {
+            if let Some(seq) = &tx.sequence {
+                return Ok(seq.len() as u64);
+            }
+        }
+        // 3. Fall through to a direct genomic lookup (a genomic accession that
+        //    is not flagged as a known contig).
+        if let Some(s) = self.genomic_sequences.get(id) {
+            return Ok(s.len() as u64);
+        }
+        Err(FerroError::ReferenceNotFound { id: id.to_string() })
     }
 
     fn has_transcript_version_exact(&self, id: &str) -> bool {
