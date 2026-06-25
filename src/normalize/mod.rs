@@ -600,14 +600,17 @@ fn boundary_has_intronic<T>(
 /// reference** (no `NG_(…)`/`NC_(…)` genomic context). Returns the warning
 /// to emit, or `None`.
 ///
-/// In scope: a bare coding transcript (`NM_`/`XM_`) used with `c.` and a bare
-/// non-coding transcript (`NR_`/`XR_`, via `is_noncoding_rna()`) used with
-/// `n.`, with `Accession.genomic_context == None`. The spec's "a (non-)coding
-/// DNA reference sequence does not contain introns" rule applies equally to
-/// curated (`NM_`/`NR_`) and predicted (`XM_`/`XR_`) transcripts, so both are
-/// covered on each axis. Out of scope: genomic-context forms
-/// (`genomic_context: Some`), `NG_`/`NC_` references (which never reach the
-/// c./n. transcript path), LRG, Ensembl `ENST`, and the r. axis. Both `Single`
+/// In scope: a bare coding transcript (`NM_`/`XM_` or LRG `LRG_<N>t<k>`) used
+/// with `c.` and a bare non-coding transcript (`NR_`/`XR_` via
+/// `is_noncoding_rna()`, or LRG) used with `n.`, with
+/// `Accession.genomic_context == None`. The spec's "a (non-)coding DNA
+/// reference sequence does not contain introns" rule applies equally to curated
+/// (`NM_`/`NR_`), predicted (`XM_`/`XR_`), and LRG transcript references — an
+/// LRG transcript is itself a bare reference with no `NG_`/`NC_` genomic
+/// context — so all are covered on each axis (#834). Out of scope:
+/// genomic-context forms (`genomic_context: Some`), `NG_`/`NC_` references
+/// (which never reach the c./n. transcript path), Ensembl `ENST`, and the r.
+/// axis. Both `Single`
 /// and `Range` (uncertain-breakpoint) position boundaries are inspected; an
 /// unknown (`?`) offset still counts as intronic (`CdsPos::is_intronic` treats
 /// the unknown-offset sentinel as intronic), which is correct — it is an
@@ -615,8 +618,15 @@ fn boundary_has_intronic<T>(
 fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<NormalizationWarning> {
     match variant {
         HV::Cds(v) => {
-            if !matches!(&*v.accession.prefix, "NM" | "XM") || v.accession.genomic_context.is_some()
-            {
+            // A bare coding-DNA reference does not contain introns, so an
+            // intronic offset on it is a spec-invalid form regardless of which
+            // transcript namespace addresses it. Curated/predicted RefSeq
+            // (`NM_`/`XM_`) and LRG transcript references (`LRG_<N>t<k>`, which
+            // carry no `NG_`/`NC_` genomic context — the LRG *is* the reference)
+            // are all bare coding transcripts; treat them uniformly (#834).
+            let is_bare_coding_transcript =
+                matches!(&*v.accession.prefix, "NM" | "XM") || v.accession.is_lrg();
+            if !is_bare_coding_transcript || v.accession.genomic_context.is_some() {
                 return None;
             }
             let intronic = boundary_has_intronic(&v.loc_edit.location.start, CdsPos::is_intronic)
@@ -627,7 +637,12 @@ fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<Normaliz
             })
         }
         HV::Tx(v) => {
-            if !v.accession.is_noncoding_rna() || v.accession.genomic_context.is_some() {
+            // Same rule on the non-coding axis: a bare `NR_`/`XR_` or LRG
+            // non-coding transcript reference used with `n.` has no introns
+            // (#834 extends the LRG coverage to match the `c.` arm).
+            let is_bare_noncoding_transcript =
+                v.accession.is_noncoding_rna() || v.accession.is_lrg();
+            if !is_bare_noncoding_transcript || v.accession.genomic_context.is_some() {
                 return None;
             }
             let intronic = boundary_has_intronic(&v.loc_edit.location.start, TxPos::is_intronic)
@@ -10898,6 +10913,56 @@ mod eintronic_helper_tests {
         // the spec-valid description — no warning.
         let v =
             parse_hgvs("NG_012337.1(NM_004006.2):c.(4185+1_4186-1)_(4357+1_4358-1)del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
+    }
+
+    #[test]
+    fn bare_lrg_coding_intronic_yields_warning() {
+        // #834: an LRG transcript (`LRG_<N>t<k>`) is a bare coding reference
+        // with no NG_/NC_ genomic context — same "no introns on a coding
+        // reference" property as NM_, so a bare intronic c. form is spec-invalid
+        // and must warn, exactly like its NM-addressed equivalent.
+        let v = parse_hgvs("LRG_741t1:c.7007+30del").unwrap();
+        let w = intronic_on_bare_transcript_warning(&v).expect("bare LRG intronic must warn");
+        assert_eq!(w.code(), "INTRONIC_ON_BARE_TRANSCRIPT");
+    }
+
+    #[test]
+    fn bare_lrg_coding_minus_offset_intronic_yields_warning() {
+        // Offset-sign-agnostic, matching the NM behavior.
+        let v = parse_hgvs("LRG_763t1:c.53-6del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn bare_lrg_coding_exonic_no_warning() {
+        // A purely exonic LRG c. variant is a valid form — no warning.
+        let v = parse_hgvs("LRG_741t1:c.7007del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_none());
+    }
+
+    #[test]
+    fn bare_lrg_noncoding_intronic_yields_warning() {
+        // #834: the `HV::Tx` (`n.`) arm was widened to treat an LRG transcript
+        // as a bare non-coding reference, exactly like `NR_`/`XR_`. An LRG
+        // `n.<pos>+<offset>` intronic form has no introns on its bare reference,
+        // so it must warn just like the `NR_` form above.
+        let v = parse_hgvs("LRG_741t1:n.100+10del").unwrap();
+        let w = intronic_on_bare_transcript_warning(&v).expect("bare LRG n. intronic must warn");
+        assert_eq!(w.code(), "INTRONIC_ON_BARE_TRANSCRIPT");
+    }
+
+    #[test]
+    fn bare_lrg_noncoding_minus_offset_intronic_yields_warning() {
+        // Offset-sign-agnostic on the `n.` axis too, matching the `NR_` behavior.
+        let v = parse_hgvs("LRG_741t1:n.100-6del").unwrap();
+        assert!(intronic_on_bare_transcript_warning(&v).is_some());
+    }
+
+    #[test]
+    fn bare_lrg_noncoding_exonic_no_warning() {
+        // A purely exonic LRG n. variant is a valid form — no warning.
+        let v = parse_hgvs("LRG_741t1:n.100del").unwrap();
         assert!(intronic_on_bare_transcript_warning(&v).is_none());
     }
 }

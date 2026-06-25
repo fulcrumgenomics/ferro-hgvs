@@ -11,7 +11,9 @@ use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer, ShuffleD
 /// Shared helpers for integration tests that require benchmark reference data.
 #[cfg(test)]
 mod integration_helpers {
-    use ferro_hgvs::{parse_hgvs, FerroError, MultiFastaProvider, Normalizer};
+    use ferro_hgvs::error_handling::ErrorMode;
+    use ferro_hgvs::normalize::NormalizationWarning;
+    use ferro_hgvs::{parse_hgvs, FerroError, MultiFastaProvider, NormalizeConfig, Normalizer};
     use std::path::Path;
 
     pub fn create_normalizer() -> Option<Normalizer<MultiFastaProvider>> {
@@ -21,6 +23,71 @@ mod integration_helpers {
         }
         let provider = MultiFastaProvider::from_manifest(ref_path).ok()?;
         Some(Normalizer::new(provider))
+    }
+
+    /// Build a `MultiFastaProvider`-backed normalizer in a given error mode,
+    /// panicking (rather than silently skipping) if the prepared reference is
+    /// absent — these helpers are only reached from `#[ignore]`d tests, so a
+    /// missing reference is a setup error, not an expected skip.
+    fn create_normalizer_with_mode(mode: ErrorMode) -> Normalizer<MultiFastaProvider> {
+        let ref_path = Path::new("benchmark-output/manifest.json");
+        let provider = MultiFastaProvider::from_manifest(ref_path).unwrap_or_else(|e| {
+            panic!(
+                "prepared reference required (symlink benchmark-output/ to a prepared ref); \
+                 these tests are #[ignore]d and must be run with --ignored + reference: {e:?}"
+            )
+        });
+        Normalizer::with_config(provider, NormalizeConfig::default().with_error_mode(mode))
+    }
+
+    /// Assert the full lenient-vs-strict W4007/EINTRONIC contract for a bare-LRG
+    /// intronic input whose genomic intronic conversion declines (Bucket C in
+    /// `#834`). Beyond `assert_normalizes_to`'s identity + idempotency check
+    /// (which alone cannot distinguish intended lenient recovery from an
+    /// accidental no-op success), this pins both axes of the contract:
+    ///
+    /// 1. **Lenient (default):** the input echoes verbatim *and* carries an
+    ///    `IntronicOnBareTranscript` (`INTRONIC_ON_BARE_TRANSCRIPT` / W4007)
+    ///    diagnostic — proving the echo is the deliberate lenient recovery, not
+    ///    a silent pass-through.
+    /// 2. **Strict:** the same input is rejected with `FerroError::IntronicVariant`
+    ///    (the EINTRONIC promotion of W4007), proving the form is genuinely
+    ///    spec-invalid rather than merely unshifted.
+    ///
+    /// This mirrors the contract the NM-addressed equivalents satisfy (`#834`).
+    pub fn assert_intronic_bare_transcript_echo(input: &str) {
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
+
+        // 1. Lenient: echoes the input AND emits the W4007 diagnostic.
+        let lenient = create_normalizer_with_mode(ErrorMode::Lenient);
+        let outcome = lenient
+            .normalize_with_diagnostics(&variant)
+            .unwrap_or_else(|e| panic!("lenient normalize failed for {input}: {e:?}"));
+        assert_eq!(
+            format!("{}", outcome.result),
+            input,
+            "lenient recovery must echo the input verbatim for {input}"
+        );
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::IntronicOnBareTranscript { .. })),
+            "lenient recovery for {input} must emit INTRONIC_ON_BARE_TRANSCRIPT (W4007); \
+             got warnings: {:?}",
+            outcome.warnings
+        );
+
+        // 2. Strict: the same form is rejected as EINTRONIC.
+        let strict = create_normalizer_with_mode(ErrorMode::Strict);
+        let err = strict.normalize(&variant).err().unwrap_or_else(|| {
+            panic!("strict mode must reject bare intronic transcript {input}, but it succeeded")
+        });
+        assert!(
+            matches!(err, FerroError::IntronicVariant { .. }),
+            "strict mode must reject {input} as IntronicVariant (EINTRONIC), got {err:?}"
+        );
     }
 
     pub fn try_normalize(input: &str) -> Option<String> {
@@ -82,21 +149,6 @@ mod integration_helpers {
             expected,
             "normalization is not idempotent for {input}: {normalized} re-normalizes to {renormalized}"
         );
-    }
-
-    /// Normalize `input` and return the `FerroError` it fails with (panicking if
-    /// it unexpectedly succeeds). Used by the Bucket C residual cases to pin the
-    /// exact current decline.
-    pub fn normalize_expect_err(input: &str) -> FerroError {
-        let normalizer = create_normalizer().unwrap_or_else(|| {
-            panic!("prepared reference required; run #[ignore]d tests with --ignored + reference")
-        });
-        let variant =
-            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
-        match normalizer.normalize(&variant) {
-            Ok(n) => panic!("expected {input} to fail conversion, but it normalized to {n}"),
-            Err(e) => e,
-        }
     }
 }
 
@@ -4285,11 +4337,16 @@ mod comprehensive_normalization_tests {
 //     transcripts are served from the transcript FASTA, so cdot-synthesis (the
 //     only E2005 emitter) is never invoked. The apply/decline split is covered
 //     by the synthesis unit tests in `src/reference/multi_fasta.rs`.
-//   - Bucket C (7 cases): residual LRG-addressed-path failures (`ConversionFailed`)
-//     where the NM-addressed equivalent succeeds (LRG->genomic mapping gap), plus
-//     LRG_720t1 (no genomic alignment). #807 did not address this shape; these
-//     assert the exact current decline and are tracked in #811 (see
-//     `lrg_intronic_still_unsupported`).
+//   - Bucket C (0 cases, resolved by #834): the 7 LRG-addressed cases that
+//     formerly declined (`ConversionFailed`) where their NM-addressed
+//     equivalent appeared to succeed. The asymmetry was solely that the
+//     EINTRONIC / W4007 bare-transcript handling did not treat LRG transcripts
+//     as bare references. #834 fixed that, so all 7 now behave identically to
+//     their NM equivalents and have moved into `lrg_intronic_normalization`
+//     (asserting identity, mirroring the NM oracle). The two LRG_720t1 cases
+//     are included: their NM equivalent NM_000280.3 also lacks a genomic
+//     alignment and likewise echoes via the lenient W4007 recovery, so there is
+//     no LRG/NM distinction left to track.
 //
 // All of these need the prepared reference and so are `#[ignore]`d (not silently
 // skipped) — matching this file's `real_repeat_tests` / `ferro_mutalyzer_differences`
@@ -4495,19 +4552,35 @@ mod version_mismatch_normalization {
 
 #[cfg(test)]
 mod lrg_intronic_normalization {
-    use super::integration_helpers::assert_normalizes_to;
+    use super::integration_helpers::{assert_intronic_bare_transcript_echo, assert_normalizes_to};
     use rstest::rstest;
 
     // =========================================================================
-    // LRG transcripts (Bucket A subset): these LRG-addressed intronic variants
-    // resolve and normalize with #807. Each asserts the exact normalized
-    // string; a few renormalize to the canonical upstream span (e.g.
-    // `LRG_486t1:c.-234-1616_-234-235del1382` -> `c.-1850_-469del`).
+    // LRG-addressed intronic variants. An LRG transcript (`LRG_<N>t<k>`) is a
+    // bare transcript reference with no `NG_`/`NC_` genomic context, exactly
+    // like a bare `NM_`/`XM_`/`NR_`/`XR_` reference. #834 made the EINTRONIC /
+    // W4007 (`IntronicOnBareTranscript`) handling treat LRG transcripts
+    // uniformly with RefSeq, so an LRG-addressed intronic variant now behaves
+    // identically to its NM-addressed equivalent in every error mode:
+    //   - genuinely resolvable cases 3'-shift / re-anchor (e.g.
+    //     `LRG_311t1:c.80+1del` -> `c.79+1del`, mirroring
+    //     `NM_000314.4:c.80+1del` -> `c.79+1del`) — `test_lrg_intronic_normalizes_ok`;
+    //   - cases whose genomic intronic conversion declines instead echo the
+    //     input verbatim under the lenient W4007 recovery, again mirroring the
+    //     NM equivalent (the seven previously in `lrg_intronic_still_unsupported`)
+    //     — `test_lrg_intronic_bare_transcript_echo`, which pins the full
+    //     lenient-echo-with-W4007 / strict-EINTRONIC-rejection contract rather
+    //     than identity alone.
     //
-    // The 7 LRG cases that still fail are in `lrg_intronic_still_unsupported`.
+    // The genuinely-resolving cases assert the exact normalized string under the
+    // default (lenient) normalizer used by `assert_normalizes_to`, plus
+    // idempotency. The asserted value is the SAME string the NM-addressed
+    // equivalent produces — that NM output is the independent oracle for the
+    // expected LRG output (#834).
     // =========================================================================
 
     #[rstest]
+    // ---- Genuinely-resolving LRG intronic variants (3'-shift / re-anchor). ----
     // LRG_741t1 → NM_015120.4 (CIGAR-affected)
     #[case(
         "LRG_741t1:c.10078+1_10078+5delinsAAAAACCCTTGCAGAATGAAAA",
@@ -4525,60 +4598,34 @@ mod lrg_intronic_normalization {
     // LRG_311t1 → NM_000314.4
     #[case("LRG_311t1:c.-1032-222_-366del889", "LRG_311t1:c.-1254_-366del")]
     #[case("LRG_311t1:c.80+1del", "LRG_311t1:c.79+1del")]
-    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #811"]
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #834"]
     fn test_lrg_intronic_normalizes_ok(#[case] input: &str, #[case] expected: &str) {
         assert_normalizes_to(input, expected);
     }
-}
 
-#[cfg(test)]
-mod lrg_intronic_still_unsupported {
-    use super::integration_helpers::normalize_expect_err;
-    use ferro_hgvs::error::ErrorCode;
-    use ferro_hgvs::FerroError;
-    use rstest::rstest;
-
-    // =========================================================================
-    // Bucket C (issue #811, residual): LRG-addressed intronic variants that
-    // still fail with `ConversionFailed` even after #807. This is NOT a clean
-    // E2005 decline — for several of these the identical variant addressed via
-    // the NM_ accession succeeds (see the version_mismatch_normalization and
-    // cigar_aware_normalization modules), so the gap is in the LRG→genomic
-    // mapping path, not in resolving the intronic offset itself. The two
-    // LRG_720t1 cases are a distinct missing-genomic-alignment failure.
+    // ---- Previously declining (Bucket C); #834 makes them echo identity, ----
+    // ---- mirroring their NM-addressed equivalents (the oracle). Each NM ----
+    // ---- equivalent itself only echoes via the same lenient W4007 recovery, ----
+    // ---- because its intronic genomic conversion also declines — including ----
+    // ---- LRG_720t1 → NM_000280.3, whose NM equivalent likewise lacks a ----
+    // ---- genomic alignment (chromosome=None) and echoes via recovery. ----
     //
-    // These assert the EXACT current decline so the residual gap is tracked and
-    // a future fix that starts resolving them is forced to update this test
-    // (moving the case into the OK module) rather than silently passing.
-    //
-    // Residual shape — tracked follow-up: LRG-addressed intronic normalization
-    // fails (ConversionFailed) where the NM-addressed equivalent succeeds, plus
-    // LRG_720t1 lacking any genomic alignment.
-    // =========================================================================
-
+    // These cannot use `assert_normalizes_to`: identity + idempotency alone
+    // cannot tell intended lenient W4007 recovery from an accidental no-op
+    // success. `assert_intronic_bare_transcript_echo` pins both axes — lenient
+    // echo *with* the INTRONIC_ON_BARE_TRANSCRIPT diagnostic, and strict-mode
+    // EINTRONIC rejection (#834).
     #[rstest]
-    // NM-addressed equivalents succeed; only the LRG-addressed path fails.
-    #[case("LRG_741t1:c.7007+30del")] // cf. NM_015120.4:c.7007+30del (OK)
-    #[case("LRG_763t1:c.52+1del")] // cf. NM_002111.8:c.52+1del (OK)
-    #[case("LRG_763t1:c.53-6del")] // cf. NM_002111.8:c.53-6del (OK)
+    #[case("LRG_741t1:c.7007+30del")] // cf. NM_015120.4:c.7007+30del
+    #[case("LRG_763t1:c.52+1del")] // cf. NM_002111.8:c.52+1del
+    #[case("LRG_763t1:c.53-6del")] // cf. NM_002111.8:c.53-6del
     #[case("LRG_293t1:c.1-59_1-57del")] // BRCA2 5'-UTR intronic
-    #[case("LRG_486t1:c.1000+5del")]
-    // cf. NM_000368.4:c.1000+5del (OK)
-    // LRG_720t1 → NM_000280.3: no genomic alignment on any known build.
-    #[case("LRG_720t1:c.1183+4dup")]
-    #[case("LRG_720t1:c.1327+4del")]
-    #[ignore = "residual LRG-addressed intronic gap (Bucket C) — run with --ignored; tracked in #811"]
-    fn test_lrg_intronic_still_declines(#[case] input: &str) {
-        let err = normalize_expect_err(input);
-        assert!(
-            matches!(err, FerroError::ConversionError { .. }),
-            "expected a ConversionError (E5001) for residual LRG case {input}, got {err:?}"
-        );
-        assert_eq!(
-            err.code(),
-            Some(ErrorCode::ConversionFailed),
-            "expected E5001 (ConversionFailed) for residual LRG case {input}, got {err:?}"
-        );
+    #[case("LRG_486t1:c.1000+5del")] // cf. NM_000368.4:c.1000+5del
+    #[case("LRG_720t1:c.1183+4dup")] // cf. NM_000280.3:c.1183+4dup
+    #[case("LRG_720t1:c.1327+4del")] // cf. NM_000280.3:c.1327+4del
+    #[ignore = "requires prepared reference (benchmark-output/) — run with --ignored; tracked in #834"]
+    fn test_lrg_intronic_bare_transcript_echo(#[case] input: &str) {
+        assert_intronic_bare_transcript_echo(input);
     }
 }
 
