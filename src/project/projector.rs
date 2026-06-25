@@ -139,6 +139,121 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .map(|gc| gc.to_string())
     }
 
+    /// The build-bearing genomic accession to stamp as `genomic_context` when
+    /// fetching a transcript for [`crate::project::rna::predict_rna`], so the
+    /// fetch partitions by genome build the same way the single genome-pivot
+    /// path does via its parallel `cache_variant` (#843).
+    ///
+    /// `predict_rna` reads the transcript *sequence* (e.g. to 3'-shift a
+    /// deletion or resolve a range insert), so the served bases must come from
+    /// the build the `input` is addressed on — a `g.` allele on `NC_*.10`
+    /// (GRCh37) must read the GRCh37 transcript, not the GRCh38 primary. The
+    /// raw `cached_get_transcript_for_variant(input, …)` keys on
+    /// [`Self::parent_key_for`], which is `None` for a bare `g.` input (its
+    /// build-bearing `NC_*` accession lives in `accession`, not
+    /// `genomic_context`), collapsing both builds onto the primary transcript.
+    ///
+    /// Resolution order, mirroring the genome-pivot path's build selection:
+    /// 1. If `input`'s accession already carries a `genomic_context` (an
+    ///    NG/NC-parented c./n./r. input), reuse it — that context already
+    ///    drives the correct build probe, so the cache identity is unchanged
+    ///    (a no-op for the existing NG-parented corpus cases).
+    /// 2. Else, if `input`'s own accession is a build-bearing genomic
+    ///    accession (a `g.` on `NC_*.10`/`.11`), use the accession itself as
+    ///    the context — the new build-scoping for bare `g.` inputs.
+    /// 3. Else (truly build-agnostic — bare `NM_`/`NG_`/`LRG_`), `None`: the
+    ///    primary-build fetch is the only defined answer and no divergence is
+    ///    possible, so behavior is unchanged.
+    ///
+    /// The [`Self::assembly_override`] (`--assembly`) is deliberately *not*
+    /// consulted here. It only `fills in` a build for a build-agnostic
+    /// `NG_`/`LRG_` parent, and such a parent's transcript bases are
+    /// build-independent: RefSeqGene/`LRG_` transcripts are served from the
+    /// build-agnostic transcript FASTA, so `predict_rna` (which reads the
+    /// transcript *sequence*) produces identical output under either build. The
+    /// override changes only the genomic *placement* (the `.genomic` re-anchor),
+    /// which the genome-pivot path handles separately via its build-resolved
+    /// `cache_variant`. Folding the override in here would stamp a build the
+    /// fetch cannot observably honor (no per-build NG transcript bases exist) —
+    /// a no-op that no test could exercise — so it is intentionally omitted.
+    fn rna_build_context(&self, input: &HgvsVariant) -> Option<Accession> {
+        let accession = input.accession()?;
+        if let Some(parent) = accession.genomic_context.as_deref() {
+            return Some(parent.clone());
+        }
+        // Reached only when `accession.genomic_context` is None (step 1 returned
+        // early otherwise), so the accession is already bare — a build-bearing
+        // genomic accession (a `g.` on `NC_*.10`/`.11`) is used directly as the
+        // context to stamp.
+        if self.provider.infer_genome_build(accession).is_some() {
+            return Some(accession.clone());
+        }
+        None
+    }
+
+    /// Fetch the transcript for a `predict_rna` call, build-scoped by `input`
+    /// (#843). Builds a minimal `cache_variant` that stamps the build-bearing
+    /// genomic accession from [`Self::rna_build_context`] as `genomic_context`
+    /// on `transcript_id`, then resolves through the parent-aware
+    /// [`Self::cached_get_transcript_for_variant`] so the transcript/ref caches
+    /// partition by build — exactly the mechanism the single genome-pivot path
+    /// uses (`cache_variant` at the `predict_rna` site). When no build-bearing
+    /// context is derivable the cache_variant is bare and the fetch is the
+    /// (unchanged) primary-build lookup.
+    ///
+    /// `predict_rna` walks the transcript *bases*, so unlike the coding/protein
+    /// axes (which read build-identical CDS coordinates) it must not run against
+    /// another build's sequence. The build-stamped fetch above resolves the
+    /// correct build when the provider has it, but the parent-aware cache it
+    /// shares with the g.→c./n. fetch can hold a build-agnostic *primary*
+    /// transcript that the provider degraded to on a build-keyed miss (the
+    /// `ReferenceNotFound` fallback in `cached_get_transcript_for_variant`).
+    /// Serving that for a non-primary input would emit a wrong-build `r.` (#843),
+    /// so when the input encodes a build, require the resolved transcript's build
+    /// to match it; a *definite* mismatch (a known, different build) declines
+    /// rather than predicting against the wrong bases. A build-agnostic
+    /// transcript (`GenomeBuild::Unknown`, e.g. FASTA-served bases that are
+    /// build-independent) is accepted — there is no divergence to get wrong.
+    fn predict_rna_transcript(
+        &self,
+        input: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        let mut accession = parse_accession(transcript_id);
+        if let Some(context) = self.rna_build_context(input) {
+            accession = accession.with_genomic_context(context);
+        }
+        // A minimal Cds carrier: `cached_get_transcript_for_variant` only reads
+        // `accession()` (for the parent key and the build-aware provider probe),
+        // so the location/edit are immaterial.
+        let cache_variant = HgvsVariant::Cds(CdsVariant {
+            accession,
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(1)),
+                NaEdit::Substitution {
+                    reference: crate::hgvs::edit::Base::A,
+                    alternative: crate::hgvs::edit::Base::G,
+                },
+            ),
+        });
+        let tx = self.cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
+        if let Some(input_build) = self.infer_input_build(input) {
+            let tx_build = tx.genome_build;
+            if tx_build != crate::reference::transcript::GenomeBuild::Unknown
+                && tx_build.to_string() != input_build
+            {
+                return Err(FerroError::ReferenceNotFound {
+                    id: format!(
+                        "{transcript_id} on build {input_build}: resolved transcript is \
+                         build {tx_build} (refusing to predict r. against wrong-build bases)"
+                    ),
+                });
+            }
+        }
+        Ok(tx)
+    }
+
     /// Reject parentless c./n./r. fan-out inputs up front.
     ///
     /// `project_normalized_all` seeds a stab query against the contig
@@ -2127,8 +2242,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // — `predict_rna` handles the `Allele` shape directly, emitting one
         // outer predicted wrapper `r.([a;b])` (recommendations/RNA/alleles.md).
         // Re-frame under the input's parent so it matches the input framing.
+        // Build-scope the transcript fetch by the input's NC/NG build (#843):
+        // for a bare `g.` allele the member NC accession is build-bearing but
+        // unparented, so a raw `cached_get_transcript_for_variant(original, …)`
+        // would read the primary (GRCh38) transcript even for a GRCh37 input,
+        // yielding a wrong-build `r.`. `predict_rna_transcript` stamps the
+        // build-bearing accession as `genomic_context` first, mirroring the
+        // single genome-pivot path's `cache_variant`.
         let rna = coding.as_ref().and_then(|coding_allele| {
-            self.cached_get_transcript_for_variant(original, transcript_id)
+            self.predict_rna_transcript(original, transcript_id)
                 .ok()
                 .and_then(|tx| crate::project::rna::predict_rna(coding_allele, &tx))
         });
@@ -2553,8 +2675,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             Err(_) => None,
         };
 
+        // Build-scope the `predict_rna` transcript fetch via the shared helper
+        // for consistency with the allele site and the genome-pivot path (#843).
+        // NOTE: this site is reached ONLY for a bare-`NM_` c. input
+        // (`genomic_context.is_none()` gates the dispatch above), which carries no
+        // genome build at all — so `rna_build_context` returns `None` and the
+        // fetch is byte-identical to the prior build-agnostic lookup. The change
+        // is therefore a deliberate latent no-op here: it makes every
+        // `predict_rna` fetch flow through one build-aware helper, so a future
+        // build-bearing input reaching this path would be scoped automatically
+        // rather than silently reading the primary build. (The reachable
+        // build-scoping fix is at the allele site.)
         let rna = self
-            .cached_get_transcript_for_variant(normalized, transcript_id)
+            .predict_rna_transcript(normalized, transcript_id)
             .ok()
             .and_then(|tx| crate::project::rna::predict_rna(normalized, &tx));
         let rna = Self::reframe_rna_from_input(rna, normalized);
@@ -8990,6 +9123,297 @@ mod tests {
                 s.contains(":c.5A>T"),
                 "expected c.5A>T from the GRCh38-discovered projection, got: {}",
                 s
+            );
+        }
+
+        // ---------------------------------------------------------------------
+        // Predicted-RNA allele build-scoping (#843)
+        //
+        // The predicted `r.` allele in `project_allele_inner` fetches the
+        // transcript for `predict_rna` via the input. For a bare `g.` allele the
+        // member `NC_*` accession is build-bearing but carries no
+        // `genomic_context`, so before #843 the fetch resolved the primary-build
+        // transcript regardless of build — and `predict_rna`'s deletion 3'-shift
+        // (which walks the transcript *sequence*) then ran against the wrong
+        // build's bases, emitting a wrong-build `r.`. These tests model a
+        // transcript whose GRCh37 vs GRCh38 bases differ at a deletion-shift
+        // boundary (the real divergence a genome-reconstructed transcript shows;
+        // FASTA-backed transcripts serve build-identical bases) and assert the
+        // allele `r.` is now build-correct.
+        // ---------------------------------------------------------------------
+
+        /// A 30 nt single-exon coding fixture whose GRCh37 and GRCh38 transcript
+        /// *bases* differ only in the length of a poly-A run starting at c.5:
+        /// GRCh37 runs `A` over c.5..7 (blocked by `C` at c.8); GRCh38 runs `A`
+        /// over c.5..9 (blocked by `C` at c.10). A `c.5del` (deleting an `A`)
+        /// therefore 3'-shifts to `r.(7del)` on GRCh37 but `r.(9del)` on GRCh38
+        /// — a clean, build-dependent predicted-RNA output. The genome contigs
+        /// differ per build (`NC_000001.10` [10000,10030) GRCh37 /
+        /// `NC_000001.11` [20000,20030) GRCh38), so a `g.` input's build is
+        /// inferred from its `NC_*` version.
+        fn make_rna_divergence_projector() -> VariantProjector<MockProvider> {
+            make_rna_divergence_projector_inner(true)
+        }
+
+        /// Variant of [`make_rna_divergence_projector`] that omits the GRCh37
+        /// build-keyed transcript record, leaving only the GRCh38 build-keyed
+        /// record plus the build-agnostic primary. A GRCh37 `g.` input therefore
+        /// *misses* the build-keyed lookup (the mock surfaces `ReferenceNotFound`
+        /// for the partial setup), modeling a transcript whose sequence is present
+        /// only in the primary build's data.
+        fn make_rna_divergence_projector_grch38_keyed_only() -> VariantProjector<MockProvider> {
+            make_rna_divergence_projector_inner(false)
+        }
+
+        fn make_rna_divergence_projector_inner(
+            register_grch37_keyed: bool,
+        ) -> VariantProjector<MockProvider> {
+            use crate::reference::transcript::{
+                Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
+                Transcript as RefTranscript,
+            };
+            use std::sync::OnceLock;
+
+            let cdot_json = r#"
+            {
+                "transcripts": {
+                    "NM_RNA_DIV.1": {
+                        "gene_name": "RNADIV",
+                        "genome_builds": {
+                            "GRCh37": {
+                                "contig": "NC_000001.10",
+                                "strand": "+",
+                                "exons": [[10000, 10030, 1, 0, 30, "M30"]]
+                            },
+                            "GRCh38": {
+                                "contig": "NC_000001.11",
+                                "strand": "+",
+                                "exons": [[20000, 20030, 1, 0, 30, "M30"]]
+                            }
+                        },
+                        "start_codon": 0,
+                        "stop_codon": 30
+                    }
+                }
+            }
+            "#;
+            // c.:  1 2 3 4 5 6 7 8 9 ...                      (1-based)
+            // 37:  G G C G A A A C T ...   poly-A c.5..7, C at c.8
+            // 38:  G G C G A A A A A C ... poly-A c.5..9, C at c.10
+            // The deletion projects to c.5 (a poly-A base on BOTH builds), so the
+            // g.→c. step is build-identical; only the run length downstream — and
+            // thus the predicted `r.` 3'-shift target — differs: GRCh37 shifts to
+            // c.7 (`r.(7del)`), GRCh38 to c.9 (`r.(9del)`).
+            let seq37 = "GGCGAAACTTTTTTTTTTTTTTTTTTTTTT"; // len 30
+            let seq38full = "GGCGAAAAACTTTTTTTTTTTTTTTTTTTTTT"; // len 32 -> trim to 30
+            let seq38 = &seq38full[..30];
+            assert_eq!(seq37.len(), 30, "seq37 must be 30 nt");
+            assert_eq!(seq38.len(), 30, "seq38 must be 30 nt");
+
+            let cdot = CdotMapper::from_reader_with_build(cdot_json.as_bytes(), "GRCh38")
+                .expect("rna-divergence cdot JSON should parse");
+            let projector = Projector::new(cdot);
+            let mut provider = MockProvider::new();
+            let mk = |build: RefGenomeBuild, seq: &str, chrom: &str, gstart: u64| RefTranscript {
+                id: "NM_RNA_DIV.1".to_string(),
+                gene_symbol: Some("RNADIV".to_string()),
+                strand: TxStrand::Plus,
+                sequence: Some(seq.to_string()),
+                cds_start: Some(1),
+                cds_end: Some(30),
+                exons: vec![Exon::new(1, 1, 30)],
+                chromosome: Some(chrom.to_string()),
+                genomic_start: Some(gstart),
+                genomic_end: Some(gstart + 29),
+                genome_build: build,
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            };
+            // Build-keyed transcripts (the #843 divergence vector). The GRCh37
+            // record is optional so a partial setup (GRCh38-keyed + primary only)
+            // can model a build-keyed miss for a GRCh37 input.
+            if register_grch37_keyed {
+                provider.add_transcript_on_build(
+                    "GRCh37",
+                    mk(RefGenomeBuild::GRCh37, seq37, "NC_000001.10", 10000),
+                );
+            }
+            provider.add_transcript_on_build(
+                "GRCh38",
+                mk(RefGenomeBuild::GRCh38, seq38, "NC_000001.11", 20000),
+            );
+            // Build-agnostic fallback = the primary (GRCh38) bases, matching how a
+            // real provider serves the primary transcript when no build is keyed.
+            // This is exactly what the pre-#843 build-agnostic fetch returned for
+            // BOTH builds, so a GRCh37 input wrongly read the GRCh38 run length.
+            provider.add_transcript(mk(RefGenomeBuild::GRCh38, seq38, "NC_000001.11", 20000));
+            VariantProjector::new(projector, provider)
+        }
+
+        /// Build a single-deletion `g.` allele at `g.<pos>del` on `NC_000001.<ver>`.
+        fn g_del_allele(version: u32, pos: u64) -> HgvsVariant {
+            let member = HgvsVariant::Genome(GenomeVariant {
+                accession: nc_chr1(version),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(pos)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            });
+            HgvsVariant::Allele(AlleleVariant::new(vec![member], AllelePhase::Cis))
+        }
+
+        /// The allele predicted `r.` must read the *input's build* transcript, so
+        /// a `g.` allele on GRCh37 (`NC_000001.10`) and one on GRCh38
+        /// (`NC_000001.11`) — same `c.6del` after projection — yield
+        /// build-distinct 3'-shifted `r.` outputs. Pre-#843 both read the primary
+        /// (GRCh38) transcript, so the GRCh37 allele emitted the GRCh38 shift
+        /// (`r.(10del)`): a wrong-build `r.`. Post-fix the GRCh37 allele emits its
+        /// own `r.(8del)`.
+        #[test]
+        fn allele_predicted_rna_is_build_scoped() {
+            let vp = make_rna_divergence_projector();
+
+            // g.10005del on NC_000001.10 (GRCh37) -> c.5del.
+            let g37 = g_del_allele(10, 10005);
+            let r37 = vp
+                .project_normalized(&g37, "NM_RNA_DIV.1")
+                .expect("GRCh37 g. allele must project")
+                .rna
+                .expect("GRCh37 allele must predict an r.")
+                .to_string();
+
+            // g.20005del on NC_000001.11 (GRCh38) -> c.6del.
+            let g38 = g_del_allele(11, 20005);
+            let r38 = vp
+                .project_normalized(&g38, "NM_RNA_DIV.1")
+                .expect("GRCh38 g. allele must project")
+                .rna
+                .expect("GRCh38 allele must predict an r.")
+                .to_string();
+
+            // The two builds 3'-shift the deletion to different positions because
+            // their poly-A run lengths differ. Pre-fix r37 == r38 (both GRCh38).
+            // Assert the FULL rendered string (exact, not a `contains` substring
+            // match that would also accept e.g. `17del`/`19del`).
+            assert_eq!(
+                r37, "NM_RNA_DIV.1:r.7del",
+                "GRCh37 allele r. must 3'-shift to its own run end (r.7del)"
+            );
+            assert_eq!(
+                r38, "NM_RNA_DIV.1:r.9del",
+                "GRCh38 allele r. must 3'-shift to its own run end (r.9del)"
+            );
+            assert_ne!(
+                r37, r38,
+                "GRCh37 and GRCh38 alleles must predict build-distinct r.; \
+                 equal output means predict_rna read the same (wrong-build) transcript"
+            );
+        }
+
+        /// The allele predicted-`r.` transcript fetch must partition the
+        /// transcript cache by build (mirrors
+        /// `caches_partition_by_genome_build_for_nc_inputs` for the single path).
+        /// Pre-#843 the bare `g.` allele fetched under `(id, None)` for both
+        /// builds (one colliding key); post-fix each build stamps its `NC_*`
+        /// accession, yielding two build-distinct keys.
+        #[test]
+        fn allele_predicted_rna_does_not_pollute_cache_with_parentless_key() {
+            // The build-distinct keys `(id, Some(NC_*.10))` / `(id, Some(NC_*.11))`
+            // are inserted by each member's genome-pivot projection regardless of
+            // the #843 bug, so their presence is NOT a fix signal. The bug's
+            // fingerprint is the PARENTLESS `(id, None)` key the buggy allele-site
+            // fetch (keyed on the unparented `g.` allele) inserted in ADDITION:
+            // post-fix `predict_rna_transcript` stamps the build-bearing accession
+            // first, so no `(id, None)` entry is ever created for the allele path.
+            let vp = make_rna_divergence_projector();
+            vp.project_normalized(&g_del_allele(10, 10005), "NM_RNA_DIV.1")
+                .expect("GRCh37 allele projection");
+            vp.project_normalized(&g_del_allele(11, 20005), "NM_RNA_DIV.1")
+                .expect("GRCh38 allele projection");
+
+            let tx_keys: std::collections::HashSet<_> = vp
+                .transcript_cache
+                .read()
+                .expect("transcript cache poisoned")
+                .keys()
+                .cloned()
+                .collect();
+            // Sanity: the build-scoped entries exist (from the member pivots).
+            assert!(
+                tx_keys.contains(&("NM_RNA_DIV.1".to_string(), Some("NC_000001.10".to_string())))
+                    && tx_keys
+                        .contains(&("NM_RNA_DIV.1".to_string(), Some("NC_000001.11".to_string()))),
+                "build-scoped member-pivot keys must be present, got: {tx_keys:?}"
+            );
+            // The actual fix signal: no parentless entry for the allele transcript.
+            assert!(
+                !tx_keys.contains(&("NM_RNA_DIV.1".to_string(), None)),
+                "predict_rna must not fetch the allele transcript build-agnostically;                  a parentless (id, None) key means it read the primary build, got: {tx_keys:?}"
+            );
+        }
+
+        /// A build-keyed miss under a stamped build context must NOT fall back to
+        /// the build-agnostic primary transcript (#843 / CodeRabbit). With only
+        /// the GRCh38 transcript build-keyed (plus the primary), a GRCh37 `g.`
+        /// allele's build-stamped fetch misses; `predict_rna_transcript` must
+        /// surface that miss instead of silently re-serving the GRCh38 primary —
+        /// which would emit the wrong-build `r.9del`. The c./g. forms stay
+        /// build-identical (they read cdot, not transcript bases), so the
+        /// projection still succeeds; only the predicted `r.` is withheld.
+        /// Pre-fix the `ReferenceNotFound` fallback masked the miss (rna = r.9del).
+        #[test]
+        fn allele_predicted_rna_does_not_fall_back_to_primary_on_build_miss() {
+            let vp = make_rna_divergence_projector_grch38_keyed_only();
+            let g37 = g_del_allele(10, 10005);
+            let proj = vp
+                .project_normalized(&g37, "NM_RNA_DIV.1")
+                .expect("GRCh37 g. allele must still project (c./g. are build-identical)");
+            // The coding form is build-identical, so it must be present — this
+            // confirms the projection reached the predicted-`r.` step rather than
+            // bailing earlier (which would make `rna.is_none()` vacuous).
+            assert!(
+                proj.coding.is_some(),
+                "the build-identical c. form must project even with the GRCh37 \
+                 transcript absent"
+            );
+            assert!(
+                proj.rna.is_none(),
+                "a build-keyed miss must not fall back to the primary transcript; \
+                 a predicted r. here ({:?}) means the wrong-build (GRCh38) bases \
+                 were served",
+                proj.rna.as_ref().map(|r| r.to_string())
+            );
+        }
+
+        /// The build-match guard must decline *only* on a wrong build, never
+        /// over-decline the matching one. On the same partial fixture (GRCh38
+        /// build-keyed + primary), a GRCh38 `g.` allele resolves its own
+        /// build-keyed transcript, so the guard passes and the predicted `r.` is
+        /// emitted as usual. This locks the guard's precision: a future "just
+        /// suppress the fallback" regression that broke the build-identical axes
+        /// (or dropped the matching-build `r.`) would fail here.
+        #[test]
+        fn grch38_predicted_rna_survives_build_guard_on_partial_fixture() {
+            let vp = make_rna_divergence_projector_grch38_keyed_only();
+            let g38 = g_del_allele(11, 20005);
+            let r38 = vp
+                .project_normalized(&g38, "NM_RNA_DIV.1")
+                .expect("GRCh38 g. allele must project")
+                .rna
+                .expect("GRCh38 allele must still predict an r. (build-keyed record present)")
+                .to_string();
+            assert_eq!(
+                r38, "NM_RNA_DIV.1:r.9del",
+                "GRCh38 allele must 3'-shift to its own run end (r.9del); the build guard \
+                 must not decline a matching-build transcript"
             );
         }
 
