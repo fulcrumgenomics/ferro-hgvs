@@ -1573,11 +1573,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         // The warning is specifically about a bracketed payload being
         // expanded — by construction `canonicalize_insertion_expand`
-        // only acts on `InsertedSequence::Complex`. `to_bracketed_string`
-        // forces the bracketed form so the warning preserves the user's
-        // input shape (`[ATC]`, `[A;100_110]`) even though `Display` on
-        // `InsertedSequence::Complex` now drops brackets for single-element
-        // vectors (spec-canonical form).
+        // only acts on `InsertedSequence::Complex`. Since #856 a single
+        // bracketed *literal* (`[ATC]`) is collapsed to a plain `Literal` at
+        // parse time, so the surviving `Complex` payloads here are genuinely
+        // multi-part (`[A;T]`) or single non-literal (`[100_110]`).
+        // `to_bracketed_string` forces the bracketed form so the warning
+        // preserves the user's input shape (`[A;100_110]`) even though
+        // `Display` on `InsertedSequence::Complex` drops brackets for
+        // single-element vectors (spec-canonical form).
         let original_payload = original_inserted.to_bracketed_string();
 
         let new_edit = match canonicalize_insertion_expand(edit, accession, kind, &self.provider)? {

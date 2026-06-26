@@ -5532,17 +5532,23 @@ mod ins_bracketed_expansion {
     }
 
     // -------------------------------------------------------------------
-    // 9b. Positive warning assertion — a bracketed `ins[ATC]` input must
-    //     emit `InsertedSequenceExpanded` with payload/literal fields
-    //     matching their documented shape: `[ATC]` (payload, with
-    //     brackets) and `ATC` (flat literal, no brackets, no `ins`
-    //     prefix). Complements the no-warning assertion above and pins
+    // 9b. Positive warning assertion — a MULTI-element bracketed payload
+    //     `ins[AT;C]` must emit `InsertedSequenceExpanded` with
+    //     payload/literal fields matching their documented shape: `[AT;C]`
+    //     (payload, with brackets) and `ATC` (flat literal, no brackets, no
+    //     `ins` prefix). Complements the no-warning assertion above and pins
     //     the public contract of the warning fields.
+    //
+    //     NOTE (#856): a SINGLE bracketed literal `ins[ATC]` is now collapsed
+    //     to a plain literal at parse time (`ins[ATC]` ≡ `insATC`), so it no
+    //     longer round-trips through the expansion path and emits no warning —
+    //     covered by `single_literal_bracket_emits_no_expansion_warning` below.
+    //     The expansion warning still applies to genuinely multi-part brackets.
     // -------------------------------------------------------------------
     #[test]
     fn ins_bracketed_expansion_emits_warning() {
         use ferro_hgvs::normalize::NormalizationWarning;
-        let input = "NC_000001.11:g.100_101ins[ATC]";
+        let input = "NC_000001.11:g.100_101ins[AT;C]";
         let normalizer = Normalizer::new(MockProvider::new());
         let variant =
             parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
@@ -5580,7 +5586,7 @@ mod ins_bracketed_expansion {
         // literal is the bare inserted sequence (no `ins` / `delins`
         // / `dupins` prefix and no brackets).
         assert_eq!(
-            original_payload, "[ATC]",
+            original_payload, "[AT;C]",
             "original_payload must be the bracketed inserted sequence only"
         );
         assert_eq!(
@@ -5588,6 +5594,33 @@ mod ins_bracketed_expansion {
             "expanded_literal must be the flat inserted bases only"
         );
         assert_eq!(accession, "NC_000001.11");
+    }
+
+    /// #856: a single bracketed literal `ins[ATC]` is collapsed to a plain
+    /// literal at parse time, so normalization has nothing to expand and emits
+    /// no `InsertedSequenceExpanded` warning (it is identical to `insATC`).
+    #[test]
+    fn single_literal_bracket_emits_no_expansion_warning() {
+        use ferro_hgvs::normalize::NormalizationWarning;
+        let input = "NC_000001.11:g.100_101ins[ATC]";
+        let normalizer = Normalizer::new(MockProvider::new());
+        let variant =
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for {}: {}", input, e));
+        let outcome = normalizer
+            .normalize_with_diagnostics(&variant)
+            .unwrap_or_else(|e| panic!("normalize failed for {}: {}", input, e));
+        assert_eq!(
+            format!("{}", outcome.result),
+            "NC_000001.11:g.100_101insATC"
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::InsertedSequenceExpanded { .. })),
+            "single bracketed literal must collapse at parse and emit no expansion warning; got: {:?}",
+            outcome.warnings
+        );
     }
 
     // -------------------------------------------------------------------

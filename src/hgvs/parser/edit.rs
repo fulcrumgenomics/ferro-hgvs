@@ -503,13 +503,28 @@ fn parse_bracketed_inserted_sequence(input: &str) -> IResult<&str, InsertedSeque
     let (input, _) = char(']').parse(remaining_input)?;
 
     if parts.is_empty() {
-        Err(nom::Err::Error(nom::error::Error::new(
+        return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
-        )))
-    } else {
-        Ok((input, InsertedSequence::Complex(parts)))
+        )));
     }
+    // A single bracketed *literal* is the same thing as the unbracketed literal
+    // (`ins[ATC]` ≡ `insATC`). Collapse it to `InsertedSequence::Literal` so it
+    // flows identically to the unbracketed form everywhere downstream — minus-
+    // strand reverse-complement, protein prediction, SPDI conversion, length —
+    // rather than diverging as a `Complex`, which several consumers handle
+    // differently (e.g. `project::edit::revcomp_inserted` revcomps `Literal` but
+    // clones `Complex` unchanged, so the bracketed form was wrongly left in
+    // transcript orientation on minus-strand projection; #856). Single
+    // *non-literal* brackets (position-range, repeat, …) deliberately stay
+    // `Complex` — they are wrapped on purpose in `parse_inserted_sequence`.
+    if parts.len() == 1 && matches!(parts[0], InsertedPart::Literal(_)) {
+        let InsertedPart::Literal(seq) = parts.into_iter().next().expect("len == 1") else {
+            unreachable!("matched InsertedPart::Literal above")
+        };
+        return Ok((input, InsertedSequence::Literal(seq)));
+    }
+    Ok((input, InsertedSequence::Complex(parts)))
 }
 
 /// Check if the input starts with a reference accession prefix
@@ -2961,6 +2976,77 @@ mod tests {
         } else {
             panic!("Expected insertion");
         }
+    }
+
+    #[test]
+    fn single_literal_bracket_collapses_to_literal() {
+        // #856: `delins[ATCCC]` must parse to the SAME `InsertedSequence::Literal`
+        // as the unbracketed `delinsATCCC`, not a `Complex([Literal])` — otherwise
+        // strand revcomp / protein prediction / SPDI treat the two forms
+        // differently.
+        let (rem_b, edit_b) = parse_na_edit("delins[ATCCC]").unwrap();
+        let (rem_u, edit_u) = parse_na_edit("delinsATCCC").unwrap();
+        assert_eq!(rem_b, "");
+        assert_eq!(rem_u, "");
+        match (&edit_b, &edit_u) {
+            (NaEdit::Delins { sequence: sb, .. }, NaEdit::Delins { sequence: su, .. }) => {
+                assert!(
+                    matches!(sb, InsertedSequence::Literal(_)),
+                    "bracketed single literal must collapse to Literal, got {sb:?}"
+                );
+                assert_eq!(
+                    sb, su,
+                    "bracketed and unbracketed literal must be identical"
+                );
+            }
+            _ => panic!("expected two Delins edits"),
+        }
+
+        // `ins[ATC]` likewise collapses.
+        let (_, edit) = parse_na_edit("ins[ATC]").unwrap();
+        let NaEdit::Insertion { sequence } = edit else {
+            panic!("expected insertion");
+        };
+        assert!(
+            matches!(sequence, InsertedSequence::Literal(_)),
+            "single literal ins bracket must collapse to Literal, got {sequence:?}"
+        );
+    }
+
+    #[test]
+    fn single_non_literal_bracket_stays_complex() {
+        // #856: only single *literals* collapse. A single position-range or
+        // repeat bracket stays `Complex` (the issue confirms `ins[180_188]` is
+        // unaffected).
+        let (_, edit) = parse_na_edit("ins[180_188]").unwrap();
+        let NaEdit::Insertion { sequence } = edit else {
+            panic!("expected insertion");
+        };
+        assert!(
+            matches!(&sequence, InsertedSequence::Complex(parts)
+                if parts.len() == 1 && matches!(parts[0], InsertedPart::PositionRange { .. })),
+            "single position-range bracket must stay Complex, got {sequence:?}"
+        );
+
+        let (_, edit) = parse_na_edit("ins[A[10]]").unwrap();
+        let NaEdit::Insertion { sequence } = edit else {
+            panic!("expected insertion");
+        };
+        assert!(
+            matches!(&sequence, InsertedSequence::Complex(parts)
+                if parts.len() == 1 && matches!(parts[0], InsertedPart::Repeat { .. })),
+            "single repeat bracket must stay Complex, got {sequence:?}"
+        );
+
+        // A multi-element literal bracket also stays Complex.
+        let (_, edit) = parse_na_edit("ins[AT;C]").unwrap();
+        let NaEdit::Insertion { sequence } = edit else {
+            panic!("expected insertion");
+        };
+        assert!(
+            matches!(&sequence, InsertedSequence::Complex(parts) if parts.len() == 2),
+            "multi-element bracket must stay Complex, got {sequence:?}"
+        );
     }
 
     #[test]
