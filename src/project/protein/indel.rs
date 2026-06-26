@@ -561,15 +561,59 @@ fn build_inframe_delins(
         return build_identity_variant(ref_protein, protein_accession, transcript);
     }
 
+    // Pure-deletion guard (#847): when the last differing ref index falls
+    // *before* `first_diff` and the alt protein is *shorter* than the ref, no
+    // ref residue is replaced — the net effect is a pure deletion, not a
+    // delins. This arises for a codon-straddling in-frame deletion inside a run
+    // of identical residues (e.g. one Leu removed from a Leu run): the forward
+    // `first_diff` and backward `find_last_diff` scans cross over because every
+    // residue in the run is identical. Emit a `del` over the 3'-most deleted
+    // residues, mirroring `build_inframe_deletion`'s arithmetic. Without this,
+    // the pure-insertion guard below fires with `n_inserted == 0` and renders
+    // the invalid `p.(Xaa_Yaa ins)` (empty inserted sequence).
+    if last_diff_ref < first_diff && alt_len < ref_len && first_diff < ref_len {
+        let n_deleted = ref_len - alt_len;
+        let first_del = first_diff;
+        let last_del = (first_diff + n_deleted - 1).min(ref_len - 1);
+        let start_aa = ref_protein
+            .get(first_del)
+            .copied()
+            .unwrap_or(AminoAcid::Xaa);
+        let start_pos = (first_del + 1) as u64;
+        let loc = if first_del == last_del {
+            ProtInterval::point(ProtPos::new(start_aa, start_pos))
+        } else {
+            let end_aa = ref_protein.get(last_del).copied().unwrap_or(AminoAcid::Xaa);
+            let end_pos = (last_del + 1) as u64;
+            ProtInterval::new(
+                ProtPos::new(start_aa, start_pos),
+                ProtPos::new(end_aa, end_pos),
+            )
+        };
+        let variant = ProteinVariant {
+            accession: parse_accession(protein_accession),
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(
+                loc,
+                ProteinEdit::Deletion {
+                    sequence: None,
+                    count: None,
+                },
+            ),
+        };
+        return Ok(HgvsVariant::Protein(variant));
+    }
+
     // Pure-insertion guard (#498): when the last differing ref index falls
-    // *before* `first_diff`, the ref differing region is empty — no ref
-    // residues are replaced, so this is an insertion, not a delins. Rendering
-    // it as a delins would cross the positions (`start > end`) into malformed
-    // HGVS. Emit an insertion between the two flanking ref residues with
-    // ascending positions. (Requires an interior insertion point with a
-    // residue on each side; the N-terminal edge `first_diff == 0` falls
-    // through to the clamped delins path below, which stays ascending.)
-    if last_diff_ref < first_diff && first_diff >= 1 && first_diff < ref_len {
+    // *before* `first_diff` and the alt protein is *longer* than the ref, the
+    // ref differing region is empty — no ref residues are replaced, so this is
+    // an insertion, not a delins. Rendering it as a delins would cross the
+    // positions (`start > end`) into malformed HGVS. Emit an insertion between
+    // the two flanking ref residues with ascending positions. (Requires an
+    // interior insertion point with a residue on each side; the N-terminal edge
+    // `first_diff == 0` falls through to the clamped delins path below, which
+    // stays ascending.)
+    if last_diff_ref < first_diff && alt_len > ref_len && first_diff >= 1 && first_diff < ref_len {
         let n_inserted = alt_len.saturating_sub(ref_len);
         let left_idx = first_diff - 1;
         let left_aa = ref_protein.get(left_idx).copied().unwrap_or(AminoAcid::Xaa);
@@ -1014,6 +1058,25 @@ mod tests {
         assert_eq!(protein_tandem_dup_range(&ref_protein, 99, &[Met]), None);
     }
 
+    /// Regression (#847): `build_inframe_delins` called directly with a `ref`/
+    /// `alt` pair whose backward (`find_last_diff`) and forward (`first_diff`)
+    /// scans cross over (`last_diff_ref < first_diff`) AND whose `alt` is
+    /// *shorter* than `ref` must render a `del`, never an empty `ins`. This
+    /// locks the pure-deletion guard's invariant: when it fires, `alt` is
+    /// provably `ref` with a contiguous block removed, so `del` is exact. Here
+    /// one Leu is removed from a two-Leu run between Ala and Gly →
+    /// `p.(Leu4del)`. Calling the builder directly (bypassing edit-type routing)
+    /// proves the guard, not just the `Deletion` entry path.
+    #[test]
+    fn inframe_delins_renders_pure_deletion_as_del() {
+        use crate::hgvs::location::AminoAcid::{Ala, Gly, Leu, Met};
+        let t = tx("ATGGCTCTTCTTGGTTAA", 1, 18); // sequence unused by the position logic
+        let ref_protein = [Met, Ala, Leu, Leu, Gly];
+        let alt_protein = [Met, Ala, Leu, Gly]; // one Leu removed from the Leu-Leu run
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 8, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Leu4del)");
+    }
+
     /// Test convenience wrapper: build the `RefProteinBundle` on demand so
     /// existing tests can keep their original `predict_indel_protein` calls.
     fn predict_indel(
@@ -1094,6 +1157,87 @@ mod tests {
         let result = predict_indel(&t, 4, 9, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
         assert_eq!(s, "NP_TEST.1:p.(Arg2_Lys3del)");
+    }
+
+    /// Regression (#847): an in-frame single-codon deletion that straddles a
+    /// codon boundary (`frame_at_start != 0`) inside a run of identical
+    /// residues must render as a single-residue `del`, NOT a malformed `ins`
+    /// with an empty inserted sequence.
+    ///
+    /// CDS "ATG" + "CTG"×5 + "GGG" + "TAA" = Met-Leu-Leu-Leu-Leu-Leu-Gly-Ter.
+    /// Delete c.6_8 (3 bp, codon-straddling: `(6-1)%3 == 2`) which removes the
+    /// "G C T" spanning the 1st Leu codon's last base and the 2nd Leu codon's
+    /// first two bases — net effect is one Leu codon removed from the run:
+    ///   mutated CDS "ATGCTGCTGCTGCTGGGGTAA" = Met-Leu-Leu-Leu-Leu-Gly-Ter.
+    /// ref = [Met,Leu,Leu,Leu,Leu,Leu,Gly], alt = [Met,Leu,Leu,Leu,Leu,Gly].
+    /// The 3'-most Leu is deleted ⇒ p.(Leu6del). Before the fix this misrouted
+    /// through `build_inframe_delins`'s pure-insertion guard and emitted the
+    /// invalid `p.(Leu5_Leu6ins)` (empty inserted sequence).
+    #[test]
+    fn del_single_codon_in_homopolymer_run_renders_del_not_empty_ins() {
+        let t = tx("ATGCTGCTGCTGCTGCTGGGGTAA", 1, 24);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 6, 8, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Leu6del)");
+        assert!(
+            !s.contains("ins"),
+            "single-codon in-frame deletion must not render as an insertion: '{}'",
+            s
+        );
+    }
+
+    /// Regression (#847): a two-codon in-frame deletion straddling a codon
+    /// boundary inside a homopolymer run must render as a range `del`, not an
+    /// empty `ins`/`delins`.
+    ///
+    /// Same fixture as the single-codon case but delete c.6_11 (6 bp,
+    /// codon-straddling): removes two Leu codons from the run.
+    ///   mutated CDS "ATGCTGCTGCTGGGGTAA" = Met-Leu-Leu-Leu-Gly-Ter.
+    /// ref = [Met,Leu,Leu,Leu,Leu,Leu,Gly], alt = [Met,Leu,Leu,Leu,Gly].
+    /// The two 3'-most Leu are deleted ⇒ p.(Leu5_Leu6del).
+    #[test]
+    fn del_two_codons_in_homopolymer_run_renders_range_del() {
+        let t = tx("ATGCTGCTGCTGCTGCTGGGGTAA", 1, 24);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 6, 11, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Leu5_Leu6del)");
+        assert!(
+            !s.contains("ins"),
+            "two-codon in-frame deletion must not render as an insertion: '{}'",
+            s
+        );
+    }
+
+    /// Companion to the #847 fix: a codon-straddling in-frame deletion that is
+    /// NOT inside a run still changes a residue at the AA level and must remain
+    /// a `delins` (its differing ref region is non-empty), unaffected by the
+    /// pure-deletion guard.
+    ///
+    /// CDS "ATGCGCAAAGGGTAA" = Met-Arg-Lys-Gly-Ter. Delete c.5_7 ("GCA",
+    /// codon-straddling): mutated CDS "ATGCAAGGGTAA"? Recompute bases —
+    ///   ATG C G C A A A G G G T A A (positions 1..15)
+    ///   delete 5,6,7 (G,C,A) → ATG C | A A G G G T A A = "ATGCAAGGGTAA"
+    ///   = ATG CAA GGG TAA = Met-Gln-Gly-Ter.
+    /// ref = [Met,Arg,Lys,Gly], alt = [Met,Gln,Gly]: Arg2/Lys3 collapse to a
+    /// single Gln ⇒ a genuine delins, p.(Arg2_Lys3delinsGln).
+    #[test]
+    fn del_codon_straddling_not_in_run_stays_delins() {
+        let t = tx("ATGCGCAAAGGGTAA", 1, 15);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 5, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Arg2_Lys3delinsGln)");
     }
 
     #[test]
