@@ -224,26 +224,46 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 | `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(NM_058195.3):n.204_205insATC` | normalized | accepted_divergence | — | — |
+| `NG_008835.1(CDH23_v001):c.1449+846delA` | genomic | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | spec_citation | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1:g.320802_320803del` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157insGTCCTGTGCTCATTATCTGGC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTC;ATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[GTCCTGTGCTCATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins180_188` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins180_188` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins180_188inv` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins180_188inv` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[180_188]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188]` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | normalized | known_bug | — | #480 |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.155_157del3` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.155_157delAAC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.274_275inv` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | normalized | spec_citation | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | normalized | known_bug | — | #487 |
 | `NG_009299.1(NM_017668.3):c.[250del;41>CA]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
 | `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
+| `NG_009497.1(USH2A_v001):c.8682-19dup` | genomic | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
+| `NG_012337.1(10683):c.274G>T` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | normalized | known_bug | — | #487 |
@@ -252,6 +272,13 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.-1_*1del` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | normalized | known_bug | — | #487 |
+| `NG_012337.1(SDHD):c.274G>T` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(SDHD_v001):c.274G>T` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B):c.12_15dupCAGC` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B):c.12dupC` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13insGATC` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13ins[GATC]` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13ins[TTT;GATC]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1:274` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_50` | normalized | accepted_divergence | — | — |
@@ -261,6 +288,13 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002):274+400G>T` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002.4):r.274+10G>T` | errors | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.622_672del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.622_674del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.632-5_670del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.632-5_681+7del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.632-5_793+7del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.68-7_316+7del` | genomic | accepted_divergence | — | — |
+| `NG_012772.1(BRCA2_v001):c.681+1_682-1del` | genomic | accepted_divergence | — | — |
 | `NG_017013.2:g.17496_17497insAGCTGCTCAGATAGCGA` | normalized | accepted_divergence | — | — |
 | `NG_029724.1(NM_004321.7):c.101del` | normalized | accepted_divergence | — | — |
 | `NM_002001.2:c.1_3delinsATG` | normalized | accepted_divergence | — | — |
@@ -275,7 +309,7 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 2 | 0 | 0 | 0 | 0 |
+| genomic | 36 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |

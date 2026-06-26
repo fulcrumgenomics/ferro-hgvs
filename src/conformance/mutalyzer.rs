@@ -554,6 +554,17 @@ pub enum RejectionReason {
     /// the input); here a sibling exists and the silent substitution is refused.
     #[serde(rename = "ferro-policy-785-version-substitution-refused")]
     VersionSubstitutionRefused785,
+    /// ferro declines genomic projection of a transcript-coordinate variant on an
+    /// `NG_` genomic reference whose selector is a gene symbol /
+    /// `GENE_v001` / numeric gene-id, or is absent (bare `NG_:c.`). Gene symbols
+    /// are not valid HGVS specifications (background/refseq.md L40-41) and a bare
+    /// `NG_:c.` gives no transcript specification, so ferro cannot resolve a unique
+    /// transcript and declines with `no parent reference`. mutalyzer leniently
+    /// resolves the selector and projects anyway; ferro's refusal is the
+    /// spec-correct behaviour. Optional convergence with mutalyzer is tracked in
+    /// #872 (residual of #858; closed #327 covered explicit-`NM_`-parent inputs).
+    #[serde(rename = "ferro-policy-858-nonstandard-or-absent-selector-declined")]
+    NonstandardOrAbsentSelectorDeclined858,
 }
 
 impl RejectionReason {
@@ -568,6 +579,9 @@ impl RejectionReason {
             }
             RejectionReason::VersionSubstitutionRefused785 => {
                 "ferro-policy-785-version-substitution-refused"
+            }
+            RejectionReason::NonstandardOrAbsentSelectorDeclined858 => {
+                "ferro-policy-858-nonstandard-or-absent-selector-declined"
             }
         }
     }
