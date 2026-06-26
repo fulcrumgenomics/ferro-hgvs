@@ -231,13 +231,19 @@ pub fn insertion_to_repeat(
 
     let (unit, ref_start, ref_count) = best?;
     let total_count = ref_count + added_copies;
-    let ref_end = ref_start + ref_count as usize * unit.len() - 1;
+    // 3'-align the reported window so it agrees with `normalize_repeat` — the
+    // HGVS 3'-rule (idempotency; #852). `find_tandem_extent` returns the 5'-most
+    // unit-aligned start; convert to an exclusive end, slide to the most-3' phase,
+    // and report the rotated unit + window. The count is invariant under the shift.
+    let ref_end_excl = ref_start + ref_count as usize * unit.len();
+    let (start, end_excl, rotated_unit) =
+        three_prime_align_tract(ref_seq, ref_start, ref_end_excl, &unit);
     Some((
-        unit[0],
+        rotated_unit[0],
         total_count,
-        index_to_hgvs_pos(ref_start),
-        index_to_hgvs_pos(ref_end),
-        unit,
+        index_to_hgvs_pos(start),
+        index_to_hgvs_pos(end_excl - 1),
+        rotated_unit,
     ))
 }
 
@@ -2574,6 +2580,40 @@ mod tests {
         let r = b"ATTGTTGA";
         let (s, e, u) = three_prime_align_tract(r, 1, 7, b"TTG");
         assert_eq!((s, e, u.as_slice()), (1, 7, b"TTG".as_slice()));
+    }
+
+    #[test]
+    fn insertion_to_repeat_three_prime_aligns_odd_di_tract() {
+        // ref CTGTGTT: tract TGTGT at 0-based [1,6); inserting TGTGTG (3 copies of
+        // TG) makes 5 copies. The HGVS 3'-rule anchors GT (not TG) at the 3'-most
+        // 2-copy reference window. Hand-verified: unit GT, count 5, 1-based 3_6.
+        let r = b"CTGTGTT";
+        let (base, count, start, end, unit) =
+            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
+        assert_eq!(base, b'G');
+        assert_eq!(count, 5);
+        assert_eq!((start, end), (3, 6));
+        assert_eq!(unit, b"GT".to_vec());
+    }
+
+    #[test]
+    fn insertion_to_repeat_agrees_with_normalize_repeat_phase() {
+        // Idempotency invariant: the window insertion_to_repeat reports must equal
+        // the window normalize_repeat produces for the same tract/unit/count.
+        let r = b"CTGTGTT";
+        let (_b, _c, ins_start, ins_end, ins_unit) =
+            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
+        match normalize_repeat(r, 1, 5, b"TG", 5, false) {
+            RepeatNormResult::Repeat {
+                start,
+                end,
+                sequence,
+                ..
+            } => {
+                assert_eq!((ins_start, ins_end, ins_unit), (start, end, sequence));
+            }
+            other => panic!("expected Repeat, got {other:?}"),
+        }
     }
 
     #[test]
