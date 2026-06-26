@@ -194,6 +194,24 @@ fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVari
     }
 }
 
+/// Map an LRG transcript accession (`LRG_<gnum>t<tnum>`) to its protein
+/// accession (`LRG_<gnum>p<tnum>`). LRG defines `p<k>` as the translation of
+/// `t<k>`, so the index is shared — a structural fact of the accession, not a
+/// cdot inference (the LRG mapping table carries no protein column). Returns
+/// `None` for any accession that is not an `LRG_<digits>t<digits>` (#860).
+fn lrg_protein_accession(lrg_transcript: &str) -> Option<String> {
+    let rest = lrg_transcript.strip_prefix("LRG_")?;
+    let (gnum, tnum) = rest.split_once('t')?;
+    if gnum.is_empty()
+        || tnum.is_empty()
+        || !gnum.bytes().all(|b| b.is_ascii_digit())
+        || !tnum.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("LRG_{gnum}p{tnum}"))
+}
+
 pub struct VariantProjector<P: ReferenceProvider + Clone> {
     projector: Projector,
     provider: P,
@@ -4049,6 +4067,24 @@ mod tests {
     use crate::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
     use crate::reference::Strand as ProvStrand;
     use std::sync::OnceLock;
+
+    #[test]
+    fn lrg_protein_accession_swaps_t_to_p() {
+        assert_eq!(lrg_protein_accession("LRG_1t1").as_deref(), Some("LRG_1p1"));
+        assert_eq!(
+            lrg_protein_accession("LRG_24t2").as_deref(),
+            Some("LRG_24p2")
+        );
+        assert_eq!(
+            lrg_protein_accession("LRG_1t10").as_deref(),
+            Some("LRG_1p10")
+        );
+        // Not an LRG transcript accession:
+        assert_eq!(lrg_protein_accession("NM_000077.4"), None);
+        assert_eq!(lrg_protein_accession("LRG_24"), None); // bare genomic LRG
+        assert_eq!(lrg_protein_accession("LRG_1p1"), None); // already a protein
+        assert_eq!(lrg_protein_accession("NP_000068.1"), None);
+    }
 
     fn make_test_provider_and_projector() -> (Projector, MockProvider) {
         // A single coding transcript on chr1, plus strand.
