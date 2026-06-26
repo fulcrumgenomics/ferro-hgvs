@@ -3039,6 +3039,11 @@
         "axis": "normalized",
         "tracking_issue": 487,
         "note": "ferro keeps the input repeat anchor (c.33_35CAA[5]); mutalyzer 3'-shifts the repeat unit to c.34_39AAC[6]. Repeat 3' normalization tracked in #487."
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "NG_009299.1 (MYH11-centric RefSeqGene) annotates NM_017668.3 (NDE1) only partially -- mRNA complement(135678..>137840), CDS complement(137780..>137840) (60 bp, 5'-incomplete); NDE1 itself complement(135678..>160896) extends beyond the NG_. cdot's authoritative alignment places this coordinate ~60 kb outside the NG_'s placed span (NC_000016.10 15701135-15862030), so there is no valid NG_ coordinate for it. mutalyzer maps it against the partial-annotation stub; ferro's decline is spec-correct. Subsumes #865; residual of #480/#655.",
+        "reason": "ferro-policy-853-ng-partial-transcript-coverage-declined"
       }
     },
     {
@@ -3128,6 +3133,11 @@
         "section": "HGVS §Substitution (no frameshift)",
         "note": "A single-base coding substitution preserves length and reading frame, so its protein consequence is a missense, never a frameshift (substitution.md:5; frameshift.md:18). ferro's NM_017668.3 CDS translates to NP_060138.1 (MEDSGKTFSSEEEEAN...; residue 14 = Glu, verified against the canonical RefSeq record NP_060138.1) so c.41A>C gives the in-frame missense NP_060138.1:p.(Glu14Ala) (bare NP_ per the protein-reference convention). mutalyzer's NG_009299.1(NP_060138.1):p.(Gln14ProfsTer68) reconstructs the transcript from the NG_009299.1 embedding (this case is tagged 'reverse strand sequence'); its Gln14 contradicts the very protein accession NP_060138.1 it cites, and a substitution-frameshift is invalid against a fixed reference. ferro's value is the spec-correct one.",
         "cluster": "substitution-no-frameshift"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "NG_009299.1 (MYH11-centric RefSeqGene) annotates NM_017668.3 (NDE1) only partially -- mRNA complement(135678..>137840), CDS complement(137780..>137840) (60 bp, 5'-incomplete); NDE1 itself complement(135678..>160896) extends beyond the NG_. cdot's authoritative alignment places this coordinate ~60 kb outside the NG_'s placed span (NC_000016.10 15701135-15862030), so there is no valid NG_ coordinate for it. mutalyzer maps it against the partial-annotation stub; ferro's decline is spec-correct. Subsumes #865; residual of #480/#655.",
+        "reason": "ferro-policy-853-ng-partial-transcript-coverage-declined"
       }
     },
     {

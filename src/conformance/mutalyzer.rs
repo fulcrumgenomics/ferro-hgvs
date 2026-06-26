@@ -565,6 +565,21 @@ pub enum RejectionReason {
     /// #872 (residual of #858; closed #327 covered explicit-`NM_`-parent inputs).
     #[serde(rename = "ferro-policy-858-nonstandard-or-absent-selector-declined")]
     NonstandardOrAbsentSelectorDeclined858,
+    /// ferro declines to project a transcript-coordinate variant whose locus
+    /// falls **outside the genomic reference's annotated coverage** of that
+    /// transcript. An `NG_` RefSeqGene may annotate only the portion of a
+    /// neighboring transcript that lies within its span — e.g. NG_009299.1
+    /// (MYH11-centric) annotates NM_017668.3 (NDE1) only partially: `mRNA
+    /// complement(135678..>137840)` / `CDS complement(137780..>137840)` (60 bp,
+    /// 5'-incomplete), with NDE1 itself `complement(135678..>160896)` extending
+    /// beyond the NG_. The authoritative transcript→genome alignment (cdot) puts
+    /// the variant ~60 kb outside the NG_'s placed span, so there is no valid NG_
+    /// coordinate for it. mutalyzer maps it against the partial annotation stub
+    /// (treating the truncation boundary as c.1), yielding a coordinate that
+    /// points at a different genomic base; ferro's decline is the spec-correct
+    /// behaviour (#853, residual of #480/#655; subsumes #865).
+    #[serde(rename = "ferro-policy-853-ng-partial-transcript-coverage-declined")]
+    NgPartialTranscriptCoverageDeclined853,
 }
 
 impl RejectionReason {
@@ -582,6 +597,9 @@ impl RejectionReason {
             }
             RejectionReason::NonstandardOrAbsentSelectorDeclined858 => {
                 "ferro-policy-858-nonstandard-or-absent-selector-declined"
+            }
+            RejectionReason::NgPartialTranscriptCoverageDeclined853 => {
+                "ferro-policy-853-ng-partial-transcript-coverage-declined"
             }
         }
     }
