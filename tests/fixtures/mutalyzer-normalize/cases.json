@@ -1519,10 +1519,10 @@
       "input": "NM_002001.2:c.1_3delinsATG",
       "normalized": "NM_002001.2:c.=",
       "to_test": true,
-      "accepted_rejection": {
+      "accepted_divergence": {
         "axis": "normalized",
-        "reason": "ferro-policy-785-version-substitution-refused",
-        "note": "NM_002001.2 is absent from this manifest (only the sibling .4 is carried); ferro refuses to normalize against .4's frame and declines with TranscriptVersionNotExact (#785). mutalyzer carries .2 and renders c.=. Previously ferro silently substituted .4 and rendered the positional identity c.1_3= (the #654 accepted_divergence this replaces)."
+        "policy": "ferro-policy-654-explicit-identity-rendering",
+        "note": "NM_002001.2 is now provisioned (#802: deposited mRNA backfilled via `ferro prepare --backfill-transcripts`, plus a sibling-anchored exon→genome structure in derived_transcript_placements.json). The delins replaces c.1_3 (ATG, the start codon) with ATG — a no-op — so ferro renders the explicit positional identity c.1_3=; mutalyzer renders the whole-gene c.=. Both denote no change. Same #654 explicit-identity rendering divergence as the bare-position g.274 case; this is the accepted_divergence the prior #785 accepted_rejection note anticipated would replace it once .2 was provisioned."
       }
     },
     {
@@ -3479,12 +3479,7 @@
         "IWHOLETRANSCRIPTEXON",
         "IMRNAGENOMICTIP"
       ],
-      "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-785-version-substitution-refused",
-        "note": "NM_002001.2 is absent from this manifest (only the sibling .4 is carried); ferro refuses to normalize against .4's frame and declines with TranscriptVersionNotExact (#785). mutalyzer carries .2 and echoes c.=. Previously ferro silently substituted .4, which happened to echo c.= too."
-      }
+      "to_test": true
     },
     {
       "keywords": [
