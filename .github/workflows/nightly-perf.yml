@@ -40,7 +40,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # SHARED with nightly-mutalyzer.yml — keep identical, bump together.
-  MANIFEST_CACHE_VERSION: v1
+  # (v2: --derive-ng-placements added to the prepare step; #875.)
+  MANIFEST_CACHE_VERSION: v2
   # Budget knobs (seconds). Today's startup floor is ~1.0s; the #585 bug was
   # ~4.8s. 2.5s sits ~2.5x above healthy and ~2x below the bug — outside runner
   # noise in both directions.
@@ -86,7 +87,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: benchmark-output/
-          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs') }}
+          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs', 'tests/fixtures/mutalyzer-normalize/ng_accessions.txt') }}
 
       - name: Build ferro (release)
         run: cargo build --release --bin ferro
@@ -96,7 +97,8 @@ jobs:
         run: |
           ./target/release/ferro prepare \
             --output-dir benchmark-output \
-            --genome grch38
+            --genome grch38 \
+            --derive-ng-placements tests/fixtures/mutalyzer-normalize/ng_accessions.txt
 
       - name: Confirm manifest present
         run: |

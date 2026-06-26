@@ -1,0 +1,21 @@
+# Versioned NG_ RefSeqGene accessions referenced by the conformance corpus
+# (tests/fixtures/mutalyzer-normalize/cases.json). Fed to
+#   ferro prepare --derive-ng-placements <this file>
+# in the nightly workflows so the prepared reference carries derived NG_
+# placements + ng_hosted_transcripts (the #793 legacy-selector resolution).
+# Regenerate when the corpus's NG_ set changes:
+#   grep -oE 'NG_[0-9]+\.[0-9]+' tests/fixtures/mutalyzer-normalize/cases.json | sort -u
+NG_007107.2
+NG_007485.1
+NG_008835.1
+NG_008939.1
+NG_009113.2
+NG_009299.1
+NG_009497.1
+NG_009930.1
+NG_012232.1
+NG_012337.1
+NG_012337.3
+NG_012772.1
+NG_017013.2
+NG_029724.1
