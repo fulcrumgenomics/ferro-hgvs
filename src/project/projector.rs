@@ -32,6 +32,168 @@ use std::sync::{Arc, RwLock};
 /// could steer the lookup to a non-primary cdot build (issue #332).
 type TranscriptCacheKey = (String, Option<String>);
 
+/// Build a bare whole-protein-unknown `p.?` variant for an in-cis frameshift
+/// allele (#855), reusing the protein accession and gene symbol of an existing
+/// member protein consequence so no transcript fetch is needed. `member` is
+/// expected to be an `HgvsVariant::Protein`; any other shape is returned as-is.
+fn build_cis_whole_protein_unknown(member: &HgvsVariant) -> HgvsVariant {
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::{AminoAcid, ProtPos};
+    use crate::hgvs::variant::{LocEdit, ProteinVariant};
+    match member {
+        HgvsVariant::Protein(pv) => HgvsVariant::Protein(ProteinVariant {
+            accession: pv.accession.clone(),
+            gene_symbol: pv.gene_symbol.clone(),
+            // The location is ignored for a whole-protein unknown; a placeholder
+            // `Met1` point is fine. `LocEdit::new` (not `new_predicted`) renders
+            // the bare `p.?`, not `p.(?)`.
+            loc_edit: LocEdit::new(
+                ProtInterval::point(ProtPos::new(AminoAcid::Met, 1)),
+                ProteinEdit::whole_protein_unknown(),
+            ),
+        }),
+        other => other.clone(),
+    }
+}
+
+/// Combine the per-member protein consequences of an **in-cis** allele into a
+/// single description when the members are adjacent single substitutions (#855).
+///
+/// Per HGVS `delins.md`, adjacent in-cis residue changes are described as one
+/// combined delins (`p.(Asp92_Tyr93delinsTyrCys)`), not a bracketed list
+/// (`p.[(Asp92Tyr);(Tyr93Cys)]`, explicitly "not correct"); variants separated
+/// by one or more unchanged residues are described individually.
+///
+/// Returns:
+/// - `Some(single delins/substitution)` when all members are single
+///   substitutions that collapse to one contiguous run;
+/// - `Some(allele)` when they form multiple contiguous runs (each rendered, then
+///   bracketed) — separated runs stay individual;
+/// - `None` (caller keeps the existing bracketed allele) when any member is not a
+///   single point substitution, two members hit the *same* residue (ambiguous —
+///   needs codon-level combination, not description merging), or there is nothing
+///   to merge (every run is a single residue, i.e. the existing bracket is
+///   already the correct individual-variant rendering).
+fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVariant> {
+    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit};
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::{AminoAcid, ProtPos};
+    use crate::hgvs::variant::{Accession, LocEdit, ProteinVariant};
+
+    struct SubSpan {
+        pos: u64,
+        ref_aa: AminoAcid,
+        alt_aa: AminoAcid,
+    }
+
+    let mut spans: Vec<SubSpan> = Vec::with_capacity(members.len());
+    let mut accession: Option<Accession> = None;
+    let mut gene_symbol: Option<String> = None;
+    for m in members {
+        let HgvsVariant::Protein(pv) = m else {
+            return None;
+        };
+        let edit = pv.loc_edit.edit.inner()?;
+        let ProteinEdit::Substitution {
+            reference,
+            alternative,
+        } = edit
+        else {
+            return None;
+        };
+        let start = pv.loc_edit.location.start.inner()?;
+        let end = pv.loc_edit.location.end.inner()?;
+        if start.number != end.number {
+            return None; // not a point substitution
+        }
+        if accession.is_none() {
+            accession = Some(pv.accession.clone());
+            gene_symbol = pv.gene_symbol.clone();
+        }
+        spans.push(SubSpan {
+            pos: start.number,
+            ref_aa: *reference,
+            alt_aa: *alternative,
+        });
+    }
+    if spans.len() < 2 {
+        return None;
+    }
+    spans.sort_by_key(|s| s.pos);
+
+    // Group consecutive residues (no unchanged residue between them).
+    let mut groups: Vec<Vec<SubSpan>> = Vec::new();
+    for s in spans {
+        match groups.last_mut() {
+            Some(g) if s.pos <= g.last().expect("non-empty group").pos + 1 => {
+                if s.pos == g.last().expect("non-empty group").pos {
+                    // Two substitutions on the same residue: this needs codon-level
+                    // combination, which per-member description merging cannot do.
+                    // Bail to the bracketed allele rather than emit a malformed
+                    // single-residue delins.
+                    return None;
+                }
+                g.push(s);
+            }
+            _ => groups.push(vec![s]),
+        }
+    }
+    // Nothing merged → the existing bracket of individual substitutions is already
+    // the spec-correct rendering for separated variants.
+    if groups.iter().all(|g| g.len() == 1) {
+        return None;
+    }
+
+    let accession = accession?;
+    let render_group = |g: &[SubSpan]| -> ProteinVariant {
+        if g.len() == 1 {
+            let s = &g[0];
+            ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new_predicted(
+                    ProtInterval::point(ProtPos::new(s.ref_aa, s.pos)),
+                    ProteinEdit::Substitution {
+                        reference: s.ref_aa,
+                        alternative: s.alt_aa,
+                    },
+                ),
+            }
+        } else {
+            let first = &g[0];
+            let last = &g[g.len() - 1];
+            let inserted: Vec<AminoAcid> = g.iter().map(|s| s.alt_aa).collect();
+            ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new_predicted(
+                    ProtInterval::new(
+                        ProtPos::new(first.ref_aa, first.pos),
+                        ProtPos::new(last.ref_aa, last.pos),
+                    ),
+                    ProteinEdit::Delins {
+                        sequence: AminoAcidSeq::new(inserted),
+                    },
+                ),
+            }
+        }
+    };
+
+    if groups.len() == 1 {
+        Some(HgvsVariant::Protein(render_group(&groups[0])))
+    } else {
+        let variants: Vec<HgvsVariant> = groups
+            .iter()
+            .map(|g| HgvsVariant::Protein(render_group(g)))
+            .collect();
+        Some(HgvsVariant::Allele(AlleleVariant::new(
+            variants,
+            AllelePhase::Cis,
+        )))
+    }
+}
+
 pub struct VariantProjector<P: ReferenceProvider + Clone> {
     projector: Projector,
     provider: P,
@@ -2200,6 +2362,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
         let protein = if let Some(init_unknown) = cis_init_unknown {
             Some(init_unknown)
+        } else if allele.phase == AllelePhase::Cis
+            && is_frameshift
+            && inner_projections.iter().any(|p| p.protein.is_some())
+        {
+            // In-cis frameshift (#855): a downstream frameshift makes the combined
+            // protein product uncertain — there is no spec form for "sense change +
+            // frameshift" in one allele — so the whole-protein consequence collapses
+            // to `p.?` ("an effect is expected but cannot be reliably predicted",
+            // uncertain.md), reusing a member protein's accession/gene_symbol.
+            inner_projections
+                .iter()
+                .find_map(|p| p.protein.as_ref())
+                .map(build_cis_whole_protein_unknown)
         } else {
             // Build the protein allele only if ALL inner projections have a protein.
             let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
@@ -2208,10 +2383,26 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     .iter()
                     .filter_map(|p| p.protein.clone())
                     .collect();
-                Some(HgvsVariant::Allele(AlleleVariant::new(
-                    protein_variants,
-                    allele.phase,
-                )))
+                // In-cis adjacent substitutions are described as a single combined
+                // delins, not a bracketed list (#855; delins.md: `p.[Arg76Ser;
+                // Cys77Trp]` is "not correct" for adjacent residues). Separated
+                // substitutions and any non-substitution member keep the bracketed
+                // allele (delins.md: "two variants separated by one or more amino
+                // acids should be described individually"). Cis only — trans members
+                // are independent alleles.
+                if allele.phase == AllelePhase::Cis {
+                    combine_cis_substitution_proteins(&protein_variants).or_else(|| {
+                        Some(HgvsVariant::Allele(AlleleVariant::new(
+                            protein_variants,
+                            allele.phase,
+                        )))
+                    })
+                } else {
+                    Some(HgvsVariant::Allele(AlleleVariant::new(
+                        protein_variants,
+                        allele.phase,
+                    )))
+                }
             } else {
                 None
             }
@@ -4056,6 +4247,96 @@ mod tests {
         (projector, provider)
     }
 
+    /// Provider with two longer plus-strand CDS transcripts for the #855 in-cis
+    /// protein-combination tests:
+    /// - `NM_DELINS.1` = "ATGGATTATTAA" (Met-Asp-Tyr-Stop) — adjacent-codon subs
+    ///   and an in-cis frameshift.
+    /// - `NM_SEP.1` = "ATGGATTATTGCTAA" (Met-Asp-Tyr-Cys-Stop) — subs separated by
+    ///   an unchanged residue.
+    fn make_multicodon_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_DELINS.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("DELINSGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1012, 0, 12]],
+                cds_start: Some(0),
+                cds_end: Some(12),
+                gene_id: None,
+                protein: Some("NP_DELINS.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        cdot.add_transcript(
+            "NM_SEP.1".to_string(),
+            CdotTranscript {
+                gene_name: Some("SEPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[2000, 2015, 0, 15]],
+                cds_start: Some(0),
+                cds_end: Some(15),
+                gene_id: None,
+                protein: Some("NP_SEP.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_DELINS.1".to_string(),
+            gene_symbol: Some("DELINSGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGGATTATTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(12),
+            exons: vec![Exon::new(1, 1, 12)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1011),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        provider.add_transcript(Transcript {
+            id: "NM_SEP.1".to_string(),
+            gene_symbol: Some("SEPGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGGATTATTGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(15),
+            exons: vec![Exon::new(1, 1, 15)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(2000),
+            genomic_end: Some(2014),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // Genomic sequence so the genomic-projection step of each member resolves:
+        // N*1000 + DELINS CDS + filler + SEP CDS + tail (plus strand → genomic
+        // bases equal the transcript bases at each exon offset).
+        let mut genome = String::new();
+        genome.push_str(&"N".repeat(1000));
+        genome.push_str("ATGGATTATTAA"); // [1000, 1012)
+        genome.push_str(&"N".repeat(2000 - 1012));
+        genome.push_str("ATGGATTATTGCTAA"); // [2000, 2015)
+        genome.push_str(&"N".repeat(100));
+        provider.add_genomic_sequence("chr1", genome);
+        (projector, provider)
+    }
+
     fn make_minus_strand_provider_and_projector() -> (Projector, MockProvider) {
         // Same 9bp CDS on chr1, but transcript is on the minus strand.
         let mut cdot = CdotMapper::new();
@@ -5628,7 +5909,10 @@ mod tests {
             .as_ref()
             .expect("p. expected for delins")
             .to_string();
-        assert!(p.contains("delins"), "expected delins in p.: {}", p);
+        // c.4_5delinsAT changes codon 2 CGC→ATC, i.e. Arg2→Ile (1 AA → 1 AA).
+        // Per delins.md that is a SUBSTITUTION on the protein level, not a delins,
+        // even though the DNA-level edit stays a delins (#855).
+        assert_eq!(p, "NP_TEST.1:p.(Arg2Ile)");
         assert!(
             !result.is_frameshift,
             "delins of equal length is not a frameshift"
@@ -5649,9 +5933,10 @@ mod tests {
             .as_ref()
             .expect("p. expected for inv")
             .to_string();
-        assert!(p.contains("Arg2"), "expected Arg2 in p.: {}", p);
-        assert!(p.contains("delins"), "expected delins in p.: {}", p);
-        assert!(p.contains("Ala"), "expected Ala in p.: {}", p);
+        // c.4_6inv inverts codon 2 CGC→GCG, i.e. Arg2→Ala (1 AA → 1 AA). A
+        // single-residue whole-codon inversion is a SUBSTITUTION on the protein
+        // level per delins.md (1↔1), not a delins (#855).
+        assert_eq!(p, "NP_TEST.1:p.(Arg2Ala)");
         assert!(!result.is_frameshift, "inversion is not a frameshift");
     }
 
@@ -10095,6 +10380,143 @@ mod tests {
              member declining under the #625 non-ATG guard the all-or-nothing protein is None, \
              got {:?}",
             proj.protein
+        );
+    }
+
+    /// #855 (delins.md): two in-cis substitutions affecting ADJACENT residues are
+    /// described as a single combined delins, not a bracketed list. Mirrors the
+    /// corpus row `c.[274G>T;278A>G]` → `p.(Asp92_Tyr93delinsTyrCys)`.
+    /// CDS "ATGGATTATTAA" = Met-Asp-Tyr-Stop; `c.[4G>T;8A>G]` makes Asp2→Tyr and
+    /// Tyr3→Cys (adjacent codons 2 and 3).
+    #[test]
+    fn project_cis_adjacent_substitutions_combine_to_delins() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let m1 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_DELINS.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::G,
+                    alternative: Base::T,
+                },
+            ),
+        });
+        let m2 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_DELINS.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(8)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![m1, m2]));
+        let proj = vp
+            .project_variant(&allele, "NM_DELINS.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("adjacent cis subs must report a protein");
+        assert_eq!(
+            format!("{protein}"),
+            "NP_DELINS.1:p.(Asp2_Tyr3delinsTyrCys)"
+        );
+    }
+
+    /// #855: an in-cis frameshift allele collapses to the whole-protein-unknown
+    /// `p.?` (uncertain.md). Mirrors the corpus row `c.[41A>C;250del]` → `p.?`.
+    /// Uses NON-adjacent members (`c.[4G>T;11del]`) so the allele is not merged
+    /// into a single delins before the allele path runs; the `c.11del` member
+    /// frameshifts the product. Output is bare `p.?` (single ProteinVariant).
+    #[test]
+    fn project_cis_frameshift_allele_collapses_to_unknown() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let sub = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::G,
+                    alternative: Base::T,
+                },
+            ),
+        });
+        let del = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(11)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![sub, del]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("an in-cis frameshift allele must report a protein consequence");
+        assert_eq!(format!("{protein}"), "NP_SEP.1:p.?");
+    }
+
+    /// #855 regression guard (delins.md): two in-cis substitutions SEPARATED by an
+    /// unchanged residue stay individual (bracketed), NOT merged into a delins.
+    /// CDS "ATGGATTATTGCTAA" = Met-Asp-Tyr-Cys-Stop; `c.[4G>T;11G>A]` makes
+    /// Asp2→Tyr and Cys4→Tyr (codons 2 and 4; codon 3 Tyr is unchanged).
+    #[test]
+    fn project_cis_separated_substitutions_stay_bracketed() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let m1 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Substitution {
+                    reference: Base::G,
+                    alternative: Base::T,
+                },
+            ),
+        });
+        let m2 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(11)),
+                NaEdit::Substitution {
+                    reference: Base::G,
+                    alternative: Base::A,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![m1, m2]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        let protein = proj
+            .protein
+            .expect("separated cis subs must report a protein");
+        // Separated subs stay an Allele; the Allele Display hoists the shared gene
+        // symbol (unchanged pre-existing behavior). The point of this guard is that
+        // they are NOT merged into a single delins.
+        assert_eq!(
+            format!("{protein}"),
+            "NP_SEP.1(SEPGENE):p.[(Asp2Tyr);(Cys4Tyr)]"
         );
     }
 

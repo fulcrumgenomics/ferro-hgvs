@@ -293,15 +293,15 @@ class TestIndelProteinNomenclature:
         assert result.is_frameshift is True
 
     def test_inversion_whole_codon(self, long_projector: ferro_hgvs.VariantProjector) -> None:
-        # Invert Arg codon (g.2006_2008inv = c.4_6inv = CGC → GCG = Ala):
-        # p.(Arg2delinsAla).
+        # Invert Arg codon (g.2006_2008inv = c.4_6inv = CGC → GCG = Ala).
+        # A whole-codon inversion that changes a single residue is a SUBSTITUTION
+        # per HGVS delins.md (1 AA → 1 AA), not a delins: p.(Arg2Ala).
         result = long_projector.project("NC_000002.12:g.2006_2008inv", transcript="NM_LONG.1")
         assert result.c_name is not None
         assert "inv" in result.c_name
         assert result.p_name is not None
-        assert "Arg2" in result.p_name
-        assert "delins" in result.p_name
-        assert "Ala" in result.p_name
+        assert "Arg2Ala" in result.p_name
+        assert "delins" not in result.p_name
         assert result.is_frameshift is False
 
     def test_stop_codon_readthrough(self, long_projector: ferro_hgvs.VariantProjector) -> None:
