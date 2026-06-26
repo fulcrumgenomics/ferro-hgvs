@@ -1397,24 +1397,14 @@ pub fn normalize_repeat(
     }
 
     // 3'-rule unit rotation (repeated.md L44: "applying the 3'rule, the repeat
-    // has to be described as an AGC repeat"). A repeat unit shifts 3' exactly
-    // like a homopolymer: while the base immediately after the tract equals the
-    // unit's first base, the tract can slide one base 3' with the unit rotated
-    // left by one (e.g. CAA tract abutting a trailing C -> AAC tract one base
-    // over). This picks the 3'-most phase. Each step drops one base at
-    // `ref_start` and adds one matching base at `ref_end`, so on a periodic
-    // tract it is a pure re-phasing: the width (`ref_end - ref_start =
-    // ref_count * unit_len`) is unchanged and the new window is still
-    // `ref_count` copies of the rotated unit — hence `ref_count` is preserved
-    // and only the phase and anchor move. The loop terminates because `ref_end`
-    // strictly increases and is bounded by `ref_seq.len()`. A clean tract
-    // bounded by a non-matching base (the common case) does not rotate.
-    let mut rotated_unit = canonical_unit.to_vec();
-    while ref_end < ref_seq.len() && ref_seq[ref_end] == rotated_unit[0] {
-        rotated_unit.rotate_left(1);
-        ref_start += 1;
-        ref_end += 1;
-    }
+    // has to be described as an AGC repeat") via the shared helper, so
+    // `insertion_to_repeat` reaches the identical 3'-most phase (idempotency;
+    // #852). `ref_end` stays exclusive (the later `index_to_hgvs_pos(ref_end - 1)`
+    // is unchanged).
+    let (ns, ne, rotated_unit) =
+        three_prime_align_tract(ref_seq, ref_start, ref_end, canonical_unit);
+    ref_start = ns;
+    ref_end = ne;
     let canonical_unit: &[u8] = &rotated_unit;
 
     let unit_len = canonical_unit.len() as u64;
