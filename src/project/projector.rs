@@ -2587,7 +2587,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // transcript id keeps the output honest — the identifier names the
         // transcript whose CDS we actually translated — and still satisfies the
         // grammar.
-        let prot_acc = cdot_protein.unwrap_or_else(|| transcript_id.to_string());
+        // #860: when the input names an LRG transcript (LRG_<n>t<k>), echo its
+        // LRG protein namespace (LRG_<n>p<k>) rather than the resolved NP_ — both
+        // are spec-valid public references (general.md L16), and preserving the
+        // input's namespace matches the reference the caller used. Non-LRG inputs
+        // return None here and keep the cdot NP_ (or the honest transcript-id
+        // fallback, #310/#808) — byte-identical to the prior behavior.
+        let prot_acc = lrg_protein_accession(transcript_id)
+            .or(cdot_protein)
+            .unwrap_or_else(|| transcript_id.to_string());
         // Issue #505: protein prediction below reads this transcript's CDS
         // bases directly and translates them. If the reference only carries a
         // *different* version of the transcript (a silent version-strip

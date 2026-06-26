@@ -190,6 +190,7 @@ mod issue_573_intronic_shuffle_window;
 mod issue_736_rna_uracil_normalize;
 mod issue_806_effect_real_residues;
 mod issue_843_allele_rna_build_scoping;
+mod issue_860_lrg_namespace;
 mod issue_91_protein_three_prime_shift;
 mod issue_92_protein_delins_to_dup;
 mod issue_92_protein_ins_to_dup;
