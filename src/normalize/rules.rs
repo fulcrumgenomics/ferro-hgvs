@@ -1300,6 +1300,34 @@ pub enum RepeatNormResult {
     Unchanged,
 }
 
+/// Apply the HGVS 3'-rule to a tandem-repeat tract, returning the most-3' phase.
+///
+/// `ref_start`/`ref_end` are 0-based with `ref_end` **exclusive**:
+/// `ref_seq[ref_start..ref_end]` is a whole number of copies of `unit`. While the
+/// base immediately past the tract equals the rotating unit's head, the window
+/// slides one base 3' and the unit rotates left by one — a pure re-phasing that
+/// preserves the width (copy count). Returns the rotated
+/// `(start, end_exclusive, rotated_unit)`.
+///
+/// Shared by [`normalize_repeat`] and [`insertion_to_repeat`] so their
+/// ins->repeat canonicalization agrees in a single pass (idempotency; #852, #866).
+fn three_prime_align_tract(
+    ref_seq: &[u8],
+    ref_start: usize,
+    ref_end: usize,
+    unit: &[u8],
+) -> (usize, usize, Vec<u8>) {
+    let mut start = ref_start;
+    let mut end = ref_end;
+    let mut rotated = unit.to_vec();
+    while end < ref_seq.len() && !rotated.is_empty() && ref_seq[end] == rotated[0] {
+        rotated.rotate_left(1);
+        start += 1;
+        end += 1;
+    }
+    (start, end, rotated)
+}
+
 /// Normalize a repeat variant
 ///
 /// Given a repeat notation like CAT[1], determines the appropriate
@@ -2524,6 +2552,39 @@ pub fn canonicalize_insertion_expand<P: ReferenceProvider>(
 mod tests {
     use super::*;
     use crate::normalize::config::ShuffleDirection;
+
+    #[test]
+    fn three_prime_align_odd_di_tract_shifts_phase() {
+        // ref "CTGTGTT": tract TGTG at [1,5) (count 2, unit TG). idx 5 is 'T' ==
+        // rotated[0], so it slides one base 3': GTGT at [2,6), unit GT.
+        let r = b"CTGTGTT";
+        let (s, e, u) = three_prime_align_tract(r, 1, 5, b"TG");
+        assert_eq!((s, e, u.as_slice()), (2, 6, b"GT".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_clean_tract_is_noop() {
+        // ref "CGCGCA": GCGC at [1,5) bounded by 'A' (!= 'G') -> no shift.
+        let r = b"CGCGCA";
+        let (s, e, u) = three_prime_align_tract(r, 1, 5, b"GC");
+        assert_eq!((s, e, u.as_slice()), (1, 5, b"GC".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_homopolymer_shifts_to_run_end() {
+        // ref "GAAAAG": single 'A' window [1,2) inside AAAA slides to [4,5).
+        let r = b"GAAAAG";
+        let (s, e, u) = three_prime_align_tract(r, 1, 2, b"A");
+        assert_eq!((s, e, u.as_slice()), (4, 5, b"A".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_tri_tract_clean_noop() {
+        // ref "ATTGTTGA": TTGTTG at [1,7) bounded by 'A' -> no shift.
+        let r = b"ATTGTTGA";
+        let (s, e, u) = three_prime_align_tract(r, 1, 7, b"TTG");
+        assert_eq!((s, e, u.as_slice()), (1, 7, b"TTG".as_slice()));
+    }
 
     #[test]
     fn test_needs_normalization() {
