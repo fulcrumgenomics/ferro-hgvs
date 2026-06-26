@@ -1375,12 +1375,56 @@ pub fn normalize_repeat(
     let copies_per_input_unit = (repeat_unit.len() / canonical_unit.len()) as u64;
     let mut specified_count = specified_count * copies_per_input_unit;
 
-    // Count how many times the canonical unit appears in the reference
-    let Some((ref_count, mut ref_start, mut ref_end)) =
-        count_tandem_repeats(ref_seq, pos, canonical_unit)
-    else {
+    // Count how many times the canonical unit appears in the reference.
+    //
+    // For a single-position anchor (`end_pos == pos`) the unit can land off the
+    // tract's phase boundary — a reverse-complemented projected repeat puts its
+    // single anchor at the genomic 3' end of the tract, often mid-unit (#852).
+    // Examples vs the `GT`/`GC` tracts: `g.4913TG[5]` (anchor reads `GT`, not the
+    // queried `TG`) and `g.4920GC[5]` (anchor is the tract's last base, so a
+    // boundary-anchored count undercounts). `count_tandem_repeats` requires the
+    // unit to tile *at* the anchor, so the literal lookup misses or undercounts.
+    // Search unit rotations AND small anchor offsets (`pos - a`) for the maximal
+    // tandem tract that CONTAINS `pos`, mirroring `insertion_to_repeat`'s rotation
+    // handling; `three_prime_align_tract` below then fixes the final phase. Bounded
+    // (`unit_len^2` probes). An explicit range is spelled unit-aligned by the
+    // caller, so it keeps the literal unit (no search) — only length>=2 units on a
+    // single anchor can be off-phase.
+    let mut working_unit = canonical_unit.to_vec();
+    let tract = match count_tandem_repeats(ref_seq, pos, &working_unit) {
+        Some(t) => Some(t),
+        None if end_pos == pos && working_unit.len() >= 2 => {
+            let mut best: Option<(u64, usize, usize, Vec<u8>)> = None;
+            for a in 0..canonical_unit.len() {
+                let Some(anchor) = pos.checked_sub(a) else {
+                    continue;
+                };
+                for r in 0..canonical_unit.len() {
+                    let mut rotated = canonical_unit.to_vec();
+                    rotated.rotate_left(r);
+                    if let Some((c, s, e)) = count_tandem_repeats(ref_seq, anchor, &rotated) {
+                        // Only accept a tract that actually spans the anchor, and
+                        // keep the longest such tract.
+                        if s <= pos && pos < e && best.as_ref().is_none_or(|(bc, ..)| c > *bc) {
+                            best = Some((c, s, e, rotated));
+                        }
+                    }
+                }
+            }
+            match best {
+                Some((c, s, e, u)) => {
+                    working_unit = u;
+                    Some((c, s, e))
+                }
+                None => None,
+            }
+        }
+        None => None,
+    };
+    let Some((ref_count, mut ref_start, mut ref_end)) = tract else {
         return RepeatNormResult::Unchanged;
     };
+    let canonical_unit: &[u8] = &working_unit;
 
     // Flank absorption for an under-specified explicit range. `[N]` counts the
     // alt copies of the *stated* reference units; reference repeat copies inside
@@ -2594,6 +2638,62 @@ mod tests {
         assert_eq!(count, 5);
         assert_eq!((start, end), (3, 6));
         assert_eq!(unit, b"GT".to_vec());
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_off_phase_di_repeat_expands() {
+        // #852 Option 2: a reverse-complemented projected di-repeat lands at a
+        // single anchor off the tract's phase boundary. ref "CTGTGTT": the literal
+        // unit "TG" does not tile at anchor idx 2 (which reads "GT"), so without
+        // the rotation retry `normalize_repeat` bails to `Unchanged`. It must
+        // instead find the GT tract and emit the entire-range 3'-form.
+        let r = b"CTGTGTT";
+        let got = normalize_repeat(r, 2, 2, b"TG", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 3,
+                end: 6,
+                sequence: b"GT".to_vec(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_tract_end_di_repeat_expands() {
+        // #852 Option 2: minus-strand projection lands the single anchor at the
+        // tract's 3' END. ref "TGCGCA": GCGC tract at idx 1..5; single anchor at
+        // the last base (idx 4) — a boundary-anchored count undercounts, so the
+        // offset search must recover the full 2-copy tract (the `c.3GC[5]` shape).
+        let r = b"TGCGCA";
+        let got = normalize_repeat(r, 4, 4, b"GC", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 2,
+                end: 5,
+                sequence: b"GC".to_vec(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_in_phase_di_repeat_unaffected() {
+        // The already-phase-aligned unit takes the direct path and yields the same
+        // result (phase-independence / idempotency).
+        let r = b"CTGTGTT";
+        let got = normalize_repeat(r, 2, 2, b"GT", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 3,
+                end: 6,
+                sequence: b"GT".to_vec(),
+                count: 5,
+            }
+        );
     }
 
     #[test]
