@@ -44,13 +44,17 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | protein_description | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | protein_description | spec_citation | — | — |
+| `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.169T>A` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_003002.2):c.[274G>T;278A>G]` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.129G>T` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.130G>A` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.15_17dup` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.3GC[5]` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.4_5insGTA` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.4_6delinsGTA` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.5_6delinsTAG` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.6C[4]` | protein_description | spec_citation | — | — |
 | `NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203` | protein_description | spec_citation | — | — |
@@ -272,5 +276,5 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 47 |
+| protein_description | 0 | 0 | 0 | 0 | 51 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

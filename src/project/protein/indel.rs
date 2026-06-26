@@ -378,6 +378,20 @@ fn build_inframe_insertion(
     let insert_end = (aa_before_idx + 1 + n_inserted).min(alt_protein.len());
     let inserted_aas: Vec<AminoAcid> = alt_protein[aa_before_idx + 1..insert_end].to_vec();
 
+    // A directly-C-terminal tandem copy is a duplication, not an insertion
+    // (duplication.md). The insertion sits before `ref_protein[aa_before_idx + 1]`.
+    if let Some((dup_start, dup_end)) =
+        protein_tandem_dup_range(ref_protein, aa_before_idx + 1, &inserted_aas)
+    {
+        return Ok(build_dup_variant(
+            ref_protein,
+            dup_start,
+            dup_end,
+            protein_accession,
+            transcript,
+        ));
+    }
+
     let protein_edit = ProteinEdit::Insertion {
         sequence: AminoAcidSeq::new(inserted_aas),
     };
@@ -438,6 +452,87 @@ fn build_inframe_duplication(
     Ok(HgvsVariant::Protein(variant))
 }
 
+/// Detect whether a pure protein insertion is a tandem duplication.
+///
+/// Per HGVS `duplication.md`, an inserted residue block that is a copy of the
+/// residues **directly C-terminal** of (i.e. immediately 5' of, in tandem with)
+/// the insertion point is a *duplication*, not an insertion. The non-adjacent
+/// case — where the inserted sequence is present elsewhere in the protein but not
+/// directly flanking — stays an insertion (the `p.His7_Gln8insGly4_Ser6` example
+/// in duplication.md's discussion). The protein 3' rule ("the most C-terminal
+/// residue is arbitrarily assigned to have been duplicated") is applied by
+/// sliding the insertion point C-terminal across any equal-residue run before the
+/// tandem test.
+///
+/// `point` is the 0-based index in `ref_protein` *before which* `inserted` is
+/// added (so `inserted` sits between `ref_protein[point-1]` and
+/// `ref_protein[point]`). Returns the 0-based inclusive `[start, end]` range of
+/// the duplicated residues in `ref_protein`, or `None` when the insertion is not
+/// a directly-C-terminal tandem copy (a genuine insertion). Mirrors the
+/// DNA-level `normalize::rules::insertion_is_duplication` semantics at the
+/// amino-acid level.
+fn protein_tandem_dup_range(
+    ref_protein: &[AminoAcid],
+    point: usize,
+    inserted: &[AminoAcid],
+) -> Option<(usize, usize)> {
+    let unit = inserted.len();
+    if unit == 0 || point > ref_protein.len() {
+        return None;
+    }
+    // Apply the protein 3' rule: slide the insertion point C-terminal across any
+    // run where the residue at the point matches the head of the (rotating)
+    // inserted unit. This places a homopolymer/tandem insertion at its most
+    // C-terminal equivalent position before the tandem test.
+    let mut point = point;
+    let mut rotated: Vec<AminoAcid> = inserted.to_vec();
+    while point < ref_protein.len() && ref_protein[point] == rotated[0] {
+        rotated.rotate_left(1);
+        point += 1;
+    }
+    // Tandem test: the `unit` residues immediately 5' of the (shifted) insertion
+    // point must equal the (rotated) inserted unit — a copy lying directly
+    // C-terminal of the original.
+    let start = point.checked_sub(unit)?;
+    if ref_protein[start..point] == rotated[..] {
+        Some((start, point - 1))
+    } else {
+        None
+    }
+}
+
+/// Build a `p.(Xxx{N}dup)` / `p.(Xxx{N}_Yyy{M}dup)` variant for the 0-based
+/// inclusive residue range `[start_idx, end_idx]` in `ref_protein`. Shares the
+/// location shape with [`build_inframe_duplication`] (point when single residue,
+/// interval otherwise).
+fn build_dup_variant(
+    ref_protein: &[AminoAcid],
+    start_idx: usize,
+    end_idx: usize,
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> HgvsVariant {
+    let start_aa = ref_protein
+        .get(start_idx)
+        .copied()
+        .unwrap_or(AminoAcid::Xaa);
+    let start_pos = (start_idx + 1) as u64;
+    let loc = if start_idx == end_idx {
+        ProtInterval::point(ProtPos::new(start_aa, start_pos))
+    } else {
+        let end_aa = ref_protein.get(end_idx).copied().unwrap_or(AminoAcid::Xaa);
+        ProtInterval::new(
+            ProtPos::new(start_aa, start_pos),
+            ProtPos::new(end_aa, (end_idx + 1) as u64),
+        )
+    };
+    HgvsVariant::Protein(ProteinVariant {
+        accession: parse_accession(protein_accession),
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new_predicted(loc, ProteinEdit::Duplication),
+    })
+}
+
 /// Generic in-frame delins: `p.(Xxx{N}_Yyy{M}delins{ZzzZzz...})`.
 ///
 /// Used when the edit straddles a codon boundary or is a delins/inversion.
@@ -486,6 +581,20 @@ fn build_inframe_delins(
             .get(first_diff..first_diff + n_inserted)
             .map(|s| s.to_vec())
             .unwrap_or_default();
+        // A directly-C-terminal tandem copy is a duplication, not an insertion
+        // (duplication.md). `first_diff` is the index in `ref_protein` before
+        // which the residues are inserted.
+        if let Some((dup_start, dup_end)) =
+            protein_tandem_dup_range(ref_protein, first_diff, &inserted)
+        {
+            return Ok(build_dup_variant(
+                ref_protein,
+                dup_start,
+                dup_end,
+                protein_accession,
+                transcript,
+            ));
+        }
         let loc = ProtInterval::new(
             ProtPos::new(left_aa, (left_idx + 1) as u64),
             ProtPos::new(right_aa, (first_diff + 1) as u64),
@@ -523,6 +632,27 @@ fn build_inframe_delins(
     } else {
         vec![]
     };
+
+    // One amino acid replaced by one (non-stop) amino acid is, by definition, a
+    // substitution, not a deletion-insertion (delins.md: "when **one** amino acid
+    // is replaced by **one** other amino acid, the change is a substitution").
+    // This applies to every edit routed here, including a whole-codon inversion
+    // that changes a single residue. An immediate stop (1 AA → Ter) is a nonsense
+    // substitution per spec, but is left to the existing path (no corpus case;
+    // such a delins typically truncates `alt_protein` before reaching here).
+    if start_pos == end_pos && inserted.len() == 1 && inserted[0] != AminoAcid::Ter {
+        let protein_edit = ProteinEdit::Substitution {
+            reference: start_aa,
+            alternative: inserted[0],
+        };
+        let loc = ProtInterval::point(ProtPos::new(start_aa, start_pos));
+        let variant = ProteinVariant {
+            accession: parse_accession(protein_accession),
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(loc, protein_edit),
+        };
+        return Ok(HgvsVariant::Protein(variant));
+    }
 
     let protein_edit = ProteinEdit::Delins {
         sequence: AminoAcidSeq::new(inserted),
@@ -809,6 +939,81 @@ mod tests {
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala2_Gly3insIle)");
     }
 
+    /// #855 (delins.md): one residue replaced by one residue is a substitution,
+    /// not a delins — even when routed through `build_inframe_delins`.
+    #[test]
+    fn inframe_delins_single_residue_renders_substitution() {
+        use crate::hgvs::location::AminoAcid::{Arg, Gly, Met, Val};
+        let t = tx("ATGCGCGGTTAA", 1, 12);
+        let ref_protein = [Met, Arg, Gly];
+        let alt_protein = [Met, Val, Gly]; // Arg2 → Val (1 AA → 1 AA)
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 4, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2Val)");
+    }
+
+    /// #855 (duplication.md): a pure insertion that is a tandem copy of the
+    /// residue directly C-terminal (immediately 5') of the insertion point is a
+    /// duplication, not an insertion. Mirrors the corpus `c.15_17dup`
+    /// → `p.(Cys6dup)` shape (mid-codon dup routed through the delins guard).
+    #[test]
+    fn inframe_delins_tandem_single_residue_renders_dup() {
+        use crate::hgvs::location::AminoAcid::{Arg, Cys, Met};
+        let t = tx("ATGTGCCGCTAA", 1, 12);
+        let ref_protein = [Met, Cys, Arg];
+        let alt_protein = [Met, Cys, Cys, Arg]; // extra Cys inserted after Cys2
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 6, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Cys2dup)");
+    }
+
+    /// #855 (duplication.md 3' rule): for a tandem run the **most C-terminal**
+    /// residue is assigned as duplicated. Inserting an extra Ala into an Ala run
+    /// must report the 3'-most Ala, not the 5'-most.
+    #[test]
+    fn inframe_delins_tandem_run_picks_most_cterminal() {
+        use crate::hgvs::location::AminoAcid::{Ala, Gly, Met};
+        let t = tx("ATGGCAGCAGGTTAA", 1, 15);
+        let ref_protein = [Met, Ala, Ala, Gly]; // Ala at positions 2 and 3
+        let alt_protein = [Met, Ala, Ala, Ala, Gly]; // one extra Ala in the run
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala3dup)");
+    }
+
+    /// #855 regression guard: a multi-residue tandem copy renders as a ranged dup.
+    #[test]
+    fn inframe_delins_tandem_two_residues_renders_ranged_dup() {
+        use crate::hgvs::location::AminoAcid::{Gly, His, Met, Ser};
+        let t = tx("ATGGGCTCCCACTAA", 1, 15);
+        let ref_protein = [Met, Gly, Ser, His];
+        let alt_protein = [Met, Gly, Ser, Gly, Ser, His]; // GlySer copied in tandem
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 8, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Gly2_Ser3dup)");
+    }
+
+    /// #855 regression guard: a non-tandem insertion (inserted residue does not
+    /// match the directly-5' residue) must stay an insertion, not become a dup.
+    #[test]
+    fn inframe_delins_non_tandem_insertion_stays_insertion() {
+        use crate::hgvs::location::AminoAcid::{Ala, Gly, Ile, Met};
+        let t = tx("ATGGCTGGTTAA", 1, 12);
+        let ref_protein = [Met, Ala, Gly];
+        let alt_protein = [Met, Ala, Ile, Gly]; // Ile ≠ Ala(2) → genuine insertion
+        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala2_Gly3insIle)");
+    }
+
+    /// #855 bounds guard: an insertion near the N-terminus (fewer preceding
+    /// residues than the inserted unit) must not panic and must stay an insertion.
+    #[test]
+    fn protein_tandem_dup_range_n_terminal_no_panic() {
+        use crate::hgvs::location::AminoAcid::{Ala, Gly, Met};
+        // Insert [Gly, Ala] at index 1 (only one residue, Met, precedes it).
+        let ref_protein = [Met, Ala];
+        assert_eq!(protein_tandem_dup_range(&ref_protein, 1, &[Gly, Ala]), None);
+        // Empty insertion and out-of-range point are also None.
+        assert_eq!(protein_tandem_dup_range(&ref_protein, 1, &[]), None);
+        assert_eq!(protein_tandem_dup_range(&ref_protein, 99, &[Met]), None);
+    }
+
     /// Test convenience wrapper: build the `RefProteinBundle` on demand so
     /// existing tests can keep their original `predict_indel_protein` calls.
     fn predict_indel(
@@ -990,11 +1195,10 @@ mod tests {
     fn delins_same_length_codon_aligned() {
         // CDS "ATGCGCTAA": delins c.4_6 (CGC → TCC).
         // Mutated CDS: "ATGTCCTAA" → ATG TCC TAA → [Met, Ser]
-        // ref=[Met, Arg], alt=[Met, Ser]
-        // first_diff=1, last_diff_ref=1, last_diff_alt=1 → p.(Arg2delinsser)? No:
-        // It's a delins: p.(Arg2delinsSer) → but HGVS for single AA change is really
-        // p.(Arg2Ser) substitution. However since it's a delins NaEdit we go through
-        // build_inframe_delins. Let's check what we actually get.
+        // ref=[Met, Arg], alt=[Met, Ser].
+        // One amino acid replaced by one other amino acid is a SUBSTITUTION, not a
+        // delins (delins.md:17), even though the DNA-level edit is a delins → so the
+        // spec-correct protein consequence is p.(Arg2Ser), not p.(Arg2delinsSer).
         let t = tx("ATGCGCTAA", 1, 9);
         let seq: crate::hgvs::edit::Sequence = "TCC".parse().unwrap();
         let edit = NaEdit::Delins {
@@ -1003,28 +1207,24 @@ mod tests {
             deleted_length: None,
         };
         let result = predict_indel(&t, 4, 6, &edit, "NP_TEST.1").unwrap();
-        let s = prot_str(&result);
-        // Should be a delins at Arg2 → Ser: p.(Arg2delinsSer)
-        assert!(s.contains("Arg2"), "expected Arg2 in '{}'", s);
-        assert!(s.contains("delins"), "expected delins in '{}'", s);
-        assert!(s.contains("Ser"), "expected Ser in '{}'", s);
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Arg2Ser)");
     }
 
     #[test]
     fn inversion_codon_cgc_to_gcg() {
         // CDS "ATGCGCTAA": inv c.4_6 (CGC → GCG).
-        // GCG = Ala. Mutated CDS: "ATGGCGTAA" → [Met, Ala]
-        // first_diff=1 → delins Arg2 → Ala: p.(Arg2delinsAla)
+        // GCG = Ala. Mutated CDS: "ATGGCGTAA" → [Met, Ala].
+        // A whole-codon inversion that changes a single residue is a SUBSTITUTION
+        // per delins.md:17 (1 AA → 1 AA), not a delins → p.(Arg2Ala). (The spec
+        // says inversions are rendered as delins on the protein level only when
+        // they span 2+ residues.)
         let t = tx("ATGCGCTAA", 1, 9);
         let edit = NaEdit::Inversion {
             sequence: None,
             length: None,
         };
         let result = predict_indel(&t, 4, 6, &edit, "NP_TEST.1").unwrap();
-        let s = prot_str(&result);
-        assert!(s.contains("Arg2"), "expected Arg2 in '{}'", s);
-        assert!(s.contains("delins"), "expected delins in '{}'", s);
-        assert!(s.contains("Ala"), "expected Ala in '{}'", s);
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Arg2Ala)");
     }
 
     // ─── Regression tests for CodeRabbit-flagged edge cases ───────────────────
