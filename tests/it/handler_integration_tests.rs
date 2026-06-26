@@ -25,6 +25,7 @@ fn create_test_state() -> ferro_hgvs::service::server::AppState {
         tool_manager: Arc::new(tool_manager),
         config: Arc::new(ServiceConfig::default()),
         cdot: None,
+        reference: None,
         liftover: None,
         health_cache: HealthCache::default(),
     }

@@ -12,6 +12,8 @@ use tokio::sync::RwLock;
 
 use crate::data::cdot::CdotMapper;
 use crate::liftover::Liftover;
+use crate::reference::provider::ReferenceProvider;
+use crate::reference::MultiFastaProvider;
 use crate::service::{
     config::ServiceConfig,
     handlers,
@@ -48,6 +50,27 @@ pub struct AppState {
     pub health_cache: HealthCache,
     /// Optional transcript data for coordinate conversion
     pub cdot: Option<Arc<CdotMapper>>,
+    /// Optional sequence-bearing reference provider (FASTA + cdot CDS).
+    ///
+    /// Enables real amino-acid resolution in the effect handler: unlike
+    /// [`cdot`](Self::cdot) (coordinate-only [`CdotTranscript`]s with no
+    /// sequence), a [`MultiFastaProvider`] returns [`Transcript`]s carrying the
+    /// full mRNA sequence, so the handler can translate real codons instead of
+    /// emitting `?` placeholders (issue #806). Built from the ferro tool's
+    /// `reference_dir` via its `manifest.json` (required — a directory-only load
+    /// carries no cdot/CDS metadata and so cannot resolve residues). `None` when
+    /// ferro is disabled, unconfigured, the reference directory is absent or has
+    /// no `manifest.json`, or loading fails — in which case the handler degrades
+    /// to honest "data unavailable" signals.
+    ///
+    /// This is the shared seam #498 (full c.→p.) inherits. Typed as a trait
+    /// object so the production [`MultiFastaProvider`] and a test
+    /// [`MockProvider`](crate::reference::mock::MockProvider) are
+    /// interchangeable.
+    ///
+    /// [`CdotTranscript`]: crate::data::cdot::CdotTranscript
+    /// [`Transcript`]: crate::reference::transcript::Transcript
+    pub reference: Option<Arc<dyn ReferenceProvider + Send + Sync>>,
     /// Optional liftover engine for genome build conversion
     pub liftover: Option<Arc<Liftover>>,
 }
@@ -86,6 +109,13 @@ pub fn create_app(config: ServiceConfig) -> Result<(Router, AppState), ServiceEr
         None
     };
 
+    // Load an optional sequence-bearing reference provider from the ferro
+    // tool's reference_dir (issue #806). Gated on ferro being enabled with an
+    // existing reference directory — mirroring the cdot guard above — and
+    // degrades to `None` on any load error so the effect handler falls back to
+    // honest "data unavailable" signals rather than failing startup.
+    let reference = load_reference_provider(&config);
+
     // Load optional liftover chain files
     let liftover = if let Some(liftover_config) = &config.data.liftover {
         if liftover_config.grch37_to_38.exists() && liftover_config.grch38_to_37.exists() {
@@ -119,6 +149,7 @@ pub fn create_app(config: ServiceConfig) -> Result<(Router, AppState), ServiceEr
         config: Arc::new(config.clone()),
         health_cache: HealthCache::default(),
         cdot,
+        reference,
         liftover,
     };
 
@@ -311,6 +342,75 @@ fn load_cdot(path: &std::path::Path) -> Result<CdotMapper, ServiceError> {
         .map_err(|e| ServiceError::ConfigError(format!("Failed to load cdot: {}", e)))
 }
 
+/// Build the optional sequence-bearing reference provider (issue #806).
+///
+/// Sourced from the ferro tool's `reference_dir` via its `manifest.json`, which
+/// pairs FASTA bases with the cdot CDS metadata residue resolution needs. A
+/// manifest is **required**: a bare directory load (`from_directory`) carries no
+/// cdot/CDS metadata, so it would resolve every residue to `?` while looking
+/// like a working provider — declined explicitly instead. Returns `None` (never
+/// an error) when ferro is disabled or unconfigured, the reference directory is
+/// missing or has no `manifest.json`, or the load fails — the effect handler
+/// treats the provider as optional and degrades to honest "data unavailable"
+/// signals rather than failing service startup.
+fn load_reference_provider(
+    config: &ServiceConfig,
+) -> Option<Arc<dyn ReferenceProvider + Send + Sync>> {
+    let ferro = config.tools.ferro.as_ref()?;
+    if !ferro.enabled {
+        tracing::debug!("Ferro tool disabled; reference provider for effect handler unavailable.");
+        return None;
+    }
+    let reference_dir = &ferro.reference_dir;
+    if !reference_dir.exists() {
+        tracing::warn!(
+            "Ferro reference directory {} does not exist; effect amino-acid resolution will be \
+             limited.",
+            reference_dir.display()
+        );
+        return None;
+    }
+
+    // Require a manifest. A directory-loaded provider
+    // (`MultiFastaProvider::from_directory`) leaves `cdot_mapper` and
+    // `supplemental_cds` empty, so it carries no CDS metadata — effect
+    // amino-acid resolution would then silently fall back to `?` for every
+    // residue despite a provider being present. Decline explicitly instead, so
+    // the effect handler takes its honest "data unavailable" path (issue #806).
+    let manifest_path = reference_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        tracing::warn!(
+            "Ferro reference directory {} has no manifest.json; a directory-loaded provider \
+             carries no cdot/CDS metadata, so effect amino-acid resolution would silently fall \
+             back to `?`. Point ferro.reference_dir at a prepared reference (with manifest.json) \
+             to enable real residue resolution (issue #806).",
+            reference_dir.display()
+        );
+        return None;
+    }
+
+    tracing::info!(
+        "Loading reference provider from manifest {}",
+        manifest_path.display()
+    );
+    match MultiFastaProvider::from_manifest(&manifest_path) {
+        Ok(provider) => {
+            tracing::info!(
+                "Reference provider loaded successfully for effect amino-acid resolution"
+            );
+            Some(Arc::new(provider) as Arc<dyn ReferenceProvider + Send + Sync>)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to load reference provider: {}. Effect amino-acid resolution will be \
+                 limited.",
+                e
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +429,31 @@ mod tests {
         // Invalid formats
         assert!(parse_size("invalid").is_err());
         assert!(parse_size("10XB").is_err());
+    }
+
+    /// A reference directory that exists and holds indexed FASTA but has **no**
+    /// `manifest.json` must yield no provider: `from_directory` would succeed
+    /// yet carry no cdot/CDS metadata, so the effect handler would silently
+    /// resolve every residue to `?`. `load_reference_provider` must decline
+    /// (issue #806) so the handler takes its honest "data unavailable" path.
+    #[test]
+    fn load_reference_provider_declines_manifestless_directory() {
+        use std::fs;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Minimal indexed FASTA so `from_directory` itself would SUCCEED — this
+        // is what makes the test a true red/green: pre-fix it returned `Some`.
+        fs::write(dir.path().join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(dir.path().join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+        // Deliberately no manifest.json.
+
+        let mut config = ServiceConfig::default();
+        let ferro = config.tools.ferro.as_mut().expect("ferro config");
+        ferro.enabled = true;
+        ferro.reference_dir = dir.path().to_path_buf();
+
+        assert!(
+            load_reference_provider(&config).is_none(),
+            "a manifest-less directory must not yield a CDS-less provider"
+        );
     }
 }

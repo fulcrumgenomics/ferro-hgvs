@@ -21,4 +21,7 @@ pub(crate) use helpers::{
     whole_exon_deletion_span, RefProteinBundle,
 };
 pub(crate) use indel::predict_indel_protein;
-pub(crate) use substitution::predict_substitution_protein;
+// `read_ref_codon` / `translate` are the position-level CDS primitives reused by
+// the service effect handler to resolve real amino-acid residues (issue #806);
+// `read_ref_codon` is also the seam #498 (full c.→p.) inherits.
+pub(crate) use substitution::{predict_substitution_protein, read_ref_codon, translate};

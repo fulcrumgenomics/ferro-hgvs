@@ -51,6 +51,7 @@ fn state_with_test_transcript() -> AppState {
         tool_manager: Arc::new(ToolManager::empty()),
         config: Arc::new(ServiceConfig::default()),
         cdot: Some(Arc::new(cdot)),
+        reference: None,
         liftover: None,
         health_cache: HealthCache::default(),
     }

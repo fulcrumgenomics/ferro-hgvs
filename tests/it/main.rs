@@ -188,6 +188,7 @@ mod issue_502_np_protein_selector;
 mod issue_537_pter_qter_genomic;
 mod issue_573_intronic_shuffle_window;
 mod issue_736_rna_uracil_normalize;
+mod issue_806_effect_real_residues;
 mod issue_843_allele_rna_build_scoping;
 mod issue_91_protein_three_prime_shift;
 mod issue_92_protein_delins_to_dup;
