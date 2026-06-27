@@ -128,3 +128,111 @@ fn allele_with_unparented_member_declines_whole() {
         "expected an all-or-nothing decline citing the missing genomic parent, got: {msg}"
     );
 }
+
+/// Minus-strand NM_M.1 on NC_000001.11, 20-base transcript, cds_start=2 (0-based
+/// tx). tx_to_genome(tx) = 2019 - tx (exon genome [2000,2020)). NG_M.1 identity
+/// placement over [1900,2100]. c.1→tx2→g.2017; c.5→tx6→g.2013; c.9→tx10→g.2009
+/// (descending in input order → C2 must re-sort ascending).
+fn minus_fixture() -> VariantProjector<MockProvider> {
+    let mut cdot = CdotMapper::new();
+    cdot.add_transcript(
+        "NM_M.1".to_string(),
+        CdotTranscript {
+            gene_name: Some("MGENE".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: Strand::Minus,
+            exons: vec![[2000, 2020, 0, 20]],
+            cds_start: Some(2),
+            cds_end: Some(20),
+            gene_id: None,
+            protein: Some("NP_M.1".to_string()),
+            exon_cigars: Vec::new(),
+        },
+    );
+    let projector = Projector::new(cdot);
+
+    let mut provider = MockProvider::new();
+    // Transcript sequence is the reverse-complement of the genome (minus strand);
+    // the sort/flank tests assert positions, not bases.
+    provider.add_transcript(Transcript::new(
+        "NM_M.1".to_string(),
+        Some("MGENE".to_string()),
+        TxStrand::Minus,
+        "ACGTACGTACGTACGTACGT".to_string(),
+        Some(3),
+        Some(20),
+        vec![Exon::new(1, 1, 20)],
+        Some("NC_000001.11".to_string()),
+        Some(2000),
+        Some(2019),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+    let seq = format!(
+        "{}{}{}",
+        "N".repeat(1999),
+        "ACGTACGTACGTACGTACGT",
+        "N".repeat(80)
+    );
+    provider.add_genomic_sequence("NC_000001.11", seq);
+    provider.add_genomic_placement(
+        "NG_M.1",
+        GenomicPlacement {
+            nc: parse_acc("NC_000001.11"),
+            parent_start: 1900,
+            nc_start: 1900,
+            nc_end: 2100,
+            strand: Strand::Plus,
+        },
+    );
+    VariantProjector::new(projector, provider)
+}
+
+/// Extract each Genome allele member's start position, in order.
+fn member_starts(v: &HgvsVariant) -> Vec<u64> {
+    match v {
+        HgvsVariant::Allele(a) => a
+            .variants
+            .iter()
+            .map(|m| match m {
+                HgvsVariant::Genome(g) => {
+                    g.loc_edit.location.start.inner().map(|p| p.base).unwrap()
+                }
+                other => panic!("expected Genome member, got {other:?}"),
+            })
+            .collect(),
+        other => panic!("expected Allele, got {other:?}"),
+    }
+}
+
+#[test]
+fn minus_strand_allele_members_sorted_genomic_order() {
+    let vp = minus_fixture();
+    // Input c. order is 1,5,9 → genomic 2017,2013,2009 (descending). After C2 the
+    // projected members must be ascending: 2009, 2013, 2017.
+    let v = parse_hgvs("NG_M.1(NM_M.1):c.[1A>C;5A>C;9A>C]").expect("parse");
+    let g = vp.project_to_genomic(&v).expect("should project");
+    let starts = member_starts(&g);
+    assert!(
+        starts.windows(2).all(|w| w[0] < w[1]),
+        "members must be ascending by genomic start, got {starts:?}"
+    );
+    assert_eq!(starts, vec![2009, 2013, 2017]);
+}
+
+#[test]
+fn trans_allele_members_not_reordered() {
+    // A trans allele `[m1];[m2]` encodes haplotype assignment by member order;
+    // the genomic-order sort must NOT touch it (only cis is sorted). c.1→g.2017
+    // (haplotype A), c.9→g.2009 (haplotype B) must stay in input order.
+    let vp = minus_fixture();
+    let v = parse_hgvs("NG_M.1(NM_M.1):c.[1A>C];[9A>C]").expect("parse");
+    let g = vp.project_to_genomic(&v).expect("should project");
+    assert_eq!(
+        member_starts(&g),
+        vec![2017, 2009],
+        "trans order must be preserved"
+    );
+}

@@ -58,9 +58,25 @@ fn build_cis_whole_protein_unknown(member: &HgvsVariant) -> HgvsVariant {
     }
 }
 
-/// Sort projected genomic allele members into ascending genomic order (#851).
-/// Task-1 stub: no-op; Task 2 implements the sort.
-fn sort_genomic_allele_members(_members: &mut [HgvsVariant]) {}
+/// Sort projected genomic allele members into ascending genomic order
+/// (recommendations/DNA/alleles.md:118 "Variants should be listed in genomic
+/// order"). A minus-strand transcript projects members in descending genomic
+/// order, so this re-canonicalizes. Stable (`sort_by_key`); a non-Genome or
+/// unresolved-start member sorts to the end without reordering among such
+/// members. Scoped to the projection allele path — not the global normalizer —
+/// to bound blast radius, and applied by the caller to cis alleles only (#851).
+fn sort_genomic_allele_members(members: &mut [HgvsVariant]) {
+    members.sort_by_key(|m| match m {
+        HgvsVariant::Genome(g) => g
+            .loc_edit
+            .location
+            .start
+            .inner()
+            .map(|p| p.base)
+            .unwrap_or(u64::MAX),
+        _ => u64::MAX,
+    });
+}
 
 /// Combine the per-member protein consequences of an **in-cis** allele into a
 /// single description when the members are adjacent single substitutions (#855).
