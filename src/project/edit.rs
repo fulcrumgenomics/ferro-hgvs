@@ -104,6 +104,16 @@ fn revcomp_sequence(s: &Sequence) -> Sequence {
 ///
 /// For non-literal variants (counts, ranges, repeats, named elements, etc.)
 /// there is no embedded sequence to revcomp, so they are cloned unchanged.
+///
+/// KNOWN GAP (#856): a multi-part `Complex` payload whose parts include literals
+/// (e.g. `ins[ATG;CCC]`) is cloned unchanged here, so its literal members are
+/// left in transcript orientation on minus-strand projection. A *single*
+/// bracketed literal no longer reaches this path — it is collapsed to `Literal`
+/// at parse (see `parser::edit::parse_bracketed_inserted_sequence`) — so the
+/// common case is correct; the residual multi-part case is a separate, pre-
+/// existing limitation. Reverse-complementing a `Complex` correctly would also
+/// require reversing the part order and projecting any position-range members,
+/// which is out of scope here.
 fn revcomp_inserted(ins: &InsertedSequence) -> InsertedSequence {
     match ins {
         InsertedSequence::Literal(seq) => InsertedSequence::Literal(revcomp_sequence(seq)),
@@ -203,6 +213,9 @@ fn u_to_t_sequence(s: &Sequence) -> Sequence {
         .expect("U→T translation produces only valid IUPAC bases")
 }
 
+// Same KNOWN GAP as `revcomp_inserted` (#856): literal members of a multi-part
+// `Complex` payload are not U→T translated; a single bracketed literal is
+// collapsed to `Literal` at parse, so the common case is handled.
 fn u_to_t_inserted(ins: &InsertedSequence) -> InsertedSequence {
     match ins {
         InsertedSequence::Literal(seq) => InsertedSequence::Literal(u_to_t_sequence(seq)),

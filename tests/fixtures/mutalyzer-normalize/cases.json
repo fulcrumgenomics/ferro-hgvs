@@ -142,6 +142,12 @@
         "input not for test_description_to_model_to_description"
       ],
       "input": "NG_007485.1(NM_000077.4):c.161_162ins[ATC]",
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      },
       "normalized": "NG_007485.1(NM_000077.4):c.161_162insATC",
       "genomic": "NG_007485.1:g.28294_28295insATC",
       "coding_protein_descriptions": [
@@ -208,6 +214,12 @@
         "input not for test_description_to_model_to_description"
       ],
       "input": "NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]",
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      },
       "coding_protein_descriptions": [
         [
           "NG_007485.1(NM_058195.3):c.204_205delinsATCCC",
@@ -273,6 +285,12 @@
         "input not for test_description_to_model_to_description"
       ],
       "input": "NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]",
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      },
       "normalized": "NG_007485.1(NM_000077.4):c.161_162delinsATCCC",
       "genomic": "NG_007485.1:g.28294_28295delinsATCCC",
       "coding_protein_descriptions": [

@@ -148,6 +148,9 @@ On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-ins
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
+| `NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162ins[ATC]` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_007485.1(NM_058195.3):c.141_142del` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_008835.1(NM_022153.2):c.568del` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.129G>T` | coding_protein_descriptions | accepted_divergence | — | — |
@@ -270,7 +273,7 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
-| coding_protein_descriptions | 7 | 0 | 0 | 0 | 0 |
+| coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
 | genomic | 2 | 0 | 0 | 0 | 0 |
 | infos | 4 | 0 | 0 | 0 | 0 |
