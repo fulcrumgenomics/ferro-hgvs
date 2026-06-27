@@ -565,3 +565,114 @@ fn test_clinvar_sample_parsing_idempotency() {
         );
     }
 }
+
+// =============================================================================
+// #864: CORPUS-WIDE + REGRESSION IDEMPOTENCY GUARANTEES
+// =============================================================================
+// `normalize` is single-pass; #852 (repeat path) and #864 (insertion→dup path)
+// each fixed a class where one pass produced a non-3'-most form that a second
+// pass would shift. These tests lock `normalize(normalize(x)) == normalize(x)`.
+
+/// Part 2 — corpus-wide, reference-free. With an empty provider, normalize the
+/// HGVS-spec + edge-case corpora twice and require idempotency on every input
+/// that normalizes without a reference (ref-stripping, delins canonicalization,
+/// repeat/dup collapse, identity stamping). Inputs needing a real transcript
+/// error on the first normalize and are skipped. CI-runnable (no manifest).
+#[test]
+fn test_normalization_idempotency_reference_free_corpus() {
+    let provider = MockProvider::new();
+    let mut inputs = load_spec_examples();
+    inputs.extend(load_edge_cases());
+
+    let mut tested = 0usize;
+    let mut transformed = 0usize;
+    let mut failures = Vec::new();
+
+    for input in &inputs {
+        let Ok(v) = parse_hgvs(input) else { continue };
+        let Ok(n1) = Normalizer::new(provider.clone()).normalize(&v) else {
+            continue;
+        };
+        let f1 = format!("{n1}");
+        if f1 != *input {
+            transformed += 1;
+        }
+        let Ok(v2) = parse_hgvs(&f1) else {
+            failures.push(format!("re-parse failed: {input} -> {f1}"));
+            continue;
+        };
+        let Ok(n2) = Normalizer::new(provider.clone()).normalize(&v2) else {
+            failures.push(format!("re-normalize failed: {input} -> {f1}"));
+            continue;
+        };
+        let f2 = format!("{n2}");
+        tested += 1;
+        if f1 != f2 {
+            failures.push(format!("not idempotent: {input} -> {f1} -> {f2}"));
+        }
+    }
+
+    eprintln!(
+        "reference-free idempotency: tested {tested}, transformed {transformed}, {} failures",
+        failures.len()
+    );
+    assert!(
+        tested > 100,
+        "corpus sweep exercised too few inputs ({tested})"
+    );
+    assert!(
+        failures.is_empty(),
+        "reference-free normalization not idempotent:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Part 3 — regression lock for the #852/#864 single-pass-non-3'-most classes,
+/// hermetic (MockProvider genomic sequence, no manifest). An off-phase di-repeat
+/// run "TGTGTGTGT" (odd length, 3'-flanked by a non-tract base) is the shape
+/// where the pre-#864 insertion→dup path stopped one base 5' of the run's true
+/// 3' end. The variant must (a) normalize to the most-3' dup in ONE pass
+/// (value-pin, mutalyzer-confirmed) and (b) be idempotent.
+#[test]
+fn test_insertion_to_dup_offphase_is_3prime_and_idempotent() {
+    use ferro_hgvs::reference::mock::MockProvider;
+    // 1-based: 1..=1000 = 'G' (avoid forming a T/A tract); 1001..=1013 =
+    // "ACTGTGTGTGTAC" (the mutalyzer-verified NC_000001.11:g.5010036.. context);
+    // rest 'G'. The TG run is g.1003..1011, 3'-flanked by A at g.1012.
+    let seq = format!(
+        "{}{}{}",
+        "G".repeat(1000),
+        "ACTGTGTGTGTAC",
+        "G".repeat(1000)
+    );
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence("NC_000001.11", seq);
+
+    // Insert TG at the 5' edge of the run (between C@1002 and T@1003).
+    let input = "NC_000001.11:g.1002_1003insTG";
+    let v = parse_hgvs(input).expect("parse");
+    let n1 = format!(
+        "{}",
+        Normalizer::new(provider.clone())
+            .normalize(&v)
+            .expect("normalize")
+    );
+
+    // Value-pin: most-3' dup is the GT phase at the run's 3' end (g.1010_1011),
+    // NOT the under-shifted TG-phase g.1009_1010. (3'rule; mutalyzer agrees.)
+    assert_eq!(
+        n1, "NC_000001.11:g.1010_1011dup",
+        "insertion into an off-phase di-repeat must land the dup at the most-3' \
+         position (3'rule); got {n1}"
+    );
+
+    // Idempotency: a second normalize must not shift it further.
+    let v2 = parse_hgvs(&n1).expect("re-parse");
+    let n2 = format!(
+        "{}",
+        Normalizer::new(provider)
+            .normalize(&v2)
+            .expect("re-normalize")
+    );
+    assert_eq!(n1, n2, "normalize is not idempotent: {n1} -> {n2}");
+}

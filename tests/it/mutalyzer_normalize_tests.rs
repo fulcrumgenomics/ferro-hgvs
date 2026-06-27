@@ -3848,3 +3848,107 @@ mod comparator_tests {
         );
     }
 }
+
+// ----------------------------------------------------------------------------
+// #864: corpus-wide normalization idempotency (manifest-gated)
+// ----------------------------------------------------------------------------
+// `normalize(normalize(x)) == normalize(x)` must hold for every corpus input on
+// both the normalized and genomic axes. This is a hard invariant, not a parity
+// tally — there is no baseline ledger; any non-idempotent case is a real bug to
+// fix (cf. #852 repeat path, #864 insertion→dup path). Skips without a manifest.
+
+/// Re-normalize `s`, returning the formatted output or an error string.
+fn renormalize_once(normalizer: &Normalizer<ArcProvider>, s: &str) -> Result<String, String> {
+    let v = parse_hgvs(s).map_err(|e| format!("parse: {e}"))?;
+    let n = normalizer
+        .normalize(&v)
+        .map_err(|e| format!("normalize: {e}"))?;
+    Ok(format!("{n}"))
+}
+
+#[test]
+fn axis_normalized_idempotent() {
+    let Some(normalizer) = normalizer() else {
+        eprintln!("axis_normalized_idempotent: skipping — no manifest");
+        return;
+    };
+    let mut tested = 0usize;
+    let mut failures = Vec::new();
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        // Only inputs that normalize successfully participate; a normalize error
+        // is the concern of `axis_normalized`, not the idempotency invariant.
+        let Ok(n1) = renormalize_once(&normalizer, &case.input) else {
+            continue;
+        };
+        tested += 1;
+        match renormalize_once(&normalizer, &n1) {
+            Ok(n2) if n2 != n1 => failures.push(format!("{} : {n1} -> {n2}", case.input)),
+            Err(e) => failures.push(format!("{} : {n1} -> {e}", case.input)),
+            _ => {}
+        }
+    }
+    eprintln!(
+        "axis_normalized_idempotent: {tested} tested, {} non-idempotent",
+        failures.len()
+    );
+    assert!(tested > 0, "exercised no cases");
+    assert!(
+        failures.is_empty(),
+        "normalize is not idempotent on the normalized axis:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn axis_genomic_idempotent() {
+    let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
+        eprintln!("axis_genomic_idempotent: skipping — no manifest");
+        return;
+    };
+    let mut tested = 0usize;
+    let mut failures = Vec::new();
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        // Project (c./n./r. → g.) then normalize, mirroring `axis_genomic`; only
+        // successfully-projected-and-normalized inputs participate.
+        let projected = (|| -> Result<String, String> {
+            let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
+            let g = if matches!(
+                v,
+                HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_)
+            ) {
+                projector
+                    .project_to_genomic(&v)
+                    .map_err(|e| format!("project: {e}"))?
+            } else {
+                v
+            };
+            let n = normalizer
+                .normalize(&g)
+                .map_err(|e| format!("normalize: {e}"))?;
+            Ok(format!("{n}"))
+        })();
+        let Ok(g1) = projected else { continue };
+        tested += 1;
+        match renormalize_once(&normalizer, &g1) {
+            Ok(g2) if g2 != g1 => failures.push(format!("{} : {g1} -> {g2}", case.input)),
+            Err(e) => failures.push(format!("{} : {g1} -> {e}", case.input)),
+            _ => {}
+        }
+    }
+    eprintln!(
+        "axis_genomic_idempotent: {tested} tested, {} non-idempotent",
+        failures.len()
+    );
+    assert!(tested > 0, "exercised no cases");
+    assert!(
+        failures.is_empty(),
+        "normalize is not idempotent on the genomic axis:\n{}",
+        failures.join("\n")
+    );
+}
