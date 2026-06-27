@@ -1175,14 +1175,18 @@ fn axis_genomic() {
 
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
-            // Project transcript-coordinate (c./n./r.) inputs onto their genomic
-            // reference frame; pass g./allele/etc. inputs through unchanged
-            // (project_to_genomic only handles single c./n./r. variants — #328).
-            // Then normalize the genomic form so the output matches mutalyzer's
+            // Project transcript-coordinate (c./n./r.) inputs — and compound
+            // alleles, whose members are each projected and reassembled (cis
+            // members re-sorted into genomic order; #851) — onto their genomic
+            // reference frame; pass g. and other inputs through unchanged. Then
+            // normalize the genomic form so the output matches mutalyzer's
             // normalized g. (3'-shift, ins→dup, …).
             let g = if matches!(
                 v,
-                HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_)
+                HgvsVariant::Cds(_)
+                    | HgvsVariant::Tx(_)
+                    | HgvsVariant::Rna(_)
+                    | HgvsVariant::Allele(_)
             ) {
                 projector
                     .project_to_genomic(&v)
@@ -3915,12 +3919,17 @@ fn axis_genomic_idempotent() {
             continue;
         }
         // Project (c./n./r. → g.) then normalize, mirroring `axis_genomic`; only
-        // successfully-projected-and-normalized inputs participate.
+        // successfully-projected-and-normalized inputs participate. Include
+        // `Allele(_)` so compound alleles exercise the #851 cis-sort + genomic
+        // re-anchor path under the idempotency check, matching `axis_genomic`.
         let projected = (|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let g = if matches!(
                 v,
-                HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_)
+                HgvsVariant::Cds(_)
+                    | HgvsVariant::Tx(_)
+                    | HgvsVariant::Rna(_)
+                    | HgvsVariant::Allele(_)
             ) {
                 projector
                     .project_to_genomic(&v)
