@@ -982,7 +982,18 @@ impl PyVariantProjector {
     /// The output `g.` variant carries the parent NG/NC `Accession` stored in
     /// the input's `Accession.genomic_context` (e.g.
     /// `NG_007485.1(NM_000077.4):c.161_162insATC` projects onto
-    /// `NG_007485.1:g.28294_28295insATC`). Idempotent on `Genome` input.
+    /// `NG_007485.1:g.28294_28295insATC`).
+    ///
+    /// By default (`normalize=True`) the result is the projector-normalized
+    /// genomic form — what most callers want; a `Genome` input is canonicalized
+    /// too. The normalizer follows this projector's configured shuffle direction
+    /// (`VariantProjector(direction=...)`): with the default `direction="3prime"`
+    /// that is the spec-canonical, 3'-shifted form (e.g. a non-3'-most `g.1003del`
+    /// in a poly-A run → `g.1007del`); a `direction="5prime"` projector instead
+    /// returns the 5'-anchored form. Pass `normalize=False` to get the raw pivot,
+    /// which intentionally does not normalize its input (#785): a non-canonical
+    /// input then yields a non-canonical genomic output, and a `Genome` input
+    /// passes through unchanged (idempotent). (#867)
     ///
     /// Limitations:
     ///   - `Allele` inputs are rejected pending #328.
@@ -995,6 +1006,10 @@ impl PyVariantProjector {
     ///     variant: A c./n./r./g. HgvsVariant. Transcript-coord variants must
     ///         have a `genomic_context` (NG/NC parent reference) on their
     ///         `Accession`.
+    ///     normalize: When True (default), return the projector-normalized
+    ///         genomic form (spec-canonical 3'-shifted for the default
+    ///         `direction="3prime"`); when False, return the raw un-normalized
+    ///         pivot.
     ///
     /// Returns:
     ///     The Genome-kind HgvsVariant for the requested projection.
@@ -1003,9 +1018,24 @@ impl PyVariantProjector {
     ///     RuntimeError: If the input lacks a parent reference, carries an
     ///         unknown (`?`) position, or is otherwise unsupported (`p.`/`m.`/
     ///         `o.`/Allele/fusion/null/unknown-allele).
-    fn project_to_genomic(&self, variant: &PyHgvsVariant) -> PyResult<PyHgvsVariant> {
-        self.inner
-            .project_to_genomic(&variant.inner)
+    #[pyo3(signature = (variant, normalize=true))]
+    fn project_to_genomic(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+        normalize: bool,
+    ) -> PyResult<PyHgvsVariant> {
+        // Release the GIL for the Rust projection work so it doesn't block other
+        // Python threads (mirrors `project_normalized_all`/`project_many`).
+        let inner_variant = variant.inner.clone();
+        let result = py.detach(|| {
+            if normalize {
+                self.inner.project_to_genomic_normalized(&inner_variant)
+            } else {
+                self.inner.project_to_genomic(&inner_variant)
+            }
+        });
+        result
             .map(|inner| PyHgvsVariant { inner })
             .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
     }
