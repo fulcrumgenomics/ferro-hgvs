@@ -371,14 +371,31 @@ pub(crate) fn insertion_to_duplication(
         }
     }
 
-    let (unit, ref_start, ref_count) = best?;
+    let (mut unit, ref_start, ref_count) = best?;
     let tract_end_idx = ref_start + (ref_count as usize) * unit.len();
     // `find_tandem_extent` returns `ref_start` aligned on a `unit`-length
     // anchor probe, so picking `ref_start` for the 5' end never lands the
     // dup slot mid-unit even when the inserted alt was a non-zero
     // rotation of the canonical reference unit.
     let dup_start_idx = match direction {
-        ShuffleDirection::ThreePrime => tract_end_idx - unit.len(),
+        ShuffleDirection::ThreePrime => {
+            // Push to the *true* 3'-most slot, crossing any off-phase tract
+            // extension. `tract_end_idx - unit.len()` only 3'-aligns within the
+            // abutting rotation's phase; when the run continues one base further
+            // in the opposite phase (e.g. inserting `TG` at the 5' edge of a
+            // `TGTGTGTGT` run — the abutting `TG`/`GT` tract ends one base short
+            // of the run's true 3' end), stopping there violates the 3'rule.
+            // `three_prime_align_tract` walks the remaining flank while
+            // `ref[end] == rotated[0]` — exactly the duplication slide rule
+            // `ref[s] == ref[s+L]` — rotating the unit to the run's 3' phase,
+            // mirroring the repeat path (#852). HGVS DNA duplication.md: "the
+            // most 3' position possible … is arbitrarily assigned to have been
+            // changed (3'rule)." Verified against mutalyzer (#864).
+            let (_, aligned_end, aligned_unit) =
+                three_prime_align_tract(ref_seq, ref_start, tract_end_idx, &unit);
+            unit = aligned_unit;
+            aligned_end - unit.len()
+        }
         ShuffleDirection::FivePrime => ref_start,
     };
     let dup_end_idx = dup_start_idx + unit.len() - 1;
@@ -4510,6 +4527,27 @@ mod tests {
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 7);
         assert_eq!(r.end, 8);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_offphase_slides_through_partial_flank() {
+        // #864: an ODD-length di-repeat run ("TGTGTGTGT", 9 bases) ends one base
+        // past the last full 2-copy window. The dup must still reach the run's
+        // true 3' end (3'rule), which lands on the GT phase — NOT stop at the
+        // abutting TG-phase boundary. ref "ACTGTGTGTGTAC": insert TG at pos=1
+        // (between C@1 and the run). `three_prime_align_tract` slides through the
+        // trailing base → dup unit "GT" at 1-based [10..11].
+        //
+        // Mirrors the real, mutalyzer-confirmed locus
+        // NC_000001.11:g.5010037_5010038insTG → g.5010045_5010046dup (same
+        // ACTGTGTGTGTAC context). Before #864 this stopped one base 5' (the
+        // under-shifted, mutalyzer-divergent form).
+        let ref_seq = b"ACTGTGTGTGTAC";
+        let r = insertion_to_duplication(ref_seq, 1, b"TG", ShuffleDirection::ThreePrime)
+            .expect("should fire");
+        assert_eq!(r.unit, b"GT");
+        assert_eq!(r.start, 10);
+        assert_eq!(r.end, 11);
     }
 
     #[test]

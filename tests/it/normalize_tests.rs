@@ -2677,14 +2677,15 @@ mod insertion_rotation_tests {
         //
         // c.243 = position 38 + 242 = 280 (1-based), so index 279
         //
-        // Issue #132 update: the canonical dup is now phase-aligned with
-        // the GGC tract (most-3' GGC dup), not the rotated GCG-phase that
-        // shuffle's iterative walk happened to land on. The new helper
-        // `insertion_to_duplication` picks the tract-aligned phase (GGC at
-        // tract [279..300)), so the dup spans the most-3' GGC = c.261_263.
-        // Both the new and old positions describe the same edit; the new
-        // behavior is symmetric with the multi-copy `insertion_to_repeat`
-        // path's phase choice.
+        // #864: the canonical dup is the MOST-3' position (HGVS 3'rule,
+        // DNA duplication.md). The GGC[7] tract is followed by a partial-match
+        // flank "GC" (c.264=G, c.265=C); the 3'-shift slides one GGC copy right
+        // through the run while ref[s]==ref[s+3] — past c.261_263 (the last pure
+        // GGC) and one more base onto the GCG phase at c.262_264, stopping when
+        // ref[c.262]=G != ref[c.265]=C. The earlier `c.261_263dup` (tract-phase)
+        // stopped at the pure-tandem boundary and was under-shifted.
+        // Confirmed against mutalyzer on a real homologous locus (the strict
+        // 3'-slide; mutalyzer re-normalizes the phase-aligned form to it).
 
         let mut seq = String::new();
         seq.push_str(&"A".repeat(37)); // Positions 1-37 (5' UTR)
@@ -2702,11 +2703,10 @@ mod insertion_rotation_tests {
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.242_243insGGC");
 
-        // GGC-phase tract: 7 GGC units at c.243..c.263 inclusive. Most-3'
-        // GGC dup → c.261_263.
+        // Most-3' dup, slid through the "GC" partial flank → c.262_264 (#864).
         assert_eq!(
-            result, "NM_TEST.1:c.261_263dup",
-            "Expected c.261_263dup (issue #132 GGC-phase canonical form), got: {}",
+            result, "NM_TEST.1:c.262_264dup",
+            "Expected c.262_264dup (#864 most-3' slide past the GGC[7]+GC flank), got: {}",
             result
         );
     }

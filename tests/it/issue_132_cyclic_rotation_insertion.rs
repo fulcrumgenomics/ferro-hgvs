@@ -72,26 +72,30 @@ fn ins_agc_cag_tract_rotates_to_dup() {
     // HGVS 258_259 (just before tract's first C). alt "AGC" is the r=1
     // rotation of canonical "CAG".
     //
-    // Rotation iteration on `smallest_repeat_unit("AGC") = "AGC"` →
-    // "AGC" (r=0): no anchor matches the abutting window;
-    // "GCA" (r=1): no anchor matches;
-    // "CAG" (r=2): anchor at ins_point=258 matches; tract walks right
-    //   through CAGCAGCAG, ref_count=3.
-    // Only CAG-rotation matches. Most-3' CAG dup → tract end=267,
-    // dup_start_idx=264, dup_end_idx=266 → HGVS [265..267].
+    // CORE_CAG = "AACAGCAGCAGCAACAGAA": the CAG[3] tract is followed by a
+    // partial-match flank "CA" (from the trailing "CAA"). Per the HGVS 3'rule
+    // (DNA duplication.md: "the most 3' position possible … is arbitrarily
+    // assigned to have been changed"), the duplicated copy must shift as far 3'
+    // as the run allows — sliding one CAG copy right through the whole tandem
+    // run (valid while ref[s]==ref[s+3]) crosses the "CA" partial flank and
+    // lands on the GCA phase at HGVS [267..269]. The earlier `265_267dup`
+    // stopped at the pure-tandem boundary and was under-shifted (#864).
+    //
+    // Confirmed against mutalyzer on a real homologous locus:
+    // NC_000001.11:g.5010037_5010038insTG → g.5010045_5010046dup, and mutalyzer
+    // likewise re-normalizes the phase-aligned form to the most-3' slide.
     let p = SyntheticBuilder::genomic(CORE_CAG).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insAGC", SEQID));
-    assert_eq!(result, format!("{}:g.265_267dup", SEQID));
+    assert_eq!(result, format!("{}:g.267_269dup", SEQID));
 }
 
 #[test]
 fn ins_gca_cag_tract_rotates_to_dup() {
-    // Same layout as above, alt = GCA (r=2 of canonical "GCA"). Rotation
-    // iteration on `smallest_repeat_unit("GCA") = "GCA"`: only the "CAG"
-    // rotation finds an anchored tract abutting the ins point. Result is
-    // identical to the AGC case — both spec-equivalent rotations of the
-    // same tandem unit produce the same canonical dup.
+    // Same layout/flank as `ins_agc_cag_tract_rotates_to_dup`, alt = GCA (a
+    // different rotation of the same tandem unit). Both spec-equivalent
+    // rotations yield the same most-3' canonical dup — the #864 3'rule slide
+    // through the "CA" partial flank → HGVS [267..269].
     let p = SyntheticBuilder::genomic(CORE_CAG).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insGCA", SEQID));
-    assert_eq!(result, format!("{}:g.265_267dup", SEQID));
+    assert_eq!(result, format!("{}:g.267_269dup", SEQID));
 }
