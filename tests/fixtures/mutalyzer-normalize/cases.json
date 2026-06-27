@@ -76,6 +76,12 @@
       "title": "n. projection onto an overlapping transcript outside its exonic span",
       "spec_section": "background/numbering.md#DNAn (3' downstream offset)",
       "note": "The n. corpus rows expect a projection onto the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), where the variant lies 3' downstream of its single exon and mutalyzer addresses it as n.616+offset. ferro's transcript fan-out enumerates only transcripts the variant overlaps, so it emits valid n. forms on the overlapping NM_ isoforms but declines NR_024274.1 ('variant does not overlap transcript'). Spec tension: numbering.md L43-44 bars describing variants beyond a bare transcript's boundaries, so a bare NR_024274.1:n.616+offset would be invalid; but mutalyzer (and the corpus) frame it under its NG_007485.1 genomic parent (NG_007485.1(NR_024274.1):n.616+offset), the same genomic-context construction numbering.md L65 endorses (e.g. NG_012232.1(NM_004006.2):r.186+1_186+4), where the parent supplies the flanking sequence. Under that framing the form is valid and ferro should produce it -> known_bug, not accepted_divergence. Cross-isoform enumeration scope tracked by #646 (core landed in #647); ferro should extend enumeration/addressing to the downstream-of-last-exon case when the genomic parent is present. XPASS-guarded: if #646 lands and ferro starts matching, the annotation fails loudly and the row demotes."
+    },
+    {
+      "id": "inserted-inversion-854",
+      "title": "Inserted inversion (reverse complement) not applied by mutalyzer",
+      "spec_section": "HGVS §Inserted inversion (reverse complement)",
+      "note": "An `<range>inv` segment in an ins/delins payload inserts the reverse complement (inverted copy) of the range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro applies the inversion and normalizes the delins; mutalyzer leaves the segment forward (inversion not applied). ferro's output is the spec-correct value. #854."
     }
   ],
   "cases": [
@@ -1252,7 +1258,13 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsAlaGlnAspHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "genomic",
+        "cluster": "inserted-inversion-854",
+        "note": "An inserted `<range>inv` segment in a delins/ins payload means the reverse-complement (inverted copy) of that range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro reverse-complements g.4300_4309 (GTCCTGTGCT -> AGCACAGGAC), keeps g.4310_4320 forward (CATTATCTGGC), then normalizes -- the deleted span ACGCCG and the insert AGCAC... share a leading A, trimmed -- yielding g.5208_5212delinsGCACAGGACCATTATCTGGC. mutalyzer leaves the segment forward (GTCCTGTGCT; inversion not applied) and so also skips the prefix trim; its output is spec-incorrect. ferro's output is the spec-correct value (#854).",
+        "section": "HGVS §Inserted inversion (reverse complement)"
+      }
     },
     {
       "keywords": [

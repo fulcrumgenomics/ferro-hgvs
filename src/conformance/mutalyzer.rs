@@ -859,6 +859,18 @@ pub enum SpecSection {
     /// `r.[(…)]` is the spec-correct value (#693).
     #[serde(rename = "HGVS §RNA alleles (predicted bracket placement)")]
     RnaAlleleBracketPlacement,
+    /// HGVS inserted inversion — an `<range>inv` segment in an `ins`/`delins`
+    /// payload inserts the **reverse complement** (inverted copy) of that range's
+    /// reference bases (`docs/recommendations/DNA/insertion.md` L52-62, e.g.
+    /// `c.940_941ins[903_940inv;851_885inv]` = "an inverted copy of nucleotides";
+    /// `docs/recommendations/DNA/inversion.md` L5, L48-49, L53-62 define an
+    /// inversion as the reverse complement, explicitly *not* the plain reverse or
+    /// plain complement). ferro reverse-complements the `inv` segment and then
+    /// normalizes the resulting delins (common-prefix trim); mutalyzer leaves the
+    /// segment forward (inversion not applied) and so also skips the trim, which
+    /// is invalid HGVS. ferro's output is the spec-correct value (#854).
+    #[serde(rename = "HGVS §Inserted inversion (reverse complement)")]
+    InsertedInversion,
 }
 
 impl SpecSection {
@@ -883,6 +895,7 @@ impl SpecSection {
             SpecSection::RnaAlleleBracketPlacement => {
                 "HGVS §RNA alleles (predicted bracket placement)"
             }
+            SpecSection::InsertedInversion => "HGVS §Inserted inversion (reverse complement)",
         }
     }
 }

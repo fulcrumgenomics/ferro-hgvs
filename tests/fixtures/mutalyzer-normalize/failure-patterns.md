@@ -200,6 +200,16 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 | `NG_007485.1(NM_058195.3):c.141_142del` | noncoding | known_bug | — | #646 |
 | `NG_007485.1:g.5479_5480insACT` | noncoding | known_bug | — | #646 |
 
+### Inserted inversion (reverse complement) not applied by mutalyzer
+
+Spec: `HGVS §Inserted inversion (reverse complement)`
+
+An `<range>inv` segment in an ins/delins payload inserts the reverse complement (inverted copy) of the range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro applies the inversion and normalizes the delins; mutalyzer leaves the segment forward (inversion not applied). ferro's output is the spec-correct value. #854.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;4310_4320]` | genomic | spec_citation | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -309,7 +319,7 @@ The n. corpus rows expect a projection onto the overlapping single-exon non-codi
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 36 | 0 | 0 | 0 | 0 |
+| genomic | 36 | 0 | 0 | 0 | 1 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 24 | 18 | 4 | 5 | 9 |
