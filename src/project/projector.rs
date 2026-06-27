@@ -1189,26 +1189,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         match self.project_to_genomic_nc(variant)? {
             HgvsVariant::Genome(gv) => {
-                let reanchored =
-                    self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))?;
-                // #737: re-normalize the genomic output in its own frame — the
-                // transcript-space normalization is genome-5' on a minus-strand
-                // transcript, so a shiftable variant must be re-shuffled to its
-                // genomic-3' position here. Falls back to the un-normalized form
-                // if normalization fails (e.g. no reference bases); the dropped
-                // error is `trace!`-logged so a regression is observable rather
-                // than silently masked (the fallback swallows *any* normalize
-                // error, not only missing bases).
-                Ok(self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
-                    log::trace!(
-                        "genomic-frame renormalization failed for {reanchored}; \
-                             emitting un-normalized re-anchored form: {e}"
-                    );
-                    reanchored
-                }))
+                self.reanchor_and_normalize_genomic(gv, self.build_hint_for_variant(variant))
             }
             other => Ok(other),
         }
+    }
+
+    /// Re-anchor an NC-frame pivot into its parent frame, then re-normalize in the
+    /// parent's own frame (#737), returning the spec-canonical genomic form.
+    ///
+    /// On normalize error, emit the un-normalized re-anchored form (the dropped
+    /// error is `trace!`-logged so a regression is observable rather than silently
+    /// masked — the fallback swallows *any* normalize error, not only missing
+    /// bases). The reanchor decline is returned as `Err`; the caller chooses
+    /// whether to propagate it (`?`, public `project_to_genomic` contract) or
+    /// degrade the genomic axis to `None` (`.ok()`, the multi-axis paths, #655/#702).
+    ///
+    /// Why renormalize: the pivot was 3'-normalized in transcript space, which is
+    /// the genome's 5' end on a minus-strand transcript, so a shiftable del/dup/ins
+    /// (or repeat) must be re-shuffled to its genomic-3' position against the output
+    /// accession's own sequence.
+    fn reanchor_and_normalize_genomic(
+        &self,
+        gv: crate::hgvs::variant::GenomeVariant,
+        build: Option<&str>,
+    ) -> Result<HgvsVariant, FerroError> {
+        let reanchored = self.reanchor_genome_output(gv, build)?;
+        Ok(self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
+            log::trace!(
+                "genomic-frame renormalization failed for {reanchored}; \
+                 emitting un-normalized re-anchored form: {e}"
+            );
+            reanchored
+        }))
     }
 
     /// Project a `c.pter`/`c.qter` (telomere-flank marker) coding input onto its
@@ -3722,30 +3735,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let genomic = match normalized {
             HgvsVariant::Genome(_) => Some(projected_genome),
             _ => match projected_genome {
+                // Re-anchor + genomic-frame renormalize (#737); decline degrades the
+                // genomic axis to `None` so the other axes survive (#655/#702).
                 HgvsVariant::Genome(gv) => self
-                    .reanchor_genome_output(gv, self.build_hint_for_variant(normalized))
-                    .ok()
-                    // #737: re-normalize the genomic *output* in its own
-                    // (parent/`NC_`) frame. The pivot was 3'-normalized in
-                    // transcript space; for a minus-strand transcript that is the
-                    // genome's 5' end, so without a genomic-frame renormalization
-                    // a shiftable del/dup/ins lands at the wrong (5') end on the
-                    // genome. Normalizing the re-anchored variant against the
-                    // output accession's own sequence yields the spec-canonical
-                    // genomic-3' form. Falls back to the un-normalized re-anchored
-                    // form if normalization fails (e.g. no reference bases); the
-                    // dropped error is `trace!`-logged so a regression is
-                    // observable rather than silently masked (the fallback
-                    // swallows *any* normalize error, not only missing bases).
-                    .map(|reanchored| {
-                        self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
-                            log::trace!(
-                                "genomic-frame renormalization failed for {reanchored}; \
-                                 emitting un-normalized re-anchored form: {e}"
-                            );
-                            reanchored
-                        })
-                    }),
+                    .reanchor_and_normalize_genomic(gv, self.build_hint_for_variant(normalized))
+                    .ok(),
                 other => Some(other),
             },
         };
@@ -3822,17 +3816,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // path's #655/#702 handling).
         let genomic = match projected_genome {
             HgvsVariant::Genome(gv) => self
-                .reanchor_genome_output(gv.clone(), self.build_hint_for_variant(normalized))
-                .ok()
-                .map(|reanchored| {
-                    self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
-                        log::trace!(
-                            "poly-A genomic-frame renormalization failed for {reanchored}; \
-                             emitting un-normalized re-anchored form: {e}"
-                        );
-                        reanchored
-                    })
-                }),
+                .reanchor_and_normalize_genomic(gv.clone(), self.build_hint_for_variant(normalized))
+                .ok(),
             _ => return None,
         };
 

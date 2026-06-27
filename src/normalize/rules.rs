@@ -231,13 +231,19 @@ pub fn insertion_to_repeat(
 
     let (unit, ref_start, ref_count) = best?;
     let total_count = ref_count + added_copies;
-    let ref_end = ref_start + ref_count as usize * unit.len() - 1;
+    // 3'-align the reported window so it agrees with `normalize_repeat` — the
+    // HGVS 3'-rule (idempotency; #852). `find_tandem_extent` returns the 5'-most
+    // unit-aligned start; convert to an exclusive end, slide to the most-3' phase,
+    // and report the rotated unit + window. The count is invariant under the shift.
+    let ref_end_excl = ref_start + ref_count as usize * unit.len();
+    let (start, end_excl, rotated_unit) =
+        three_prime_align_tract(ref_seq, ref_start, ref_end_excl, &unit);
     Some((
-        unit[0],
+        rotated_unit[0],
         total_count,
-        index_to_hgvs_pos(ref_start),
-        index_to_hgvs_pos(ref_end),
-        unit,
+        index_to_hgvs_pos(start),
+        index_to_hgvs_pos(end_excl - 1),
+        rotated_unit,
     ))
 }
 
@@ -1300,6 +1306,34 @@ pub enum RepeatNormResult {
     Unchanged,
 }
 
+/// Apply the HGVS 3'-rule to a tandem-repeat tract, returning the most-3' phase.
+///
+/// `ref_start`/`ref_end` are 0-based with `ref_end` **exclusive**:
+/// `ref_seq[ref_start..ref_end]` is a whole number of copies of `unit`. While the
+/// base immediately past the tract equals the rotating unit's head, the window
+/// slides one base 3' and the unit rotates left by one — a pure re-phasing that
+/// preserves the width (copy count). Returns the rotated
+/// `(start, end_exclusive, rotated_unit)`.
+///
+/// Shared by [`normalize_repeat`] and [`insertion_to_repeat`] so their
+/// ins->repeat canonicalization agrees in a single pass (idempotency; #852, #866).
+fn three_prime_align_tract(
+    ref_seq: &[u8],
+    ref_start: usize,
+    ref_end: usize,
+    unit: &[u8],
+) -> (usize, usize, Vec<u8>) {
+    let mut start = ref_start;
+    let mut end = ref_end;
+    let mut rotated = unit.to_vec();
+    while end < ref_seq.len() && !rotated.is_empty() && ref_seq[end] == rotated[0] {
+        rotated.rotate_left(1);
+        start += 1;
+        end += 1;
+    }
+    (start, end, rotated)
+}
+
 /// Normalize a repeat variant
 ///
 /// Given a repeat notation like CAT[1], determines the appropriate
@@ -1341,12 +1375,56 @@ pub fn normalize_repeat(
     let copies_per_input_unit = (repeat_unit.len() / canonical_unit.len()) as u64;
     let mut specified_count = specified_count * copies_per_input_unit;
 
-    // Count how many times the canonical unit appears in the reference
-    let Some((ref_count, mut ref_start, mut ref_end)) =
-        count_tandem_repeats(ref_seq, pos, canonical_unit)
-    else {
+    // Count how many times the canonical unit appears in the reference.
+    //
+    // For a single-position anchor (`end_pos == pos`) the unit can land off the
+    // tract's phase boundary — a reverse-complemented projected repeat puts its
+    // single anchor at the genomic 3' end of the tract, often mid-unit (#852).
+    // Examples vs the `GT`/`GC` tracts: `g.4913TG[5]` (anchor reads `GT`, not the
+    // queried `TG`) and `g.4920GC[5]` (anchor is the tract's last base, so a
+    // boundary-anchored count undercounts). `count_tandem_repeats` requires the
+    // unit to tile *at* the anchor, so the literal lookup misses or undercounts.
+    // Search unit rotations AND small anchor offsets (`pos - a`) for the maximal
+    // tandem tract that CONTAINS `pos`, mirroring `insertion_to_repeat`'s rotation
+    // handling; `three_prime_align_tract` below then fixes the final phase. Bounded
+    // (`unit_len^2` probes). An explicit range is spelled unit-aligned by the
+    // caller, so it keeps the literal unit (no search) — only length>=2 units on a
+    // single anchor can be off-phase.
+    let mut working_unit = canonical_unit.to_vec();
+    let tract = match count_tandem_repeats(ref_seq, pos, &working_unit) {
+        Some(t) => Some(t),
+        None if end_pos == pos && working_unit.len() >= 2 => {
+            let mut best: Option<(u64, usize, usize, Vec<u8>)> = None;
+            for a in 0..canonical_unit.len() {
+                let Some(anchor) = pos.checked_sub(a) else {
+                    continue;
+                };
+                for r in 0..canonical_unit.len() {
+                    let mut rotated = canonical_unit.to_vec();
+                    rotated.rotate_left(r);
+                    if let Some((c, s, e)) = count_tandem_repeats(ref_seq, anchor, &rotated) {
+                        // Only accept a tract that actually spans the anchor, and
+                        // keep the longest such tract.
+                        if s <= pos && pos < e && best.as_ref().is_none_or(|(bc, ..)| c > *bc) {
+                            best = Some((c, s, e, rotated));
+                        }
+                    }
+                }
+            }
+            match best {
+                Some((c, s, e, u)) => {
+                    working_unit = u;
+                    Some((c, s, e))
+                }
+                None => None,
+            }
+        }
+        None => None,
+    };
+    let Some((ref_count, mut ref_start, mut ref_end)) = tract else {
         return RepeatNormResult::Unchanged;
     };
+    let canonical_unit: &[u8] = &working_unit;
 
     // Flank absorption for an under-specified explicit range. `[N]` counts the
     // alt copies of the *stated* reference units; reference repeat copies inside
@@ -1369,24 +1447,14 @@ pub fn normalize_repeat(
     }
 
     // 3'-rule unit rotation (repeated.md L44: "applying the 3'rule, the repeat
-    // has to be described as an AGC repeat"). A repeat unit shifts 3' exactly
-    // like a homopolymer: while the base immediately after the tract equals the
-    // unit's first base, the tract can slide one base 3' with the unit rotated
-    // left by one (e.g. CAA tract abutting a trailing C -> AAC tract one base
-    // over). This picks the 3'-most phase. Each step drops one base at
-    // `ref_start` and adds one matching base at `ref_end`, so on a periodic
-    // tract it is a pure re-phasing: the width (`ref_end - ref_start =
-    // ref_count * unit_len`) is unchanged and the new window is still
-    // `ref_count` copies of the rotated unit — hence `ref_count` is preserved
-    // and only the phase and anchor move. The loop terminates because `ref_end`
-    // strictly increases and is bounded by `ref_seq.len()`. A clean tract
-    // bounded by a non-matching base (the common case) does not rotate.
-    let mut rotated_unit = canonical_unit.to_vec();
-    while ref_end < ref_seq.len() && ref_seq[ref_end] == rotated_unit[0] {
-        rotated_unit.rotate_left(1);
-        ref_start += 1;
-        ref_end += 1;
-    }
+    // has to be described as an AGC repeat") via the shared helper, so
+    // `insertion_to_repeat` reaches the identical 3'-most phase (idempotency;
+    // #852). `ref_end` stays exclusive (the later `index_to_hgvs_pos(ref_end - 1)`
+    // is unchanged).
+    let (ns, ne, rotated_unit) =
+        three_prime_align_tract(ref_seq, ref_start, ref_end, canonical_unit);
+    ref_start = ns;
+    ref_end = ne;
     let canonical_unit: &[u8] = &rotated_unit;
 
     let unit_len = canonical_unit.len() as u64;
@@ -2524,6 +2592,129 @@ pub fn canonicalize_insertion_expand<P: ReferenceProvider>(
 mod tests {
     use super::*;
     use crate::normalize::config::ShuffleDirection;
+
+    #[test]
+    fn three_prime_align_odd_di_tract_shifts_phase() {
+        // ref "CTGTGTT": tract TGTG at [1,5) (count 2, unit TG). idx 5 is 'T' ==
+        // rotated[0], so it slides one base 3': GTGT at [2,6), unit GT.
+        let r = b"CTGTGTT";
+        let (s, e, u) = three_prime_align_tract(r, 1, 5, b"TG");
+        assert_eq!((s, e, u.as_slice()), (2, 6, b"GT".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_clean_tract_is_noop() {
+        // ref "CGCGCA": GCGC at [1,5) bounded by 'A' (!= 'G') -> no shift.
+        let r = b"CGCGCA";
+        let (s, e, u) = three_prime_align_tract(r, 1, 5, b"GC");
+        assert_eq!((s, e, u.as_slice()), (1, 5, b"GC".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_homopolymer_shifts_to_run_end() {
+        // ref "GAAAAG": single 'A' window [1,2) inside AAAA slides to [4,5).
+        let r = b"GAAAAG";
+        let (s, e, u) = three_prime_align_tract(r, 1, 2, b"A");
+        assert_eq!((s, e, u.as_slice()), (4, 5, b"A".as_slice()));
+    }
+
+    #[test]
+    fn three_prime_align_tri_tract_clean_noop() {
+        // ref "ATTGTTGA": TTGTTG at [1,7) bounded by 'A' -> no shift.
+        let r = b"ATTGTTGA";
+        let (s, e, u) = three_prime_align_tract(r, 1, 7, b"TTG");
+        assert_eq!((s, e, u.as_slice()), (1, 7, b"TTG".as_slice()));
+    }
+
+    #[test]
+    fn insertion_to_repeat_three_prime_aligns_odd_di_tract() {
+        // ref CTGTGTT: tract TGTGT at 0-based [1,6); inserting TGTGTG (3 copies of
+        // TG) makes 5 copies. The HGVS 3'-rule anchors GT (not TG) at the 3'-most
+        // 2-copy reference window. Hand-verified: unit GT, count 5, 1-based 3_6.
+        let r = b"CTGTGTT";
+        let (base, count, start, end, unit) =
+            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
+        assert_eq!(base, b'G');
+        assert_eq!(count, 5);
+        assert_eq!((start, end), (3, 6));
+        assert_eq!(unit, b"GT".to_vec());
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_off_phase_di_repeat_expands() {
+        // #852 Option 2: a reverse-complemented projected di-repeat lands at a
+        // single anchor off the tract's phase boundary. ref "CTGTGTT": the literal
+        // unit "TG" does not tile at anchor idx 2 (which reads "GT"), so without
+        // the rotation retry `normalize_repeat` bails to `Unchanged`. It must
+        // instead find the GT tract and emit the entire-range 3'-form.
+        let r = b"CTGTGTT";
+        let got = normalize_repeat(r, 2, 2, b"TG", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 3,
+                end: 6,
+                sequence: b"GT".to_vec(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_tract_end_di_repeat_expands() {
+        // #852 Option 2: minus-strand projection lands the single anchor at the
+        // tract's 3' END. ref "TGCGCA": GCGC tract at idx 1..5; single anchor at
+        // the last base (idx 4) — a boundary-anchored count undercounts, so the
+        // offset search must recover the full 2-copy tract (the `c.3GC[5]` shape).
+        let r = b"TGCGCA";
+        let got = normalize_repeat(r, 4, 4, b"GC", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 2,
+                end: 5,
+                sequence: b"GC".to_vec(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_repeat_single_anchor_in_phase_di_repeat_unaffected() {
+        // The already-phase-aligned unit takes the direct path and yields the same
+        // result (phase-independence / idempotency).
+        let r = b"CTGTGTT";
+        let got = normalize_repeat(r, 2, 2, b"GT", 5, false);
+        assert_eq!(
+            got,
+            RepeatNormResult::Repeat {
+                start: 3,
+                end: 6,
+                sequence: b"GT".to_vec(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn insertion_to_repeat_agrees_with_normalize_repeat_phase() {
+        // Idempotency invariant: the window insertion_to_repeat reports must equal
+        // the window normalize_repeat produces for the same tract/unit/count.
+        let r = b"CTGTGTT";
+        let (_b, _c, ins_start, ins_end, ins_unit) =
+            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
+        match normalize_repeat(r, 1, 5, b"TG", 5, false) {
+            RepeatNormResult::Repeat {
+                start,
+                end,
+                sequence,
+                ..
+            } => {
+                assert_eq!((ins_start, ins_end, ins_unit), (start, end, sequence));
+            }
+            other => panic!("expected Repeat, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_needs_normalization() {

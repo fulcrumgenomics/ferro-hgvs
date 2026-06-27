@@ -64,7 +64,31 @@ pub fn transform_edit_for_strand(edit: &NaEdit, strand: Strand) -> NaEdit {
             sequence: sequence.as_ref().map(revcomp_sequence),
             length: *length,
         },
-        // Identity, Unknown, Conversion, Repeat, MultiRepeat, Methylation, CopyNumber,
+        // A tandem-repeat unit reads on the transcript's sense strand, so on a
+        // minus-strand transcript it must be reverse-complemented to land on the
+        // genomic reference (e.g. `CA[5]` → `TG[5]`, `T[8]` → `A[8]`) — #852.
+        // The repeat counts are orientation-invariant and carry through unchanged.
+        //
+        // CAVEAT: `trailing` AND `additional_counts` are reverse-complemented in
+        // place only. On the opposite strand a *trailing* partial unit becomes a
+        // *leading* one, and a mixed repeat's unit *order* reverses — neither is
+        // re-ordered here. Latent-only: `normalize` bails when `trailing.is_some()`
+        // or `additional_counts` is non-empty (normalize/mod.rs), and no projected
+        // repeat in scope has them. The first mixed-repeat minus-strand projection
+        // must revisit this (#852 notes). Mirrors the in-place handling in
+        // `u_to_t_edit`.
+        NaEdit::Repeat {
+            sequence,
+            count,
+            additional_counts,
+            trailing,
+        } => NaEdit::Repeat {
+            sequence: sequence.as_ref().map(revcomp_sequence),
+            count: count.clone(),
+            additional_counts: additional_counts.clone(),
+            trailing: trailing.as_ref().map(revcomp_sequence),
+        },
+        // Identity, Unknown, Conversion, MultiRepeat, Methylation, CopyNumber,
         // Splice, NoProduct, PositionOnly: no revcomp needed at the edit level.
         other => other.clone(),
     }
@@ -231,6 +255,28 @@ mod tests {
 
     fn seq(s: &str) -> Sequence {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn repeat_minus_strand_revcomps_unit() {
+        use crate::hgvs::edit::RepeatCount;
+        // A tandem-repeat unit must be reverse-complemented on the minus strand:
+        // revcomp(CA) = TG (#852). Counts are orientation-invariant.
+        let edit = NaEdit::Repeat {
+            sequence: Some(seq("CA")),
+            count: RepeatCount::Exact(5),
+            additional_counts: Vec::new(),
+            trailing: None,
+        };
+        match transform_edit_for_strand(&edit, Strand::Minus) {
+            NaEdit::Repeat {
+                sequence, count, ..
+            } => {
+                assert_eq!(sequence.unwrap().to_string(), "TG");
+                assert_eq!(count, RepeatCount::Exact(5));
+            }
+            other => panic!("expected Repeat, got {other:?}"),
+        }
     }
 
     #[test]
