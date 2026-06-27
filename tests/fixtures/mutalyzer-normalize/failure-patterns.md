@@ -52,6 +52,7 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.15_17dup` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.274delinsNG_012337.3(NM_003002.4):c.200_203` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_012459.2):c.297_*1del` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.3GC[5]` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.4_5insGTA` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.4_6delinsGTA` | protein_description | spec_citation | — | — |
@@ -322,5 +323,5 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 23 | 18 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 51 |
+| protein_description | 0 | 0 | 0 | 0 | 52 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
