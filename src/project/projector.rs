@@ -16,8 +16,9 @@ use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
     build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
-    cds_has_valid_start, edit_reaches_initiation_codon, predict_indel_protein,
-    predict_substitution_protein, read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
+    cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
+    predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
+    read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -2634,7 +2635,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Clamp it to the exonic CDS bases removed; if that yields a span, let
         // it through the intronic gate so the indel predictor runs on it below.
         let whole_exon = whole_exon_deletion_span(c_edit, cds_start, cds_end);
-        if (is_intronic && whole_exon.is_none()) || !is_coding || (is_utr && !affects_init) {
+        // A deletion spanning the CDS→3'UTR boundary disrupts the termination
+        // codon (stop-loss) and yields a C-terminal extension — the 3'-side
+        // mirror of `affects_init`. Without this carve-out the coarse `is_utr`
+        // gate (set because the 3' end is a `*N` position) would drop it to "no
+        // protein predicted" before the extension predictor runs (#857).
+        let affects_term = edit_spans_cds_into_3utr(cds_start, cds_end, is_intronic);
+        if (is_intronic && whole_exon.is_none())
+            || !is_coding
+            || (is_utr && !affects_init && !affects_term)
+        {
             return Ok(None);
         }
         // Resolve the protein accession: the authoritative cdot/reference value
@@ -2811,6 +2821,37 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     Err(other) => return Err(other),
                 }
             }
+            // Boundary-spanning deletion (CDS 5' end, 3'UTR `*N` 3' end):
+            // stop-loss → C-terminal extension. Splices against the extended
+            // (CDS + 3'UTR) reference; `predict_stop_region_extension` returns
+            // `None` if it is not a clean stop-loss. Must precede the combined
+            // arm below (whose `cds_end.base > 0` would otherwise match a `*1`
+            // end and panic in the CDS-only splice) (#857).
+            NaEdit::Deletion { .. }
+                if cds_end.utr3
+                    && !cds_start.utr3
+                    && cds_start.base > 0
+                    && cds_start.offset.is_none()
+                    && cds_end.offset.is_none() =>
+            {
+                let tx_for_codon =
+                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+                let ref_bundle =
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                match predict_stop_region_extension(
+                    &tx_for_codon,
+                    &ref_bundle,
+                    cds_start.base,
+                    cds_end.base,
+                    c_edit,
+                    &prot_acc,
+                ) {
+                    Ok(pv) => protein = pv,
+                    Err(FerroError::UnsupportedProjection { .. })
+                    | Err(FerroError::ProteinSequenceUnavailable { .. }) => {}
+                    Err(other) => return Err(other),
+                }
+            }
             NaEdit::Deletion { .. }
             | NaEdit::Insertion { .. }
             | NaEdit::Duplication { .. }
@@ -2819,11 +2860,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 // Only predict for concrete exonic CDS positions. This arm's
                 // own `offset.is_none()` guards exclude intronic offsets — the
                 // loosened intronic gate above no longer does, since whole-exon
-                // deletions now pass it (they are handled by the arm above).
+                // deletions now pass it (they are handled by the arm above). The
+                // `!utr3` guards keep a `*N` end (which has `base > 0`) out of
+                // the CDS-only splice, where it would panic; such a 3'UTR-
+                // spanning edit is handled by the boundary arm above or falls to
+                // `_ => {}` (#857).
                 if cds_start.offset.is_none()
                     && cds_end.offset.is_none()
                     && cds_start.base > 0
-                    && cds_end.base > 0 =>
+                    && cds_end.base > 0
+                    && !cds_start.utr3
+                    && !cds_end.utr3 =>
             {
                 let tx_for_codon =
                     self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
