@@ -152,8 +152,10 @@ fn minus_fixture() -> VariantProjector<MockProvider> {
     let projector = Projector::new(cdot);
 
     let mut provider = MockProvider::new();
-    // Transcript sequence is the reverse-complement of the genome (minus strand);
-    // the sort/flank tests assert positions, not bases.
+    // Genome (plus strand) carries the transcript bases at g.2000–2019 and a
+    // deterministic downstream flank from g.2020 on, so the minus-strand 5'-flank
+    // substitution renders an exact, complement-checked g. string (not just a
+    // position). The sort/in-UTR position tests are unaffected by the base values.
     provider.add_transcript(Transcript::new(
         "NM_M.1".to_string(),
         Some("MGENE".to_string()),
@@ -170,11 +172,14 @@ fn minus_fixture() -> VariantProjector<MockProvider> {
         None,
         None,
     ));
+    // g.2000–2019 = transcript bases (0-based index 1999..2019); g.2020 onward
+    // is a deterministic flank. g.2020 (index 2019) = 'T', so the minus-strand
+    // projection of c.-3A>C reverse-complements to g.2020T>G.
     let seq = format!(
         "{}{}{}",
-        "N".repeat(1999),
+        "A".repeat(1999),
         "ACGTACGTACGTACGTACGT",
-        "N".repeat(80)
+        "TGCA".repeat(20)
     );
     provider.add_genomic_sequence("NC_000001.11", seq);
     provider.add_genomic_placement(
@@ -234,5 +239,76 @@ fn trans_allele_members_not_reordered() {
         member_starts(&g),
         vec![2017, 2009],
         "trans order must be preserved"
+    );
+}
+
+#[test]
+fn minus_strand_5utr_within_modeled_utr_unchanged() {
+    // cds_start=2 ⇒ c.-1→tx1→g.2018, c.-2→tx0→g.2019 (last in-UTR). These route
+    // through the existing cds_to_tx; the flank fallback must NOT intercept them.
+    let vp = minus_fixture();
+    let g = vp
+        .project_to_genomic(&parse_hgvs("NG_M.1(NM_M.1):c.-2A>C").expect("parse"))
+        .expect("in-UTR position projects");
+    // Minus strand: A>C reverse-complements to T>G; genome base at g.2019 is 'T'.
+    assert_eq!(g.to_string(), "NG_M.1:g.2019T>G");
+}
+
+#[test]
+fn minus_strand_5utr_flank_extends_into_parent() {
+    // c.-3: offset 3 > cds_start 2 ⇒ under=1, g0=tx_to_genome(0)=2019, minus
+    // g0+under=2020. Identity placement ⇒ NG g.2020.
+    let vp = minus_fixture();
+    let g = vp
+        .project_to_genomic(&parse_hgvs("NG_M.1(NM_M.1):c.-3A>C").expect("parse"))
+        .expect("5' flank projects");
+    // Minus strand: A>C reverse-complements to T>G; flank base at g.2020 is 'T'.
+    assert_eq!(g.to_string(), "NG_M.1:g.2020T>G");
+}
+
+#[test]
+fn plus_strand_5utr_flank_extends_into_parent() {
+    // Plus fixture cds_start=2 ⇒ c.-3: under=1, g0=tx_to_genome(0)=1000, plus
+    // g0-under=999. Flank base 'G' at g.999 (identity placement). c.-3G>A → g.999G>A.
+    let vp = plus_fixture();
+    let g = vp
+        .project_to_genomic(&parse_hgvs("NG_P.1(NM_P.1):c.-3G>A").expect("parse"))
+        .expect("5' flank projects");
+    assert_eq!(g.to_string(), "NG_P.1:g.999G>A");
+}
+
+#[test]
+fn plus_strand_5utr_flank_outside_placement_declines() {
+    // A 5' flank far enough upstream that its NC_ coordinate drops below the
+    // placed span must be DECLINED, not emitted: arithmetic checked_add/sub
+    // guards integer wrap but not the parent/reference bounds — the placement
+    // bounds check in reanchor_genome_to_parent does that (#851). Plus fixture
+    // cds_start=2, nc_start=900: c.-103 ⇒ under=101, g0=1000, g0-under=899 < 900,
+    // so the NC_ coordinate falls one base below the placed span.
+    let vp = plus_fixture();
+    let err = vp
+        .project_to_genomic(&parse_hgvs("NG_P.1(NM_P.1):c.-103G>A").expect("parse"))
+        .expect_err("out-of-flank 5' projection must decline, not fabricate a coordinate");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("placed genomic span"),
+        "expected an out-of-span decline, got: {msg}"
+    );
+}
+
+#[test]
+fn minus_strand_5utr_flank_outside_placement_declines() {
+    // Minus-strand sibling of the plus case: the flank extends UP in genomic
+    // coordinates, so an out-of-flank position overruns nc_end instead. Minus
+    // fixture cds_start=2, nc_end=2100: c.-84 ⇒ under=82, g0=tx_to_genome(0)=2019,
+    // g0+under=2101 > 2100, one base past the placed span ⇒ decline.
+    let vp = minus_fixture();
+    let err = vp
+        .project_to_genomic(&parse_hgvs("NG_M.1(NM_M.1):c.-84A>C").expect("parse"))
+        .expect_err("out-of-flank 5' projection must decline, not fabricate a coordinate");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("placed genomic span"),
+        "expected an out-of-span decline, got: {msg}"
     );
 }
