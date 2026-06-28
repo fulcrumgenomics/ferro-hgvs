@@ -194,6 +194,24 @@ fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVari
     }
 }
 
+/// Map an LRG transcript accession (`LRG_<gnum>t<tnum>`) to its protein
+/// accession (`LRG_<gnum>p<tnum>`). LRG defines `p<k>` as the translation of
+/// `t<k>`, so the index is shared — a structural fact of the accession, not a
+/// cdot inference (the LRG mapping table carries no protein column). Returns
+/// `None` for any accession that is not an `LRG_<digits>t<digits>` (#860).
+fn lrg_protein_accession(lrg_transcript: &str) -> Option<String> {
+    let rest = lrg_transcript.strip_prefix("LRG_")?;
+    let (gnum, tnum) = rest.split_once('t')?;
+    if gnum.is_empty()
+        || tnum.is_empty()
+        || !gnum.bytes().all(|b| b.is_ascii_digit())
+        || !tnum.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("LRG_{gnum}p{tnum}"))
+}
+
 pub struct VariantProjector<P: ReferenceProvider + Clone> {
     projector: Projector,
     provider: P,
@@ -947,7 +965,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 },
                 None => r,
             };
-            framed.push(Self::frame_projection_owned(r, &parent, placement.as_ref()));
+            framed.push(self.frame_projection_owned(r, &parent, placement.as_ref()));
         }
         Ok(framed)
     }
@@ -962,6 +980,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// emit a selector that was not in the input, and the mutalyzer `NG_(NM_)`
     /// form carries none.
     fn frame_projection_owned(
+        &self,
         mut result: VariantProjection,
         parent: &Accession,
         placement: Option<&crate::reference::GenomicPlacement>,
@@ -973,6 +992,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         ] {
             if let Some(v) = field.as_ref() {
                 *field = Some(Self::relabel_under_parent(v, parent));
+            }
+        }
+        // #860: under a bare LRG genomic parent, echo the input's LRG namespace
+        // instead of the resolved NM_/NP_. The transcript index (LRG_<n>t<k>)
+        // comes from the resolved NM_ of the coding/noncoding axis via the
+        // parent-scoped reverse lookup; the protein is the structural t->p of the
+        // same index. Render bare — clear the genomic_context the loop above
+        // attached, since the corpus expects `LRG_24t1:c.`, not `LRG_24(LRG_24t1):c.`.
+        if parent.is_lrg() {
+            let cdot = self.projector.mapper().cdot();
+            let base = parent.base();
+            let lrg_tx = result
+                .coding
+                .as_ref()
+                .or(result.noncoding.as_ref())
+                .and_then(|v| v.accession())
+                .map(|a| a.transcript_accession())
+                .and_then(|nm| cdot.lrg_transcript_for_parent(&base, &nm));
+            if let Some(lrg_tx) = lrg_tx {
+                let lrg_tx_acc = parse_accession(&lrg_tx);
+                // The rna axis can be an allele needing apply_rna_framing-style
+                // recursion; no #860 corpus row exercises rna under an LRG parent,
+                // so it is intentionally out of scope here.
+                for field in [&mut result.coding, &mut result.noncoding] {
+                    if let Some(v) = field.as_mut() {
+                        Self::set_bare_accession(v, lrg_tx_acc.clone());
+                    }
+                }
+                if let (Some(protein), Some(lrg_p)) =
+                    (result.protein.as_mut(), lrg_protein_accession(&lrg_tx))
+                {
+                    Self::set_bare_accession(protein, parse_accession(&lrg_p));
+                }
             }
         }
         // The RNA axis can be a predicted allele (`r.[...]`), so frame it through
@@ -1041,6 +1093,34 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             _ => {}
         }
         v
+    }
+
+    /// Set `variant`'s top-level accession to `acc` with no `genomic_context`
+    /// (bare rendering), clearing any synthesized gene symbol. Used by #860 to
+    /// echo the input's LRG namespace (`LRG_<n>t<k>`/`LRG_<n>p<k>`) on a fan-out
+    /// projection without the `LRG_<n>(inner)` genomic-context wrapper. Only the
+    /// single-variant arms are handled (an allele rna axis is out of scope).
+    fn set_bare_accession(variant: &mut HgvsVariant, acc: Accession) {
+        let acc = acc.without_genomic_context();
+        match variant {
+            HgvsVariant::Cds(c) => {
+                c.accession = acc;
+                c.gene_symbol = None;
+            }
+            HgvsVariant::Tx(t) => {
+                t.accession = acc;
+                t.gene_symbol = None;
+            }
+            HgvsVariant::Rna(r) => {
+                r.accession = acc;
+                r.gene_symbol = None;
+            }
+            HgvsVariant::Protein(p) => {
+                p.accession = acc;
+                p.gene_symbol = None;
+            }
+            _ => {}
+        }
     }
 
     /// Re-frame a predicted RNA (`r.`) consequence so its accession matches the
@@ -2569,7 +2649,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // transcript id keeps the output honest — the identifier names the
         // transcript whose CDS we actually translated — and still satisfies the
         // grammar.
-        let prot_acc = cdot_protein.unwrap_or_else(|| transcript_id.to_string());
+        // #860: when the input names an LRG transcript (LRG_<n>t<k>), echo its
+        // LRG protein namespace (LRG_<n>p<k>) rather than the resolved NP_ — both
+        // are spec-valid public references (general.md L16), and preserving the
+        // input's namespace matches the reference the caller used. Non-LRG inputs
+        // return None here and keep the cdot NP_ (or the honest transcript-id
+        // fallback, #310/#808) — byte-identical to the prior behavior.
+        let prot_acc = lrg_protein_accession(transcript_id)
+            .or(cdot_protein)
+            .unwrap_or_else(|| transcript_id.to_string());
         // Issue #505: protein prediction below reads this transcript's CDS
         // bases directly and translates them. If the reference only carries a
         // *different* version of the transcript (a silent version-strip
@@ -4049,6 +4137,24 @@ mod tests {
     use crate::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
     use crate::reference::Strand as ProvStrand;
     use std::sync::OnceLock;
+
+    #[test]
+    fn lrg_protein_accession_swaps_t_to_p() {
+        assert_eq!(lrg_protein_accession("LRG_1t1").as_deref(), Some("LRG_1p1"));
+        assert_eq!(
+            lrg_protein_accession("LRG_24t2").as_deref(),
+            Some("LRG_24p2")
+        );
+        assert_eq!(
+            lrg_protein_accession("LRG_1t10").as_deref(),
+            Some("LRG_1p10")
+        );
+        // Not an LRG transcript accession:
+        assert_eq!(lrg_protein_accession("NM_000077.4"), None);
+        assert_eq!(lrg_protein_accession("LRG_24"), None); // bare genomic LRG
+        assert_eq!(lrg_protein_accession("LRG_1p1"), None); // already a protein
+        assert_eq!(lrg_protein_accession("NP_000068.1"), None);
+    }
 
     fn make_test_provider_and_projector() -> (Projector, MockProvider) {
         // A single coding transcript on chr1, plus strand.
@@ -7503,11 +7609,8 @@ mod tests {
                 is_utr: false,
                 affects_init: false,
             };
-            let framed = VariantProjector::<MockProvider>::frame_projection_owned(
-                proj,
-                &parent,
-                Some(&placement),
-            );
+            let vp = VariantProjector::new(Projector::new(CdotMapper::new()), MockProvider::new());
+            let framed = vp.frame_projection_owned(proj, &parent, Some(&placement));
             assert!(
                 framed.genomic.is_none(),
                 "genomic axis should be dropped when it cannot be re-anchored, got: {:?}",
@@ -7522,6 +7625,69 @@ mod tests {
             assert!(
                 coding_str.starts_with("NG_900.1("),
                 "coding should be framed under the NG_ parent, got: {coding_str}"
+            );
+        }
+
+        /// #860 Case B: under a bare `LRG_<n>` genomic parent, the fan-out
+        /// coding/protein axes are relabeled to the input's LRG namespace
+        /// (`LRG_<n>t<k>`/`LRG_<n>p<k>`) and rendered **bare** — not
+        /// `LRG_<n>(LRG_<n>t<k>)` and not `LRG_<n>(NM_…)`.
+        #[test]
+        fn frame_projection_owned_relabels_lrg_namespace_bare() {
+            use crate::hgvs::edit::ProteinEdit;
+            use crate::hgvs::interval::ProtInterval;
+            use crate::hgvs::location::{AminoAcid, ProtPos};
+            use crate::hgvs::variant::ProteinVariant;
+
+            let mut cdot = CdotMapper::new();
+            // LRG file carries .1; the fan-out coding axis is .3 — base match.
+            cdot.insert_lrg_mapping("LRG_24t1".to_string(), "NM_001114101.1".to_string());
+            cdot.insert_lrg_mapping("LRG_24t2".to_string(), "NM_172369.2".to_string());
+            let vp = VariantProjector::new(Projector::new(cdot), MockProvider::new());
+
+            let parent = parse_accession("LRG_24"); // bare genomic LRG, is_lrg()
+            let coding = HgvsVariant::Cds(CdsVariant {
+                accession: parse_accession("NM_001114101.3"),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(127)),
+                    NaEdit::Substitution {
+                        reference: Base::G,
+                        alternative: Base::A,
+                    },
+                ),
+            });
+            let protein = HgvsVariant::Protein(ProteinVariant {
+                accession: parse_accession("NP_001107573.1"),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    ProtInterval::point(ProtPos::new(AminoAcid::Met, 1)),
+                    ProteinEdit::whole_protein_unknown(),
+                ),
+            });
+            let proj = VariantProjection {
+                genomic: None,
+                coding: Some(coding),
+                noncoding: None,
+                protein: Some(protein),
+                rna: None,
+                transcript_id: "NM_001114101.3".to_string(),
+                gene_symbol: None,
+                is_frameshift: false,
+                is_intronic: false,
+                is_utr: false,
+                affects_init: false,
+            };
+            let framed = vp.frame_projection_owned(proj, &parent, None);
+
+            assert_eq!(
+                framed.coding.unwrap().to_string(),
+                "LRG_24t1:c.127G>A",
+                "coding should render bare LRG_24t1 (no NM_, no LRG_24(...) wrapper)"
+            );
+            assert!(
+                framed.protein.unwrap().to_string().starts_with("LRG_24p1:"),
+                "protein should render bare LRG_24p1"
             );
         }
 

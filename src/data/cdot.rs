@@ -2518,6 +2518,30 @@ impl CdotMapper {
         self.lrg_to_refseq.get(lrg_accession).map(|s| s.as_str())
     }
 
+    /// Reverse of [`Self::get_refseq_for_lrg`], scoped to one LRG parent: return
+    /// the `LRG_<n>t<k>` hosted by `lrg_parent` (e.g. `"LRG_24"`) whose mapped
+    /// RefSeq transcript base-matches `nm` (version-stripped on both sides — the
+    /// LRG mapping table pins one NM version while cdot / the projection fan-out
+    /// may serve another). Scoping to `lrg_parent` avoids a cross-LRG collision
+    /// were some NM base ever hosted by two LRGs. Returns `None` when no hosted
+    /// transcript matches (#860).
+    pub fn lrg_transcript_for_parent(&self, lrg_parent: &str, nm: &str) -> Option<String> {
+        let nm_base = nm.rsplit_once('.').map_or(nm, |(b, _)| b);
+        let prefix = format!("{lrg_parent}t");
+        self.lrg_to_refseq.iter().find_map(|(lrg_t, refseq)| {
+            let refseq_base = refseq.rsplit_once('.').map_or(refseq.as_str(), |(b, _)| b);
+            (lrg_t.starts_with(&prefix) && refseq_base == nm_base).then(|| lrg_t.clone())
+        })
+    }
+
+    /// Test-only: insert an `LRG_<n>t<k>` → versioned `NM_x.v` mapping. The
+    /// `lrg_to_refseq` field is private, so tests in other modules (e.g. the
+    /// projector's #860 LRG-namespace tests) use this to populate the reverse map.
+    #[cfg(test)]
+    pub(crate) fn insert_lrg_mapping(&mut self, lrg: String, refseq: String) {
+        self.lrg_to_refseq.insert(lrg, refseq);
+    }
+
     /// Get a transcript by accession.
     ///
     /// For LRG transcripts (e.g., "LRG_1t1"), this will look up the equivalent
@@ -3206,6 +3230,37 @@ impl Default for CdotMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lrg_transcript_for_parent_base_insensitive_and_scoped() {
+        let mut cdot = CdotMapper::new();
+        // LRG file carries .1; cdot/fan-out query .3 — must still match on base.
+        cdot.insert_lrg_mapping("LRG_24t1".to_string(), "NM_001114101.1".to_string());
+        cdot.insert_lrg_mapping("LRG_24t2".to_string(), "NM_172369.2".to_string());
+        cdot.insert_lrg_mapping("LRG_1t1".to_string(), "NM_000079.3".to_string());
+
+        // Version-insensitive base match, scoped to the parent:
+        assert_eq!(
+            cdot.lrg_transcript_for_parent("LRG_24", "NM_001114101.3")
+                .as_deref(),
+            Some("LRG_24t1")
+        );
+        assert_eq!(
+            cdot.lrg_transcript_for_parent("LRG_24", "NM_172369.5")
+                .as_deref(),
+            Some("LRG_24t2")
+        );
+        // A transcript not hosted by LRG_24 → miss (graceful):
+        assert_eq!(
+            cdot.lrg_transcript_for_parent("LRG_24", "NM_001347619.2"),
+            None
+        );
+        // Scoping: LRG_1's transcript is not returned under parent LRG_24:
+        assert_eq!(
+            cdot.lrg_transcript_for_parent("LRG_24", "NM_000079.3"),
+            None
+        );
+    }
 
     /// #742 regression: a 2-exon minus-strand transcript loaded from raw cdot
     /// JSON (genome 0-based, cdna 1-based — the real cdot convention) maps the
