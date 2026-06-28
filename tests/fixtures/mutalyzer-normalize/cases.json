@@ -507,7 +507,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_670del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_670del",
       "genomic": "NG_012772.1:g.18959_19002del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -517,7 +522,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_681+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_681+7del",
       "genomic": "NG_012772.1:g.18959_19020del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -543,7 +553,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.68-7_316+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.68-7_316+7del",
       "genomic": "NG_012772.1:g.8591_8853del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -553,7 +568,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.632-5_793+7del",
       "normalized": "NG_012772.1(NM_000059.3):c.632-5_793+7del",
       "genomic": "NG_012772.1:g.18959_20558del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -570,6 +590,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -580,7 +605,12 @@
       "input": "NG_012772.1(BRCA2_v001):c.681+1_682-1del",
       "normalized": "NG_012772.1(NM_000059.3):c.681+1_682-1del",
       "genomic": "NG_012772.1:g.19014_20439del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -597,6 +627,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -682,7 +717,12 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -741,7 +781,12 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -802,7 +847,12 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insTTTGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCAAAG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5PhefsTer22)",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -915,6 +965,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -933,6 +988,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -950,6 +1010,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -967,6 +1032,11 @@
         "axis": "normalized",
         "policy": "ferro-policy-654-positional-insert-literal-expansion",
         "note": "ferro expands the copy-range payload ins180_188 to the literal bases insGCGAGGAAA; mutalyzer keeps the positional notation. Same edit; literal inserted sequence is spec-valid."
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -984,6 +1054,11 @@
         "axis": "normalized",
         "policy": "ferro-policy-654-positional-insert-literal-expansion",
         "note": "ferro expands the inverted copy-range payload to literal bases (insTTTCCTCGC); mutalyzer keeps positional notation."
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1002,6 +1077,11 @@
         "axis": "normalized",
         "policy": "ferro-policy-654-positional-insert-literal-expansion",
         "note": "bracketed copy-range payload expanded to literal bases by ferro; mutalyzer keeps positional notation."
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1020,6 +1100,11 @@
         "axis": "normalized",
         "policy": "ferro-policy-654-positional-insert-literal-expansion",
         "note": "bracketed inverted copy-range payload expanded to literal bases by ferro; mutalyzer keeps positional notation."
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1248,6 +1333,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1266,6 +1356,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1283,6 +1378,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1299,6 +1399,11 @@
         "axis": "normalized",
         "tracking_issue": 480,
         "note": "ferro expands the c.180_188 copy range as transcript-contiguous bases; mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele with intronic offsets. Genomic-context copy-range expansion tracked in #480. [review: ferro-vs-mutalyzer correctness]"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1315,6 +1420,11 @@
         "axis": "normalized",
         "tracking_issue": 480,
         "note": "inverted copy-range delins; ferro expands transcript-contiguous, mutalyzer through the genomic (intron-split) reference. Tracked in #480. [review]"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1332,6 +1442,11 @@
         "axis": "normalized",
         "tracking_issue": 480,
         "note": "bracketed copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480. [review]"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1349,6 +1464,11 @@
         "axis": "normalized",
         "tracking_issue": 480,
         "note": "bracketed inverted copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480. [review]"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1468,6 +1588,11 @@
         "section": "HGVS §RefSeqGene transcript selection",
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1487,6 +1612,11 @@
         "section": "HGVS §RefSeqGene transcript selection",
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -1506,6 +1636,11 @@
         "section": "HGVS §RefSeqGene transcript selection",
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -2141,6 +2276,11 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -2172,6 +2312,11 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
@@ -2653,7 +2798,12 @@
       "input": "NG_008835.1(CDH23_v001):c.1449+846delA",
       "normalized": "NG_008835.1(NM_022124.6):c.1449+858del",
       "genomic": "NG_008835.1:g.255529del",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [],
@@ -2695,7 +2845,12 @@
       "input": "NG_009497.1(USH2A_v001):c.8682-19dup",
       "normalized": "NG_009497.1(NM_206933.2):c.8682-19dup",
       "genomic": "NG_009497.1:g.561208dup",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [],
@@ -2890,7 +3045,12 @@
       "input": "NG_012337.1(SDHD_v001):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -2899,7 +3059,12 @@
       "input": "NG_012337.1(SDHD):c.274G>T",
       "normalized": "NG_012337.1(NM_003002.2):c.274G>T",
       "genomic": "NG_012337.1:g.7125G>T",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+      }
     },
     {
       "keywords": [
@@ -2915,6 +3080,11 @@
         "section": "HGVS §RefSeqGene transcript selection",
         "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
         "cluster": "refseqgene-selector"
+      },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
       }
     },
     {
