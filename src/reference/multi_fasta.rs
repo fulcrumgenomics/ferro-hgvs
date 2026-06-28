@@ -802,6 +802,29 @@ impl MultiFastaProvider {
             }
         }
 
+        // Version-aware backfill FASTA (#842): deposited sequences for
+        // accession.versions present in cdot but absent from the bulk RNA feed.
+        // Scanning its directory ensures the backfilled `accession.version` is
+        // served by the primary index path (version-exact cdot metadata), so the
+        // lossy genome+CIGAR synthesis fallback is never reached for it.
+        if let Some(backfill) = manifest
+            .get("backfill_transcripts_fasta")
+            .and_then(|v| v.as_str())
+        {
+            let path = resolve_path(backfill);
+            let fai = PathBuf::from(format!("{}.fai", path.display()));
+            if !path.exists() || !fai.exists() {
+                warn!(
+                    "Backfill transcript FASTA or its .fai is missing: {}; skipping backfill index",
+                    path.display()
+                );
+            } else if let Some(backfill_dir) = path.parent() {
+                if !dirs.contains(&backfill_dir.to_path_buf()) {
+                    dirs.push(backfill_dir.to_path_buf());
+                }
+            }
+        }
+
         if dirs.is_empty() {
             return Err(FerroError::Io {
                 msg: "No FASTA directories found in manifest".to_string(),
@@ -3958,6 +3981,100 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert!(
             cdot.get_transcript("NM_000088.3").is_some(),
             "RefSeq transcript still resolves in cdot"
+        );
+    }
+
+    #[test]
+    fn from_manifest_serves_backfilled_transcript_from_index() {
+        // #842: a backfill FASTA named in the manifest (in its own subdir, NOT
+        // the bulk transcript dir) must be ingested so the accession.version is
+        // served from the primary index path rather than synthesized.
+        use crate::reference::ReferenceProvider;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // Bulk transcript FASTA that does NOT contain the superseded version.
+        fs::write(d.join("tx.fna"), ">NM_000088.4\nAAAA\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000088.4\t4\t13\t4\t5\n").unwrap();
+
+        // Backfill FASTA in its own dedicated `backfill/` subdir, carrying the
+        // superseded version's deposited bases.
+        let backfill_dir = d.join("backfill");
+        fs::create_dir_all(&backfill_dir).unwrap();
+        fs::write(
+            backfill_dir.join("backfill_transcripts.fna"),
+            ">NM_000088.3\nACGTACGT\n",
+        )
+        .unwrap();
+        fs::write(
+            backfill_dir.join("backfill_transcripts.fna.fai"),
+            "NM_000088.3\t8\t13\t8\t9\n",
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "backfill_transcripts_fasta": "backfill/backfill_transcripts.fna",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+        let tx = provider
+            .get_transcript("NM_000088.3")
+            .expect("backfilled NM_000088.3 is served from the index");
+        assert_eq!(
+            tx.sequence.as_deref(),
+            Some("ACGTACGT"),
+            "the deposited backfill bases are served, not synthesized"
+        );
+    }
+
+    #[test]
+    fn from_manifest_skips_missing_backfill_fasta() {
+        // #842: a stale `backfill_transcripts_fasta` (named in the manifest but
+        // the file/.fai absent on disk) must not brick provider load. Backfill
+        // is optional, so the entry is warned and skipped while the rest of the
+        // provider loads normally.
+        use crate::reference::ReferenceProvider;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // Bulk transcript FASTA the provider must still serve.
+        fs::write(d.join("tx.fna"), ">NM_000088.4\nAAAA\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000088.4\t4\t13\t4\t5\n").unwrap();
+
+        // Manifest names a backfill FASTA whose directory exists but whose
+        // FASTA/.fai were never written (stale path). Create the dir so the
+        // failure mode being guarded — pushing a FASTA-less dir into
+        // from_directory — would otherwise trigger.
+        fs::create_dir_all(d.join("backfill")).unwrap();
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "backfill_transcripts_fasta": "backfill/backfill_transcripts.fna",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json"))
+            .expect("provider loads despite the stale backfill path");
+        assert!(
+            provider.get_transcript("NM_000088.4").is_ok(),
+            "the bulk transcript still resolves after the backfill entry is skipped"
         );
     }
 

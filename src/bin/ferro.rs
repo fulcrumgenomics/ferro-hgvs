@@ -542,6 +542,19 @@ enum Commands {
         #[arg(long)]
         derive_ng_placements: Option<PathBuf>,
 
+        /// Newline-delimited file of exact `accession.version`s (e.g.
+        /// `NM_002001.2`) to backfill at prepare time (#842): for each that is
+        /// present in cdot but absent from the bulk RefSeq RNA FASTA, fetch its
+        /// deposited sequence and append it to `backfill/backfill_transcripts.fna`,
+        /// wiring the manifest field so the primary path serves it instead of
+        /// synthesizing lossy bases from the genome. Requires cdot (downloaded
+        /// in this run or already in the reference). Networked (NCBI EFetch per
+        /// accession); per-accession failures warn and continue.
+        ///
+        /// Example: `ferro prepare --backfill-transcripts targets.txt`
+        #[arg(long)]
+        backfill_transcripts: Option<PathBuf>,
+
         /// Dry run - show what would be downloaded without downloading
         #[arg(long)]
         dry_run: bool,
@@ -871,6 +884,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate_canonical,
             ensembl,
             derive_ng_placements,
+            backfill_transcripts,
             dry_run,
         } => run_prepare(
             &output_dir,
@@ -886,6 +900,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate_canonical.as_deref(),
             ensembl,
             derive_ng_placements,
+            backfill_transcripts,
             dry_run,
         ),
         Commands::Check {
@@ -3238,6 +3253,7 @@ fn run_prepare(
     validate_canonical: Option<&Path>,
     ensembl: bool,
     derive_ng_placements: Option<PathBuf>,
+    backfill_transcripts: Option<PathBuf>,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::prepare::{prepare_references, PrepareConfig};
@@ -3258,6 +3274,7 @@ fn run_prepare(
         patterns_file: patterns.map(|p| p.to_path_buf()),
         validate_canonical_accessions: validate_canonical.map(|p| p.to_path_buf()),
         derive_ng_placements,
+        backfill_transcripts,
         genome: genome.to_string(),
         dry_run,
     };
