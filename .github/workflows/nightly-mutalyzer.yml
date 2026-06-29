@@ -56,7 +56,7 @@ jobs:
 
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
 
-      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/bin/
@@ -74,7 +74,7 @@ jobs:
         # key and MANIFEST_CACHE_VERSION identical across both files so the perf
         # gate reuses the manifest this job prepares; bump them together.
         id: cache-manifest
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           # `benchmark-output/manifest.json` is one of the well-known
           # paths the test harness probes (see `manifest_path()` in
