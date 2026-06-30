@@ -189,6 +189,13 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// output is invariant under `ShuffleDirection`. A direction-parameter
 /// audit was performed in #357 and locked in by
 /// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`.
+///
+/// Shares the 3'-phase step (`three_prime_align_tract`) with
+/// [`normalize_repeat`]; the two are kept in lockstep by the cross-check test
+/// `insertion_to_repeat_agrees_with_normalize_repeat_phase`. They keep separate
+/// tract-finders (`find_tandem_extent` here, [`count_tandem_repeats`] there)
+/// because their anchoring contracts genuinely differ — see #866 and the note on
+/// [`count_tandem_repeats`].
 pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
@@ -371,14 +378,31 @@ pub(crate) fn insertion_to_duplication(
         }
     }
 
-    let (unit, ref_start, ref_count) = best?;
+    let (mut unit, ref_start, ref_count) = best?;
     let tract_end_idx = ref_start + (ref_count as usize) * unit.len();
     // `find_tandem_extent` returns `ref_start` aligned on a `unit`-length
     // anchor probe, so picking `ref_start` for the 5' end never lands the
     // dup slot mid-unit even when the inserted alt was a non-zero
     // rotation of the canonical reference unit.
     let dup_start_idx = match direction {
-        ShuffleDirection::ThreePrime => tract_end_idx - unit.len(),
+        ShuffleDirection::ThreePrime => {
+            // Push to the *true* 3'-most slot, crossing any off-phase tract
+            // extension. `tract_end_idx - unit.len()` only 3'-aligns within the
+            // abutting rotation's phase; when the run continues one base further
+            // in the opposite phase (e.g. inserting `TG` at the 5' edge of a
+            // `TGTGTGTGT` run — the abutting `TG`/`GT` tract ends one base short
+            // of the run's true 3' end), stopping there violates the 3'rule.
+            // `three_prime_align_tract` walks the remaining flank while
+            // `ref[end] == rotated[0]` — exactly the duplication slide rule
+            // `ref[s] == ref[s+L]` — rotating the unit to the run's 3' phase,
+            // mirroring the repeat path (#852). HGVS DNA duplication.md: "the
+            // most 3' position possible … is arbitrarily assigned to have been
+            // changed (3'rule)." Verified against mutalyzer (#864).
+            let (_, aligned_end, aligned_unit) =
+                three_prime_align_tract(ref_seq, ref_start, tract_end_idx, &unit);
+            unit = aligned_unit;
+            aligned_end - unit.len()
+        }
         ShuffleDirection::FivePrime => ref_start,
     };
     let dup_end_idx = dup_start_idx + unit.len() - 1;
@@ -1224,6 +1248,20 @@ pub fn duplication_to_repeat(
 /// - count is the number of repeats found
 /// - start is the 0-indexed start of the repeat region
 /// - end is the 0-indexed exclusive end
+///
+/// # Anchoring contract (do NOT replace with `extend_tandem_tract`)
+///
+/// This finder scans **backward** from `pos` in unit-length steps, so it accepts
+/// a tract that merely *ends at or before* `pos` — `pos` itself need not match
+/// `unit`. `extend_tandem_tract` (used by `find_tandem_extent`) instead
+/// *requires* the anchor span `ref_seq[pos..pos+unit_len]` to equal `unit`. The
+/// two are therefore **not interchangeable** (#866): e.g.
+/// `count_tandem_repeats(b"ATATXX", 4, b"AT") == Some((2, 0, 4))` (the `AT`
+/// tract ends at index 4) while `extend_tandem_tract(b"ATATXX", 4..6, b"AT")
+/// == None` (`ref[4..6] == "XX"`). `normalize_repeat` relies on this
+/// boundary-anchor behavior, so delegating here would silently drop valid
+/// tracts. The genuinely shared piece across the ins→repeat / repeat paths is
+/// the 3'-phase step `three_prime_align_tract` (#852), not the tract finder.
 pub fn count_tandem_repeats(
     ref_seq: &[u8],
     pos: usize,
@@ -1350,6 +1388,14 @@ fn three_prime_align_tract(
 /// - specified_count: The count specified in the variant
 ///
 /// Returns the normalized representation
+///
+/// Shares the 3'-phase step (`three_prime_align_tract`) with
+/// [`insertion_to_repeat`]; kept in lockstep by the cross-check test
+/// `insertion_to_repeat_agrees_with_normalize_repeat_phase`. Uses
+/// [`count_tandem_repeats`] (+ an off-phase rotation/offset search) as its
+/// tract-finder rather than `find_tandem_extent` because it anchors at an
+/// existing position (possibly mid- or end-of-tract), not an insertion point —
+/// see #866 and the note on [`count_tandem_repeats`].
 pub fn normalize_repeat(
     ref_seq: &[u8],
     pos: usize,
@@ -2698,21 +2744,67 @@ mod tests {
 
     #[test]
     fn insertion_to_repeat_agrees_with_normalize_repeat_phase() {
-        // Idempotency invariant: the window insertion_to_repeat reports must equal
-        // the window normalize_repeat produces for the same tract/unit/count.
-        let r = b"CTGTGTT";
-        let (_b, _c, ins_start, ins_end, ins_unit) =
-            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
-        match normalize_repeat(r, 1, 5, b"TG", 5, false) {
-            RepeatNormResult::Repeat {
-                start,
-                end,
-                sequence,
-                ..
-            } => {
-                assert_eq!((ins_start, ins_end, ins_unit), (start, end, sequence));
+        // #866 cross-check. The two ins→repeat entry points reach the canonical
+        // repeat window by DIFFERENT tract-finders (`find_tandem_extent` anchored
+        // at an insertion point vs `count_tandem_repeats` + off-phase rotation
+        // search anchored at an existing position) but MUST agree on the final
+        // 3'-aligned window `(start, end, rotated_unit)` for the same reference
+        // tract — both share `three_prime_align_tract` (#852). That agreement is
+        // what prevents the #852 non-idempotency from recurring; the count
+        // differs by construction (insertion adds copies) and is not compared.
+        //
+        // Covers both off-phase di-repeat shapes #852 fixed: a mid-tract phase
+        // rotation (`CTGTGTT`, unit reported as `GT` not `TG`) and a tract-end
+        // boundary anchor (`TGCGCA`, anchor at the last base).
+        struct Case {
+            ref_seq: &'static [u8],
+            ins_pos: u64,
+            ins_seq: &'static [u8],
+            nr_pos: usize,
+            nr_end: usize,
+            nr_unit: &'static [u8],
+            nr_count: u64,
+        }
+        let cases = [
+            Case {
+                ref_seq: b"CTGTGTT",
+                ins_pos: 4,
+                ins_seq: b"TGTGTG",
+                nr_pos: 1,
+                nr_end: 5,
+                nr_unit: b"TG",
+                nr_count: 5,
+            },
+            Case {
+                ref_seq: b"TGCGCA",
+                ins_pos: 1,
+                ins_seq: b"GCGC",
+                nr_pos: 4,
+                nr_end: 4,
+                nr_unit: b"GC",
+                nr_count: 5,
+            },
+        ];
+        for c in cases {
+            let (_b, _c, ins_start, ins_end, ins_unit) =
+                insertion_to_repeat(c.ref_seq, c.ins_pos, c.ins_seq, false)
+                    .unwrap_or_else(|| panic!("insertion_to_repeat None for {:?}", c.ref_seq));
+            match normalize_repeat(c.ref_seq, c.nr_pos, c.nr_end, c.nr_unit, c.nr_count, false) {
+                RepeatNormResult::Repeat {
+                    start,
+                    end,
+                    sequence,
+                    ..
+                } => {
+                    assert_eq!(
+                        (ins_start, ins_end, ins_unit),
+                        (start, end, sequence),
+                        "ins→repeat phase disagreement on {:?}",
+                        std::str::from_utf8(c.ref_seq).unwrap()
+                    );
+                }
+                other => panic!("expected Repeat for {:?}, got {other:?}", c.ref_seq),
             }
-            other => panic!("expected Repeat, got {other:?}"),
         }
     }
 
@@ -4510,6 +4602,27 @@ mod tests {
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 7);
         assert_eq!(r.end, 8);
+    }
+
+    #[test]
+    fn test_insertion_to_duplication_offphase_slides_through_partial_flank() {
+        // #864: an ODD-length di-repeat run ("TGTGTGTGT", 9 bases) ends one base
+        // past the last full 2-copy window. The dup must still reach the run's
+        // true 3' end (3'rule), which lands on the GT phase — NOT stop at the
+        // abutting TG-phase boundary. ref "ACTGTGTGTGTAC": insert TG at pos=1
+        // (between C@1 and the run). `three_prime_align_tract` slides through the
+        // trailing base → dup unit "GT" at 1-based [10..11].
+        //
+        // Mirrors the real, mutalyzer-confirmed locus
+        // NC_000001.11:g.5010037_5010038insTG → g.5010045_5010046dup (same
+        // ACTGTGTGTGTAC context). Before #864 this stopped one base 5' (the
+        // under-shifted, mutalyzer-divergent form).
+        let ref_seq = b"ACTGTGTGTGTAC";
+        let r = insertion_to_duplication(ref_seq, 1, b"TG", ShuffleDirection::ThreePrime)
+            .expect("should fire");
+        assert_eq!(r.unit, b"GT");
+        assert_eq!(r.start, 10);
+        assert_eq!(r.end, 11);
     }
 
     #[test]
