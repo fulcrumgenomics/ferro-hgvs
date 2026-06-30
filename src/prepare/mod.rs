@@ -263,20 +263,64 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
     // gap, so it needs cdot to know which versions are worth fetching — either
     // downloaded in this run, or already on disk from a prior prepare (so a
     // user can backfill a few accessions against an existing reference without
-    // re-downloading cdot). Reject a truly cdot-less selection up front.
-    if config.backfill_transcripts.is_some()
-        && !(config.download_cdot
-            || config.download_cdot_grch37
-            || manifest.cdot_json.is_some()
-            || manifest.cdot_grch37_json.is_some())
-    {
-        return Err(FerroError::Io {
-            msg: "--backfill-transcripts requires cdot, either downloaded in this run or \
-                  already present in the reference; the current selection (e.g. \
-                  --genome none or --no-cdot against a reference with no cdot) has none, \
-                  so the cdot-vs-FASTA version gap cannot be computed"
-                .to_string(),
-        });
+    // re-downloading cdot).
+    //
+    // Reject stale referenced cdot paths first. `load_cdot_versions` unions the
+    // versions from *every* cdot build the manifest references, so the backfill's
+    // "is this version known to cdot?" universe is only complete if all referenced
+    // builds load. A manifest that references both GRCh38 and GRCh37 cdot but whose
+    // GRCh37 file was deleted/moved would still pass an any-one-exists guard
+    // (GRCh38 is present), yet `load_cdot_versions` would only warn and silently
+    // compute an incomplete universe — leaving GRCh37-only versions like
+    // NM_002001.2 (#802) wrongly classified `not_in_cdot`. So require every
+    // referenced cdot path that is not being redownloaded this run to exist on
+    // disk, failing up front before any downloads instead of burning the budget
+    // and failing later in `backfill_transcripts_step` (before `manifest.save()`).
+    if config.backfill_transcripts.is_some() {
+        let stale_cdot_paths: Vec<&PathBuf> = [
+            (manifest.cdot_json.as_ref(), config.download_cdot),
+            (
+                manifest.cdot_grch37_json.as_ref(),
+                config.download_cdot_grch37,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(path, refreshed_this_run)| match path {
+            Some(path) if !refreshed_this_run && !path.exists() => Some(path),
+            _ => None,
+        })
+        .collect();
+        if !stale_cdot_paths.is_empty() {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "--backfill-transcripts requires every referenced cdot file to exist \
+                     (or be redownloaded this run); missing: {}",
+                    stale_cdot_paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+
+        // Then reject a truly cdot-less selection (nothing downloaded this run, no
+        // cdot referenced on disk) — the stale-path check above already cleared any
+        // referenced-but-missing path, so an on-disk reference here is loadable.
+        let existing_cdot_on_disk = manifest.cdot_json.as_ref().is_some_and(|p| p.exists())
+            || manifest
+                .cdot_grch37_json
+                .as_ref()
+                .is_some_and(|p| p.exists());
+        if !(config.download_cdot || config.download_cdot_grch37 || existing_cdot_on_disk) {
+            return Err(FerroError::Io {
+                msg: "--backfill-transcripts requires cdot, either downloaded in this run or \
+                      already present in the reference; the current selection (e.g. \
+                      --genome none or --no-cdot against a reference with no cdot) has none, \
+                      so the cdot-vs-FASTA version gap cannot be computed"
+                    .to_string(),
+            });
+        }
     }
 
     // Download transcripts
@@ -957,7 +1001,17 @@ fn load_cdot_versions(manifest: &ReferenceManifest) -> HashSet<String> {
         // Use `load` (not `from_json_file`) so the rkyv cache built by
         // `download_cdot` is reused instead of re-parsing the ~200MB JSON.
         match crate::data::cdot::CdotMapper::load(path) {
-            Ok(mapper) => versions.extend(mapper.transcript_ids().map(str::to_string)),
+            // `all_build_transcript_ids` (not `transcript_ids`) so a version
+            // present only on a non-primary build is still seen as in-cdot.
+            // `CdotMapper::load` always uses GRCh38 as the primary build, so
+            // when it loads the GRCh37 cdot file standalone every transcript —
+            // nested under `genome_builds["GRCh37"]` — lands in the alt map and
+            // the primary `transcripts` map (all `transcript_ids` reads) is
+            // empty. An old version GRCh38 dropped but GRCh37 retains (e.g.
+            // NM_002001.2, #802) therefore lives only in the alt map, so
+            // `transcript_ids` misses it and it is wrongly classified
+            // `not_in_cdot`; `all_build_transcript_ids` surfaces it.
+            Ok(mapper) => versions.extend(mapper.all_build_transcript_ids().map(str::to_string)),
             Err(e) => eprintln!(
                 "  Warning: failed to load cdot {} for backfill diff: {}",
                 path.display(),
@@ -2391,6 +2445,86 @@ mod tests {
         assert!(
             format!("{err}").contains("--backfill-transcripts requires cdot"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn backfill_rejects_stale_manifest_cdot_path() {
+        // A manifest that *references* cdot but whose cdot file is no longer on
+        // disk (deleted/moved) must be rejected up front, just like a cdot-less
+        // selection — `is_some()` would pass the guard and let the run burn the
+        // download budget only to fail later in backfill_transcripts_step before
+        // the manifest is persisted.
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().join("ref");
+        std::fs::create_dir_all(&ref_dir).unwrap();
+        // Persist a manifest whose cdot_json points at a file that does not exist.
+        let mut manifest = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        manifest.cdot_json = Some(ref_dir.join("cdot.json"));
+        manifest.save().unwrap();
+        assert!(!ref_dir.join("cdot.json").exists());
+
+        let acc_file = tmp.path().join("targets.txt");
+        std::fs::write(&acc_file, "NM_002001.2\n").unwrap();
+        let config = PrepareConfig {
+            output_dir: ref_dir,
+            download_transcripts: false,
+            download_genome: false,
+            download_cdot: false,
+            download_cdot_grch37: false,
+            backfill_transcripts: Some(acc_file),
+            ..Default::default()
+        };
+        let err =
+            prepare_references(&config).expect_err("stale-cdot-path backfill must be rejected");
+        assert!(
+            format!("{err}").contains("requires every referenced cdot file to exist"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn backfill_rejects_partial_stale_cdot_when_other_build_present() {
+        // A manifest that references *both* cdot builds but whose GRCh37 file was
+        // deleted/moved must be rejected even though the GRCh38 file is present.
+        // An any-one-exists guard would pass on GRCh38, but `load_cdot_versions`
+        // unions every referenced build, so a missing GRCh37 would only warn and
+        // compute an incomplete universe — wrongly classifying GRCh37-only
+        // versions (e.g. NM_002001.2, #802) as `not_in_cdot`.
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().join("ref");
+        std::fs::create_dir_all(&ref_dir).unwrap();
+        // GRCh38 cdot present on disk; GRCh37 cdot referenced but missing.
+        let cdot_grch38 = ref_dir.join("cdot_grch38.json");
+        std::fs::write(&cdot_grch38, b"").unwrap();
+        let mut manifest = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        manifest.cdot_json = Some(cdot_grch38.clone());
+        manifest.cdot_grch37_json = Some(ref_dir.join("cdot_grch37.json"));
+        manifest.save().unwrap();
+        assert!(cdot_grch38.exists());
+        assert!(!ref_dir.join("cdot_grch37.json").exists());
+
+        let acc_file = tmp.path().join("targets.txt");
+        std::fs::write(&acc_file, "NM_002001.2\n").unwrap();
+        let config = PrepareConfig {
+            output_dir: ref_dir.clone(),
+            download_transcripts: false,
+            download_genome: false,
+            download_cdot: false,
+            download_cdot_grch37: false,
+            backfill_transcripts: Some(acc_file),
+            ..Default::default()
+        };
+        let err =
+            prepare_references(&config).expect_err("partial-stale-cdot backfill must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("requires every referenced cdot file to exist"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            msg.contains("cdot_grch37.json"),
+            "error should name the missing GRCh37 cdot path: {err}"
         );
     }
 

@@ -3219,6 +3219,27 @@ impl CdotMapper {
     pub fn transcript_ids(&self) -> impl Iterator<Item = &str> {
         self.transcripts.keys().map(|s| s.as_str())
     }
+
+    /// All transcript `accession.version` keys known to this mapper, across the
+    /// primary build **and** every layered non-primary build (e.g. GRCh37 in
+    /// [`Self::alt_build_transcripts`]).
+    ///
+    /// Unlike [`Self::transcript_ids`] — which returns only the primary build's
+    /// accessions — this also yields versions that exist only on a secondary
+    /// build. That matters for callers keyed on "is this exact version known to
+    /// cdot at all" rather than "is it placed on the primary build": a version
+    /// present only on GRCh37 (e.g. `NM_002001.2`, which GRCh38 cdot superseded
+    /// with `.3`/`.4`) still has a deposited mRNA sequence to fetch, so the
+    /// version-aware backfill (#842/#802) treats it as in-cdot. The same
+    /// accession may appear on multiple builds; callers that need uniqueness
+    /// should dedup (the backfill collects into a `HashSet`).
+    pub fn all_build_transcript_ids(&self) -> impl Iterator<Item = &str> {
+        self.transcripts.keys().map(|s| s.as_str()).chain(
+            self.alt_build_transcripts
+                .values()
+                .flat_map(|by_acc| by_acc.keys().map(|s| s.as_str())),
+        )
+    }
 }
 
 impl Default for CdotMapper {
@@ -5906,6 +5927,105 @@ mod tests {
         let ids: Vec<&str> = hits.iter().map(|(acc, _)| *acc).collect();
         assert_eq!(ids, vec!["NM_000088.3"]);
         assert_eq!(hits[0].1.contig, "NC_000017.10");
+    }
+
+    #[test]
+    fn all_build_transcript_ids_surfaces_alt_build_only_versions() {
+        use std::collections::HashSet;
+        // Reproduces the #802 reference shape: GRCh38 cdot carries only the
+        // current version of an accession, while GRCh37 cdot retains an older
+        // version GRCh38 superseded. (NM_002001.2 is GRCh37-only; GRCh38 has
+        // .3/.4.) The version-aware backfill must treat that GRCh37-only version
+        // as "in cdot" so its deposited mRNA is fetched rather than declined.
+        let grch38_only_new = r#"
+        {
+            "transcripts": {
+                "NM_002001.4": {
+                    "gene_name": "FCER1A",
+                    "contig": "NC_000001.11",
+                    "strand": "+",
+                    "exons": [[159283895, 159283897, 0, 2, "M2"]]
+                }
+            }
+        }
+        "#;
+        let grch37_retains_old = r#"
+        {
+            "transcripts": {
+                "NM_002001.2": {
+                    "gene_name": "FCER1A",
+                    "contig": "NC_000001.10",
+                    "strand": "+",
+                    "exons": [[159253685, 159253687, 0, 2, "M2"]]
+                }
+            }
+        }
+        "#;
+        let mut mapper = CdotMapper::from_reader(grch38_only_new.as_bytes()).unwrap();
+        mapper
+            .load_secondary_build_from_reader(grch37_retains_old.as_bytes(), "GRCh37")
+            .unwrap();
+
+        // Primary-only `transcript_ids` sees just the GRCh38 version...
+        let primary: HashSet<&str> = mapper.transcript_ids().collect();
+        assert!(primary.contains("NM_002001.4"));
+        assert!(
+            !primary.contains("NM_002001.2"),
+            "transcript_ids must not surface the GRCh37-only old version"
+        );
+
+        // ...while `all_build_transcript_ids` also surfaces the GRCh37-only
+        // old version, the predicate the backfill keys on.
+        let all: HashSet<&str> = mapper.all_build_transcript_ids().collect();
+        assert!(all.contains("NM_002001.4"));
+        assert!(
+            all.contains("NM_002001.2"),
+            "all_build_transcript_ids must surface the GRCh37-only old version (#802)"
+        );
+    }
+
+    #[test]
+    fn all_build_transcript_ids_surfaces_standalone_grch37_file_load() {
+        use std::collections::HashSet;
+        // Pins the exact path `load_cdot_versions` (#802 backfill) takes: it
+        // loads the GRCh37 cdot file *standalone* via `CdotMapper::load`/
+        // `from_reader`, which always uses GRCh38 as the primary build. A
+        // single-build GRCh37 cdot file nests all its data under
+        // `genome_builds["GRCh37"]`, so with a GRCh38 primary the primary
+        // `transcripts` map is empty and every GRCh37 transcript lands in the
+        // alt map. `transcript_ids` (primary only) therefore returns nothing;
+        // `all_build_transcript_ids` is the predicate that actually sees the
+        // GRCh37-only version.
+        let grch37_only_nested = r#"
+        {
+            "transcripts": {
+                "NM_002001.2": {
+                    "gene_name": "FCER1A",
+                    "genome_builds": {
+                        "GRCh37": {
+                            "contig": "NC_000001.10",
+                            "strand": "+",
+                            "exons": [[159253685, 159253687, 1, 0, 2, "M2"]]
+                        }
+                    }
+                }
+            }
+        }
+        "#;
+        // `from_reader` == the default-GRCh38-primary standalone load.
+        let mapper = CdotMapper::from_reader(grch37_only_nested.as_bytes()).unwrap();
+
+        let primary: HashSet<&str> = mapper.transcript_ids().collect();
+        assert!(
+            primary.is_empty(),
+            "a standalone GRCh37 file loaded with a GRCh38 primary has an empty primary map"
+        );
+
+        let all: HashSet<&str> = mapper.all_build_transcript_ids().collect();
+        assert!(
+            all.contains("NM_002001.2"),
+            "all_build_transcript_ids must surface the GRCh37-only version from a standalone load (#802)"
+        );
     }
 
     // -------------------------------------------------------------------------

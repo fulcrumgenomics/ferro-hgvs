@@ -23,9 +23,10 @@ use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
 use ferro_hgvs::reference::ReferenceProvider;
 
 /// Default candidate old version(s). A later refinement can enumerate
-/// supplemental `NM_` versions absent from cdot with a sibling present; the
-/// single proven case is the first cut (YAGNI).
-const DEFAULT_ACCESSIONS: &str = "NM_003002.2";
+/// supplemental `NM_` versions absent from GRCh38 cdot with a sibling present;
+/// the proven cases are the first cut (YAGNI): `NM_003002.2` (#790, SDHD) and
+/// `NM_002001.2` (#802, FCER1A — retained only on GRCh37 cdot).
+const DEFAULT_ACCESSIONS: &str = "NM_003002.2,NM_002001.2";
 
 /// How many sibling versions to probe in each direction for a version present
 /// in cdot — `candidate_siblings` tries the next-higher versions first, then the
