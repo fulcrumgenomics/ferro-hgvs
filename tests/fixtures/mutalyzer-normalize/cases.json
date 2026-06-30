@@ -3314,7 +3314,13 @@
       "genomic": "NG_012337.1:g.3448_3449del",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ter99TyrextTer6)",
       "rna_description": "NG_012337.1(NM_012459.2):r.(297_*1del)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "ferro emits the bare NP_ protein reference (NP_036591.2:p.(Ter99TyrextTer6)); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value (#483/#495). The C-terminal extension body itself now matches (#857).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [

@@ -57,6 +57,27 @@ pub(crate) fn edit_reaches_initiation_codon(
         && affects_initiation_codon(edit, cds_start.base, cds_end.base)
 }
 
+/// True only for a **non-intronic, non-offset** edit whose 5' end is a CDS base
+/// and whose 3' end is a 3'UTR (`*N`) position — i.e. the edit spans the
+/// CDS→3'UTR boundary (and so reaches/disrupts the termination codon). This is
+/// the 3'-side mirror of [`edit_reaches_initiation_codon`]; the projection gate
+/// uses it to keep a stop-loss / C-terminal-extension candidate from being
+/// dropped as a plain "UTR" edit (#857). A purely-3'UTR edit (`c.*2_*4del`,
+/// both ends `utr3`) is excluded (no protein consequence), as is a 5'UTR start
+/// (`base <= 0`) and any intronic / offset endpoint.
+pub(crate) fn edit_spans_cds_into_3utr(
+    cds_start: &CdsPos,
+    cds_end: &CdsPos,
+    is_intronic: bool,
+) -> bool {
+    !is_intronic
+        && cds_start.offset.is_none()
+        && cds_end.offset.is_none()
+        && !cds_start.utr3
+        && cds_start.base > 0
+        && cds_end.utr3
+}
+
 /// Build a predicted `p.(Met1?)` variant for a change affecting the translation
 /// initiation codon. Per HGVS (`recommendations/protein/substitution.md:51`,
 /// `deletion.md:62`) the protein consequence of an initiation-codon variant
@@ -1388,5 +1409,51 @@ mod tests {
             ..CdsPos::with_offset(200, 5)
         };
         assert_eq!(whole_exon_deletion_span(&edit, &start, &end), None);
+    }
+
+    // ── edit_spans_cds_into_3utr (#857) ──────────────────────────────────────
+
+    #[test]
+    fn spans_cds_into_3utr_true_for_cds_to_3utr() {
+        let start = CdsPos::new(297); // CDS, base>0, utr3=false
+        let end = CdsPos {
+            utr3: true,
+            ..CdsPos::new(1)
+        }; // *1
+        assert!(edit_spans_cds_into_3utr(&start, &end, false));
+    }
+
+    #[test]
+    fn spans_cds_into_3utr_false_for_pure_3utr() {
+        let start = CdsPos {
+            utr3: true,
+            ..CdsPos::new(2)
+        }; // *2
+        let end = CdsPos {
+            utr3: true,
+            ..CdsPos::new(4)
+        }; // *4
+        assert!(!edit_spans_cds_into_3utr(&start, &end, false));
+    }
+
+    #[test]
+    fn spans_cds_into_3utr_false_for_5utr_start() {
+        let start = CdsPos::new(-1); // 5'UTR (base <= 0)
+        let end = CdsPos {
+            utr3: true,
+            ..CdsPos::new(1)
+        };
+        assert!(!edit_spans_cds_into_3utr(&start, &end, false));
+    }
+
+    #[test]
+    fn spans_cds_into_3utr_false_for_intronic() {
+        let start = CdsPos::new(297);
+        let end = CdsPos {
+            utr3: true,
+            ..CdsPos::with_offset(1, 5)
+        }; // offset => intronic-ish
+        assert!(!edit_spans_cds_into_3utr(&start, &end, true)); // is_intronic gate
+        assert!(!edit_spans_cds_into_3utr(&start, &end, false)); // offset gate
     }
 }

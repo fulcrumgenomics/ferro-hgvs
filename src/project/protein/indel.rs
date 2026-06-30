@@ -929,6 +929,88 @@ fn build_extension_variant(
     build_cterminal_extension(stop_pos, &scan_seq, protein_accession, transcript)
 }
 
+/// Predict a C-terminal extension for a **deletion that spans the CDS→3'UTR
+/// boundary** (5' end in the CDS, 3' end a `*N` position). Unlike the in-CDS
+/// stop-loss path (`build_extension_variant` / `is_stop_loss_readthrough`, which
+/// append the *unchanged* 3'UTR via `mut_cds_with_3utr`), the deleted bases here
+/// include 3'UTR positions — so we splice the edit against the **extended
+/// reference** (CDS ++ 3'UTR) ONCE and translate that directly. Routing through
+/// the in-CDS helpers would double-append the 3'UTR and reintroduce the deleted
+/// `*N` base (#857).
+///
+/// `cds_pos_start` is the 1-based CDS position of the 5' end; `cds_end_utr3_n`
+/// is the `N` of the `*N` 3' end. Returns `Ok(Some(p.(Ter<pos><aa>extTer<k>)))`
+/// on a clean stop-loss read-through (sense residues intact, former stop now
+/// codes an amino acid), else `Ok(None)`.
+pub(crate) fn predict_stop_region_extension(
+    transcript: &Transcript,
+    ref_bundle: &RefProteinBundle,
+    cds_pos_start: i64,
+    cds_end_utr3_n: i64,
+    edit: &NaEdit,
+    protein_accession: &str,
+) -> Result<Option<HgvsVariant>, FerroError> {
+    // Precondition: the reference CDS must end in a terminator (mirrors the
+    // `ref_protein_with_stop.last() == Ter` gate the in-CDS path applies).
+    if ref_bundle.ref_protein_with_stop.last() != Some(&AminoAcid::Ter) {
+        return Ok(None);
+    }
+    // Extended reference: CDS start through end of transcript (CDS ++ 3'UTR), in
+    // transcript orientation, uppercase. `cds_start` is 1-based → 0-based index
+    // `cds_start - 1` (same convention as `read_full_cds`).
+    let seq =
+        transcript
+            .sequence
+            .as_deref()
+            .ok_or_else(|| FerroError::ProteinSequenceUnavailable {
+                accession: transcript.id.clone(),
+            })?;
+    let cds_start = transcript
+        .cds_start
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!("transcript {} has no CDS start", transcript.id),
+        })? as usize;
+    if cds_start < 1 || cds_start > seq.len() {
+        return Ok(None);
+    }
+    let extended = seq[cds_start - 1..].to_ascii_uppercase();
+
+    // Convert the `*N` 3' end to an absolute 1-based CDS-relative position:
+    // `ref_cds` covers the CDS incl. stop, so `*N` lands at `ref_cds.len() + N`.
+    let abs_cds_pos_end = ref_bundle.ref_cds.len() as i64 + cds_end_utr3_n;
+
+    // Splice the edit against the extended reference (no overrun, no double-3'UTR).
+    let mut_full =
+        build_mutated_cds_with_ref(&extended, transcript, cds_pos_start, abs_cds_pos_end, edit)?;
+
+    // Stop-loss check directly on `mut_full` (replicates `is_stop_loss_readthrough`
+    // without re-appending the 3'UTR). `force_initiator_met` keeps the sense-prefix
+    // compare consistent with `ref_protein` (residue 0 was forced to Met for a
+    // recognized initiator, #801).
+    let mut readthrough = translate_full_cds_with_stop(&mut_full);
+    if cds_has_recognized_start(&mut_full) {
+        force_initiator_met(&mut readthrough);
+    }
+    let stop_idx = ref_bundle.ref_protein.len();
+    // Former-stop slot holds a non-Ter residue AND every sense residue before it
+    // is unchanged. (The `.get(stop_idx)` match already bounds-checks.)
+    let is_readthrough = match readthrough.get(stop_idx) {
+        Some(&aa) if aa != AminoAcid::Ter => readthrough[..stop_idx] == *ref_bundle.ref_protein,
+        _ => false,
+    };
+    if !is_readthrough {
+        return Ok(None);
+    }
+
+    let stop_pos = stop_idx as u64 + 1;
+    Ok(Some(build_cterminal_extension(
+        stop_pos,
+        &mut_full,
+        protein_accession,
+        transcript,
+    )?))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1836,5 +1918,98 @@ mod tests {
         let s = prot_str(&result);
         assert_eq!(s, "NP_TEST.1:p.(Ter3AsnextTer?)");
         assert!(!s.contains("Xaa"), "stop-loss must not emit Xaa: '{}'", s);
+    }
+
+    // ─── Boundary-spanning (CDS→3'UTR) stop-loss extension tests (#857) ───────
+    //
+    // A deletion whose 5' end is in the CDS and whose 3' end is a 3'UTR (`*N`)
+    // position disrupts the stop codon by removing it across the boundary. The
+    // splice must run against the extended (CDS + 3'UTR) reference, not the
+    // CDS-only string, and must NOT re-append the 3'UTR (no double-append).
+
+    fn predict_stop_ext(
+        t: &Transcript,
+        cds_pos_start: i64,
+        cds_end_utr3_n: i64,
+        edit: &NaEdit,
+        acc: &str,
+    ) -> Result<Option<HgvsVariant>, FerroError> {
+        let bundle = RefProteinBundle::from_transcript(t)?;
+        predict_stop_region_extension(t, &bundle, cds_pos_start, cds_end_utr3_n, edit, acc)
+    }
+
+    /// CDS "ATGAAATAA" (Met-Lys-Ter, stop c.7_9) + 3'UTR "TCTAA". Delete c.9
+    /// (last stop base 'A') + *1 ('T'). mut_full = "ATGAAATACTAA" → Met-Lys-Tyr-Ter
+    /// ⇒ former stop (Ter3) codes Tyr, new stop is the 1st added residue ⇒ extTer1.
+    #[test]
+    fn boundary_del_into_3utr_is_extension_with_downstream_stop() {
+        let t = tx("ATGAAATAATCTAA", 1, 9);
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let v = predict_stop_ext(&t, 9, 1, &del, "NP_TEST.1")
+            .unwrap()
+            .unwrap();
+        let s = prot_str(&v);
+        assert_eq!(s, "NP_TEST.1:p.(Ter3TyrextTer1)");
+        assert!(!s.contains("Xaa"));
+    }
+
+    /// Same shape, 3'UTR "TCGGG" → no downstream in-frame stop ⇒ extTer?.
+    #[test]
+    fn boundary_del_into_3utr_without_downstream_stop_is_ext_ter_unknown() {
+        let t = tx("ATGAAATAATCGGG", 1, 9);
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let v = predict_stop_ext(&t, 9, 1, &del, "NP_TEST.1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3TyrextTer?)");
+    }
+
+    /// A boundary del that also changes a SENSE residue (5' end well inside the
+    /// CDS) is not a clean stop-loss ⇒ None (prefix-equality fails).
+    #[test]
+    fn boundary_del_changing_sense_residue_returns_none() {
+        let t = tx("ATGAAATAATCTAA", 1, 9);
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        assert!(predict_stop_ext(&t, 2, 1, &del, "NP_TEST.1")
+            .unwrap()
+            .is_none());
+    }
+
+    /// CDS not terminated by a stop (cds_end before the real stop) ⇒ guard ⇒ None.
+    #[test]
+    fn boundary_del_non_stop_terminated_cds_returns_none() {
+        // CDS c.1_6 = "ATGAAA" (Met-Lys, no terminal stop).
+        let t = tx("ATGAAATCTAA", 1, 6);
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        assert!(predict_stop_ext(&t, 6, 1, &del, "NP_TEST.1")
+            .unwrap()
+            .is_none());
+    }
+
+    /// Non-ATG (CTG) recognized-initiator start: force_initiator_met keeps the
+    /// sense-prefix compare consistent so the extension still fires.
+    #[test]
+    fn boundary_del_non_atg_start_still_extends() {
+        let t = tx("CTGAAATAATCTAA", 1, 9);
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let v = predict_stop_ext(&t, 9, 1, &del, "NP_TEST.1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3TyrextTer1)");
     }
 }

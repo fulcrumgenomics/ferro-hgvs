@@ -17,10 +17,10 @@ mod substitution;
 // Re-export the public API used by `projector.rs`.
 pub(crate) use helpers::{
     build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
-    cds_has_valid_start, edit_reaches_initiation_codon, read_cds_start_codon,
-    whole_exon_deletion_span, RefProteinBundle,
+    cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
+    read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
-pub(crate) use indel::predict_indel_protein;
+pub(crate) use indel::{predict_indel_protein, predict_stop_region_extension};
 // `read_ref_codon` / `translate` are the position-level CDS primitives reused by
 // the service effect handler to resolve real amino-acid residues (issue #806);
 // `read_ref_codon` is also the seam #498 (full c.→p.) inherits.
