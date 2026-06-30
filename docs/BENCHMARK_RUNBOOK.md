@@ -32,19 +32,19 @@ Run this a few times a year when refreshing the published numbers, or when tooli
 
 ### Reference Stack
 
-The reference stack lives on a machine-specific scratch volume. The canonical location used by all commands in this runbook is:
+The reference stack lives on a machine-specific volume. All commands in this runbook refer to its root through the placeholder path:
 
 ```
-/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
+/path/to/ferro-bench-data
 ```
 
 Set it once and use throughout:
 
 ```bash
-export D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
+export D=/path/to/ferro-bench-data
 ```
 
-If you are on a different machine, adjust `$D` to wherever the stack lives. The variable is not persisted by any config file — export it in every shell session before running benchmark commands.
+Replace `/path/to/ferro-bench-data` with wherever the stack actually lives on your machine. The variable is not persisted by any config file — export it in every shell session before running benchmark commands. The `MUTALYZER_CACHE_DIR` / `HGVS_SEQREPO_DIR` settings written below use the same placeholder and must be edited to match.
 
 The stack contains:
 
@@ -154,7 +154,7 @@ mkdir -p /tmp/bench-settings
 
 ```bash
 cat > /tmp/bench-settings/mutalyzer_settings.conf << 'EOF'
-MUTALYZER_CACHE_DIR=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data/mutalyzer
+MUTALYZER_CACHE_DIR=/path/to/ferro-bench-data/mutalyzer
 MUTALYZER_FILE_CACHE_ADD=False
 EOF
 ```
@@ -167,7 +167,7 @@ EOF
 # Replace <PORT> with the actual host port discovered above (e.g. 55432)
 cat > /tmp/bench-settings/biocommons_settings.conf << 'EOF'
 UTA_DB_URL = postgresql://anonymous:anonymous@localhost:<PORT>/uta/uta_20210129b
-HGVS_SEQREPO_DIR = /Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data/seqrepo/2021-01-29
+HGVS_SEQREPO_DIR = /path/to/ferro-bench-data/seqrepo/2021-01-29
 EOF
 ```
 
@@ -178,7 +178,7 @@ The shipped biocommons settings use a relative SeqRepo path that only resolves c
 Confirm each tool is ready before running the matrix:
 
 ```bash
-D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
+D=/path/to/ferro-bench-data
 
 # ferro
 pixi run ./target/release/ferro-benchmark check ferro \
@@ -214,7 +214,7 @@ The `benchmark matrix` subcommand runs all four tools across parse and normalize
 Run a smoke pass before committing to the confident run. The smoke pass uses a small sample and a single repetition, and completes in a few minutes.
 
 ```bash
-D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
+D=/path/to/ferro-bench-data
 
 pixi run ./target/release/ferro-benchmark benchmark matrix \
   --population "$D/clinvar/clinvar_patterns.txt" \
@@ -257,7 +257,7 @@ Once the smoke pass is clean, run the confident pass. This is the run whose outp
 Instead, let the matrix **calibrate per-(tool, op) sample sizes**: it estimates each tool's rate, then picks N so each tool runs for about `--target-seconds` per rep, clamped to `[--min-sample, --max-sample]`. This is what produces the "fast tools see millions of patterns, slow tools hundreds" property described in the README footnote. The defaults (`--target-seconds 3 --min-sample 50 --max-sample 2000000`) are what the published numbers use; they give a total run time of a few tens of minutes at `--reps 5`, bounded by mutalyzer normalize.
 
 ```bash
-D=/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data
+D=/path/to/ferro-bench-data
 
 pixi run ./target/release/ferro-benchmark benchmark matrix \
   --population "$D/clinvar/clinvar_patterns.txt" \

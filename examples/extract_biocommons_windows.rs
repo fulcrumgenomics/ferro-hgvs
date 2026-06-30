@@ -322,16 +322,10 @@ fn resolve_manifest(cli_manifest: Option<PathBuf>) -> Option<PathBuf> {
         let p = PathBuf::from(path);
         return p.exists().then_some(p);
     }
-    for candidate in [
-        "/Volumes/scratch-00001/work/clients/fulcrum/ferro-hgvs/data/ferro/manifest.json",
-        "benchmark-output/manifest.json",
-    ] {
-        let p = PathBuf::from(candidate);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+    // Relative, machine-independent fallback only. Machine-specific locations
+    // belong in `--manifest` or `FERRO_MANIFEST`, never hardcoded here.
+    let fallback = PathBuf::from("benchmark-output/manifest.json");
+    fallback.exists().then_some(fallback)
 }
 
 fn main() -> ExitCode {
@@ -340,7 +334,7 @@ fn main() -> ExitCode {
     let Some(manifest_path) = resolve_manifest(cli.manifest) else {
         eprintln!(
             "extract_biocommons_windows: no manifest (pass --manifest, set FERRO_MANIFEST, or \
-             place it at a well-known path). This generator requires the full reference manifest."
+             place it at benchmark-output/manifest.json). This generator requires the full reference manifest."
         );
         return ExitCode::FAILURE;
     };
