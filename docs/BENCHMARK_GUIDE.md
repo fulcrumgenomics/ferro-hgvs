@@ -44,7 +44,7 @@ Results in this guide were generated with:
 | mutalyzer-hgvs-parser | 0.3.9 |
 | mutalyzer-algebra | 1.5.2 |
 | biocommons hgvs | 1.5.6 |
-| hgvs-rs | 0.19.1 |
+| hgvs-rs | 0.20.2-1-gb6513b3 |
 | cdot | 0.2.32 (RefSeq GRCh38) |
 | SeqRepo | 2021-01-29 |
 | UTA | uta_20210129b |

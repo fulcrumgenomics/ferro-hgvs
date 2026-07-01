@@ -121,6 +121,29 @@ fn fixture() -> &'static Fixture {
     })
 }
 
+/// #890: the comparator provenance recorded in the corpus header must stay in
+/// sync with the reference it was validated against. Assert the recorded
+/// `reference_identity` (#764) equals the live prepared-reference identity — a
+/// mismatch means the provenance is stale and its 96%-faithful validation no
+/// longer applies to the checked-out reference. Manifest-gated (skips in CI,
+/// like every other reference-backed check here).
+#[test]
+fn comparator_provenance_reference_identity_matches_live() {
+    let Some(live) = reference_identity() else {
+        eprintln!("comparator_provenance_reference_identity_matches_live: skipping — no manifest");
+        return;
+    };
+    let recorded = &fixture()
+        .comparator_provenance
+        .as_ref()
+        .expect("corpus records comparator_provenance (#890)")
+        .reference_identity;
+    assert_eq!(
+        *recorded, live,
+        "corpus comparator_provenance.reference_identity is stale — re-record it (#890/#764)"
+    );
+}
+
 fn manifest_path() -> Option<PathBuf> {
     // `FERRO_MANIFEST`, when set, is authoritative — no fallback to the
     // well-known paths. This lets CI explicitly disable the runner via
