@@ -2893,6 +2893,41 @@ mod tests {
                 nr_unit: b"GC",
                 nr_count: 5,
             },
+            // Case 3 (#866): tri-nucleotide `CAG` tract ref[2..11); ins abuts its 3'
+            // end. Both paths must agree on window (3,11,"CAG").
+            Case {
+                ref_seq: b"GGCAGCAGCAGGG",
+                ins_pos: 10,
+                ins_seq: b"CAGCAG",
+                nr_pos: 2,
+                nr_end: 10,
+                nr_unit: b"CAG",
+                nr_count: 5,
+            },
+            // Case 4 (#866): multi-copy homopolymer `A` tract ref[3..8). Window (4,8,"A").
+            Case {
+                ref_seq: b"GGGAAAAAGGG",
+                ins_pos: 7,
+                ins_seq: b"AA",
+                nr_pos: 3,
+                nr_end: 7,
+                nr_unit: b"A",
+                nr_count: 7,
+            },
+            // Case 5 (#866): single-reference-copy homopolymer (`ref_count == 1`) — the
+            // one structurally distinct delegated branch, where the re-expressed range
+            // collapses to `end_pos == pos` with `unit_len == 1`. `count_tandem_repeats`
+            // still succeeds, so the len>=2 rotation fallback is unreachable. Window
+            // (2,2,"A").
+            Case {
+                ref_seq: b"GAG",
+                ins_pos: 1,
+                ins_seq: b"AA",
+                nr_pos: 1,
+                nr_end: 1,
+                nr_unit: b"A",
+                nr_count: 3,
+            },
         ];
         for c in cases {
             let (_b, _c, ins_start, ins_end, ins_unit) =
@@ -2914,6 +2949,24 @@ mod tests {
                 }
                 other => panic!("expected Repeat for {:?}, got {other:?}", c.ref_seq),
             }
+        }
+
+        // Case 6 (#866): coding codon-gate agreement. A non-codon-aligned (`A`, len 1)
+        // expansion in c. context is NOT repeat notation — the two paths must agree that
+        // it degrades: `insertion_to_repeat` declines (→ literal `ins`), and
+        // `normalize_repeat` routes the expansion to `Insertion`. Kept out of the shared
+        // loop above (which unwraps a `Repeat`) since this case is intentionally None.
+        assert!(
+            insertion_to_repeat(b"CAAAAAC", 5, b"AA", true).is_none(),
+            "coding non-codon-aligned expansion must not be repeat notation"
+        );
+        match normalize_repeat(b"CAAAAAC", 1, 5, b"A", 7, true) {
+            RepeatNormResult::Insertion {
+                start,
+                end,
+                sequence,
+            } => assert_eq!((start, end, sequence), (6, 7, b"AA".to_vec())),
+            other => panic!("expected codon-gated Insertion, got {other:?}"),
         }
     }
 
