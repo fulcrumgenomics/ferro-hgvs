@@ -8060,6 +8060,50 @@ mod tests {
         );
     }
 
+    // Real #882 locus GACACACATAGGT padded with 120-base neutral flanks so the
+    // +/-100 normalize window stays in-contig. Motif G is at 1-based g.121, so
+    // the A|C cut of the ACACACA tract is between g.122 (A) and g.123 (C).
+    fn phase_gate_882_provider() -> MockProvider {
+        let flank = "ACGT".repeat(30); // 120 bases
+        let seq = format!("{flank}GACACACATAGGT{flank}"); // len 253
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_000001.11", &seq);
+        provider
+    }
+
+    #[test]
+    fn normalize_out_of_phase_ins_stays_ins_882() {
+        // g.122_123insAC sits at the A|C cut, out of phase with the ACACACA
+        // tract, so it must NOT become a dup (that was the silent-corruption bug).
+        let normalizer = Normalizer::new(phase_gate_882_provider());
+        let variant = parse_hgvs("NC_000001.11:g.122_123insAC").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        let output = format!("{}", normalized);
+        assert!(
+            output.contains("ins") && !output.contains("dup"),
+            "out-of-phase insAC must stay an insertion, got: {output}"
+        );
+        // Re-normalizing the result must not flip the phase gate on a second pass.
+        let again = format!("{}", normalizer.normalize(&normalized).unwrap());
+        assert_eq!(output, again, "normalize must be idempotent, got: {again}");
+    }
+
+    #[test]
+    fn normalize_in_phase_ins_becomes_dup_882() {
+        // g.122_123insCA at the same cut IS a legitimate tandem dup.
+        let normalizer = Normalizer::new(phase_gate_882_provider());
+        let variant = parse_hgvs("NC_000001.11:g.122_123insCA").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        let output = format!("{}", normalized);
+        assert!(
+            output.contains("dup"),
+            "in-phase insCA should become a dup, got: {output}"
+        );
+        // The emitted dup must stay a dup when normalized again.
+        let again = format!("{}", normalizer.normalize(&normalized).unwrap());
+        assert_eq!(output, again, "normalize must be idempotent, got: {again}");
+    }
+
     #[test]
     fn test_normalize_duplication_shifts_3prime() {
         // NM_001234.1 has G repeat spanning positions c.9-33 (25 G's)
