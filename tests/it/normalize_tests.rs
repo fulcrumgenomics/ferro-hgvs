@@ -2534,14 +2534,13 @@ mod benchmark_comparison_tests {
     #[test]
     fn test_insertion_sequence_rotation() {
         // Pattern: c.247_248insAACA against ref where c.247_250 == "AACA".
-        // ferro post-issue-132: c.247_250dup (the inserted AACA matches the
-        //   following 4 ref bases verbatim → 1-copy AACA dup).
-        // mutalyzer: c.249_250insCAAA (a different rotation choice).
-        //
-        // The HGVS 3' rule prefers `dup` over `ins` when the inserted unit
-        // matches an adjacent reference unit (insertion_to_duplication's
-        // rotation iterator finds the AACA-phase tract with ref_count=1).
-        // The dup form is canonical regardless of input rotation.
+        // #882: the inserted "AACA" is OUT OF PHASE with the adjacent AACA
+        // tract at this cut — the candidate dup c.247_250dup would decode to a
+        // different sequence than inserting "AACA" here, so the phase gate
+        // rejects the conversion. The insertion still 3'-shifts (rotating the
+        // inserted unit) but stays a plain `ins`: c.248_249insACAA
+        // (duplication.md:19). (Mutalyzer keeps out-of-phase insertions as ins
+        // — verified on real loci; NM_TEST.1 is a synthetic accession here.)
         let mut seq = String::new();
         seq.push_str(&"G".repeat(246)); // Positions 1-246
         seq.push_str("AA"); // Positions 247-248
@@ -2552,11 +2551,10 @@ mod benchmark_comparison_tests {
 
         let result = normalize_to_string(provider, "NM_TEST.1:c.247_248insAACA");
 
-        // 1-copy AACA next to a single AACA in the ref → dup spanning
-        // the matched ref tract (c.247..c.250 inclusive).
+        // Out-of-phase insertion 3'-shifts but stays `ins` (not a dup) per #882.
         assert_eq!(
-            result, "NM_TEST.1:c.247_250dup",
-            "Expected c.247_250dup (issue #132 dup-over-ins canonicalization), got: {}",
+            result, "NM_TEST.1:c.248_249insACAA",
+            "Expected c.248_249insACAA (out-of-phase ins stays ins, #882), got: {}",
             result
         );
     }
