@@ -39,10 +39,6 @@ impl Fixture {
         for case in &self.cases {
             let input = case.input.as_str();
             for cluster in [
-                case.accepted_divergence
-                    .as_ref()
-                    .and_then(|d| d.cluster.as_deref()),
-                case.known_bug.as_ref().and_then(|d| d.cluster.as_deref()),
                 case.improvement.as_ref().and_then(|d| d.cluster.as_deref()),
                 case.reference_unavailable
                     .as_ref()
@@ -56,12 +52,21 @@ impl Fixture {
             {
                 refs.push((input, cluster));
             }
-            // A `Case` may carry multiple per-axis spec citations (#827); collect
-            // the cluster ref of each.
-            for citation in &case.spec_citations {
-                if let Some(cluster) = citation.cluster.as_deref() {
-                    refs.push((input, cluster));
-                }
+            // A `Case` may carry multiple per-axis accepted divergences (#870),
+            // known bugs (#870), and spec citations (#827); collect the cluster
+            // ref of each.
+            for cluster in case
+                .accepted_divergences
+                .iter()
+                .filter_map(|d| d.cluster.as_deref())
+                .chain(case.known_bugs.iter().filter_map(|d| d.cluster.as_deref()))
+                .chain(
+                    case.spec_citations
+                        .iter()
+                        .filter_map(|d| d.cluster.as_deref()),
+                )
+            {
+                refs.push((input, cluster));
             }
         }
         refs
@@ -76,26 +81,51 @@ impl Fixture {
     /// fixture-validation time (#827).
     pub fn validate_clusters(&self) -> Result<(), String> {
         validate_cluster_refs(&self.clusters, self.cluster_refs())?;
-        self.validate_spec_citation_axes()
+        self.validate_multi_axis_annotation_uniqueness()
     }
 
-    /// Reject any `Case` whose `spec_citations` cite the same axis more than once
-    /// (the matcher would silently honor only the first). See
-    /// [`validate_clusters`](Self::validate_clusters).
-    fn validate_spec_citation_axes(&self) -> Result<(), String> {
-        for case in &self.cases {
+    /// Reject any `Case` whose multi-axis annotations (`spec_citations`,
+    /// `accepted_divergences`, `known_bugs`) name the same axis more than once
+    /// within a single annotation kind — the matcher `find`s the first match per
+    /// axis, so a duplicate-axis entry would be silently ignored. Surfacing it
+    /// here turns an authoring mistake into a hard error at fixture-validation
+    /// time (#827/#870). See [`validate_clusters`](Self::validate_clusters).
+    fn validate_multi_axis_annotation_uniqueness(&self) -> Result<(), String> {
+        fn check_unique(
+            input: &str,
+            kind: &str,
+            axes: impl IntoIterator<Item = Axis>,
+        ) -> Result<(), String> {
             let mut seen: Vec<Axis> = Vec::new();
-            for citation in &case.spec_citations {
-                if seen.contains(&citation.axis) {
+            for axis in axes {
+                if seen.contains(&axis) {
                     return Err(format!(
-                        "case {:?} has more than one spec_citation for axis {:?}; \
-                         the matcher honors only one citation per axis",
-                        case.input,
-                        citation.axis.as_str(),
+                        "case {input:?} has more than one {kind} for axis {:?}; \
+                         the matcher honors only one per axis",
+                        axis.as_str(),
                     ));
                 }
-                seen.push(citation.axis);
+                seen.push(axis);
             }
+            Ok(())
+        }
+
+        for case in &self.cases {
+            check_unique(
+                &case.input,
+                "spec_citation",
+                case.spec_citations.iter().map(|c| c.axis),
+            )?;
+            check_unique(
+                &case.input,
+                "accepted_divergence",
+                case.accepted_divergences.iter().map(|d| d.axis),
+            )?;
+            check_unique(
+                &case.input,
+                "known_bug",
+                case.known_bugs.iter().map(|d| d.axis),
+            )?;
         }
         Ok(())
     }
@@ -106,7 +136,9 @@ impl Fixture {
         let mut rows = Vec::new();
         for case in &self.cases {
             let input = case.input.as_str();
-            if let Some(d) = &case.accepted_divergence {
+            // One summary row per per-axis accepted divergence (#870): a
+            // multi-axis row contributes an `AcceptedDivergence` row per axis.
+            for d in &case.accepted_divergences {
                 rows.push(MemberRow {
                     cluster: d.cluster.clone(),
                     input: input.to_string(),
@@ -116,7 +148,8 @@ impl Fixture {
                     tracking_issue: None,
                 });
             }
-            if let Some(d) = &case.known_bug {
+            // One summary row per per-axis known bug (#870).
+            for d in &case.known_bugs {
                 rows.push(MemberRow {
                     cluster: d.cluster.clone(),
                     input: input.to_string(),
@@ -207,19 +240,42 @@ pub struct Case {
     pub noncoding: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub to_test: bool,
-    /// Marks a mismatch on a specific axis as an accepted (non-bug)
-    /// divergence — e.g. a ferro policy decision that intentionally
-    /// disagrees with mutalyzer while both outputs remain HGVS-spec-allowed.
-    /// Tallied into `AxisTally::divergence_accepted` instead of `fail`.
-    #[serde(default)]
-    pub accepted_divergence: Option<AcceptedDivergence>,
-    /// Marks a mismatch on a specific axis as a known ferro bug (xfail):
-    /// ferro is wrong and the divergence is tracked by an issue rather than
-    /// accepted as policy. Tallied into `AxisTally::known_bug` instead of
-    /// `fail`. If ferro starts matching mutalyzer (XPASS), the harness fails
-    /// so the annotation and now-fixed row are cleaned up.
-    #[serde(default)]
-    pub known_bug: Option<KnownBug>,
+    /// Per-axis accepted (non-bug) divergence annotations — e.g. a ferro policy
+    /// decision that intentionally disagrees with mutalyzer while both outputs
+    /// remain HGVS-spec-allowed. A mismatch on an axis that carries a divergence
+    /// for that axis is tallied into `AxisTally::divergence_accepted` instead of
+    /// `fail`.
+    ///
+    /// A `Case` may carry MORE THAN ONE divergence, each scoped to a different
+    /// axis (#870) — e.g. a `normalized`-axis divergence AND a `genomic`-axis
+    /// divergence on the same row (the copy-range literal-expansion policy
+    /// diverges on both axes once the genomic axis routes through the user-facing
+    /// `project_variant`). The matcher keys each divergence to its axis, so at
+    /// most one per axis takes effect.
+    ///
+    /// The wire (`cases.json`) key is `accepted_divergence` and accepts either a
+    /// single object (the common case, deserialized to a one-element vec) or an
+    /// array of objects (a multi-axis row). Absent → empty vec. See
+    /// [`de_one_or_many`].
+    #[serde(
+        default,
+        rename = "accepted_divergence",
+        deserialize_with = "de_one_or_many"
+    )]
+    pub accepted_divergences: Vec<AcceptedDivergence>,
+    /// Per-axis known-ferro-bug annotations (xfail): ferro is wrong and the
+    /// divergence is tracked by an issue rather than accepted as policy. A
+    /// mismatch on an axis that carries a known bug for that axis is tallied into
+    /// `AxisTally::known_bug` instead of `fail`. If ferro starts matching
+    /// mutalyzer (XPASS), the harness fails so the annotation and now-fixed row
+    /// are cleaned up.
+    ///
+    /// Like [`accepted_divergences`](Self::accepted_divergences), a `Case` may
+    /// carry MORE THAN ONE known bug, each scoped to a different axis (#870). The
+    /// wire key is `known_bug` and accepts a single object or an array. Absent →
+    /// empty vec. See [`de_one_or_many`].
+    #[serde(default, rename = "known_bug", deserialize_with = "de_one_or_many")]
+    pub known_bugs: Vec<KnownBug>,
     /// Marks a mismatch on a specific axis as a tracked *improvement* (not a
     /// bug): ferro's output is valid HGVS but not the spec-*preferred*
     /// canonical form, and `normalize()` should converge on the preferred form
@@ -251,12 +307,8 @@ pub struct Case {
     /// The wire (`cases.json`) key is `spec_citation` and accepts either a single
     /// citation object (the common case, deserialized to a one-element vec) or an
     /// array of citation objects (a multi-axis row). Absent → empty vec. See
-    /// [`de_spec_citations`].
-    #[serde(
-        default,
-        rename = "spec_citation",
-        deserialize_with = "de_spec_citations"
-    )]
+    /// [`de_one_or_many`].
+    #[serde(default, rename = "spec_citation", deserialize_with = "de_one_or_many")]
     pub spec_citations: Vec<SpecCitation>,
     /// Marks a non-panic `Err` on a specific axis as ferro *correctly rejecting*
     /// an input mutalyzer leniently reinterprets (the only disposition that
@@ -966,32 +1018,37 @@ fn default_true() -> bool {
     true
 }
 
-/// Deserialize the `cases.json` `spec_citation` field, accepting either a single
-/// citation object or an array of citation objects, normalizing both to a
-/// `Vec<SpecCitation>` (#827). The single-object form (the common case)
-/// deserializes to a one-element vec, so existing single-citation rows need no
-/// JSON change; a row that needs citations on more than one axis uses the array
-/// form. An explicit `null` (like an absent field, and like the prior
-/// `Option<SpecCitation>` shape this replaced) yields an empty vec. Each element
-/// is still validated against the closed [`Axis`]/[`SpecSection`] enums, so a
-/// typo in either form is a hard parse error.
-fn de_spec_citations<'de, D>(deserializer: D) -> Result<Vec<SpecCitation>, D::Error>
+/// Deserialize a per-axis annotation field, accepting either a single object or
+/// an array of objects and normalizing both to a `Vec<T>`. The single-object
+/// form (the common case) deserializes to a one-element vec, so existing
+/// single-annotation rows need no JSON change; a row that needs the annotation on
+/// more than one axis uses the array form. An explicit `null` (like an absent
+/// field, and like the prior `Option<T>` shapes this replaced) yields an empty
+/// vec. Each element is still validated against `T`'s closed enums, so a typo in
+/// either form is a hard parse error.
+///
+/// Shared by the `spec_citation` (#827), `accepted_divergence` (#870), and
+/// `known_bug` (#870) fields — the declared `Vec<T>` type of the annotated field
+/// drives the `T` inference, so one helper covers all three (and any future
+/// per-axis annotation field gets it for free).
+fn de_one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
     /// Untagged helper: serde tries `One` first, then `Many`, accepting whichever
     /// wire shape the field carries.
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum OneOrMany {
-        One(SpecCitation),
-        Many(Vec<SpecCitation>),
+    enum OneOrMany<T> {
+        One(T),
+        Many(Vec<T>),
     }
 
-    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+    Ok(match Option::<OneOrMany<T>>::deserialize(deserializer)? {
         None => Vec::new(),
-        Some(OneOrMany::One(citation)) => vec![citation],
-        Some(OneOrMany::Many(citations)) => citations,
+        Some(OneOrMany::One(item)) => vec![item],
+        Some(OneOrMany::Many(items)) => items,
     })
 }
 

@@ -507,29 +507,29 @@ impl AxisTally {
             // annotation is stale — the divergence/bug the row documents is
             // gone. Fail loudly so the annotation (and, for known_bug, the
             // fixed row) is cleaned up rather than silently rotting.
-            if let Some(ad) = &case.accepted_divergence {
-                if ad.axis == self.axis {
-                    self.fail.push((
-                        case.input.clone(),
-                        format!(
-                            "XPASS: accepted_divergence (policy {}) now matches mutalyzer; the divergence is gone — remove the annotation",
-                            ad.policy
-                        ),
-                    ));
-                    return;
-                }
+            if let Some(ad) = case
+                .accepted_divergences
+                .iter()
+                .find(|ad| ad.axis == self.axis)
+            {
+                self.fail.push((
+                    case.input.clone(),
+                    format!(
+                        "XPASS: accepted_divergence (policy {}) now matches mutalyzer; the divergence is gone — remove the annotation",
+                        ad.policy
+                    ),
+                ));
+                return;
             }
-            if let Some(kb) = &case.known_bug {
-                if kb.axis == self.axis {
-                    self.fail.push((
-                        case.input.clone(),
-                        format!(
-                            "XPASS: known_bug #{} now matches mutalyzer; the fix appears to have landed — remove the annotation and demote the row",
-                            kb.tracking_issue
-                        ),
-                    ));
-                    return;
-                }
+            if let Some(kb) = case.known_bugs.iter().find(|kb| kb.axis == self.axis) {
+                self.fail.push((
+                    case.input.clone(),
+                    format!(
+                        "XPASS: known_bug #{} now matches mutalyzer; the fix appears to have landed — remove the annotation and demote the row",
+                        kb.tracking_issue
+                    ),
+                ));
+                return;
             }
             if let Some(imp) = &case.improvement {
                 if imp.axis == self.axis {
@@ -605,10 +605,12 @@ impl AxisTally {
         // A genuine panic / the empty-projection sentinel (#651) still hard-FAIL
         // below; a match XPASS-FAILs above.
         if self.axis == Axis::CodingProteinDescriptions {
-            if let Some(ad) = &case.accepted_divergence {
-                if ad.axis == self.axis
-                    && matches!(&actual, Err(e) if e.starts_with("missing pair"))
-                {
+            if let Some(ad) = case
+                .accepted_divergences
+                .iter()
+                .find(|ad| ad.axis == self.axis)
+            {
+                if matches!(&actual, Err(e) if e.starts_with("missing pair")) {
                     self.divergence_accepted
                         .push((case.input.clone(), ad.policy.to_string()));
                     return;
@@ -622,19 +624,19 @@ impl AxisTally {
         let errors_axis_divergence =
             self.axis == Axis::Errors && matches!(&actual, Err(e) if !e.starts_with("panic:"));
         if actual.is_ok() || errors_axis_divergence {
-            if let Some(ad) = &case.accepted_divergence {
-                if ad.axis == self.axis {
-                    self.divergence_accepted
-                        .push((case.input.clone(), ad.policy.to_string()));
-                    return;
-                }
+            if let Some(ad) = case
+                .accepted_divergences
+                .iter()
+                .find(|ad| ad.axis == self.axis)
+            {
+                self.divergence_accepted
+                    .push((case.input.clone(), ad.policy.to_string()));
+                return;
             }
-            if let Some(kb) = &case.known_bug {
-                if kb.axis == self.axis {
-                    self.known_bug
-                        .push((case.input.clone(), format!("#{}", kb.tracking_issue)));
-                    return;
-                }
+            if let Some(kb) = case.known_bugs.iter().find(|kb| kb.axis == self.axis) {
+                self.known_bug
+                    .push((case.input.clone(), format!("#{}", kb.tracking_issue)));
+                return;
             }
             if let Some(imp) = &case.improvement {
                 if imp.axis == self.axis {
@@ -1156,6 +1158,117 @@ fn axis_normalized() {
 // Axis: genomic
 // ----------------------------------------------------------------------------
 
+/// Compute the genomic-axis representation of a case input the way a user would
+/// (#870): single `c./n./r.` inputs go through the user-facing
+/// `project_variant().genomic`; `Allele` inputs stay on the raw
+/// `project_to_genomic` pivot (it cis-sorts minus-strand compound-allele members
+/// per #851, which `project_variant` does not yet — #894); pure `g./m.` inputs
+/// normalize only. Shared by `axis_genomic` and `axis_genomic_idempotent` so the
+/// two cannot drift.
+fn project_genomic_userfacing(
+    projector: &VariantProjector<ArcProvider>,
+    normalizer: &Normalizer<ArcProvider>,
+    v: &HgvsVariant,
+) -> Result<HgvsVariant, String> {
+    match v {
+        HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_) => {
+            let tx_id =
+                transcript_of(v).ok_or_else(|| "could not infer transcript_id".to_string())?;
+            projector
+                .project_variant(v, &tx_id)
+                .map_err(|e| format!("project: {e}"))?
+                .genomic
+                .ok_or_else(|| "project_variant produced no genomic axis".to_string())
+        }
+        HgvsVariant::Allele(_) => {
+            let g = projector
+                .project_to_genomic(v)
+                .map_err(|e| format!("project: {e}"))?;
+            normalizer
+                .normalize(&g)
+                .map_err(|e| format!("normalize: {e}"))
+        }
+        // Pure genomic axes (`g.`/`m.`) normalize in place. Anything else
+        // (e.g. a `p.` protein input) has no genomic-axis representation here, so
+        // reject it rather than let the permissive fall-through count a
+        // non-genomic normalization as a genomic-axis success.
+        HgvsVariant::Genome(_) | HgvsVariant::Mt(_) => normalizer
+            .normalize(v)
+            .map_err(|e| format!("normalize: {e}")),
+        other => Err(format!(
+            "unsupported genomic-axis input type {}",
+            other.variant_type()
+        )),
+    }
+}
+
+/// Direct contract test for [`project_genomic_userfacing`]'s routing (#870,
+/// #895 review). The rejection arm (`other => Err(...)`) — the subject of the
+/// original critical-issue review — must reject inputs with no genomic-axis
+/// representation (e.g. a `p.` protein), rather than let a permissive
+/// fall-through count a non-genomic normalization as a genomic-axis success.
+/// The remaining kinds (`c./n./r.` transcript, `g./m.` genomic, `Allele`
+/// compound) must dispatch into a real sub-path instead. Pinning this here
+/// keeps the contract independent of which corpus fixture rows happen to
+/// exercise each arm, so a fixture reshuffle cannot silently stop covering the
+/// rejection branch.
+#[test]
+fn project_genomic_userfacing_routing() {
+    let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
+        eprintln!("project_genomic_userfacing_routing: skipping — no manifest");
+        return;
+    };
+
+    const UNSUPPORTED: &str = "unsupported genomic-axis input type";
+
+    // A protein input has no genomic-axis representation here: the `other` arm
+    // must reject it up front, before touching the projector or normalizer.
+    let protein = parse_hgvs("NP_000079.2:p.Glu6Val").expect("parse protein input");
+    let err = project_genomic_userfacing(&projector, &normalizer, &protein)
+        .expect_err("protein input must be rejected");
+    assert!(
+        err.contains(UNSUPPORTED),
+        "protein input should hit the rejection arm, got: {err}"
+    );
+
+    // Every other kind must dispatch into a genomic sub-path, never the
+    // rejection arm. All inputs below use references present in the manifest, so
+    // whether the downstream projection/normalization returns `Ok` or a
+    // (non-`UNSUPPORTED`) `Err` is reference-dependent and measured by the axis
+    // tests — the invariant asserted here is only that these inputs are NOT
+    // rejected as an unsupported input type. A panic from `catch_unwind`, by
+    // contrast, is an unexpected crash rather than an expected reference miss, so
+    // it fails the test outright. The `c./r.` rows pin that the transcript arm
+    // dispatches for all of `c./n./r.`, not just the sampled `n.`.
+    for (input, arm) in [
+        ("NM_003002.2:c.273del", "coding-transcript-projection"),
+        ("NM_003002.4:n.206_210del", "transcript-projection"),
+        ("NM_003002.4:r.206_210del", "rna-transcript-projection"),
+        (
+            "NG_012337.1:g.4812_4813insTAC",
+            "genomic in-place normalize",
+        ),
+        ("NC_012920.1:m.3243A>G", "mitochondrial in-place normalize"),
+        (
+            "NG_012337.1(NM_003002.2):c.[274G>T;278A>G]",
+            "allele project-to-genomic",
+        ),
+    ] {
+        let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input}: {e}"));
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            project_genomic_userfacing(&projector, &normalizer, &v)
+        }));
+        match outcome {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => assert!(
+                !err.contains(UNSUPPORTED),
+                "{input} should dispatch into the {arm} arm, not the rejection arm; got: {err}"
+            ),
+            Err(_) => panic!("{input} panicked while dispatching into the {arm} arm"),
+        }
+    }
+}
+
 #[test]
 fn axis_genomic() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
@@ -1175,29 +1288,24 @@ fn axis_genomic() {
 
         let actual = catch_panics(|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
-            // Project transcript-coordinate (c./n./r.) inputs — and compound
-            // alleles, whose members are each projected and reassembled (cis
-            // members re-sorted into genomic order; #851) — onto their genomic
-            // reference frame; pass g. and other inputs through unchanged. Then
-            // normalize the genomic form so the output matches mutalyzer's
-            // normalized g. (3'-shift, ins→dup, …).
-            let g = if matches!(
-                v,
-                HgvsVariant::Cds(_)
-                    | HgvsVariant::Tx(_)
-                    | HgvsVariant::Rna(_)
-                    | HgvsVariant::Allele(_)
-            ) {
-                projector
-                    .project_to_genomic(&v)
-                    .map_err(|e| format!("project: {e}"))?
-            } else {
-                v
-            };
-            let n = normalizer
-                .normalize(&g)
-                .map_err(|e| format!("normalize: {e}"))?;
-            Ok(format!("{n}"))
+            // Route the genomic axis through the *user-facing* path (#870):
+            //   - c./n./r. single-variant rows → `project_variant().genomic`,
+            //     which normalizes-then-projects and reports the reanchored
+            //     genomic axis (the path users actually hit — this is what masked
+            //     the #852 single-pass bug when measured against the raw pivot).
+            //     A reanchor decline degrades to `.genomic == None` (not Err); map
+            //     that to Err so the `accepted_rejection` disposition still catches
+            //     it. Gene-symbol / `_v001` legacy selectors that normalization
+            //     resolves (#871) are accepted — ferro's resolved output is
+            //     spec-valid. `project_variant` already normalized internally, so
+            //     there is no redundant second normalize on this path.
+            //   - Compound alleles → keep the raw `project_to_genomic` pivot: it
+            //     cis-sorts members into genomic order (#851); `project_variant`
+            //     does not yet (#894), so rerouting them would regress minus-strand
+            //     multi-member cis rows. Project-then-normalize, as before.
+            //   - Pure g./m. rows → normalize only (today's pass-through).
+            let g = project_genomic_userfacing(&projector, &normalizer, &v)?;
+            Ok(format!("{g}"))
         });
 
         t.record(case, expected, actual);
@@ -1619,12 +1727,14 @@ fn axis_infos() {
                 .push((case.input.clone(), INFO_NO_SPEC_EQUIVALENT.to_string()));
         } else if let Err(ref e) = actual {
             if e.starts_with("ferro emitted extra info") {
-                if let Some(ad) = &case.accepted_divergence {
-                    if ad.axis == Axis::Infos {
-                        t.divergence_accepted
-                            .push((case.input.clone(), ad.policy.to_string()));
-                        continue;
-                    }
+                if let Some(ad) = case
+                    .accepted_divergences
+                    .iter()
+                    .find(|ad| ad.axis == Axis::Infos)
+                {
+                    t.divergence_accepted
+                        .push((case.input.clone(), ad.policy.to_string()));
+                    continue;
                 }
             }
             t.record(case, &expected_repr, actual);
@@ -2236,8 +2346,8 @@ mod comparator_tests {
             infos: None,
             noncoding: None,
             to_test: true,
-            accepted_divergence,
-            known_bug: None,
+            accepted_divergences: accepted_divergence.into_iter().collect(),
+            known_bugs: Vec::new(),
             improvement: None,
             reference_unavailable: None,
             spec_citations,
@@ -2256,7 +2366,7 @@ mod comparator_tests {
             r#"{"input": "NM_000088.3:c.459A>G", "normalized": "NM_000088.3:c.459A>G"}"#,
         );
         assert_eq!(case.input, "NM_000088.3:c.459A>G");
-        assert!(case.accepted_divergence.is_none());
+        assert!(case.accepted_divergences.is_empty());
         assert!(case.spec_citations.is_empty());
     }
 
@@ -2337,10 +2447,8 @@ mod comparator_tests {
                 }
             }"#,
         );
-        let ad = case
-            .accepted_divergence
-            .as_ref()
-            .expect("accepted_divergence present");
+        assert_eq!(case.accepted_divergences.len(), 1);
+        let ad = &case.accepted_divergences[0];
         assert_eq!(ad.axis, Axis::Normalized);
         assert_eq!(ad.policy, Policy::GeneSymbolSelector121);
         assert_eq!(ad.note.as_deref(), Some("ferro emits (COL1A1) per #121"));
@@ -3210,7 +3318,8 @@ mod comparator_tests {
                 }
             }"#,
         );
-        let kb = case.known_bug.as_ref().expect("known_bug present");
+        assert_eq!(case.known_bugs.len(), 1);
+        let kb = &case.known_bugs[0];
         assert_eq!(kb.axis, Axis::Normalized);
         assert_eq!(kb.tracking_issue, 325);
         assert_eq!(
@@ -3226,12 +3335,12 @@ mod comparator_tests {
     fn tally_known_bug_on_matching_axis() {
         let mut t = AxisTally::new(Axis::Normalized);
         let mut case = make_case("in", None, None);
-        case.known_bug = Some(KnownBug {
+        case.known_bugs = vec![KnownBug {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
             cluster: None,
-        });
+        }];
         t.record(&case, "X", Ok("Y".to_string()));
         assert_eq!(t.pass, 0);
         assert_eq!(t.known_bug, vec![("in".to_string(), "#325".to_string())]);
@@ -3245,12 +3354,12 @@ mod comparator_tests {
     fn tally_known_bug_xpass_fails() {
         let mut t = AxisTally::new(Axis::Normalized);
         let mut case = make_case("in", None, None);
-        case.known_bug = Some(KnownBug {
+        case.known_bugs = vec![KnownBug {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
             cluster: None,
-        });
+        }];
         t.record(&case, "X", Ok("X".to_string()));
         assert_eq!(t.pass, 0);
         assert!(t.known_bug.is_empty());
@@ -3290,12 +3399,12 @@ mod comparator_tests {
     fn tally_err_with_known_bug_still_fails() {
         let mut t = AxisTally::new(Axis::Normalized);
         let mut case = make_case("in", None, None);
-        case.known_bug = Some(KnownBug {
+        case.known_bugs = vec![KnownBug {
             axis: Axis::Normalized,
             tracking_issue: 325,
             note: None,
             cluster: None,
-        });
+        }];
         t.record(&case, "X", Err("normalize: panic boom".to_string()));
         assert_eq!(t.pass, 0);
         assert!(
@@ -3486,12 +3595,12 @@ mod comparator_tests {
     fn tally_empty_projection_on_annotated_row_still_surfaces() {
         let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
         let mut case = make_case("in", None, None);
-        case.known_bug = Some(KnownBug {
+        case.known_bugs = vec![KnownBug {
             axis: Axis::CodingProteinDescriptions,
             tracking_issue: 326,
             note: None,
             cluster: None,
-        });
+        }];
         t.record(
             &case,
             "[(\"c\", \"p\")]",
@@ -3918,29 +4027,16 @@ fn axis_genomic_idempotent() {
         if !case.to_test {
             continue;
         }
-        // Project (c./n./r. → g.) then normalize, mirroring `axis_genomic`; only
-        // successfully-projected-and-normalized inputs participate. Include
-        // `Allele(_)` so compound alleles exercise the #851 cis-sort + genomic
-        // re-anchor path under the idempotency check, matching `axis_genomic`.
+        // Mirror `axis_genomic`'s user-facing routing exactly so the two axes
+        // never diverge: c./n./r. single rows through `project_variant().genomic`
+        // (#870), compound alleles kept on the raw `project_to_genomic` pivot
+        // (#851 cis-sort; #894), pure g./m. rows normalized only. Only
+        // successfully-projected-and-normalized inputs participate. The fixpoint
+        // still holds because `project_variant` normalizes internally.
         let projected = (|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
-            let g = if matches!(
-                v,
-                HgvsVariant::Cds(_)
-                    | HgvsVariant::Tx(_)
-                    | HgvsVariant::Rna(_)
-                    | HgvsVariant::Allele(_)
-            ) {
-                projector
-                    .project_to_genomic(&v)
-                    .map_err(|e| format!("project: {e}"))?
-            } else {
-                v
-            };
-            let n = normalizer
-                .normalize(&g)
-                .map_err(|e| format!("normalize: {e}"))?;
-            Ok(format!("{n}"))
+            let g = project_genomic_userfacing(&projector, &normalizer, &v)?;
+            Ok(format!("{g}"))
         })();
         let Ok(g1) = projected else { continue };
         tested += 1;
