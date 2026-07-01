@@ -479,13 +479,13 @@
         "M2: Insertion on CDS start boundary should not be included in CDS."
       ],
       "input": "NM_000143.3:c.-1_1insCAT",
-      "normalized": "NM_000143.3:c.-1_2dup",
+      "normalized": "NM_000143.3:c.-1_1insCAT",
       "protein_description": "NP_000134.2:p.(Met1?)",
       "to_test": true,
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein initiation codon (Met1?)",
-        "note": "Both ferro and mutalyzer normalize this input to c.-1_2dup. That duplication's copy is inserted between c.2 and c.3, splitting the ATG initiation codon, so the consequence on translation initiation is unknown: p.(Met1?) (substitution.md:51). ferro derives the consequence from the canonical c.-1_2dup; mutalyzer computed p.(=) from the un-normalized 5'UTR-side input — inconsistent, since c.1_2insCAT shares the same normalized form yet mutalyzer reports p.? for it. ferro's p.(Met1?) (bare NP_ per #483/#495) is the spec-correct value (#504, #512).",
+        "note": "Normalized was corrected from the stale Mutalyzer2 value c.-1_2dup to the insertion form: an out-of-phase insertion is not a tandem duplication (duplication.md:19; #882), and live mutalyzer 3.1.1 agrees (both keep it as the insertion). protein_description p.(Met1?) is ferro's hermetic output (bare NP_ per #483/#495) and passes the gate_protein_snapshot check. Whether p.(Met1?) is the biologically-correct translation-initiation consequence for the insertion form — the value was originally derived from the now-superseded c.-1_2dup, whose duplicated copy split the ATG — is tracked for re-derivation in #891.",
         "cluster": "protein-init-codon"
       }
     },
@@ -495,13 +495,13 @@
         "M2: Insertion after CDS start boundary should be included in CDS."
       ],
       "input": "NM_000143.3:c.1_2insCAT",
-      "normalized": "NM_000143.3:c.-1_2dup",
+      "normalized": "NM_000143.3:c.1_2insCAT",
       "protein_description": "NP_000134.2:p.(Met1?)",
       "to_test": true,
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein initiation codon (Met1?)",
-        "note": "Both ferro and mutalyzer normalize this input to c.-1_2dup, whose copy splits the ATG initiation codon, so the translation-initiation consequence is unknown: p.(Met1?) (substitution.md:51). mutalyzer reports the coarser p.? here but p.(=) for c.-1_1insCAT, which shares the same normalized form — inconsistent, because it predicts from the un-normalized input. ferro predicts from the canonical c.-1_2dup; its p.(Met1?) (bare NP_ per #483/#495) is the spec-correct value (#504, #512).",
+        "note": "Normalized was corrected from the stale Mutalyzer2 value c.-1_2dup to the insertion form: an out-of-phase insertion is not a tandem duplication (duplication.md:19; #882), and live mutalyzer 3.1.1 agrees (both keep it as the insertion). protein_description p.(Met1?) is ferro's hermetic output (bare NP_ per #483/#495) and passes the gate_protein_snapshot check. Whether p.(Met1?) is the biologically-correct translation-initiation consequence for the insertion form — the value was originally derived from the now-superseded c.-1_2dup, whose duplicated copy split the ATG — is tracked for re-derivation in #891.",
         "cluster": "protein-init-codon"
       }
     },

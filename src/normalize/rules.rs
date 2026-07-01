@@ -82,6 +82,73 @@ pub fn insertion_is_duplication(ref_seq: &[u8], pos: u64, inserted_seq: &[u8]) -
     false
 }
 
+/// In-phase correctness gate for insertion->dup / insertion->repeat conversion
+/// (issue #882).
+///
+/// Returns `true` iff inserting `inserted_seq` at `ins_pos` (0-based index of
+/// the base immediately 5' of the insertion point; the insertion sits between
+/// `ins_pos` and `ins_pos + 1`) yields exactly the same full sequence as the
+/// tandem edit that replaces `ref_seq[region_start..region_end_excl]` with
+/// `unit` repeated `total_count` times.
+///
+/// `region_start`, `region_end_excl`, `unit`, and `total_count` are the
+/// POST-alignment values the caller is about to emit (the dup/repeat's own
+/// window and unit), so this validates the literal emitted edit — never the raw
+/// pre-selection tract. A conversion is spec-valid only when the tandem form
+/// decodes to the identical sequence as the input insertion.
+///
+/// Total: never panics; returns `false` on any out-of-range or degenerate
+/// argument.
+fn tandem_edit_preserves_insertion(
+    ref_seq: &[u8],
+    ins_pos: usize,
+    inserted_seq: &[u8],
+    region_start: usize,
+    region_end_excl: usize,
+    unit: &[u8],
+    total_count: u64,
+) -> bool {
+    // Bounds guards. `ref_seq[..=ins_pos]` is `ref_seq[..ins_pos + 1]`, which
+    // panics when `ins_pos == ref_seq.len()`, so guard `ins_pos >= len`.
+    if unit.is_empty()
+        || ins_pos >= ref_seq.len()
+        || region_start > region_end_excl
+        || region_end_excl > ref_seq.len()
+    {
+        return false;
+    }
+
+    // Sequence produced by applying the insertion.
+    let mut from_insertion = Vec::with_capacity(ref_seq.len() + inserted_seq.len());
+    from_insertion.extend_from_slice(&ref_seq[..=ins_pos]);
+    from_insertion.extend_from_slice(inserted_seq);
+    from_insertion.extend_from_slice(&ref_seq[ins_pos + 1..]);
+
+    // Sequence produced by the emitted tandem edit: replace the region with
+    // `unit` repeated `total_count` times. Compute the capacity with checked
+    // arithmetic so a degenerate `total_count` can't truncate (32-bit `usize`)
+    // or overflow into a panic; per the contract, bail out `false` if it would.
+    let Ok(total_count_usize) = usize::try_from(total_count) else {
+        return false;
+    };
+    let capacity = unit
+        .len()
+        .checked_mul(total_count_usize)
+        .and_then(|body| body.checked_add(region_start))
+        .and_then(|head| head.checked_add(ref_seq.len().saturating_sub(region_end_excl)));
+    let Some(capacity) = capacity else {
+        return false;
+    };
+    let mut from_tandem = Vec::with_capacity(capacity);
+    from_tandem.extend_from_slice(&ref_seq[..region_start]);
+    for _ in 0..total_count {
+        from_tandem.extend_from_slice(unit);
+    }
+    from_tandem.extend_from_slice(&ref_seq[region_end_excl..]);
+
+    from_insertion == from_tandem
+}
+
 /// Determine the canonical representation of an indel
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanonicalForm {
@@ -172,7 +239,11 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// `is_coding` enables the spec's codon-frame exception (repeated.md): in
 /// c. context, repeat notation requires `unit_len % 3 == 0`. When the gate
 /// blocks the rewrite this returns `None` and the caller falls back to a
-/// literal `ins` description.
+/// literal `ins` description. A second gate, `tandem_edit_preserves_insertion`
+/// (#882), likewise returns `None` when the emitted repeat is out of phase —
+/// i.e. it would decode to a different sequence than the input insertion — so
+/// an out-of-phase insertion stays a literal `ins` rather than a spurious
+/// repeat.
 ///
 /// Returns `Some((first_byte, total_count, ref_start_1based,
 /// ref_end_1based, unit_bytes))` when repeat notation applies, `None`
@@ -245,6 +316,22 @@ pub fn insertion_to_repeat(
     let ref_end_excl = ref_start + ref_count as usize * unit.len();
     let (start, end_excl, rotated_unit) =
         three_prime_align_tract(ref_seq, ref_start, ref_end_excl, &unit);
+
+    // #882: only emit the repeat when it decodes to the same sequence as the
+    // input insertion. `start`/`end_excl`/`rotated_unit`/`total_count` are the
+    // post-alignment emitted window, unit, and count.
+    if !tandem_edit_preserves_insertion(
+        ref_seq,
+        pos as usize,
+        inserted_seq,
+        start,
+        end_excl,
+        &rotated_unit,
+        total_count,
+    ) {
+        return None;
+    }
+
     Some((
         rotated_unit[0],
         total_count,
@@ -317,7 +404,11 @@ pub(crate) struct InsToDupResult {
 ///    HGVS positions.
 ///
 /// Returns `None` when no rotation matches an adjacent tract (true
-/// non-tandem insertion — caller leaves it as plain `ins`).
+/// non-tandem insertion), **and also** when the best-matching rotation's
+/// emitted duplication is out of phase — i.e. it would decode to a different
+/// sequence than the input insertion, so it is not a tandem duplication per
+/// `duplication.md` (the `tandem_edit_preserves_insertion` gate, #882). In
+/// both cases the caller leaves it as a plain `ins`.
 pub(crate) fn insertion_to_duplication(
     ref_seq: &[u8],
     pos: u64,
@@ -406,6 +497,22 @@ pub(crate) fn insertion_to_duplication(
         ShuffleDirection::FivePrime => ref_start,
     };
     let dup_end_idx = dup_start_idx + unit.len() - 1;
+
+    // #882: only emit the dup when it decodes to the same sequence as the input
+    // insertion. `dup_start_idx`/`dup_end_idx`/`unit` are the post-alignment
+    // emitted values; a dup expands the emitted single unit to two copies.
+    if !tandem_edit_preserves_insertion(
+        ref_seq,
+        pos as usize,
+        inserted_seq,
+        dup_start_idx,
+        dup_end_idx + 1,
+        &unit,
+        2,
+    ) {
+        return None;
+    }
+
     Some(InsToDupResult {
         unit,
         start: index_to_hgvs_pos(dup_start_idx),
@@ -2775,10 +2882,12 @@ mod tests {
                 nr_unit: b"TG",
                 nr_count: 5,
             },
+            // Case 2: in-phase rotation `CGCG` (not the out-of-phase `GCGC`,
+            // which #882's gate now rejects). Same aligned window (2,5,"GC").
             Case {
                 ref_seq: b"TGCGCA",
                 ins_pos: 1,
-                ins_seq: b"GCGC",
+                ins_seq: b"CGCG",
                 nr_pos: 4,
                 nr_end: 4,
                 nr_unit: b"GC",
@@ -4626,6 +4735,92 @@ mod tests {
     }
 
     #[test]
+    fn tandem_edit_preserves_insertion_in_phase_dup_true() {
+        // GACACACATAGGT: insCA at the A|C cut (ins_pos=1) equals dup of the
+        // 3'-most CA (region [6,8), one unit -> total 2).
+        let r = b"GACACACATAGGT";
+        assert!(tandem_edit_preserves_insertion(r, 1, b"CA", 6, 8, b"CA", 2));
+    }
+
+    #[test]
+    fn tandem_edit_preserves_insertion_out_of_phase_dup_false() {
+        // Same tract, insAC at the same cut: out of phase -> reject.
+        let r = b"GACACACATAGGT";
+        assert!(!tandem_edit_preserves_insertion(
+            r, 1, b"AC", 6, 8, b"CA", 2
+        ));
+    }
+
+    #[test]
+    fn tandem_edit_preserves_insertion_in_phase_repeat_true() {
+        // TGCGCA: in-phase insCGCG at ins_pos=1 equals GC[4] over region [1,5).
+        let r = b"TGCGCA";
+        assert!(tandem_edit_preserves_insertion(
+            r, 1, b"CGCG", 1, 5, b"GC", 4
+        ));
+    }
+
+    #[test]
+    fn tandem_edit_preserves_insertion_out_of_phase_repeat_false() {
+        // TGCGCA: out-of-phase insGCGC at ins_pos=1 vs GC[4] over [1,5) -> reject.
+        let r = b"TGCGCA";
+        assert!(!tandem_edit_preserves_insertion(
+            r, 1, b"GCGC", 1, 5, b"GC", 4
+        ));
+    }
+
+    #[test]
+    fn tandem_edit_preserves_insertion_bounds_guards_no_panic() {
+        let r = b"ACGT";
+        // ins_pos == len (would panic on ref[..=ins_pos])
+        assert!(!tandem_edit_preserves_insertion(r, 4, b"A", 0, 1, b"A", 2));
+        // region_end_excl > len
+        assert!(!tandem_edit_preserves_insertion(r, 1, b"A", 0, 5, b"A", 2));
+        // empty unit
+        assert!(!tandem_edit_preserves_insertion(r, 1, b"A", 0, 1, b"", 2));
+        // region_start > region_end_excl
+        assert!(!tandem_edit_preserves_insertion(r, 1, b"A", 2, 1, b"A", 2));
+    }
+
+    #[test]
+    fn insertion_to_duplication_rejects_out_of_phase_882() {
+        // GACACACATAGGT, insAC at the A|C cut (pos=1) is out of phase with the
+        // AC-periodic tract; today it wrongly becomes a dup. Must be None now.
+        let r = b"GACACACATAGGT";
+        assert!(insertion_to_duplication(r, 1, b"AC", ShuffleDirection::ThreePrime).is_none());
+    }
+
+    #[test]
+    fn insertion_to_duplication_accepts_in_phase_882() {
+        // insCA at the same cut IS a legitimate tandem dup (3'-most CA).
+        let r = b"GACACACATAGGT";
+        let got = insertion_to_duplication(r, 1, b"CA", ShuffleDirection::ThreePrime)
+            .expect("in-phase insCA should still convert to dup");
+        assert_eq!(got.unit, b"CA");
+        assert_eq!(got.start, 7);
+        assert_eq!(got.end, 8);
+    }
+
+    #[test]
+    fn insertion_to_repeat_rejects_out_of_phase_882() {
+        // TGCGCA: insGCGC at the G|C cut (pos=1) is out of phase with the GC
+        // tract; today it wrongly becomes GC[4]. Must be None now.
+        let r = b"TGCGCA";
+        assert!(insertion_to_repeat(r, 1, b"GCGC", false).is_none());
+    }
+
+    #[test]
+    fn insertion_to_repeat_accepts_in_phase_882() {
+        // In-phase rotation insCGCG reaches the same GC[4] window and is preserved.
+        let r = b"TGCGCA";
+        let (_b, count, start, end, unit) =
+            insertion_to_repeat(r, 1, b"CGCG", false).expect("in-phase should convert");
+        assert_eq!(count, 4);
+        assert_eq!((start, end), (2, 5));
+        assert_eq!(unit, b"GC");
+    }
+
+    #[test]
     fn test_insertion_to_duplication_no_adjacent_tract() {
         // ref "ACGTACGT": no tandem of "X"; insert "X" at any pos returns None.
         let ref_seq = b"ACGTACGT";
@@ -4652,17 +4847,21 @@ mod tests {
     }
 
     #[test]
-    fn test_insertion_to_duplication_phase_matched_first_base() {
-        // Sanity: phase-matched alt (no rotation needed) returns the same
-        // most-3' dup position as the rotation case. Same reference layout
-        // as `test_insertion_to_duplication_cyclic_rotation_two_base`,
-        // but alt "GT" is r=0 (matched). Result is identical.
+    fn test_insertion_to_duplication_rejects_out_of_phase_alt_at_interior_cut() {
+        // #882: same reference layout as
+        // `test_insertion_to_duplication_cyclic_rotation_two_base`, but the alt
+        // is the OUT-OF-PHASE rotation "GT" (not the in-phase "TG"). At the
+        // interior G|T cut (pos=2, between idx2=G and idx3=T of the GTGTGT
+        // tract), inserting "TG" extends the tandem (-> ACGTGTGTGTAC, a real
+        // dup), but inserting "GT" yields ACGGTTGTGTAC — which is NOT a tandem
+        // expansion. Pre-#882 this was wrongly emitted as g.7_8dup (decoding to
+        // the different ACGTGTGTGTAC). The gate now rejects it; it stays `ins`,
+        // matching mutalyzer. (This test previously asserted the corrupt dup
+        // under the misnomer `phase_matched_first_base`.)
         let ref_seq = b"ACGTGTGTAC";
-        let r = insertion_to_duplication(ref_seq, 2, b"GT", ShuffleDirection::ThreePrime)
-            .expect("should fire");
-        assert_eq!(r.unit, b"GT");
-        assert_eq!(r.start, 7);
-        assert_eq!(r.end, 8);
+        assert!(
+            insertion_to_duplication(ref_seq, 2, b"GT", ShuffleDirection::ThreePrime).is_none()
+        );
     }
 
     #[test]

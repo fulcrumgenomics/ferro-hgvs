@@ -109,26 +109,28 @@ fn ins_tc_three_prime_unaffected() {
 
 #[test]
 fn ins_tc_at_c35_five_prime_already_canonical() {
-    // Equivalence sanity: feeding the canonical biocommons output
-    // (`c.35_36dup` is dup notation for the same haplotype as
-    // `c.35_36insTC`) under 5'-direction lands at the same canonical
-    // dup position. Pins idempotency of the after-branch fix.
+    // #882: `c.35_36insTC` sits at the OUT-OF-PHASE cut relative to the
+    // adjacent tract — the candidate dup `c.35_36dup` would decode to a
+    // different sequence than inserting "TC" here, so the phase gate rejects
+    // the conversion and the variant stays a plain `ins` (duplication.md:19).
+    // (The in-phase sibling `c.36_37insTC` still becomes a dup — see
+    // `ins_tc_five_prime_emits_after_branch_dup`.)
     assert_eq!(
         normalize_with(ShuffleDirection::FivePrime, "NM_TEST418B.1:c.35_36insTC"),
-        "NM_TEST418B.1:c.35_36dup",
+        "NM_TEST418B.1:c.35_36insTC",
     );
 }
 
 #[test]
 fn ins_tc_at_c35_three_prime_already_canonical() {
-    // 3'-direction picks the most-3' equivalent dup anchor per the
-    // direction-aware tie-break in `insertion_to_duplication` (#408):
-    // both rotations "TC"@c.35..c.36 and "CT"@c.36..c.37 give
-    // `ref_count == 1`, and 3'-direction selects the larger `ref_start`.
-    // The result is haplotype-equivalent to `c.35_36dup`.
+    // #882: same out-of-phase input under 3'-direction. The candidate dup
+    // would decode to a different sequence than the input insertion, so the
+    // phase gate rejects it and the variant stays a plain `ins`
+    // (duplication.md:19). Contrast the in-phase `c.36_37insTC`, which still
+    // becomes `c.36_37dup` (see `ins_tc_three_prime_unaffected`).
     assert_eq!(
         normalize_with(ShuffleDirection::ThreePrime, "NM_TEST418B.1:c.35_36insTC"),
-        "NM_TEST418B.1:c.36_37dup",
+        "NM_TEST418B.1:c.35_36insTC",
     );
 }
 
