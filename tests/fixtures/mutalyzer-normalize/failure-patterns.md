@@ -85,7 +85,6 @@ A variant reaching the initiation codon (CDS 1-3) has an unpredictable consequen
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `NM_000143.3:c.-1_1insCAT` | protein_description | spec_citation | — | — |
 | `NM_000143.3:c.1_2insCAT` | protein_description | spec_citation | — | — |
 
 ### A substitution consequence is never a frameshift
@@ -312,5 +311,5 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 23 | 17 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 52 |
+| protein_description | 0 | 0 | 0 | 0 | 51 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
